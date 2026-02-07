@@ -1,0 +1,245 @@
+#[cfg(test)]
+mod test_router {
+    use starknet::ContractAddress;
+    use starknet::contract_address_const;
+    use starknet::testing::set_caller_address;
+    use starknet::testing::set_block_timestamp;
+    use starknet::testing::mock_call;
+    use array::ArrayTrait;
+    use super::ZkCarelRouter;
+    use super::IZkCarelRouterDispatcher;
+    use super::SwapParams;
+    use super::BridgeParams;
+    
+    const OWNER: ContractAddress = contract_address_const::<0x12345>();
+    const WETH: ContractAddress = contract_address_const::<0x12346>();
+    const TREASURY: ContractAddress = contract_address_const::<0x12347>();
+    const POINTS_CONTRACT: ContractAddress = contract_address_const::<0x12348>();
+    const NFT_CONTRACT: ContractAddress = contract_address_const::<0x12349>();
+    const USER1: ContractAddress = contract_address_const::<0x12350>();
+    const USER2: ContractAddress = contract_address_const::<0x12351>();
+    const TOKEN1: ContractAddress = contract_address_const::<0x12352>();
+    const TOKEN2: ContractAddress = contract_address_const::<0x12353>();
+    
+    #[test]
+    fn test_swap_basic() {
+        let contract_address = deploy_contract();
+        let dispatcher = IZkCarelRouterDispatcher { contract_address };
+        
+        // Mock token approvals and transfers
+        mock_token_calls();
+        
+        // Create swap params
+        let params = SwapParams {
+            from_token: TOKEN1,
+            to_token: TOKEN2,
+            amount_in: 1000,
+            min_amount_out: 950,
+            recipient: USER1,
+            deadline: get_block_timestamp() + 3600,
+            use_private_mode: false,
+            use_mev_protection: false,
+        };
+        
+        // Execute swap
+        set_caller_address(USER1);
+        let amount_out = dispatcher.swap(params);
+        
+        // Should get some amount out (mocked as same amount for simplicity)
+        assert(amount_out >= 950, 'Should get at least min amount out');
+    }
+    
+    #[test]
+    fn test_swap_with_fee() {
+        let contract_address = deploy_contract();
+        let dispatcher = IZkCarelRouterDispatcher { contract_address };
+        
+        mock_token_calls();
+        
+        let params = SwapParams {
+            from_token: TOKEN1,
+            to_token: TOKEN2,
+            amount_in: 1000,
+            min_amount_out: 950,
+            recipient: USER1,
+            deadline: get_block_timestamp() + 3600,
+            use_private_mode: false,
+            use_mev_protection: false,
+        };
+        
+        set_caller_address(USER1);
+        let amount_out = dispatcher.swap(params);
+        
+        // With 0.3% fee, 1000 input should have 3 fee
+        // Amount out should be ~997 (minus DEX fees)
+        assert(amount_out < 1000, 'Output should be less than input due to fees');
+    }
+    
+    #[test]
+    fn test_swap_with_private_mode() {
+        let contract_address = deploy_contract();
+        let dispatcher = IZkCarelRouterDispatcher { contract_address };
+        
+        mock_token_calls();
+        
+        let params = SwapParams {
+            from_token: TOKEN1,
+            to_token: TOKEN2,
+            amount_in: 1000,
+            min_amount_out: 940, // Lower min because higher fee
+            recipient: USER1,
+            deadline: get_block_timestamp() + 3600,
+            use_private_mode: true, // Extra 0.1% fee
+            use_mev_protection: false,
+        };
+        
+        set_caller_address(USER1);
+        let amount_out = dispatcher.swap(params);
+        
+        // Private mode adds extra fee
+        assert(amount_out < 997, 'Private mode should have higher fee');
+    }
+    
+    #[test]
+    fn test_swap_deadline_expired() {
+        let contract_address = deploy_contract();
+        let dispatcher = IZkCarelRouterDispatcher { contract_address };
+        
+        mock_token_calls();
+        
+        let params = SwapParams {
+            from_token: TOKEN1,
+            to_token: TOKEN2,
+            amount_in: 1000,
+            min_amount_out: 950,
+            recipient: USER1,
+            deadline: get_block_timestamp() - 100, // Expired
+            use_private_mode: false,
+            use_mev_protection: false,
+        };
+        
+        set_caller_address(USER1);
+        
+        let mut success = true;
+        match dispatcher.try_swap(params) {
+            Option::Some(_) => { success = false; },
+            Option::None => { success = true; }
+        }
+        assert(success, 'Should fail with expired deadline');
+    }
+    
+    #[test]
+    fn test_bridge() {
+        let contract_address = deploy_contract();
+        let dispatcher = IZkCarelRouterDispatcher { contract_address };
+        
+        mock_token_calls();
+        
+        let params = BridgeParams {
+            target_chain_id: 42161, // Arbitrum
+            token: TOKEN1,
+            amount: 1000,
+            recipient: USER2,
+            bridge_provider: 'LayerSwap',
+        };
+        
+        set_caller_address(USER1);
+        let bridge_id = dispatcher.bridge(params);
+        
+        // Should return a bridge ID
+        assert(bridge_id != 0, 'Should return bridge ID');
+    }
+    
+    #[test]
+    fn test_get_quote() {
+        let contract_address = deploy_contract();
+        let dispatcher = IZkCarelRouterDispatcher { contract_address };
+        
+        // Get quote for swap
+        let (amount_out, fee, path, dexes) = dispatcher.get_quote(
+            TOKEN1,
+            TOKEN2,
+            1000,
+            false,
+            false
+        );
+        
+        // Should return reasonable values
+        assert(amount_out > 0, 'Amount out should be positive');
+        assert(fee > 0, 'Fee should be positive');
+        assert(path.len() > 0, 'Path should not be empty');
+    }
+    
+    #[test]
+    fn test_add_dex() {
+        let contract_address = deploy_contract();
+        let dispatcher = IZkCarelRouterDispatcher { contract_address };
+        
+        // Owner adds new DEX
+        set_caller_address(OWNER);
+        dispatcher.add_dex(ContractAddress::default());
+        
+        // Non-owner tries to add DEX (should fail)
+        set_caller_address(USER1);
+        
+        let mut success = true;
+        match dispatcher.try_add_dex(ContractAddress::default()) {
+            Option::Some(_) => { success = false; },
+            Option::None => { success = true; }
+        }
+        assert(success, 'Non-owner should not add DEX');
+    }
+    
+    fn mock_token_calls() {
+        // Mock token allowance check
+        mock_call(
+            TOKEN1,
+            'allowance',
+            array![USER1.into(), ContractAddress::default().into()],
+            array![1000000.into()]
+        );
+        
+        // Mock token transfer_from
+        mock_call(
+            TOKEN1,
+            'transfer_from',
+            array![],
+            array![]
+        );
+        
+        // Mock token transfer
+        mock_call(
+            TOKEN2,
+            'transfer',
+            array![],
+            array![]
+        );
+        
+        // Mock points contract
+        mock_call(
+            POINTS_CONTRACT,
+            'add_points',
+            array![],
+            array![]
+        );
+        
+        // Mock NFT contract
+        mock_call(
+            NFT_CONTRACT,
+            'has_active_discount',
+            array![USER1.into()],
+            array![false.into(), 0.into()]
+        );
+    }
+    
+    fn deploy_contract() -> ContractAddress {
+        starknet::testing::deploy_contract(
+            ZkCarelRouter::TEST_CLASS_HASH,
+            array![WETH.into(), TREASURY.into(), POINTS_CONTRACT.into(), NFT_CONTRACT.into()]
+        )
+    }
+    
+    fn get_block_timestamp() -> u64 {
+        1700000000
+    }
+}
