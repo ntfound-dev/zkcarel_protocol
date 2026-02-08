@@ -162,4 +162,30 @@ mod tests {
         let parsed = parsed.unwrap();
         assert_eq!(parsed.event_type, "Swap");
     }
+
+    #[test]
+    fn parse_event_returns_none_for_empty_keys() {
+        // Memastikan event tanpa key diabaikan
+        let parser = EventParser::new();
+        let event = Event {
+            from_address: "0x123".to_string(),
+            keys: vec![],
+            data: vec![],
+        };
+        assert!(parser.parse_event(&event).is_none());
+    }
+
+    #[test]
+    fn hex_to_decimal_parses_valid_hex() {
+        // Memastikan hex valid diubah menjadi angka desimal
+        let parser = EventParser::new();
+        assert_eq!(parser.hex_to_decimal("0x10"), Some(16));
+    }
+
+    #[test]
+    fn hex_to_address_always_prefixes() {
+        // Memastikan alamat selalu memiliki prefix 0x
+        let parser = EventParser::new();
+        assert_eq!(parser.hex_to_address("abc"), "0xabc");
+    }
 }

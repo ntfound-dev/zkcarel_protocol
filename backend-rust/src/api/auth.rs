@@ -66,7 +66,7 @@ pub async fn connect_wallet(
     state.db.update_last_active(&req.address).await?;
 
     // 4. Generate JWT token
-    let token = generate_jwt_token(&req.address, &state.config.jwt_secret)?;
+    let token = generate_jwt_token(&req.address, &state.config.jwt_secret, state.config.jwt_expiry_hours)?;
 
     // 5. Calculate expiry
     let expires_in = state.config.jwt_expiry_hours * 3600;
@@ -94,7 +94,7 @@ pub async fn refresh_token(
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
     // 3. Generate new token
-    let new_token = generate_jwt_token(&user_address, &state.config.jwt_secret)?;
+    let new_token = generate_jwt_token(&user_address, &state.config.jwt_secret, state.config.jwt_expiry_hours)?;
 
     // 4. Calculate expiry
     let expires_in = state.config.jwt_expiry_hours * 3600;
@@ -129,9 +129,9 @@ fn verify_signature(address: &str, message: &str, signature: &str, chain_id: u64
     Ok(())
 }
 
-fn generate_jwt_token(address: &str, secret: &str) -> Result<String> {
+fn generate_jwt_token(address: &str, secret: &str, expiry_hours: u64) -> Result<String> {
     let expiration = Utc::now()
-        .checked_add_signed(Duration::hours(24))
+        .checked_add_signed(Duration::hours(expiry_hours as i64))
         .expect("valid timestamp")
         .timestamp();
 
@@ -158,4 +158,23 @@ pub async fn extract_user_from_token(token: &str, secret: &str) -> Result<String
     ).map_err(|_| AppError::AuthError("Invalid or expired token".to_string()))?;
 
     Ok(token_data.claims.sub)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_signature_rejects_invalid_format() {
+        // Memastikan format signature yang salah ditolak
+        let result = verify_signature("0xabc", "hello", "deadbeef", 1);
+        assert!(matches!(result, Err(AppError::InvalidSignature)));
+    }
+
+    #[tokio::test]
+    async fn extract_user_from_token_rejects_invalid() {
+        // Memastikan token invalid mengembalikan error autentikasi
+        let result = extract_user_from_token("invalid.token", "secret").await;
+        assert!(matches!(result, Err(AppError::AuthError(_))));
+    }
 }

@@ -1,7 +1,15 @@
-use crate::{config::Config, db::Database, error::Result, models::LimitOrder};
+use crate::{config::Config, constants::{DEX_EKUBO, ORDER_EXECUTOR_INTERVAL_SECS}, db::Database, error::Result, models::LimitOrder};
 use std::sync::Arc;
 use sqlx::Row; // Penting untuk .get()
 use rust_decimal::prelude::ToPrimitive; // Penting untuk f64 conversion
+
+fn is_order_expired(now: chrono::DateTime<chrono::Utc>, expiry: chrono::DateTime<chrono::Utc>) -> bool {
+    now > expiry
+}
+
+fn should_execute_price(current_price: f64, target_price: f64) -> bool {
+    current_price <= target_price * 1.005
+}
 
 pub struct LimitOrderExecutor {
     db: Database,
@@ -22,7 +30,7 @@ impl LimitOrderExecutor {
                 }
 
                 // Check every 10 seconds
-                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(ORDER_EXECUTOR_INTERVAL_SECS)).await;
             }
         });
     }
@@ -32,7 +40,7 @@ impl LimitOrderExecutor {
         let orders = self.get_active_orders().await?;
 
         for order in orders {
-            if chrono::Utc::now() > order.expiry {
+            if is_order_expired(chrono::Utc::now(), order.expiry) {
                 self.expire_order(&order.order_id).await?;
                 continue;
             }
@@ -52,6 +60,18 @@ impl LimitOrderExecutor {
                         }
                     }
                 }
+            }
+        }
+
+        if self.config.is_testnet() {
+            if let Ok(stats) = self.get_executor_stats().await {
+                tracing::debug!(
+                    "Executor stats: active={}, filled={}, expired={}, total={}",
+                    stats.active_orders,
+                    stats.filled_orders,
+                    stats.expired_orders,
+                    stats.total_orders
+                );
             }
         }
 
@@ -78,7 +98,7 @@ impl LimitOrderExecutor {
         // Konversi Decimal ke f64 dengan ToPrimitive
         let target_price_f64 = order.price.to_f64().unwrap_or(0.0);
 
-        Ok(current_price <= target_price_f64 * 1.005) 
+        Ok(should_execute_price(current_price, target_price_f64))
     }
 
     async fn get_current_price(&self, _from_token: &str, _to_token: &str) -> Result<f64> {
@@ -92,15 +112,7 @@ impl LimitOrderExecutor {
 
         let filled_amount = order.amount - order.filled;
 
-        sqlx::query(
-            "UPDATE limit_orders
-             SET filled = filled + $1, status = 2
-             WHERE order_id = $2"
-        )
-        .bind(filled_amount)
-        .bind(&order.order_id)
-        .execute(self.db.pool())
-        .await?;
+        self.db.fill_order(&order.order_id, filled_amount).await?;
 
         sqlx::query(
             "INSERT INTO order_executions (order_id, executor, amount_filled, price_executed, tx_hash)
@@ -128,7 +140,7 @@ impl LimitOrderExecutor {
     }
 
     async fn get_best_execution_route(&self, _order: &LimitOrder) -> Result<String> {
-        Ok("Ekubo".to_string())
+        Ok(DEX_EKUBO.to_string())
     }
 
     async fn execute_swap_on_chain(&self, _order: &LimitOrder, _route: &str) -> Result<String> {
@@ -178,4 +190,26 @@ pub struct ExecutorStats {
     pub filled_orders: i64,
     pub expired_orders: i64,
     pub total_orders: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn is_order_expired_detects_past() {
+        // Memastikan order dianggap expired jika sekarang lebih besar dari expiry
+        let now = Utc.timestamp_opt(2_000, 0).unwrap();
+        let expiry = Utc.timestamp_opt(1_000, 0).unwrap();
+        assert!(is_order_expired(now, expiry));
+    }
+
+    #[test]
+    fn should_execute_price_allows_small_slippage() {
+        // Memastikan toleransi 0.5% diterapkan
+        assert!(should_execute_price(100.0, 100.0));
+        assert!(should_execute_price(100.4, 100.0));
+        assert!(!should_execute_price(101.0, 100.0));
+    }
 }

@@ -5,6 +5,7 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
+    constants::EPOCH_DURATION_SECONDS,
     error::Result,
     models::ApiResponse,
 };
@@ -47,6 +48,13 @@ pub struct UserRankResponse {
     pub value: f64,
 }
 
+fn compute_percentile(rank: i64, total_users: i64) -> f64 {
+    if total_users <= 0 {
+        return 0.0;
+    }
+    (1.0 - (rank as f64 / total_users as f64)) * 100.0
+}
+
 /// GET /api/v1/leaderboard/:type
 pub async fn get_leaderboard(
     State(state): State<AppState>,
@@ -80,7 +88,7 @@ pub async fn get_user_rank(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> Result<Json<ApiResponse<UserRankResponse>>> {
-    let current_epoch = (chrono::Utc::now().timestamp() / 2592000) as i64;
+    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
     let user_points = state.db.get_user_points(&address, current_epoch).await?
         .ok_or_else(|| crate::error::AppError::NotFound("User not found".to_string()))?;
@@ -103,7 +111,7 @@ pub async fn get_user_rank(
     .await?;
 
     let total_users = if total_users_res.count == 0 { 1 } else { total_users_res.count };
-    let percentile = (1.0 - (rank_result.rank as f64 / total_users as f64)) * 100.0;
+    let percentile = compute_percentile(rank_result.rank, total_users);
 
     Ok(Json(ApiResponse::success(UserRankResponse {
         rank: rank_result.rank,
@@ -114,7 +122,7 @@ pub async fn get_user_rank(
 }
 
 async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
-    let current_epoch = (chrono::Utc::now().timestamp() / 2592000) as i64;
+    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
     // Perhatikan penggunaan CAST(... AS FLOAT) agar cocok dengan struct f64
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
@@ -177,4 +185,23 @@ async fn get_referrals_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEn
     .await?;
 
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_percentile_handles_basic_case() {
+        // Memastikan perhitungan percentile sesuai formula
+        let percentile = compute_percentile(1, 100);
+        assert!((percentile - 99.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn compute_percentile_zero_total() {
+        // Memastikan total user 0 menghasilkan 0
+        let percentile = compute_percentile(1, 0);
+        assert!((percentile - 0.0).abs() < f64::EPSILON);
+    }
 }

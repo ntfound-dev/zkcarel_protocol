@@ -1,4 +1,19 @@
-use crate::{config::Config, db::Database, error::Result};
+use crate::{
+    config::Config,
+    constants::{
+        EPOCH_DURATION_SECONDS,
+        MULTIPLIER_TIER_1,
+        MULTIPLIER_TIER_2,
+        MULTIPLIER_TIER_3,
+        MULTIPLIER_TIER_4,
+        POINTS_PER_USD_BRIDGE,
+        POINTS_PER_USD_STAKE_DAILY,
+        POINTS_PER_USD_SWAP,
+        POINT_CALCULATOR_INTERVAL_SECS,
+    },
+    db::Database,
+    error::Result,
+};
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use sqlx::Row;
@@ -18,7 +33,7 @@ impl PointCalculator {
     /// Start point calculation loop
     pub async fn start(self: Arc<Self>) {
         tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(60)); // Every minute
+            let mut ticker = interval(Duration::from_secs(POINT_CALCULATOR_INTERVAL_SECS)); // Every minute
 
             loop {
                 ticker.tick().await;
@@ -32,6 +47,9 @@ impl PointCalculator {
 
     /// Calculate points for all pending transactions
     async fn calculate_pending_points(&self) -> Result<()> {
+        if self.config.is_testnet() {
+            tracing::debug!("Point calculator running in testnet mode");
+        }
         // Ganti ke runtime query_as
         let transactions = sqlx::query_as::<_, crate::models::Transaction>(
             "SELECT * FROM transactions WHERE processed = false ORDER BY timestamp ASC LIMIT 100"
@@ -68,7 +86,7 @@ impl PointCalculator {
             _ => 0.0,
         };
 
-        let current_epoch = (chrono::Utc::now().timestamp() / 2592000) as i64;
+        let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
         let points_decimal = rust_decimal::Decimal::from_f64_retain(points).unwrap_or_default();
         
         match tx.tx_type.as_str() {
@@ -102,6 +120,9 @@ impl PointCalculator {
             _ => {}
         }
 
+        // Apply multipliers after point updates
+        self.apply_multipliers(&tx.user_address, current_epoch).await?;
+
         sqlx::query("UPDATE transactions SET points_earned = $1, processed = true WHERE tx_hash = $2")
             .bind(points_decimal)
             .bind(&tx.tx_hash)
@@ -119,15 +140,15 @@ impl PointCalculator {
     }
 
     async fn calculate_swap_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * 10.0)
+        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * POINTS_PER_USD_SWAP)
     }
 
     async fn calculate_bridge_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * 15.0)
+        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * POINTS_PER_USD_BRIDGE)
     }
 
     async fn calculate_stake_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * 0.05 / 365.0)
+        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * POINTS_PER_USD_STAKE_DAILY)
     }
 
     async fn is_wash_trading(&self, user_address: &str, current_tx: &str) -> Result<bool> {
@@ -147,7 +168,7 @@ impl PointCalculator {
     }
 
     async fn flag_wash_trading(&self, user_address: &str) -> Result<()> {
-        let current_epoch = (chrono::Utc::now().timestamp() / 2592000) as i64;
+        let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
         sqlx::query(
             "UPDATE points SET wash_trading_flagged = true
@@ -162,7 +183,20 @@ impl PointCalculator {
     }
 
     pub async fn apply_multipliers(&self, user_address: &str, epoch: i64) -> Result<()> {
-        let multiplier = 1.25; // Contoh logika multiplier
+        let stake_points: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+            "SELECT stake_points FROM points WHERE user_address = $1 AND epoch = $2"
+        )
+        .bind(user_address)
+        .bind(epoch)
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        let stake_points_f64 = stake_points
+            .unwrap_or(rust_decimal::Decimal::ZERO)
+            .to_f64()
+            .unwrap_or(0.0);
+
+        let multiplier = staking_multiplier_for(stake_points_f64);
         let nft_boost = false;
 
         sqlx::query(
@@ -180,5 +214,31 @@ impl PointCalculator {
         .await?;
 
         Ok(())
+    }
+}
+
+fn staking_multiplier_for(stake_amount: f64) -> f64 {
+    if stake_amount < 10_000.0 {
+        MULTIPLIER_TIER_1
+    } else if stake_amount < 50_000.0 {
+        MULTIPLIER_TIER_2
+    } else if stake_amount < 100_000.0 {
+        MULTIPLIER_TIER_3
+    } else {
+        MULTIPLIER_TIER_4
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staking_multiplier_for_tier_boundaries() {
+        // Memastikan multiplier berubah sesuai batas tier
+        assert_eq!(staking_multiplier_for(0.0), MULTIPLIER_TIER_1);
+        assert_eq!(staking_multiplier_for(10_000.0), MULTIPLIER_TIER_2);
+        assert_eq!(staking_multiplier_for(50_000.0), MULTIPLIER_TIER_3);
+        assert_eq!(staking_multiplier_for(100_000.0), MULTIPLIER_TIER_4);
     }
 }

@@ -122,7 +122,67 @@ impl Config {
         })
     }
     
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.database_url.trim().is_empty() {
+            anyhow::bail!("DATABASE_URL is empty");
+        }
+        if self.starknet_rpc_url.trim().is_empty() {
+            anyhow::bail!("STARKNET_RPC_URL is empty");
+        }
+        if self.ethereum_rpc_url.trim().is_empty() {
+            anyhow::bail!("ETHEREUM_RPC_URL is empty");
+        }
+        if self.backend_private_key.trim().is_empty() || self.backend_public_key.trim().is_empty() {
+            anyhow::bail!("Backend signing keys are missing");
+        }
+        if self.jwt_secret.trim().is_empty() {
+            anyhow::bail!("JWT_SECRET is empty");
+        }
+
+        if self.carel_token_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder CAREL token address");
+        }
+        if self.snapshot_distributor_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder snapshot distributor address");
+        }
+        if self.point_storage_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder point storage address");
+        }
+        if self.price_oracle_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder price oracle address");
+        }
+        if self.limit_order_book_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder limit order book address");
+        }
+
+        if self.backend_private_key.contains("123456") || self.jwt_secret.contains("super_secret") {
+            tracing::warn!("Detected dev credentials in config");
+        }
+
+        if self.rate_limit_public == 0 || self.rate_limit_authenticated == 0 {
+            tracing::warn!("Rate limit values should be > 0");
+        }
+
+        if self.cors_allowed_origins.trim().is_empty() {
+            tracing::warn!("CORS_ALLOWED_ORIGINS is empty; requests may be blocked");
+        }
+
+        let _ = &self.openai_api_key;
+        let _ = &self.twitter_bearer_token;
+        let _ = &self.telegram_bot_token;
+        let _ = &self.discord_bot_token;
+        let _ = &self.stripe_secret_key;
+        let _ = &self.moonpay_api_key;
+        let _ = &self.starknet_chain_id;
+
+        Ok(())
+    }
+
     pub fn is_testnet(&self) -> bool {
-        self.environment == "development" || self.environment == "testnet"
+        if self.environment == "development" || self.environment == "testnet" {
+            return true;
+        }
+        let chain = self.starknet_chain_id.to_ascii_uppercase();
+        chain.contains("SEPOLIA") || chain.contains("GOERLI")
     }
 }

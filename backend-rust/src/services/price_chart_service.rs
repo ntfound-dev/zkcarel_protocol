@@ -1,5 +1,6 @@
 use crate::{
     config::Config,
+    constants::PRICE_UPDATER_INTERVAL_SECS,
     db::Database,
     error::{AppError, Result},
     models::PriceTick,
@@ -11,6 +12,26 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+fn candle_start_time(time: DateTime<Utc>, interval: &str) -> DateTime<Utc> {
+    let minutes = match interval {
+        "1m" => 1,
+        "5m" => 5,
+        "15m" => 15,
+        "1h" => 60,
+        "4h" => 240,
+        "1d" => 1440,
+        _ => 1,
+    };
+
+    let total_minutes = time.hour() as i64 * 60 + time.minute() as i64;
+    let rounded = (total_minutes / minutes) * minutes;
+
+    time.date_naive()
+        .and_hms_opt((rounded / 60) as u32, (rounded % 60) as u32, 0)
+        .unwrap()
+        .and_utc()
+}
 
 pub struct PriceChartService {
     db: Database,
@@ -35,7 +56,7 @@ impl PriceChartService {
                     tracing::error!("Failed to update prices: {}", e);
                 }
 
-                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(PRICE_UPDATER_INTERVAL_SECS)).await;
             }
         });
     }
@@ -50,6 +71,10 @@ impl PriceChartService {
             let last_price = cache.get(token).copied();
             cache.insert(token.to_string(), price);
             drop(cache);
+
+            if let Ok(latest) = self.get_current_price(token).await {
+                tracing::debug!("Current price {}: {}", token, latest);
+            }
 
             self.update_ohlcv_candles(token, price, last_price).await?;
         }
@@ -68,7 +93,10 @@ impl PriceChartService {
             _ => 1.0,
         };
 
-        let variation = (rand::random::<f64>() - 0.5) * 0.02;
+        let mut variation = (rand::random::<f64>() - 0.5) * 0.02;
+        if self.config.is_testnet() {
+            variation *= 0.5;
+        }
         let price = base_price * (1.0 + variation);
 
         Decimal::from_f64(price)
@@ -85,7 +113,7 @@ impl PriceChartService {
         let intervals = ["1m", "5m", "15m", "1h", "4h", "1d"];
 
         for interval in intervals {
-            let candle_start = self.get_candle_start_time(now, interval);
+            let candle_start = candle_start_time(now, interval);
 
             let sql = r#"
                 SELECT token, timestamp, open, high, low, close, volume
@@ -162,25 +190,6 @@ impl PriceChartService {
         Ok(())
     }
 
-    fn get_candle_start_time(&self, time: DateTime<Utc>, interval: &str) -> DateTime<Utc> {
-        let minutes = match interval {
-            "1m" => 1,
-            "5m" => 5,
-            "15m" => 15,
-            "1h" => 60,
-            "4h" => 240,
-            "1d" => 1440,
-            _ => 1,
-        };
-
-        let total_minutes = time.hour() as i64 * 60 + time.minute() as i64;
-        let rounded = (total_minutes / minutes) * minutes;
-
-        time.date_naive()
-            .and_hms_opt((rounded / 60) as u32, (rounded % 60) as u32, 0)
-            .unwrap()
-            .and_utc()
-    }
 
     pub async fn get_current_price(&self, token: &str) -> Result<Decimal> {
         self.price_cache
@@ -223,25 +232,7 @@ impl PriceChartService {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> Result<Vec<PriceTick>> {
-        let sql = r#"
-            SELECT token, timestamp, open, high, low, close, volume
-            FROM price_history
-            WHERE token = $1
-              AND interval = $2
-              AND timestamp >= $3
-              AND timestamp <= $4
-            ORDER BY timestamp ASC
-        "#;
-
-        let rows = sqlx::query_as::<_, PriceTick>(sql)
-            .bind(token)
-            .bind(interval)
-            .bind(from)
-            .bind(to)
-            .fetch_all(self.db.pool())
-            .await?;
-
-        Ok(rows)
+        self.db.get_price_history(token, interval, from, to).await
     }
 
     pub async fn calculate_indicators(
@@ -336,5 +327,20 @@ impl PriceChartService {
         }
 
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn candle_start_time_rounds_down() {
+        // Memastikan waktu dibulatkan ke interval terdekat ke bawah
+        let time = Utc.with_ymd_and_hms(2024, 1, 1, 10, 37, 45).unwrap();
+        let rounded = candle_start_time(time, "15m");
+        assert_eq!(rounded.minute(), 30);
+        assert_eq!(rounded.second(), 0);
     }
 }

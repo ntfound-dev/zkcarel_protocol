@@ -1,4 +1,4 @@
-use crate::{config::Config, db::Database, error::Result, models::Notification};
+use crate::{config::Config, db::Database, error::Result, models::{Notification, NotificationPreferences}};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -27,6 +27,7 @@ impl NotificationService {
         message: String,
         data: Option<serde_json::Value>,
     ) -> Result<()> {
+        let _ = NotificationType::all();
         self.db
             .create_notification(user_address, &notif_type.to_string(), &title, &message)
             .await?;
@@ -73,6 +74,10 @@ impl NotificationService {
     }
 
     async fn send_via_other_channels(&self, user_address: &str, notification: &Notification) -> Result<()> {
+        if self.config.is_testnet() {
+            tracing::debug!("Testnet mode: skip external notifications for {}", user_address);
+            return Ok(());
+        }
         let prefs = self.get_user_preferences(user_address).await?;
         if prefs.email_enabled { self.send_email(user_address, notification).await?; }
         if prefs.push_enabled { self.send_push(user_address, notification).await?; }
@@ -108,25 +113,13 @@ impl NotificationService {
 
     pub async fn get_user_notifications(&self, user_address: &str, page: i32, limit: i32) -> Result<Vec<Notification>> {
         let offset = (page - 1) * limit;
-        let notifications = sqlx::query_as::<_, Notification>(
-            "SELECT * FROM notifications WHERE user_address = $1
-             ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-        )
-        .bind(user_address)
-        .bind(limit as i64)
-        .bind(offset as i64)
-        .fetch_all(self.db.pool())
-        .await?;
-        Ok(notifications)
+        self.db
+            .get_user_notifications(user_address, limit as i64, offset as i64)
+            .await
     }
 
     pub async fn mark_as_read(&self, notification_id: i64, user_address: &str) -> Result<()> {
-        sqlx::query("UPDATE notifications SET read = true WHERE id = $1 AND user_address = $2")
-            .bind(notification_id)
-            .bind(user_address)
-            .execute(self.db.pool())
-            .await?;
-        Ok(())
+        self.db.mark_notification_read(notification_id, user_address).await
     }
 
     pub async fn mark_all_as_read(&self, user_address: &str) -> Result<()> {
@@ -171,10 +164,38 @@ impl ToString for NotificationType {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, Default)]
-pub struct NotificationPreferences {
-    pub email_enabled: bool,
-    pub push_enabled: bool,
-    pub telegram_enabled: bool,
-    pub discord_enabled: bool,
+impl NotificationType {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::SwapCompleted,
+            Self::SwapFailed,
+            Self::OrderFilled,
+            Self::OrderExpired,
+            Self::StakeRewards,
+            Self::NFTExpired,
+            Self::RewardClaimable,
+            Self::PriceAlert,
+            Self::System,
+        ]
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_type_to_string_maps() {
+        // Memastikan mapping enum ke string berjalan benar
+        assert_eq!(NotificationType::SwapCompleted.to_string(), "swap.completed");
+        assert_eq!(NotificationType::System.to_string(), "system");
+    }
+
+    #[test]
+    fn notification_type_all_has_items() {
+        // Memastikan daftar tipe notifikasi tidak kosong
+        let all = NotificationType::all();
+        assert!(all.len() >= 5);
+    }
+}
+

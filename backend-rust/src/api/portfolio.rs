@@ -41,6 +41,19 @@ pub struct HistoryQuery {
     pub period: String, // 1d, 7d, 30d, all
 }
 
+fn total_value_usd(balances: &[TokenBalance]) -> f64 {
+    balances.iter().map(|b| b.value_usd).sum()
+}
+
+fn points_count_for_period(period: &str) -> i64 {
+    match period {
+        "1d" => 24,
+        "7d" => 7 * 24,
+        "30d" => 30,
+        _ => 30,
+    }
+}
+
 /// GET /api/v1/portfolio/balance
 pub async fn get_balance(
     State(_state): State<AppState>,
@@ -79,7 +92,7 @@ pub async fn get_balance(
         },
     ];
 
-    let total_value_usd: f64 = balances.iter().map(|b| b.value_usd).sum();
+    let total_value_usd = total_value_usd(&balances);
 
     let response = BalanceResponse {
         total_value_usd,
@@ -97,12 +110,7 @@ pub async fn get_history(
     // TODO: Extract user and calculate actual history
 
     // Generate mock history data
-    let points_count = match query.period.as_str() {
-        "1d" => 24,
-        "7d" => 7 * 24,
-        "30d" => 30,
-        _ => 30,
-    };
+    let points_count = points_count_for_period(&query.period);
 
     let mut total_value = Vec::new();
     let base_value = 31000.0;
@@ -132,4 +140,25 @@ pub async fn get_history(
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn total_value_usd_sums_balances() {
+        // Memastikan total nilai dihitung dari seluruh saldo
+        let balances = vec![
+            TokenBalance { token: "A".to_string(), amount: 1.0, value_usd: 10.0, price: 10.0, change_24h: 0.0 },
+            TokenBalance { token: "B".to_string(), amount: 2.0, value_usd: 15.5, price: 7.75, change_24h: 0.0 },
+        ];
+        assert!((total_value_usd(&balances) - 25.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn points_count_for_period_defaults_to_30() {
+        // Memastikan periode tidak dikenal memakai default 30
+        assert_eq!(points_count_for_period("unknown"), 30);
+    }
 }

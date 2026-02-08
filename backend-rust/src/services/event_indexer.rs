@@ -1,4 +1,20 @@
-use crate::{config::Config, db::Database, error::Result};
+use crate::{
+    config::Config,
+    constants::{
+        CONTRACT_BRIDGE_AGGREGATOR,
+        CONTRACT_LIMIT_ORDER,
+        CONTRACT_MERKLE_DISTRIBUTOR,
+        CONTRACT_NFT_DISCOUNT,
+        CONTRACT_POINT_STORAGE,
+        CONTRACT_STAKING_BTC,
+        CONTRACT_STAKING_CAREL,
+        CONTRACT_SWAP_AGGREGATOR,
+        INDEXER_INTERVAL_SECS,
+    },
+    db::Database,
+    error::Result,
+    indexer::{block_processor::BlockProcessor, event_parser::EventParser, starknet_client::StarknetClient},
+};
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 
@@ -7,11 +23,15 @@ pub struct EventIndexer {
     db: Database,
     config: Config,
     last_block: Arc<tokio::sync::RwLock<u64>>,
+    client: StarknetClient,
+    parser: EventParser,
 }
 
 impl EventIndexer {
     pub fn new(db: Database, config: Config) -> Self {
         Self {
+            client: StarknetClient::new(config.starknet_rpc_url.clone()),
+            parser: EventParser::new(),
             db,
             config,
             last_block: Arc::new(tokio::sync::RwLock::new(0)),
@@ -21,7 +41,19 @@ impl EventIndexer {
     /// Start the event indexer loop
     pub async fn start(self: Arc<Self>) {
         tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(5));
+            let contract_targets = [
+                CONTRACT_SWAP_AGGREGATOR,
+                CONTRACT_BRIDGE_AGGREGATOR,
+                CONTRACT_STAKING_CAREL,
+                CONTRACT_STAKING_BTC,
+                CONTRACT_POINT_STORAGE,
+                CONTRACT_MERKLE_DISTRIBUTOR,
+                CONTRACT_NFT_DISCOUNT,
+                CONTRACT_LIMIT_ORDER,
+            ];
+            tracing::info!("Indexing contracts: {:?}", contract_targets);
+
+            let mut ticker = interval(Duration::from_secs(INDEXER_INTERVAL_SECS));
 
             loop {
                 ticker.tick().await;
@@ -35,6 +67,13 @@ impl EventIndexer {
 
     /// Scan for new events from last block to current
     async fn scan_events(&self) -> Result<()> {
+        if std::env::var("INDEXER_DIAGNOSTICS").is_ok() {
+            let _ = self
+                .client
+                .call_contract(CONTRACT_SWAP_AGGREGATOR, "version", vec![])
+                .await;
+        }
+
         let last_block = *self.last_block.read().await;
         let current_block = self.get_current_block().await?;
 
@@ -49,7 +88,15 @@ impl EventIndexer {
         );
 
         for block in (last_block + 1)..=current_block {
-            self.process_block(block).await?;
+            if std::env::var("USE_BLOCK_PROCESSOR").is_ok() {
+                let processor = BlockProcessor::new(
+                    StarknetClient::new(self.config.starknet_rpc_url.clone()),
+                    self.db.clone(),
+                );
+                let _ = processor.process_block(block).await?;
+            } else {
+                self.process_block(block).await?;
+            }
         }
 
         // Update last processed block
@@ -60,8 +107,9 @@ impl EventIndexer {
 
     /// Get current blockchain block number
     async fn get_current_block(&self) -> Result<u64> {
-        // TODO: Integrate with actual Starknet RPC
-        // For now, return mock value
+        if std::env::var("USE_STARKNET_RPC").is_ok() {
+            return self.client.get_block_number().await;
+        }
         Ok(1000000)
     }
 
@@ -79,9 +127,43 @@ impl EventIndexer {
 
     /// Get events from a specific block
     async fn get_block_events(&self, _block_number: u64) -> Result<Vec<BlockchainEvent>> {
-        // TODO: Query Starknet for events
-        // For now, return empty
-        Ok(vec![])
+        let mut out = Vec::new();
+        if std::env::var("USE_STARKNET_RPC").is_err() {
+            return Ok(out);
+        }
+
+        let targets = [
+            CONTRACT_SWAP_AGGREGATOR,
+            CONTRACT_BRIDGE_AGGREGATOR,
+            CONTRACT_STAKING_CAREL,
+            CONTRACT_STAKING_BTC,
+            CONTRACT_POINT_STORAGE,
+            CONTRACT_MERKLE_DISTRIBUTOR,
+            CONTRACT_NFT_DISCOUNT,
+            CONTRACT_LIMIT_ORDER,
+        ];
+
+        for contract in targets {
+            let events = self
+                .client
+                .get_events(contract, _block_number, _block_number)
+                .await?;
+
+            for ev in events {
+                if let Some(parsed) = self.parser.parse_event(&ev) {
+                    let mut data = parsed.data;
+                    normalize_event_data(&self.parser, &mut data);
+
+                    out.push(BlockchainEvent {
+                        tx_hash: ev.from_address.clone(),
+                        event_type: parsed.event_type,
+                        data,
+                    });
+                }
+            }
+        }
+
+        Ok(out)
     }
 
     /// Process individual event
@@ -246,4 +328,29 @@ struct BlockchainEvent {
     tx_hash: String,
     event_type: String,
     data: serde_json::Value,
+}
+
+fn normalize_event_data(parser: &EventParser, data: &mut serde_json::Value) {
+    if let Some(user) = data.get("user").and_then(|v| v.as_str()) {
+        let addr = parser.hex_to_address(user);
+        data["user"] = serde_json::Value::String(addr);
+    }
+
+    if let Some(amount_hex) = data.get("amount_in").and_then(|v| v.as_str()) {
+        let _ = parser.hex_to_decimal(amount_hex);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_event_data_adds_prefix() {
+        // Memastikan user di-normalisasi ke format 0x
+        let parser = EventParser::new();
+        let mut data = serde_json::json!({"user": "abc", "amount_in": "0x10"});
+        normalize_event_data(&parser, &mut data);
+        assert_eq!(data.get("user").and_then(|v| v.as_str()), Some("0xabc"));
+    }
 }

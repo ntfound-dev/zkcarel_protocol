@@ -18,7 +18,6 @@ pub mod webhook_service;
 pub mod gas_optimizer;
 
 // Re-export for convenience
-pub use faucet_service::FaucetService;
 pub use notification_service::{NotificationService};
 pub use transaction_history::TransactionHistoryService;
 pub use price_chart_service::PriceChartService;
@@ -26,17 +25,17 @@ pub use limit_order_executor::LimitOrderExecutor;
 pub use liquidity_aggregator::LiquidityAggregator;
 pub use event_indexer::EventIndexer;
 pub use point_calculator::PointCalculator;
-// pub use merkle_generator::MerkleGenerator;
-// pub use route_optimizer::RouteOptimizer;
-// pub use snapshot_manager::SnapshotManager;
-// pub use social_verifier::SocialVerifier;
-// pub use ai_service::AIService;
+pub use merkle_generator::MerkleGenerator;
+pub use route_optimizer::RouteOptimizer;
+pub use snapshot_manager::SnapshotManager;
+pub use social_verifier::SocialVerifier;
 pub use deposit_service::DepositService;
-// pub use analytics_service::AnalyticsService;
-// pub use webhook_service::WebhookService;
-// pub use gas_optimizer::GasOptimizer;
+pub use analytics_service::AnalyticsService;
+pub use webhook_service::WebhookService;
 
 use crate::{config::Config, db::Database};
+use rust_decimal::prelude::ToPrimitive;
+use sqlx::Row;
 use std::sync::Arc;
 
 /// Start all background services
@@ -58,6 +57,43 @@ pub async fn start_background_services(db: Database, config: Config) {
     // Start limit order executor
     let order_executor = Arc::new(LimitOrderExecutor::new(db.clone(), config.clone()));
     order_executor.clone().start_executor().await;
+
+    // Snapshot manager (optional one-off jobs)
+    let snapshot_manager = SnapshotManager::new(db.clone(), config.clone());
+    let current_epoch = snapshot_manager.get_current_epoch();
+    tracing::info!("Current epoch: {}", current_epoch);
+
+    if std::env::var("RUN_EPOCH_JOBS").is_ok() {
+        tracing::info!("Running epoch finalize job...");
+        let finalize_epoch = current_epoch.saturating_sub(1);
+        let merkle = MerkleGenerator::new(db.clone(), config.clone());
+
+        if let Ok(tree) = merkle.generate_for_epoch(finalize_epoch).await {
+            let _ = merkle.save_merkle_root(finalize_epoch, &tree.root).await;
+
+            if let Ok(sample) = sqlx::query(
+                "SELECT user_address, total_points FROM points
+                 WHERE epoch = $1 AND finalized = true AND total_points > 0
+                 ORDER BY user_address ASC LIMIT 1"
+            )
+            .bind(finalize_epoch)
+            .fetch_optional(db.pool())
+            .await
+            {
+                if let Some(row) = sample {
+                    let address: String = row.get("user_address");
+                    let points: rust_decimal::Decimal = row.get("total_points");
+                    let amount_carel =
+                        points.to_f64().unwrap_or(0.0) * crate::constants::POINTS_TO_CAREL_RATIO;
+                    let _ = merkle.generate_proof(&tree, &address, amount_carel).await;
+                    let _ = merkle.get_merkle_root(finalize_epoch).await;
+                }
+            }
+        }
+
+        let _ = snapshot_manager.finalize_epoch(finalize_epoch).await;
+        let _ = snapshot_manager.start_new_epoch(current_epoch).await;
+    }
 
     tracing::info!("All background services started successfully");
 }

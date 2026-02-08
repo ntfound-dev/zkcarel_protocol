@@ -2,8 +2,9 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use axum::http::HeaderValue;
 use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
@@ -20,6 +21,7 @@ mod utils;
 mod websocket;
 
 use config::Config;
+use constants::API_VERSION;
 use db::Database;
 
 #[tokio::main]
@@ -35,12 +37,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Load configuration
     let config = Config::from_env()?;
+    config.validate()?;
 
     tracing::info!("Starting CAREL Backend Server");
     tracing::info!("Environment: {}", config.environment);
+    tracing::info!("API Version: {}", API_VERSION);
 
     // Initialize database
-    let db = Database::new(&config.database_url).await?;
+    let db = Database::new(&config).await?;
 
     // Run migrations
     tracing::info!("Running database migrations...");
@@ -87,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
 
 fn build_router(state: api::AppState) -> Router {
     // CORS configuration
-    let cors = CorsLayer::very_permissive();
+    let cors = cors_from_config(&state.config);
 
     Router::new()
         // Health check
@@ -210,4 +214,28 @@ fn build_router(state: api::AppState) -> Router {
         .route("/ws/orders", get(websocket::orders::handler))
         .layer(cors)
         .with_state(state)
+}
+
+fn cors_from_config(config: &Config) -> CorsLayer {
+    let raw = config.cors_allowed_origins.trim();
+    if raw.is_empty() || raw == "*" {
+        return CorsLayer::very_permissive();
+    }
+
+    let allowed: Vec<HeaderValue> = raw
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<HeaderValue>().ok())
+        .collect();
+
+    if allowed.is_empty() {
+        tracing::warn!("No valid CORS origins parsed; falling back to permissive");
+        return CorsLayer::very_permissive();
+    }
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(allowed))
+        .allow_methods(Any)
+        .allow_headers(Any)
 }

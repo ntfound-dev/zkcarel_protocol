@@ -1,2 +1,30 @@
+# Rust
 /target
+**/*.rs.bk
+Cargo.lock
+
+# Env / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# SQLx offline cache
+/.sqlx
+
+# Logs
+*.log
+
+# Docker
+*.pid
+
+# Temporary
+*.tmp
+*.temp
+
+# Misc
 readme.MD

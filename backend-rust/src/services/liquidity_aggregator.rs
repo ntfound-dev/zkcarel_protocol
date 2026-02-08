@@ -1,5 +1,17 @@
-use crate::{config::Config, error::Result};
+use crate::{config::Config, constants::{DEX_AVNU, DEX_EKUBO, DEX_HAIKO}, error::Result};
 use std::collections::HashMap;
+
+fn score_route(route: &SwapRoute) -> f64 {
+    let amount_score = route.amount_out / route.amount_in;
+    let impact_score = 1.0 / (1.0 + route.price_impact);
+    let fee_score = 1.0 / (1.0 + route.fee);
+
+    amount_score * 0.4 + impact_score * 0.3 + fee_score * 0.3
+}
+
+fn apply_env_factor(score: f64, is_testnet: bool) -> f64 {
+    if is_testnet { score * 0.99 } else { score }
+}
 
 // ==================== AGGREGATOR ====================
 
@@ -12,9 +24,9 @@ impl LiquidityAggregator {
     pub fn new(config: Config) -> Self {
         let mut dex_clients: HashMap<String, Box<dyn DEXClient>> = HashMap::new();
 
-        dex_clients.insert("Ekubo".to_string(), Box::new(EkuboClient::new()));
-        dex_clients.insert("Haiko".to_string(), Box::new(HaikoClient::new()));
-        dex_clients.insert("Avnu".to_string(), Box::new(AvnuClient::new()));
+        dex_clients.insert(DEX_EKUBO.to_string(), Box::new(EkuboClient::new()));
+        dex_clients.insert(DEX_HAIKO.to_string(), Box::new(HaikoClient::new()));
+        dex_clients.insert(DEX_AVNU.to_string(), Box::new(AvnuClient::new()));
 
         Self { config, dex_clients }
     }
@@ -49,7 +61,7 @@ impl LiquidityAggregator {
                     path: q.path,
                     score: 0.0,
                 };
-                route.score = self.calculate_route_score(&route);
+                route.score = apply_env_factor(self.calculate_route_score(&route), self.config.is_testnet());
                 routes.push(route);
             }
         }
@@ -61,11 +73,7 @@ impl LiquidityAggregator {
     }
 
     fn calculate_route_score(&self, route: &SwapRoute) -> f64 {
-        let amount_score = route.amount_out / route.amount_in;
-        let impact_score = 1.0 / (1.0 + route.price_impact);
-        let fee_score = 1.0 / (1.0 + route.fee);
-
-        amount_score * 0.4 + impact_score * 0.3 + fee_score * 0.3
+        score_route(route)
     }
 
     /// Split routing (simple heuristic)
@@ -271,4 +279,32 @@ pub struct DEXQuote {
 pub struct LiquidityDepth {
     pub total_liquidity: f64,
     pub dex_liquidity: HashMap<String, f64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn score_route_increases_with_amount_out() {
+        // Memastikan skor naik jika amount_out lebih besar
+        let route_low = SwapRoute {
+            dex: "dex".to_string(),
+            amount_in: 100.0,
+            amount_out: 90.0,
+            price_impact: 0.01,
+            fee: 0.1,
+            path: vec![],
+            score: 0.0,
+        };
+        let route_high = SwapRoute { amount_out: 95.0, ..route_low.clone() };
+        assert!(score_route(&route_high) > score_route(&route_low));
+    }
+
+    #[test]
+    fn apply_env_factor_applies_discount() {
+        // Memastikan faktor testnet menurunkan skor
+        let score = apply_env_factor(1.0, true);
+        assert!((score - 0.99).abs() < f64::EPSILON);
+    }
 }

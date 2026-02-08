@@ -16,3 +16,26 @@ pub fn keccak256_hex(data: &[u8]) -> String {
 pub fn hash_string(s: &str) -> String {
     keccak256_hex(s.as_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keccak256_hex_matches_empty_string_vector() {
+        let digest = keccak256_hex(b"");
+        assert_eq!(
+            digest,
+            "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+        );
+        assert_eq!(digest.len(), 66);
+    }
+
+    #[test]
+    fn hash_string_matches_hex_helper() {
+        let input = "zkcare";
+        let digest = hash_string(input);
+        assert!(digest.starts_with("0x"));
+        assert_eq!(digest, keccak256_hex(input.as_bytes()));
+    }
+}

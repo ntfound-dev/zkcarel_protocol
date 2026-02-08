@@ -94,10 +94,20 @@ impl IntoResponse for AppError {
                 "INVALID_SIGNATURE",
                 "Signature verification failed".to_string(),
             ),
+            AppError::InvalidToken => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_TOKEN",
+                "Token is not supported".to_string(),
+            ),
             AppError::NotFound(ref msg) => (
                 StatusCode::NOT_FOUND,
                 "NOT_FOUND",
                 msg.clone(),
+            ),
+            AppError::OrderNotFound => (
+                StatusCode::NOT_FOUND,
+                "ORDER_NOT_FOUND",
+                "Order not found".to_string(),
             ),
             AppError::BadRequest(ref msg) => (
                 StatusCode::BAD_REQUEST,
@@ -128,6 +138,11 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_REQUEST,
                 "SLIPPAGE_TOO_HIGH",
                 "Price impact exceeds slippage tolerance".to_string(),
+            ),
+            AppError::ExternalAPI(ref msg) => (
+                StatusCode::BAD_GATEWAY,
+                "EXTERNAL_API_ERROR",
+                msg.clone(),
             ),
             _ => (
                 StatusCode::INTERNAL_SERVER_ERROR,

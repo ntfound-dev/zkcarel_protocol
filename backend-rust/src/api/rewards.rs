@@ -2,6 +2,7 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    constants::{EPOCH_DURATION_SECONDS, POINTS_TO_CAREL_RATIO},
     error::Result,
     models::ApiResponse,
 };
@@ -33,6 +34,10 @@ pub struct ConvertRequest {
     pub points: f64,
 }
 
+fn points_to_carel(points: f64) -> f64 {
+    points * POINTS_TO_CAREL_RATIO
+}
+
 /// GET /api/v1/rewards/points
 pub async fn get_points(
     State(state): State<AppState>,
@@ -41,7 +46,7 @@ pub async fn get_points(
     let user_address = "0x1234...";
 
     // Get current epoch
-    let current_epoch = (chrono::Utc::now().timestamp() / 2592000) as i64; // ~30 days
+    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64; // ~30 days
 
     // Get user points
     let points = state.db.get_user_points(user_address, current_epoch).await?
@@ -83,7 +88,7 @@ pub async fn claim_rewards(
     let user_address = "0x1234...";
 
     // Get previous epoch (finalized)
-    let current_epoch = (chrono::Utc::now().timestamp() / 2592000) as i64;
+    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
     let prev_epoch = current_epoch - 1;
 
     // Get user points from previous epoch
@@ -99,7 +104,7 @@ pub async fn claim_rewards(
 
     // Calculate CAREL amount (1 point = 0.1 CAREL)
     let total_points: f64 = points.total_points.to_string().parse().unwrap_or(0.0);
-    let carel_amount = total_points * 0.1;
+    let carel_amount = points_to_carel(total_points);
 
     // Execute claim transaction (mock)
     let tx_hash = format!("0x{}", hex::encode(&rand::random::<[u8; 32]>()));
@@ -129,7 +134,7 @@ pub async fn convert_to_carel(
     let _user_address = "0x1234...";
 
     // Calculate CAREL amount
-    let carel_amount = req.points * 0.1;
+    let carel_amount = points_to_carel(req.points);
 
     // Execute conversion (mock)
     let tx_hash = format!("0x{}", hex::encode(&rand::random::<[u8; 32]>()));
@@ -141,4 +146,16 @@ pub async fn convert_to_carel(
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn points_to_carel_uses_ratio() {
+        // Memastikan konversi poin ke CAREL benar
+        let carel = points_to_carel(100.0);
+        assert!((carel - (100.0 * POINTS_TO_CAREL_RATIO)).abs() < f64::EPSILON);
+    }
 }

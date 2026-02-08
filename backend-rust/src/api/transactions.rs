@@ -11,6 +11,7 @@ use crate::{
     error::Result,
     models::{ApiResponse, Transaction, PaginatedResponse},
     services::TransactionHistoryService,
+    utils::ensure_page_limit,
 };
 
 use super::AppState;
@@ -45,6 +46,7 @@ pub async fn get_history(
     let (from_date, to_date) = parse_dates(&query);
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(20);
+    ensure_page_limit(limit, state.config.rate_limit_authenticated)?;
 
     let service = TransactionHistoryService::new(state.db);
     let history = service.get_user_history(
@@ -55,6 +57,15 @@ pub async fn get_history(
         page,
         limit,
     ).await?;
+
+    if page == 1 {
+        if let Ok(stats) = service.get_user_stats(user_address).await {
+            tracing::debug!("Transaction stats: {:?}", stats);
+        }
+        if let Ok(recent) = service.get_recent_transactions(user_address).await {
+            tracing::debug!("Recent transaction sample count: {}", recent.len());
+        }
+    }
 
     Ok(Json(ApiResponse::success(history)))
 }
@@ -96,4 +107,39 @@ pub async fn export_csv(
         ],
         csv,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_dates_returns_none_for_invalid() {
+        // Memastikan tanggal invalid menghasilkan None
+        let query = HistoryQuery {
+            tx_type: None,
+            from_date: Some("invalid".to_string()),
+            to_date: Some("invalid".to_string()),
+            page: None,
+            limit: None,
+        };
+        let (from, to) = parse_dates(&query);
+        assert!(from.is_none());
+        assert!(to.is_none());
+    }
+
+    #[test]
+    fn parse_dates_parses_valid_rfc3339() {
+        // Memastikan tanggal valid ter-parse
+        let query = HistoryQuery {
+            tx_type: None,
+            from_date: Some("2024-01-01T00:00:00Z".to_string()),
+            to_date: None,
+            page: None,
+            limit: None,
+        };
+        let (from, to) = parse_dates(&query);
+        assert!(from.is_some());
+        assert!(to.is_none());
+    }
 }

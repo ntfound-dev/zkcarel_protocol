@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::Result,
-    models::{ApiResponse, Notification, PaginatedResponse},
-    services::notification_service::NotificationPreferences,
+    models::{ApiResponse, Notification, NotificationPreferences, PaginatedResponse},
+    services::NotificationService,
+    utils::ensure_page_limit,
 };
 
 use super::AppState;
@@ -34,8 +35,11 @@ struct CountResult {
 
 #[derive(sqlx::FromRow)]
 struct StatsResult {
-    unread: i64,
     total: i64,
+}
+
+fn should_mark_all(notification_ids: &[i64]) -> bool {
+    notification_ids.is_empty()
 }
 
 /// GET /api/v1/notifications/list
@@ -47,10 +51,11 @@ pub async fn list(
 
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(20);
-    let offset = (page - 1) * limit;
+    ensure_page_limit(limit, state.config.rate_limit_authenticated)?;
 
-    let notifications = state.db
-        .get_user_notifications(user_address, limit as i64, offset as i64)
+    let service = NotificationService::new(state.db.clone(), state.config.clone());
+    let notifications = service
+        .get_user_notifications(user_address, page, limit)
         .await?;
 
     // Perbaikan: Gunakan query_as
@@ -77,9 +82,14 @@ pub async fn mark_read(
     Json(req): Json<MarkReadRequest>,
 ) -> Result<Json<ApiResponse<String>>> {
     let user_address = "0x1234...";
+    let service = NotificationService::new(state.db.clone(), state.config.clone());
 
-    for id in req.notification_ids {
-        state.db.mark_notification_read(id, user_address).await?;
+    if should_mark_all(&req.notification_ids) {
+        service.mark_all_as_read(user_address).await?;
+    } else {
+        for id in req.notification_ids {
+            service.mark_as_read(id, user_address).await?;
+        }
     }
 
     Ok(Json(ApiResponse::success("Notifications marked as read".to_string())))
@@ -118,12 +128,11 @@ pub async fn get_stats(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<NotificationStats>>> {
     let user_address = "0x1234...";
+    let service = NotificationService::new(state.db.clone(), state.config.clone());
 
-    // Perbaikan: Gunakan query_as dengan CAST untuk menangani NULL/Filter
+    // Hitung total notifikasi
     let stats: StatsResult = sqlx::query_as(
-        "SELECT 
-            COALESCE(COUNT(*) FILTER (WHERE NOT read), 0) as unread,
-            COUNT(*) as total
+        "SELECT COUNT(*) as total
          FROM notifications
          WHERE user_address = $1"
     )
@@ -132,7 +141,24 @@ pub async fn get_stats(
     .await?;
 
     Ok(Json(ApiResponse::success(NotificationStats {
-        unread_count: stats.unread,
+        unread_count: service.get_unread_count(user_address).await?,
         total_count: stats.total,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_mark_all_true_when_empty() {
+        // Memastikan daftar kosong menandai semua notifikasi
+        assert!(should_mark_all(&[]));
+    }
+
+    #[test]
+    fn should_mark_all_false_when_ids_present() {
+        // Memastikan daftar berisi ID tidak menandai semua
+        assert!(!should_mark_all(&[1, 2, 3]));
+    }
 }

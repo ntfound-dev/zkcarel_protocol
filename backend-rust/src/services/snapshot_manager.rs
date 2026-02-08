@@ -1,5 +1,9 @@
-use crate::{config::Config, db::Database, error::Result};
+use crate::{config::Config, constants::EPOCH_DURATION_SECONDS, db::Database, error::Result};
 use sqlx::Row;
+
+fn epoch_from_timestamp(timestamp: i64) -> i64 {
+    timestamp / EPOCH_DURATION_SECONDS
+}
 
 /// Snapshot Manager - Finalizes epochs and prepares for distribution
 pub struct SnapshotManager {
@@ -14,6 +18,9 @@ impl SnapshotManager {
 
     /// Finalize epoch - called at end of each month
     pub async fn finalize_epoch(&self, epoch: i64) -> Result<()> {
+        if self.config.is_testnet() {
+            tracing::debug!("Finalizing epoch in testnet mode");
+        }
         tracing::info!("Finalizing epoch {}...", epoch);
 
         // 1. Mark all points as finalized
@@ -65,6 +72,18 @@ impl SnapshotManager {
 
     /// Get current epoch
     pub fn get_current_epoch(&self) -> i64 {
-        (chrono::Utc::now().timestamp() / 2592000) as i64
+        epoch_from_timestamp(chrono::Utc::now().timestamp())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_from_timestamp_calculates_epoch() {
+        // Memastikan epoch dihitung dari timestamp
+        let timestamp = EPOCH_DURATION_SECONDS * 2 + 10;
+        assert_eq!(epoch_from_timestamp(timestamp), 2);
     }
 }

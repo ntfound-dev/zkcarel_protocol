@@ -65,22 +65,8 @@ impl BlockProcessor {
 
     async fn handle_swap(&self, tx_hash: &str, block_number: u64, data: serde_json::Value) -> Result<()> {
         let user = data.get("user").and_then(|v| v.as_str()).unwrap_or("");
-        
-        let tx = crate::models::Transaction {
-            tx_hash: tx_hash.to_string(),
-            block_number: block_number as i64,
-            user_address: user.to_string(),
-            tx_type: "swap".to_string(),
-            token_in: data.get("token_in").and_then(|v| v.as_str()).map(String::from),
-            token_out: data.get("token_out").and_then(|v| v.as_str()).map(String::from),
-            amount_in: None,
-            amount_out: None,
-            usd_value: None,
-            fee_paid: None,
-            points_earned: None,
-            timestamp: chrono::Utc::now(),
-            processed: false,
-        };
+
+        let tx = build_swap_transaction(tx_hash, block_number, user, &data);
 
         self.db.save_transaction(&tx).await?;
         Ok(())
@@ -89,21 +75,7 @@ impl BlockProcessor {
     async fn handle_bridge(&self, tx_hash: &str, block_number: u64, data: serde_json::Value) -> Result<()> {
         let user = data.get("user").and_then(|v| v.as_str()).unwrap_or("");
         
-        let tx = crate::models::Transaction {
-            tx_hash: tx_hash.to_string(),
-            block_number: block_number as i64,
-            user_address: user.to_string(),
-            tx_type: "bridge".to_string(),
-            token_in: None,
-            token_out: None,
-            amount_in: None,
-            amount_out: None,
-            usd_value: None,
-            fee_paid: None,
-            points_earned: None,
-            timestamp: chrono::Utc::now(),
-            processed: false,
-        };
+        let tx = build_simple_transaction(tx_hash, block_number, user, "bridge");
 
         self.db.save_transaction(&tx).await?;
         Ok(())
@@ -112,21 +84,7 @@ impl BlockProcessor {
     async fn handle_stake(&self, tx_hash: &str, block_number: u64, data: serde_json::Value) -> Result<()> {
         let user = data.get("user").and_then(|v| v.as_str()).unwrap_or("");
         
-        let tx = crate::models::Transaction {
-            tx_hash: tx_hash.to_string(),
-            block_number: block_number as i64,
-            user_address: user.to_string(),
-            tx_type: "stake".to_string(),
-            token_in: None,
-            token_out: None,
-            amount_in: None,
-            amount_out: None,
-            usd_value: None,
-            fee_paid: None,
-            points_earned: None,
-            timestamp: chrono::Utc::now(),
-            processed: false,
-        };
+        let tx = build_simple_transaction(tx_hash, block_number, user, "stake");
 
         self.db.save_transaction(&tx).await?;
         Ok(())
@@ -135,21 +93,7 @@ impl BlockProcessor {
     async fn handle_unstake(&self, tx_hash: &str, block_number: u64, data: serde_json::Value) -> Result<()> {
         let user = data.get("user").and_then(|v| v.as_str()).unwrap_or("");
         
-        let tx = crate::models::Transaction {
-            tx_hash: tx_hash.to_string(),
-            block_number: block_number as i64,
-            user_address: user.to_string(),
-            tx_type: "unstake".to_string(),
-            token_in: None,
-            token_out: None,
-            amount_in: None,
-            amount_out: None,
-            usd_value: None,
-            fee_paid: None,
-            points_earned: None,
-            timestamp: chrono::Utc::now(),
-            processed: false,
-        };
+        let tx = build_simple_transaction(tx_hash, block_number, user, "unstake");
 
         self.db.save_transaction(&tx).await?;
         Ok(())
@@ -160,5 +104,80 @@ impl BlockProcessor {
         
         self.db.update_order_status(order_id, 2).await?;
         Ok(())
+    }
+}
+
+fn build_simple_transaction(
+    tx_hash: &str,
+    block_number: u64,
+    user: &str,
+    tx_type: &str,
+) -> crate::models::Transaction {
+    crate::models::Transaction {
+        tx_hash: tx_hash.to_string(),
+        block_number: block_number as i64,
+        user_address: user.to_string(),
+        tx_type: tx_type.to_string(),
+        token_in: None,
+        token_out: None,
+        amount_in: None,
+        amount_out: None,
+        usd_value: None,
+        fee_paid: None,
+        points_earned: None,
+        timestamp: chrono::Utc::now(),
+        processed: false,
+    }
+}
+
+fn build_swap_transaction(
+    tx_hash: &str,
+    block_number: u64,
+    user: &str,
+    data: &serde_json::Value,
+) -> crate::models::Transaction {
+    crate::models::Transaction {
+        tx_hash: tx_hash.to_string(),
+        block_number: block_number as i64,
+        user_address: user.to_string(),
+        tx_type: "swap".to_string(),
+        token_in: data.get("token_in").and_then(|v| v.as_str()).map(String::from),
+        token_out: data.get("token_out").and_then(|v| v.as_str()).map(String::from),
+        amount_in: None,
+        amount_out: None,
+        usd_value: None,
+        fee_paid: None,
+        points_earned: None,
+        timestamp: chrono::Utc::now(),
+        processed: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_simple_transaction_sets_fields() {
+        // Memastikan field dasar transaksi terisi dengan benar
+        let tx = build_simple_transaction("0xhash", 10, "0xuser", "bridge");
+        assert_eq!(tx.tx_hash, "0xhash");
+        assert_eq!(tx.block_number, 10);
+        assert_eq!(tx.user_address, "0xuser");
+        assert_eq!(tx.tx_type, "bridge");
+        assert!(!tx.processed);
+    }
+
+    #[test]
+    fn build_swap_transaction_maps_tokens() {
+        // Memastikan token_in dan token_out terambil dari data event
+        let data = serde_json::json!({
+            "token_in": "ETH",
+            "token_out": "USDT"
+        });
+        let tx = build_swap_transaction("0xhash", 1, "0xuser", &data);
+        assert_eq!(tx.token_in.as_deref(), Some("ETH"));
+        assert_eq!(tx.token_out.as_deref(), Some("USDT"));
+        assert_eq!(tx.tx_type, "swap");
     }
 }

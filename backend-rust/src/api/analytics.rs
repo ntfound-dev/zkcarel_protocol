@@ -3,12 +3,21 @@ use serde::Serialize;
 
 use super::AppState;
 use crate::{
+    constants::{EPOCH_DURATION_SECONDS, POINTS_TO_CAREL_RATIO},
     error::Result,
     models::{ApiResponse, UserPoints},
+    services::AnalyticsService,
 };
 
 use rust_decimal::Decimal;
-use sqlx::Row;
+
+fn decimal_or_zero(value: f64) -> Decimal {
+    Decimal::from_f64_retain(value).unwrap_or(Decimal::ZERO)
+}
+
+fn estimated_carel_from_points(total_points: Decimal) -> Decimal {
+    total_points * decimal_or_zero(POINTS_TO_CAREL_RATIO)
+}
 
 #[derive(Debug, Serialize)]
 pub struct AnalyticsResponse {
@@ -59,44 +68,16 @@ pub async fn get_analytics(
     // TODO: Extract real user from JWT
     let user_address = "0x1234...";
 
-    // Runtime-checked SQL (no compile DB required)
-    let row = sqlx::query(
-        r#"
-        SELECT 
-            COUNT(*) as total_trades,
-            SUM(usd_value) as total_volume,
-            AVG(usd_value) as avg_trade,
-            MAX(usd_value) as best_trade,
-            MIN(usd_value) as worst_trade
-        FROM transactions
-        WHERE user_address = $1
-        "#,
-    )
-    .bind(user_address)
-    .fetch_one(state.db.pool())
-    .await?;
-
-    // Extract using Decimal where appropriate
-    let total_trades: i64 = row.try_get::<i64, _>("total_trades")?;
-
-    let total_volume: Decimal = row
-        .try_get::<Option<Decimal>, _>("total_volume")?
-        .unwrap_or(Decimal::ZERO);
-
-    let avg_trade: Decimal = row
-        .try_get::<Option<Decimal>, _>("avg_trade")?
-        .unwrap_or(Decimal::ZERO);
-
-    let best_trade: Decimal = row
-        .try_get::<Option<Decimal>, _>("best_trade")?
-        .unwrap_or(Decimal::ZERO);
-
-    let worst_trade: Decimal = row
-        .try_get::<Option<Decimal>, _>("worst_trade")?
-        .unwrap_or(Decimal::ZERO);
+    let analytics = AnalyticsService::new(state.db.clone(), state.config.clone());
+    let pnl_24h = analytics.calculate_pnl(user_address, "24h").await?;
+    let pnl_7d = analytics.calculate_pnl(user_address, "7d").await?;
+    let pnl_30d = analytics.calculate_pnl(user_address, "30d").await?;
+    let pnl_all = analytics.calculate_pnl(user_address, "all_time").await?;
+    let allocation = analytics.get_allocation(user_address).await?;
+    let trading = analytics.get_trading_performance(user_address).await?;
 
     // Current epoch (30 days window)
-    let current_epoch = (chrono::Utc::now().timestamp() / 2_592_000) as i64;
+    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
     // Explicit DB helper return type assumed: Result<Option<UserPoints>>
     let points: Option<UserPoints> = state
@@ -108,50 +89,35 @@ pub async fn get_analytics(
         .map(|p| p.total_points)
         .unwrap_or(Decimal::ZERO);
 
-    // Example allocation using Decimal for values
-    let allocation = vec![
-        AllocationItem {
-            asset: "BTC".to_string(),
-            percentage: 31.5,
-            value_usd: Decimal::new(9750, 0),
-        },
-        AllocationItem {
-            asset: "ETH".to_string(),
-            percentage: 28.2,
-            value_usd: Decimal::new(8750, 0),
-        },
-        AllocationItem {
-            asset: "CAREL".to_string(),
-            percentage: 24.2,
-            value_usd: Decimal::new(7500, 0),
-        },
-        AllocationItem {
-            asset: "USDT".to_string(),
-            percentage: 16.1,
-            value_usd: Decimal::new(5000, 0),
-        },
-    ];
+    let allocation = allocation
+        .into_iter()
+        .map(|item| AllocationItem {
+            asset: item.asset,
+            percentage: item.percentage,
+            value_usd: decimal_or_zero(item.value_usd),
+        })
+        .collect::<Vec<_>>();
 
     let response = AnalyticsResponse {
         portfolio: PortfolioAnalytics {
-            total_value_usd: Decimal::new(31_000, 0),
-            pnl_24h: Decimal::new(450, 2), // 4.50 example (adjust scale as needed)
-            pnl_7d: Decimal::new(1230, 2),
-            pnl_30d: Decimal::new(3000, 2),
-            pnl_all_time: Decimal::new(5500, 2),
+            total_value_usd: decimal_or_zero(pnl_all.current_value),
+            pnl_24h: decimal_or_zero(pnl_24h.pnl),
+            pnl_7d: decimal_or_zero(pnl_7d.pnl),
+            pnl_30d: decimal_or_zero(pnl_30d.pnl),
+            pnl_all_time: decimal_or_zero(pnl_all.pnl),
             allocation,
         },
         trading: TradingAnalytics {
-            total_trades,
-            total_volume_usd: total_volume,
-            avg_trade_size: avg_trade,
-            win_rate: 68.5,
-            best_trade,
-            worst_trade,
+            total_trades: trading.total_trades,
+            total_volume_usd: decimal_or_zero(trading.total_volume_usd),
+            avg_trade_size: decimal_or_zero(trading.avg_trade_size),
+            win_rate: trading.win_rate,
+            best_trade: decimal_or_zero(trading.best_trade),
+            worst_trade: decimal_or_zero(trading.worst_trade),
         },
         rewards: RewardsAnalytics {
             total_points,
-            estimated_carel: total_points * Decimal::new(1, 1) / Decimal::new(10, 0), // *0.1
+            estimated_carel: estimated_carel_from_points(total_points),
             rank: 1234,
             percentile: 85.5,
         },
@@ -163,3 +129,23 @@ pub async fn get_analytics(
 // Utility: if you need to return f64 to frontend instead of Decimal,
 // convert at serialization layer or construct a DTO that converts:
 // e.g. value.to_f64().unwrap_or(0.0)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decimal_or_zero_returns_zero_for_nan() {
+        // Memastikan nilai NaN dipetakan menjadi 0
+        let value = decimal_or_zero(f64::NAN);
+        assert_eq!(value, Decimal::ZERO);
+    }
+
+    #[test]
+    fn estimated_carel_uses_ratio_constant() {
+        // Memastikan konversi poin ke CAREL mengikuti konstanta
+        let points = Decimal::from_f64_retain(100.0).unwrap();
+        let expected = points * decimal_or_zero(POINTS_TO_CAREL_RATIO);
+        assert_eq!(estimated_carel_from_points(points), expected);
+    }
+}

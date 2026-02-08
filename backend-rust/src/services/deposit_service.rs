@@ -1,9 +1,26 @@
-use crate::{config::Config, db::Database, error::Result};
+use crate::{config::Config, db::Database, error::{AppError, Result}};
 use serde::Serialize; // Disederhanakan (menghapus Deserialize yang tidak terpakai)
 use rust_decimal::prelude::{ToPrimitive, FromPrimitive}; 
 use hex;
 use rand; 
 use sqlx::Row; // Tambahkan ini untuk akses .get()
+
+fn build_bank_details(deposit_id: &str) -> BankDetails {
+    BankDetails {
+        account_name: "CAREL Protocol".to_string(),
+        account_number: "1234567890".to_string(),
+        bank_name: "Example Bank".to_string(),
+        reference: deposit_id.to_string(),
+    }
+}
+
+fn build_qris_payload(deposit_id: &str, amount: f64) -> String {
+    format!("qris://pay?id={}&amount={}", deposit_id, amount)
+}
+
+fn build_stripe_url(deposit_id: &str) -> String {
+    format!("https://checkout.stripe.com{}", deposit_id)
+}
 
 pub struct DepositService {
     db: Database,
@@ -17,12 +34,7 @@ impl DepositService {
 
     pub async fn create_bank_transfer(&self, user_address: &str, amount: f64, currency: &str) -> Result<DepositInfo> {
         let deposit_id = format!("DEP_BANK_{}", hex::encode(rand::random::<[u8; 16]>()));
-        let bank_details = BankDetails {
-            account_name: "CAREL Protocol".to_string(),
-            account_number: "1234567890".to_string(),
-            bank_name: "Example Bank".to_string(),
-            reference: deposit_id.clone(),
-        };
+        let bank_details = build_bank_details(&deposit_id);
 
         let amount_dec = rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
         self.save_deposit_with_decimal(&deposit_id, user_address, amount_dec, currency, "bank_transfer").await?;
@@ -38,8 +50,12 @@ impl DepositService {
     }
 
     pub async fn create_qris(&self, user_address: &str, amount: f64) -> Result<DepositInfo> {
+        if self.config.moonpay_api_key.is_none() {
+            return Err(AppError::ExternalAPI("Moonpay API key not configured".into()));
+        }
+
         let deposit_id = format!("DEP_QRIS_{}", hex::encode(rand::random::<[u8; 16]>()));
-        let qr_data = format!("qris://pay?id={}&amount={}", deposit_id, amount);
+        let qr_data = build_qris_payload(&deposit_id, amount);
         let amount_dec = rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
         
         self.save_deposit_with_decimal(&deposit_id, user_address, amount_dec, "IDR", "qris").await?;
@@ -55,8 +71,12 @@ impl DepositService {
     }
 
     pub async fn create_card_payment(&self, user_address: &str, amount: f64, currency: &str) -> Result<DepositInfo> {
+        if self.config.stripe_secret_key.is_none() {
+            return Err(AppError::ExternalAPI("Stripe secret key not configured".into()));
+        }
+
         let deposit_id = format!("DEP_CARD_{}", hex::encode(rand::random::<[u8; 16]>()));
-        let payment_url = format!("https://checkout.stripe.com{}", deposit_id);
+        let payment_url = build_stripe_url(&deposit_id);
         let amount_dec = rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
 
         self.save_deposit_with_decimal(&deposit_id, user_address, amount_dec, currency, "card").await?;
@@ -124,4 +144,31 @@ struct BankDetails {
     account_number: String,
     bank_name: String,
     reference: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_bank_details_uses_reference() {
+        // Memastikan reference mengikuti deposit_id
+        let details = build_bank_details("DEP_TEST");
+        assert_eq!(details.reference, "DEP_TEST");
+    }
+
+    #[test]
+    fn build_qris_payload_formats_string() {
+        // Memastikan payload QRIS mengandung id dan amount
+        let payload = build_qris_payload("DEP_QRIS_TEST", 10.5);
+        assert!(payload.contains("DEP_QRIS_TEST"));
+        assert!(payload.contains("10.5"));
+    }
+
+    #[test]
+    fn build_stripe_url_appends_id() {
+        // Memastikan URL stripe berisi deposit_id
+        let url = build_stripe_url("DEP_CARD_TEST");
+        assert_eq!(url, "https://checkout.stripe.comDEP_CARD_TEST");
+    }
 }

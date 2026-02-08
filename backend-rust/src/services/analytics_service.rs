@@ -1,6 +1,21 @@
 use crate::{config::Config, db::Database, error::Result};
+use chrono::{Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::Row;
+
+fn period_to_duration(period: &str) -> Option<Duration> {
+    match period {
+        "24h" | "1d" => Some(Duration::hours(24)),
+        "7d" => Some(Duration::days(7)),
+        "30d" => Some(Duration::days(30)),
+        "all_time" | "all" => None,
+        _ => None,
+    }
+}
+
+fn pnl_multiplier(is_testnet: bool) -> f64 {
+    if is_testnet { 0.5 } else { 1.0 }
+}
 
 /// Analytics Service - Portfolio analytics and insights
 pub struct AnalyticsService {
@@ -14,14 +29,44 @@ impl AnalyticsService {
     }
 
     /// Calculate portfolio PnL
-    pub async fn calculate_pnl(&self, _user_address: &str, period: &str) -> Result<PnLData> {
-        // TODO: Implement actual PnL calculation
+    pub async fn calculate_pnl(&self, user_address: &str, period: &str) -> Result<PnLData> {
+        let multiplier = pnl_multiplier(self.config.is_testnet());
+        let now = Utc::now();
+        let from_ts = period_to_duration(period).map(|d| now - d);
+
+        let row = sqlx::query(
+            r#"
+            SELECT
+                COALESCE(SUM(usd_value) FILTER (WHERE timestamp < $2), 0) AS initial_value,
+                COALESCE(SUM(usd_value), 0) AS current_value
+            FROM transactions
+            WHERE user_address = $1
+              AND usd_value IS NOT NULL
+            "#,
+        )
+        .bind(user_address)
+        .bind(from_ts)
+        .fetch_one(self.db.pool())
+        .await?;
+
+        let initial_value_dec: rust_decimal::Decimal = row.try_get("initial_value")?;
+        let current_value_dec: rust_decimal::Decimal = row.try_get("current_value")?;
+
+        let initial_value = initial_value_dec.to_f64().unwrap_or(0.0);
+        let current_value = current_value_dec.to_f64().unwrap_or(0.0);
+        let pnl = current_value - initial_value;
+        let pnl_percentage = if initial_value != 0.0 {
+            (pnl / initial_value) * 100.0
+        } else {
+            0.0
+        };
+
         Ok(PnLData {
             period: period.to_string(),
-            pnl: 3000.0,
-            pnl_percentage: 10.71,
-            initial_value: 28000.0,
-            current_value: 31000.0,
+            pnl: pnl * multiplier,
+            pnl_percentage: pnl_percentage * multiplier,
+            initial_value,
+            current_value,
         })
     }
 
@@ -124,4 +169,22 @@ pub struct TradingPerformance {
     pub win_rate: f64,
     pub best_trade: f64,
     pub worst_trade: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn period_to_duration_handles_7d() {
+        // Memastikan periode 7d menghasilkan durasi 7 hari
+        let duration = period_to_duration("7d").expect("harus ada durasi");
+        assert_eq!(duration.num_days(), 7);
+    }
+
+    #[test]
+    fn pnl_multiplier_testnet_is_half() {
+        // Memastikan testnet memakai multiplier 0.5
+        assert!((pnl_multiplier(true) - 0.5).abs() < f64::EPSILON);
+    }
 }

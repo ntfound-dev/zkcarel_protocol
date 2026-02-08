@@ -1,16 +1,65 @@
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
-use crate::{error::Result, models::*};
+use crate::{config::Config, error::Result, models::*};
 
 #[derive(Clone)]
 pub struct Database {
     pool: PgPool,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config(database_url: &str) -> Config {
+        Config {
+            host: "0.0.0.0".to_string(),
+            port: 3000,
+            environment: "development".to_string(),
+            database_url: database_url.to_string(),
+            database_max_connections: 1,
+            redis_url: "redis://localhost:6379".to_string(),
+            starknet_rpc_url: "http://localhost:5050".to_string(),
+            starknet_chain_id: "SN_MAIN".to_string(),
+            ethereum_rpc_url: "http://localhost:8545".to_string(),
+            carel_token_address: "0x0000000000000000000000000000000000000001".to_string(),
+            snapshot_distributor_address: "0x0000000000000000000000000000000000000002".to_string(),
+            point_storage_address: "0x0000000000000000000000000000000000000003".to_string(),
+            price_oracle_address: "0x0000000000000000000000000000000000000004".to_string(),
+            limit_order_book_address: "0x0000000000000000000000000000000000000005".to_string(),
+            faucet_wallet_private_key: None,
+            faucet_btc_amount: None,
+            faucet_strk_amount: None,
+            faucet_carel_amount: None,
+            faucet_cooldown_hours: None,
+            backend_private_key: "test_private".to_string(),
+            backend_public_key: "test_public".to_string(),
+            jwt_secret: "test_secret".to_string(),
+            jwt_expiry_hours: 24,
+            openai_api_key: None,
+            twitter_bearer_token: None,
+            telegram_bot_token: None,
+            discord_bot_token: None,
+            stripe_secret_key: None,
+            moonpay_api_key: None,
+            rate_limit_public: 1,
+            rate_limit_authenticated: 1,
+            cors_allowed_origins: "*".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn database_new_returns_error_on_invalid_url() {
+        let config = test_config("not-a-url");
+        let result = Database::new(&config).await;
+        assert!(result.is_err());
+    }
+}
+
 impl Database {
-    pub async fn new(database_url: &str) -> anyhow::Result<Self> {
+    pub async fn new(config: &Config) -> anyhow::Result<Self> {
         let pool = PgPoolOptions::new()
-            .max_connections(100)
-            .connect(database_url)
+            .max_connections(config.database_max_connections)
+            .connect(&config.database_url)
             .await?;
 
         Ok(Self { pool })

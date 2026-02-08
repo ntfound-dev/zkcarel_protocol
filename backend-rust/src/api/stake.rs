@@ -51,6 +51,20 @@ pub struct DepositResponse {
     pub amount: f64,
 }
 
+fn build_position_id(user_address: &str, pool_id: &str, now_ts: i64) -> String {
+    let pos_data = format!("{}{}{}", user_address, pool_id, now_ts);
+    format!("POS_{}", hash::hash_string(&pos_data))
+}
+
+fn build_stake_tx_hash(user_address: &str, pool_id: &str, now_ts: i64) -> String {
+    let pos_data = format!("{}{}{}", user_address, pool_id, now_ts);
+    hash::hash_string(&format!("stake_{}", pos_data))
+}
+
+fn build_withdraw_tx_hash(user_address: &str, position_id: &str, now_ts: i64) -> String {
+    hash::hash_string(&format!("withdraw_{}{}{}", user_address, position_id, now_ts))
+}
+
 /// GET /api/v1/stake/pools
 pub async fn get_pools(
     State(_state): State<AppState>,
@@ -110,11 +124,10 @@ pub async fn deposit(
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
 
     // 2. Gunakan hasher untuk membuat Position ID (Menghilangkan warning di hash.rs)
-    let pos_data = format!("{}{}{}", user_address, req.pool_id, now);
-    let position_id = format!("POS_{}", hash::hash_string(&pos_data));
+    let position_id = build_position_id(user_address, &req.pool_id, now);
 
     // 3. Gunakan hasher untuk Tx Hash
-    let tx_hash = hash::hash_string(&format!("stake_{}", pos_data));
+    let tx_hash = build_stake_tx_hash(user_address, &req.pool_id, now);
 
     tracing::info!(
         "User {} staking deposit: {} in pool {} (position: {})",
@@ -143,7 +156,7 @@ pub async fn withdraw(
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
 
     // Gunakan hasher untuk Tx Hash withdraw
-    let tx_hash = hash::hash_string(&format!("withdraw_{}{}{}", user_address, req.position_id, now));
+    let tx_hash = build_withdraw_tx_hash(user_address, &req.position_id, now);
 
     tracing::info!(
         "User {} stake withdraw: {} from position {}",
@@ -189,4 +202,24 @@ pub async fn get_positions(
     ];
 
     Ok(Json(ApiResponse::success(positions)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_position_id_has_prefix() {
+        // Memastikan position_id memiliki prefix POS_
+        let id = build_position_id("0xabc", "CAREL", 1_700_000_000);
+        assert!(id.starts_with("POS_0x"));
+    }
+
+    #[test]
+    fn build_withdraw_tx_hash_is_deterministic() {
+        // Memastikan hash withdraw konsisten untuk input yang sama
+        let hash1 = build_withdraw_tx_hash("0xabc", "POS_1", 1_700_000_000);
+        let hash2 = build_withdraw_tx_hash("0xabc", "POS_1", 1_700_000_000);
+        assert_eq!(hash1, hash2);
+    }
 }

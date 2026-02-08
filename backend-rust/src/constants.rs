@@ -21,7 +21,7 @@ pub const CONTRACT_LIMIT_ORDER: &str = "0x00000000000000000000000000000000000010
 // Points configuration
 pub const POINTS_PER_USD_SWAP: f64 = 10.0;
 pub const POINTS_PER_USD_BRIDGE: f64 = 15.0;
-pub const POINTS_PER_USD_STAKE_DAILY: f64 = 0.0137; // 5% APY / 365
+pub const POINTS_PER_USD_STAKE_DAILY: f64 = 0.05 / 365.0; // 5% APY / 365
 pub const POINTS_TWITTER_FOLLOW: f64 = 50.0;
 pub const POINTS_TELEGRAM_JOIN: f64 = 30.0;
 pub const POINTS_DISCORD_JOIN: f64 = 30.0;
@@ -47,10 +47,10 @@ pub const POINTS_TO_CAREL_RATIO: f64 = 0.1; // 1 point = 0.1 CAREL
 
 // Faucet configuration
 pub const FAUCET_COOLDOWN_HOURS: i64 = 24;
-pub const FAUCET_AMOUNT_BTC: f64 = 0.01;
+pub const FAUCET_AMOUNT_BTC: f64 = 0.001;
 pub const FAUCET_AMOUNT_ETH: f64 = 0.1;
-pub const FAUCET_AMOUNT_STRK: f64 = 100.0;
-pub const FAUCET_AMOUNT_CAREL: f64 = 1000.0;
+pub const FAUCET_AMOUNT_STRK: f64 = 10.0;
+pub const FAUCET_AMOUNT_CAREL: f64 = 100.0;
 
 // Rate limits
 pub const RATE_LIMIT_REQUESTS_PER_MINUTE: u32 = 60;
@@ -84,3 +84,16 @@ pub const INDEXER_INTERVAL_SECS: u64 = 5;
 pub const POINT_CALCULATOR_INTERVAL_SECS: u64 = 60;
 pub const PRICE_UPDATER_INTERVAL_SECS: u64 = 60;
 pub const ORDER_EXECUTOR_INTERVAL_SECS: u64 = 10;
+
+/// Map token symbol to Starknet address constant.
+pub fn token_address_for(symbol: &str) -> Option<&'static str> {
+    match symbol.to_ascii_uppercase().as_str() {
+        "CAREL" => Some(TOKEN_CAREL),
+        "BTC" => Some(TOKEN_BTC),
+        "ETH" => Some(TOKEN_ETH),
+        "STRK" => Some(TOKEN_STRK),
+        "USDT" => Some(TOKEN_USDT),
+        "USDC" => Some(TOKEN_USDC),
+        _ => None,
+    }
+}

@@ -27,6 +27,26 @@ pub struct ListOrdersQuery {
     pub limit: Option<i32>,
 }
 
+fn expiry_duration_for(expiry: &str) -> chrono::Duration {
+    match expiry {
+        "1d" => chrono::Duration::days(1),
+        "7d" => chrono::Duration::days(7),
+        "30d" => chrono::Duration::days(30),
+        _ => chrono::Duration::days(7),
+    }
+}
+
+fn build_order_id(
+    user_address: &str,
+    from_token: &str,
+    to_token: &str,
+    amount: f64,
+    now_ts: i64,
+) -> String {
+    let order_data = format!("{}{}{}{}{}", user_address, from_token, to_token, amount, now_ts);
+    format!("ORD_{}", hash::hash_string(&order_data))
+}
+
 // Struct bantuan untuk menghitung total
 #[derive(sqlx::FromRow)]
 struct CountResult {
@@ -46,19 +66,19 @@ pub async fn create_order(
     let price: f64 = req.price.parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid price".to_string()))?;
 
-    let expiry_duration = match req.expiry.as_str() {
-        "1d" => chrono::Duration::days(1),
-        "7d" => chrono::Duration::days(7),
-        "30d" => chrono::Duration::days(30),
-        _ => chrono::Duration::days(7),
-    };
+    let expiry_duration = expiry_duration_for(&req.expiry);
 
     let now = chrono::Utc::now();
     let expiry = now + expiry_duration;
 
     // 2. GUNAKAN HASHER untuk membuat Order ID (Menghilangkan warning di hash.rs)
-    let order_data = format!("{}{}{}{}{}", user_address, req.from_token, req.to_token, amount, now.timestamp());
-    let order_id = format!("ORD_{}", hash::hash_string(&order_data));
+    let order_id = build_order_id(
+        user_address,
+        &req.from_token,
+        &req.to_token,
+        amount,
+        now.timestamp(),
+    );
 
     let order = LimitOrder {
         order_id: order_id.clone(),
@@ -152,7 +172,7 @@ pub async fn cancel_order(
     Path(order_id): Path<String>,
 ) -> Result<Json<ApiResponse<String>>> {
     let order = state.db.get_limit_order(&order_id).await?
-        .ok_or_else(|| crate::error::AppError::NotFound("Order not found".to_string()))?;
+        .ok_or(crate::error::AppError::OrderNotFound)?;
 
     if order.status == 2 {
         return Err(crate::error::AppError::BadRequest("Order already filled".to_string()));
@@ -161,4 +181,25 @@ pub async fn cancel_order(
     state.db.update_order_status(&order_id, 3).await?;
 
     Ok(Json(ApiResponse::success("Order cancelled successfully".to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expiry_duration_for_defaults_to_7d() {
+        // Memastikan input tidak dikenal memakai 7 hari
+        let duration = expiry_duration_for("unknown");
+        assert_eq!(duration.num_days(), 7);
+    }
+
+    #[test]
+    fn build_order_id_is_stable() {
+        // Memastikan order_id konsisten untuk input yang sama
+        let id = build_order_id("0xabc", "ETH", "USDT", 10.0, 1_700_000_000);
+        let order_data = format!("{}{}{}{}{}", "0xabc", "ETH", "USDT", 10.0, 1_700_000_000);
+        let expected = format!("ORD_{}", hash::hash_string(&order_data));
+        assert_eq!(id, expected);
+    }
 }

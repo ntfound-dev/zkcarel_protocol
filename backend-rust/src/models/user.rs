@@ -89,7 +89,7 @@ pub struct Notification {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, Default)]
 pub struct NotificationPreferences {
     pub email_enabled: bool,
     pub push_enabled: bool,
@@ -219,4 +219,27 @@ pub struct PaginatedResponse<T> {
     pub page: i32,
     pub limit: i32,
     pub total: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_response_success_sets_flag() {
+        // Memastikan helper ApiResponse::success mengisi flag sukses
+        let response = ApiResponse::success("ok");
+        assert!(response.success);
+        assert_eq!(response.data, "ok");
+    }
+
+    #[test]
+    fn notification_preferences_default_false() {
+        // Memastikan default preferensi notifikasi bernilai false
+        let prefs = NotificationPreferences::default();
+        assert!(!prefs.email_enabled);
+        assert!(!prefs.push_enabled);
+        assert!(!prefs.telegram_enabled);
+        assert!(!prefs.discord_enabled);
+    }
 }

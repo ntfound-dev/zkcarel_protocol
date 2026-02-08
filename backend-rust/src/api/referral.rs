@@ -23,17 +23,25 @@ struct CountResult {
     total: i64,
 }
 
+fn build_referral_code(user_address: &str) -> String {
+    format!("CAREL_{}", &user_address[2..10].to_uppercase())
+}
+
+fn build_referral_url(code: &str) -> String {
+    format!("https://zkcarel.io?ref={}", code)
+}
+
 /// GET /api/v1/referral/code
 pub async fn get_code(
     State(_state): State<AppState>,
 ) -> Result<Json<ApiResponse<ReferralCode>>> {
     // TODO: Ambil dari JWT
     let user_address = "0x1234...";
-    let code = format!("CAREL_{}", &user_address[2..10].to_uppercase());
+    let code = build_referral_code(user_address);
     
     let response = ReferralCode {
         code: code.clone(),
-        url: format!("https://zkcarel.io?ref={}", code),
+        url: build_referral_url(&code),
     };
     
     Ok(Json(ApiResponse::success(response)))
@@ -63,4 +71,23 @@ pub async fn get_stats(
     };
     
     Ok(Json(ApiResponse::success(response)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_referral_code_uses_address_slice() {
+        // Memastikan kode referral mengambil substring alamat
+        let code = build_referral_code("0x1234567890abcdef");
+        assert_eq!(code, "CAREL_12345678");
+    }
+
+    #[test]
+    fn build_referral_url_appends_code() {
+        // Memastikan URL referral memakai kode yang diberikan
+        let url = build_referral_url("CAREL_TEST");
+        assert_eq!(url, "https://zkcarel.io?ref=CAREL_TEST");
+    }
 }

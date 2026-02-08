@@ -69,3 +69,34 @@ pub async fn get_status(
     
     Ok(Json(ApiResponse::success(status)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_bank_transfer_request() {
+        // Memastikan payload bank transfer ter-parse dengan benar
+        let payload = r#"{"amount": 150.5, "currency": "IDR"}"#;
+        let req: BankTransferRequest = serde_json::from_str(payload).expect("payload valid");
+        assert_eq!(req.amount, 150.5);
+        assert_eq!(req.currency, "IDR");
+    }
+
+    #[test]
+    fn deserialize_qris_request() {
+        // Memastikan payload QRIS ter-parse dengan benar
+        let payload = r#"{"amount": 75.0}"#;
+        let req: QRISRequest = serde_json::from_str(payload).expect("payload valid");
+        assert_eq!(req.amount, 75.0);
+    }
+
+    #[test]
+    fn deserialize_card_payment_request() {
+        // Memastikan payload kartu ter-parse dengan benar
+        let payload = r#"{"amount": 99.9, "currency": "USD"}"#;
+        let req: CardPaymentRequest = serde_json::from_str(payload).expect("payload valid");
+        assert_eq!(req.amount, 99.9);
+        assert_eq!(req.currency, "USD");
+    }
+}

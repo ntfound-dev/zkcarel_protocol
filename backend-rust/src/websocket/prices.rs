@@ -9,6 +9,13 @@ use tokio::sync::RwLock;
 
 use crate::api::AppState;
 
+fn connected_payload() -> String {
+    serde_json::json!({
+        "type": "connected",
+        "message": "Connected to price stream"
+    }).to_string()
+}
+
 #[derive(Debug, Deserialize)]
 struct SubscribeMessage {
     #[serde(rename = "type")]
@@ -42,12 +49,7 @@ async fn handle_socket(socket: WebSocket, _state: AppState) {
     let subscribed_clone = subscribed_tokens.clone();
 
     // FIX: Tambahkan .into() pada String sambutan
-    let _ = sender.send(Message::Text(
-        serde_json::json!({
-            "type": "connected",
-            "message": "Connected to price stream"
-        }).to_string().into()
-    )).await;
+    let _ = sender.send(Message::Text(connected_payload().into())).await;
 
     // Spawn task to send price updates
     let mut send_task = tokio::spawn(async move {
@@ -123,5 +125,24 @@ fn get_mock_price(token: &str) -> f64 {
         "STRK" => 2.5 + (rand::random::<f64>() - 0.5) * 0.1,
         "CAREL" => 0.5 + (rand::random::<f64>() - 0.5) * 0.05,
         _ => 1.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connected_payload_contains_type() {
+        // Memastikan payload koneksi berisi tipe connected
+        let payload = connected_payload();
+        assert!(payload.contains("\"type\":\"connected\""));
+    }
+
+    #[test]
+    fn get_mock_price_unknown_returns_one() {
+        // Memastikan token tidak dikenal mengembalikan 1.0
+        let price = get_mock_price("UNKNOWN");
+        assert!((price - 1.0).abs() < f64::EPSILON);
     }
 }

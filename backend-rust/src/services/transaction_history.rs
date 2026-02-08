@@ -1,6 +1,25 @@
-use crate::{db::Database, error::Result, models::{Transaction, PaginatedResponse}};
+use crate::{db::Database, error::{AppError, Result}, models::{Transaction, PaginatedResponse}};
 use chrono::{DateTime, Utc};
 use sqlx::Row; // PENTING: Import ini untuk memperbaiki error try_get
+
+fn csv_header() -> &'static str {
+    "Date,Type,Token In,Token Out,Amount In,Amount Out,USD Value,Fee,Points\n"
+}
+
+fn format_csv_row(tx: &Transaction) -> String {
+    format!(
+        "{},{},{},{},{},{},{},{},{}\n",
+        tx.timestamp.format("%Y-%m-%d %H:%M:%S"),
+        tx.tx_type,
+        tx.token_in.clone().unwrap_or_default(),
+        tx.token_out.clone().unwrap_or_default(),
+        tx.amount_in.map(|v| v.to_string()).unwrap_or_default(),
+        tx.amount_out.map(|v| v.to_string()).unwrap_or_default(),
+        tx.usd_value.map(|v| v.to_string()).unwrap_or_default(),
+        tx.fee_paid.map(|v| v.to_string()).unwrap_or_default(),
+        tx.points_earned.map(|v| v.to_string()).unwrap_or_default(),
+    )
+}
 
 pub struct TransactionHistoryService {
     db: Database,
@@ -96,11 +115,10 @@ impl TransactionHistoryService {
     }
 
     pub async fn get_transaction_details(&self, tx_hash: &str) -> Result<Transaction> {
-        let tx = sqlx::query_as::<_, Transaction>("SELECT * FROM transactions WHERE tx_hash = $1")
-            .bind(tx_hash)
-            .fetch_one(self.db.pool())
-            .await?;
-        Ok(tx)
+        self.db
+            .get_transaction(tx_hash)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Transaction not found".to_string()))
     }
 
     pub async fn get_recent_transactions(&self, user_address: &str) -> Result<Vec<Transaction>> {
@@ -151,21 +169,10 @@ impl TransactionHistoryService {
             .get_user_history(user_address, None, from_date, to_date, 1, 10000)
             .await?;
 
-        let mut csv = String::from("Date,Type,Token In,Token Out,Amount In,Amount Out,USD Value,Fee,Points\n");
+        let mut csv = String::from(csv_header());
 
         for tx in transactions.items {
-            csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{}\n",
-                tx.timestamp.format("%Y-%m-%d %H:%M:%S"),
-                tx.tx_type,
-                tx.token_in.unwrap_or_default(),
-                tx.token_out.unwrap_or_default(),
-                tx.amount_in.map(|v| v.to_string()).unwrap_or_default(),
-                tx.amount_out.map(|v| v.to_string()).unwrap_or_default(),
-                tx.usd_value.map(|v| v.to_string()).unwrap_or_default(),
-                tx.fee_paid.map(|v| v.to_string()).unwrap_or_default(),
-                tx.points_earned.map(|v| v.to_string()).unwrap_or_default(),
-            ));
+            csv.push_str(&format_csv_row(&tx));
         }
 
         Ok(csv)
@@ -181,4 +188,38 @@ pub struct TransactionStats {
     pub total_volume_usd: rust_decimal::Decimal,
     pub total_fees_paid: rust_decimal::Decimal,
     pub total_points_earned: rust_decimal::Decimal,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn csv_header_starts_with_date() {
+        // Memastikan header CSV konsisten
+        assert!(csv_header().starts_with("Date,Type"));
+    }
+
+    #[test]
+    fn format_csv_row_contains_type() {
+        // Memastikan baris CSV memuat tipe transaksi
+        let tx = Transaction {
+            tx_hash: "0x1".to_string(),
+            block_number: 1,
+            user_address: "0xuser".to_string(),
+            tx_type: "swap".to_string(),
+            token_in: Some("ETH".to_string()),
+            token_out: Some("USDT".to_string()),
+            amount_in: None,
+            amount_out: None,
+            usd_value: None,
+            fee_paid: None,
+            points_earned: None,
+            timestamp: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+            processed: false,
+        };
+        let row = format_csv_row(&tx);
+        assert!(row.contains(",swap,"));
+    }
 }

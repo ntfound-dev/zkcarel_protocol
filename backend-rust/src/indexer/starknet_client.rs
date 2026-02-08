@@ -1,6 +1,23 @@
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 
+fn rpc_request(method: &str, params: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": 1
+    })
+}
+
+fn call_contract_params(contract_address: &str, function: &str, calldata: Vec<String>) -> serde_json::Value {
+    serde_json::json!({
+        "contract_address": contract_address,
+        "entry_point_selector": function,
+        "calldata": calldata
+    })
+}
+
 /// Starknet RPC Client
 pub struct StarknetClient {
     rpc_url: String,
@@ -17,12 +34,7 @@ impl StarknetClient {
 
     /// Get current block number
     pub async fn get_block_number(&self) -> Result<u64> {
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "starknet_blockNumber",
-            "params": [],
-            "id": 1
-        });
+        let request = rpc_request("starknet_blockNumber", serde_json::json!([]));
 
         let response = self
             .client
@@ -42,14 +54,12 @@ impl StarknetClient {
 
     /// Get block by number
     pub async fn get_block(&self, block_number: u64) -> Result<Block> {
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "starknet_getBlockWithTxs",
-            "params": [{
+        let request = rpc_request(
+            "starknet_getBlockWithTxs",
+            serde_json::json!([{
                 "block_number": block_number
-            }],
-            "id": 1
-        });
+            }]),
+        );
 
         let response = self
             .client
@@ -69,12 +79,7 @@ impl StarknetClient {
 
     /// Get transaction receipt
     pub async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<TransactionReceipt> {
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "starknet_getTransactionReceipt",
-            "params": [tx_hash],
-            "id": 1
-        });
+        let request = rpc_request("starknet_getTransactionReceipt", serde_json::json!([tx_hash]));
 
         let response = self
             .client
@@ -99,17 +104,15 @@ impl StarknetClient {
         from_block: u64,
         to_block: u64,
     ) -> Result<Vec<Event>> {
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "starknet_getEvents",
-            "params": [{
+        let request = rpc_request(
+            "starknet_getEvents",
+            serde_json::json!([{
                 "from_block": { "block_number": from_block },
                 "to_block": { "block_number": to_block },
                 "address": contract_address,
                 "chunk_size": 100
-            }],
-            "id": 1
-        });
+            }]),
+        );
 
         let response = self
             .client
@@ -134,16 +137,13 @@ impl StarknetClient {
         function: &str,
         calldata: Vec<String>,
     ) -> Result<Vec<String>> {
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "starknet_call",
-            "params": [{
-                "contract_address": contract_address,
-                "entry_point_selector": function,
-                "calldata": calldata
-            }, "latest"],
-            "id": 1
-        });
+        let request = rpc_request(
+            "starknet_call",
+            serde_json::json!([
+                call_contract_params(contract_address, function, calldata),
+                "latest"
+            ]),
+        );
 
         let response = self
             .client
@@ -199,4 +199,25 @@ pub struct Event {
 #[derive(Debug, Deserialize)]
 struct EventsResponse {
     events: Vec<Event>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_request_sets_method_and_id() {
+        // Memastikan payload RPC berisi method dan id default
+        let req = rpc_request("starknet_blockNumber", serde_json::json!([]));
+        assert_eq!(req.get("method").and_then(|v| v.as_str()), Some("starknet_blockNumber"));
+        assert_eq!(req.get("id").and_then(|v| v.as_i64()), Some(1));
+    }
+
+    #[test]
+    fn call_contract_params_contains_fields() {
+        // Memastikan parameter call_contract terbentuk lengkap
+        let params = call_contract_params("0xabc", "balance", vec!["1".to_string()]);
+        assert_eq!(params.get("contract_address").and_then(|v| v.as_str()), Some("0xabc"));
+        assert_eq!(params.get("entry_point_selector").and_then(|v| v.as_str()), Some("balance"));
+    }
 }

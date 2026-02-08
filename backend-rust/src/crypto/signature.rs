@@ -34,3 +34,46 @@ impl SignatureVerifier {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_signature() -> String {
+        format!("0x{}", "a".repeat(64))
+    }
+
+    #[test]
+    fn empty_inputs_return_bad_request() {
+        let result = SignatureVerifier::verify_signature("", "hello", &valid_signature());
+        match result {
+            Err(AppError::BadRequest(msg)) => {
+                assert!(msg.contains("Address or signature cannot be empty"));
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+
+        let result = SignatureVerifier::verify_signature("0xabc", "hello", "");
+        match result {
+            Err(AppError::BadRequest(msg)) => {
+                assert!(msg.contains("Address or signature cannot be empty"));
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_signature_format_returns_error() {
+        let result = SignatureVerifier::verify_signature("0xabc", "hello", "deadbeef");
+        match result {
+            Err(AppError::InvalidSignature) => {}
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn valid_signature_returns_true() {
+        let result = SignatureVerifier::verify_signature("0xabc", "hello", &valid_signature());
+        assert!(matches!(result, Ok(true)));
+    }
+}

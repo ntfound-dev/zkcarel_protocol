@@ -22,6 +22,11 @@ impl LayerSwapClient {
         token: &str,
         amount: f64,
     ) -> Result<LayerSwapQuote> {
+        tracing::debug!(
+            "LayerSwap quote via {} (api_key_set={})",
+            self.api_url,
+            !self.api_key.is_empty()
+        );
         // TODO: Implement actual LayerSwap API integration.
         // For now we return a deterministic simulated quote.
         Ok(LayerSwapQuote {
@@ -79,4 +84,56 @@ pub struct LayerSwapQuote {
     pub amount_out: f64,
     pub fee: f64,
     pub estimated_time_minutes: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPSILON: f64 = 1e-9;
+
+    #[tokio::test]
+    async fn get_quote_returns_expected_fields() {
+        let client = LayerSwapClient::new("api_key".to_string());
+        let quote = client
+            .get_quote("bitcoin", "starknet", "BTC", 100.0)
+            .await
+            .expect("quote should succeed");
+
+        assert_eq!(quote.from_chain, "bitcoin");
+        assert_eq!(quote.to_chain, "starknet");
+        assert_eq!(quote.token, "BTC");
+        assert!((quote.amount_in - 100.0).abs() < EPSILON);
+        assert!((quote.amount_out - 99.6).abs() < EPSILON);
+        assert!((quote.fee - 0.4).abs() < EPSILON);
+        assert_eq!(quote.estimated_time_minutes, 15);
+    }
+
+    #[tokio::test]
+    async fn execute_bridge_builds_traceable_id() {
+        let client = LayerSwapClient::new("api_key".to_string());
+        let quote = client
+            .get_quote("bitcoin", "starknet", "BTC", 100.0)
+            .await
+            .expect("quote should succeed");
+        let recipient = "recipient_1234567890";
+
+        let result = client
+            .execute_bridge(&quote, recipient)
+            .await
+            .expect("execute should succeed");
+
+        assert!(result.starts_with("LS_"));
+
+        let parts: Vec<&str> = result.split("_to_").collect();
+        assert_eq!(parts.len(), 2);
+
+        let id_hex = &parts[0][3..];
+        assert_eq!(id_hex.len(), 32);
+        assert!(id_hex.chars().all(|c| c.is_ascii_hexdigit()));
+
+        let recipient_short = &recipient[recipient.len() - 10..];
+        let quote_summary = format!("{}:{}->{:.6}", quote.token, quote.to_chain, quote.amount_out);
+        assert_eq!(parts[1], format!("{}_{}", recipient_short, quote_summary));
+    }
 }

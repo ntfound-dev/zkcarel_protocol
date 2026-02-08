@@ -17,6 +17,24 @@ struct OrderUpdate {
     timestamp: i64,
 }
 
+fn connected_payload() -> String {
+    serde_json::json!({
+        "type": "connected",
+        "message": "Connected to order updates stream"
+    }).to_string()
+}
+
+fn status_label(status: i16) -> &'static str {
+    match status {
+        0 => "active",
+        1 => "partially_filled",
+        2 => "filled",
+        3 => "cancelled",
+        4 => "expired",
+        _ => "unknown",
+    }
+}
+
 /// WebSocket handler for limit order updates
 /// GET /ws/orders
 pub async fn handler(
@@ -33,12 +51,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let _user_address = "0x1234...";
 
     // Perbaikan: Tambahkan .into() untuk menyambut koneksi
-    let _ = sender.send(Message::Text(
-        serde_json::json!({
-            "type": "connected",
-            "message": "Connected to order updates stream"
-        }).to_string().into()
-    )).await;
+    let _ = sender.send(Message::Text(connected_payload().into())).await;
 
     // Spawn task to send order updates
     let state_clone = state.clone();
@@ -57,14 +70,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 let update = OrderUpdate {
                     msg_type: "order_update".to_string(),
                     order_id: order.order_id,
-                    status: match order.status {
-                        0 => "active",
-                        1 => "partially_filled",
-                        2 => "filled",
-                        3 => "cancelled",
-                        4 => "expired",
-                        _ => "unknown",
-                    }.to_string(),
+                    status: status_label(order.status).to_string(),
                     filled: order.filled.to_string(),
                     timestamp: chrono::Utc::now().timestamp(),
                 };
@@ -106,4 +112,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 
     tracing::info!("Order WebSocket connection closed");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_label_maps_known_values() {
+        // Memastikan status order terjemah sesuai kode
+        assert_eq!(status_label(2), "filled");
+        assert_eq!(status_label(9), "unknown");
+    }
 }
