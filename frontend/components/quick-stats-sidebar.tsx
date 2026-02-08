@@ -2,7 +2,9 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { Diamond, Trophy, BarChart3, TrendingUp, ChevronUp, ChevronDown } from "lucide-react"
+import { Diamond, Trophy, BarChart3, ChevronUp, ChevronDown } from "lucide-react"
+import { getLeaderboardUserCategories, getLeaderboardUserRank, getPortfolioAnalytics, getRewardsPoints } from "@/lib/api"
+import { useWallet } from "@/hooks/use-wallet"
 
 interface StatCardProps {
   icon: React.ElementType
@@ -110,6 +112,111 @@ function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
 }
 
 export function QuickStatsSidebar() {
+  const wallet = useWallet()
+  const [points, setPoints] = React.useState(1850)
+  const [tierLabel, setTierLabel] = React.useState("Silver")
+  const [tierProgress, setTierProgress] = React.useState(42)
+  const [tierSubValue, setTierSubValue] = React.useState("4,200 / 10,000")
+  const [volumeLabel, setVolumeLabel] = React.useState("$0")
+  const [rankData, setRankData] = React.useState({ rank: 0, change: 0, total: 0 })
+  const [categoryRanks, setCategoryRanks] = React.useState([
+    { label: "Total Points", rank: 56 },
+    { label: "Trading", rank: 24 },
+    { label: "Referral", rank: 89 },
+  ])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getRewardsPoints()
+        if (!active) return
+        const totalPoints = Math.round(response.total_points)
+        setPoints(totalPoints)
+
+        const tiers = [
+          { name: "Bronze", threshold: 1000 },
+          { name: "Silver", threshold: 5000 },
+          { name: "Gold", threshold: 10000 },
+          { name: "Platinum", threshold: 20000 },
+        ]
+
+        const currentTier = tiers.find((tier, idx) =>
+          totalPoints < tiers[Math.min(idx + 1, tiers.length - 1)].threshold
+        ) || tiers[tiers.length - 1]
+
+        const currentIndex = tiers.indexOf(currentTier)
+        const nextTier = tiers[currentIndex + 1]
+        const prevThreshold = currentIndex === 0 ? 0 : tiers[currentIndex - 1].threshold
+        const nextThreshold = nextTier ? nextTier.threshold : currentTier.threshold
+        const progress = nextThreshold === prevThreshold
+          ? 100
+          : ((totalPoints - prevThreshold) / (nextThreshold - prevThreshold)) * 100
+
+        setTierLabel(currentTier.name)
+        setTierProgress(Math.min(Math.max(progress, 0), 100))
+        setTierSubValue(`${totalPoints.toLocaleString()} / ${nextThreshold.toLocaleString()}`)
+      } catch {
+        // keep fallback values
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const analytics = await getPortfolioAnalytics()
+        if (!active) return
+        const volume = Number(analytics.trading.total_volume_usd)
+        setVolumeLabel(Number.isFinite(volume) ? `$${volume.toLocaleString()}` : "$0")
+      } catch {
+        // keep fallback
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        if (!wallet.address) return
+        const [rankRes, categoriesRes] = await Promise.allSettled([
+          getLeaderboardUserRank(wallet.address),
+          getLeaderboardUserCategories(wallet.address),
+        ])
+        if (!active) return
+        if (rankRes.status === "fulfilled") {
+          setRankData({ rank: rankRes.value.rank, change: 0, total: rankRes.value.total_users })
+        }
+        if (categoriesRes.status === "fulfilled" && categoriesRes.value.categories.length > 0) {
+          const categoryMap = new Map(
+            categoriesRes.value.categories.map((item) => [item.category, item.rank])
+          )
+          setCategoryRanks([
+            { label: "Total Points", rank: categoryMap.get("points") ?? 0 },
+            { label: "Trading", rank: categoryMap.get("volume") ?? 0 },
+            { label: "Referral", rank: categoryMap.get("referrals") ?? 0 },
+          ])
+        }
+      } catch {
+        // keep fallback
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [wallet.address])
+
   return (
     <aside className="w-72 shrink-0 hidden xl:block">
       <div className="sticky top-20 space-y-4">
@@ -120,33 +227,28 @@ export function QuickStatsSidebar() {
         <StatCard
           icon={Diamond}
           label="Usable Points"
-          value="1,850"
-          progress={37}
+          value={points.toLocaleString()}
+          progress={Math.round(tierProgress)}
         />
 
         <StatCard
           icon={Trophy}
           label="Tier Progress"
-          value="Silver"
-          subValue="4,200 / 10,000"
-          progress={42}
+          value={tierLabel}
+          subValue={tierSubValue}
+          progress={Math.round(tierProgress)}
         />
 
         <StatCard
           icon={BarChart3}
-          label="24H Volume"
-          value="$2.4M"
-          trend={{ value: "12.5%", isPositive: true }}
+          label="Total Volume"
+          value={volumeLabel}
         />
 
         <LeaderboardRank
-          rank={42}
-          change={3}
-          categories={[
-            { label: "Total Points", rank: 56 },
-            { label: "Trading", rank: 24 },
-            { label: "Referral", rank: 89 },
-          ]}
+          rank={rankData.rank || 42}
+          change={rankData.change}
+          categories={categoryRanks}
         />
       </div>
     </aside>

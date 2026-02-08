@@ -132,6 +132,10 @@ fn build_router(state: api::AppState) -> Router {
             get(api::portfolio::get_history),
         )
         .route(
+            "/api/v1/portfolio/ohlcv",
+            get(api::portfolio::get_portfolio_ohlcv),
+        )
+        .route(
             "/api/v1/portfolio/analytics",
             get(api::analytics::get_analytics),
         )
@@ -143,6 +147,10 @@ fn build_router(state: api::AppState) -> Router {
         .route(
             "/api/v1/leaderboard/user/{address}", // PERBAIKAN: :address -> {address}
             get(api::leaderboard::get_user_rank),
+        )
+        .route(
+            "/api/v1/leaderboard/user/{address}/categories",
+            get(api::leaderboard::get_user_categories),
         )
         // Rewards & Points
         .route("/api/v1/rewards/points", get(api::rewards::get_points))
@@ -157,6 +165,7 @@ fn build_router(state: api::AppState) -> Router {
         // Referral
         .route("/api/v1/referral/code", get(api::referral::get_code))
         .route("/api/v1/referral/stats", get(api::referral::get_stats))
+        .route("/api/v1/referral/history", get(api::referral::get_history))
         // Social Tasks
         .route("/api/v1/social/verify", post(api::social::verify_task))
         // Faucet (Testnet)
@@ -197,6 +206,11 @@ fn build_router(state: api::AppState) -> Router {
         .route(
             "/api/v1/chart/{token}/indicators", // PERBAIKAN: :token -> {token}
             get(api::charts::get_indicators),
+        )
+        // Market Depth
+        .route(
+            "/api/v1/market/depth/{token}",
+            get(api::market::get_market_depth),
         )
         // Webhooks
         .route("/api/v1/webhooks/register", post(api::webhooks::register))

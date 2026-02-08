@@ -17,22 +17,24 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ChevronDown, TrendingUp, TrendingDown, Info, Expand, X, Check, AlertCircle } from "lucide-react"
+import { useNotifications } from "@/hooks/use-notifications"
+import { cancelLimitOrder, createLimitOrder, getMarketDepth, getPortfolioBalance, getTokenOHLCV, listLimitOrders } from "@/lib/api"
 
-const tokens = [
-  { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 65000, change: 2.4 },
-  { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 2450, change: 1.8 },
-  { symbol: "STRK", name: "StarkNet", icon: "◈", price: 1.25, change: -0.5 },
-  { symbol: "CAREL", name: "ZkCarel", icon: "◐", price: 0.85, change: 5.2 },
+const tokenCatalog = [
+  { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 65000, change: 0 },
+  { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 2450, change: 0 },
+  { symbol: "STRK", name: "StarkNet", icon: "◈", price: 1.25, change: 0 },
+  { symbol: "CAREL", name: "ZkCarel", icon: "◐", price: 0.85, change: 0 },
   { symbol: "USDT", name: "Tether", icon: "₮", price: 1, change: 0 },
   { symbol: "USDC", name: "USD Coin", icon: "⭕", price: 1, change: 0 },
 ]
 
+type TokenItem = (typeof tokenCatalog)[number]
+
 const expiryOptions = [
-  { label: "10 menit", value: "10m" },
-  { label: "1 jam", value: "1h" },
   { label: "1 hari", value: "1d" },
-  { label: "3 hari", value: "3d" },
   { label: "7 hari", value: "7d" },
+  { label: "30 hari", value: "30d" },
 ]
 
 const pricePresets = [
@@ -49,13 +51,33 @@ const sellPresets = [
   { label: "+50%", value: 50 },
 ]
 
-// Mock active orders
-const mockOrders = [
-  { id: 1, type: "buy", token: "BTC", amount: "0.1", price: "62000", expiry: "1d", status: "active", createdAt: "2 jam lalu" },
-  { id: 2, type: "sell", token: "ETH", amount: "2.5", price: "2600", expiry: "3d", status: "active", createdAt: "5 jam lalu" },
+type UiOrder = {
+  id: string
+  type: "buy" | "sell"
+  token: string
+  amount: string
+  price: string
+  expiry: string
+  status: "active" | "filled" | "cancelled"
+  createdAt: string
+}
+
+const fallbackOrders: UiOrder[] = [
+  { id: "local-1", type: "buy", token: "BTC", amount: "0.1", price: "62000", expiry: "1d", status: "active", createdAt: "2 jam lalu" },
+  { id: "local-2", type: "sell", token: "ETH", amount: "2.5", price: "2600", expiry: "7d", status: "active", createdAt: "5 jam lalu" },
 ]
 
+const stableSymbols = new Set(["USDT", "USDC"])
+
+const formatDateTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })
+}
+
 export function LimitOrder() {
+  const notifications = useNotifications()
+  const [tokens, setTokens] = React.useState<TokenItem[]>(tokenCatalog)
   const [selectedToken, setSelectedToken] = React.useState(tokens[0])
   const [payToken, setPayToken] = React.useState(tokens[4])
   const [receiveToken, setReceiveToken] = React.useState(tokens[4])
@@ -65,10 +87,144 @@ export function LimitOrder() {
   const [expiry, setExpiry] = React.useState(expiryOptions[2].value)
   const [chartModalOpen, setChartModalOpen] = React.useState(false)
   const [chartPeriod, setChartPeriod] = React.useState("24H")
-  const [orders, setOrders] = React.useState(mockOrders)
+  const [orders, setOrders] = React.useState<UiOrder[]>(fallbackOrders)
   const [showConfirmDialog, setShowConfirmDialog] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [submitSuccess, setSubmitSuccess] = React.useState(false)
+  const [chartPoints, setChartPoints] = React.useState<number[]>([])
+  const [orderBook, setOrderBook] = React.useState<{ bids: Array<{ price: number; amount: number }>; asks: Array<{ price: number; amount: number }> }>({
+    bids: [],
+    asks: [],
+  })
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getPortfolioBalance()
+        if (!active) return
+        setTokens((prev) =>
+          prev.map((token) => {
+            const match = response.balances.find((item) => item.token.toUpperCase() === token.symbol)
+            if (!match) return token
+            const nextPrice = match.amount > 0 ? match.value_usd / match.amount : match.price
+            return { ...token, price: nextPrice }
+          })
+        )
+      } catch {
+        // keep fallback prices
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  React.useEffect(() => {
+    const nextSelected = tokens.find((token) => token.symbol === selectedToken.symbol) || tokens[0]
+    const nextPay = tokens.find((token) => token.symbol === payToken.symbol) || tokens[4]
+    const nextReceive = tokens.find((token) => token.symbol === receiveToken.symbol) || tokens[4]
+    setSelectedToken(nextSelected)
+    setPayToken(nextPay)
+    setReceiveToken(nextReceive)
+  }, [tokens])
+
+  const intervalForPeriod = (period: string) => {
+    switch (period) {
+      case "1H":
+        return { interval: "1h", limit: 24 }
+      case "24H":
+        return { interval: "1h", limit: 24 }
+      case "7D":
+        return { interval: "1d", limit: 7 }
+      case "30D":
+        return { interval: "1d", limit: 30 }
+      default:
+        return { interval: "1h", limit: 24 }
+    }
+  }
+
+  React.useEffect(() => {
+    let active = true
+    const { interval, limit } = intervalForPeriod(chartPeriod)
+    ;(async () => {
+      try {
+        const response = await getTokenOHLCV({
+          token: selectedToken.symbol,
+          interval,
+          limit,
+        })
+        if (!active) return
+        const closes = response.data.map((candle) => Number(candle.close)).filter((value) => Number.isFinite(value))
+        if (closes.length >= 2) {
+          const latest = closes[closes.length - 1]
+          const prev = closes[closes.length - 2]
+          const change = prev > 0 ? ((latest - prev) / prev) * 100 : 0
+          setTokens((prevTokens) =>
+            prevTokens.map((token) =>
+              token.symbol === selectedToken.symbol ? { ...token, price: latest, change } : token
+            )
+          )
+          setChartPoints(closes)
+        }
+      } catch {
+        // keep fallback chart
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [selectedToken.symbol, chartPeriod])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getMarketDepth(selectedToken.symbol, 3)
+        if (!active) return
+        setOrderBook({ bids: response.bids, asks: response.asks })
+      } catch {
+        if (!active) return
+        setOrderBook({ bids: [], asks: [] })
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [selectedToken.symbol])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await listLimitOrders(1, 10, "active")
+        if (!active) return
+        const mapped = response.items.map((order) => {
+          const isBuy = stableSymbols.has(order.from_token.toUpperCase())
+          return {
+            id: order.order_id,
+            type: isBuy ? "buy" : "sell",
+            token: isBuy ? order.to_token : order.from_token,
+            amount: order.amount,
+            price: order.price,
+            expiry: order.expiry,
+            status: order.status === 2 ? "filled" : order.status === 3 ? "cancelled" : "active",
+            createdAt: formatDateTime(order.created_at),
+          } as UiOrder
+        })
+        setOrders(mapped)
+      } catch {
+        // keep fallback
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   const handlePricePreset = (percentage: number) => {
     const marketPrice = selectedToken.price
@@ -77,8 +233,20 @@ export function LimitOrder() {
   }
 
   const marketPrice = selectedToken.price
+  const chartHigh = chartPoints.length > 0 ? Math.max(...chartPoints) : marketPrice * 1.05
+  const chartLow = chartPoints.length > 0 ? Math.min(...chartPoints) : marketPrice * 0.95
   const currentPrice = Number.parseFloat(price) || 0
   const priceChange = marketPrice ? ((currentPrice - marketPrice) / marketPrice * 100).toFixed(2) : "0"
+  const fallbackBids = [0.02, 0.04, 0.06].map((diff, i) => ({
+    price: marketPrice * (1 - diff),
+    amount: marketPrice / (1000 * (i + 1)),
+  }))
+  const fallbackAsks = [0.02, 0.04, 0.06].map((diff, i) => ({
+    price: marketPrice * (1 + diff),
+    amount: marketPrice / (900 * (i + 1)),
+  }))
+  const bids = orderBook.bids.length > 0 ? orderBook.bids : fallbackBids
+  const asks = orderBook.asks.length > 0 ? orderBook.asks : fallbackAsks
 
   const handleAmountPreset = (percent: number) => {
     // Mock balance
@@ -94,34 +262,70 @@ export function LimitOrder() {
 
   const confirmOrder = async () => {
     setIsSubmitting(true)
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500))
-    
-    const newOrder = {
-      id: orders.length + 1,
-      type: orderType,
-      token: selectedToken.symbol,
-      amount,
-      price,
-      expiry,
-      status: "active" as const,
-      createdAt: "Baru saja"
+    try {
+      const fromToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
+      const toToken = orderType === "buy" ? selectedToken.symbol : receiveToken.symbol
+
+      const response = await createLimitOrder({
+        from_token: fromToken,
+        to_token: toToken,
+        amount,
+        price,
+        expiry,
+        recipient: null,
+      })
+
+      const newOrder: UiOrder = {
+        id: response.order_id,
+        type: orderType,
+        token: selectedToken.symbol,
+        amount,
+        price,
+        expiry,
+        status: "active",
+        createdAt: "Baru saja",
+      }
+
+      setOrders((prev) => [newOrder, ...prev])
+      setSubmitSuccess(true)
+      notifications.addNotification({
+        type: "success",
+        title: "Order dibuat",
+        message: `Order ${orderType === "buy" ? "beli" : "jual"} ${amount} ${selectedToken.symbol} berhasil dibuat`,
+      })
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Gagal membuat order",
+        message: error instanceof Error ? error.message : "Terjadi kesalahan saat membuat order",
+      })
+    } finally {
+      setIsSubmitting(false)
+      setTimeout(() => {
+        setShowConfirmDialog(false)
+        setSubmitSuccess(false)
+        setAmount("")
+        setPrice("")
+      }, 1500)
     }
-    
-    setOrders([newOrder, ...orders])
-    setIsSubmitting(false)
-    setSubmitSuccess(true)
-    
-    setTimeout(() => {
-      setShowConfirmDialog(false)
-      setSubmitSuccess(false)
-      setAmount("")
-      setPrice("")
-    }, 1500)
   }
 
-  const cancelOrder = (orderId: number) => {
-    setOrders(orders.filter(o => o.id !== orderId))
+  const cancelOrder = async (orderId: string) => {
+    try {
+      await cancelLimitOrder(orderId)
+      setOrders((prev) => prev.filter((order) => order.id !== orderId))
+      notifications.addNotification({
+        type: "success",
+        title: "Order dibatalkan",
+        message: "Order berhasil dibatalkan",
+      })
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Gagal membatalkan",
+        message: error instanceof Error ? error.message : "Tidak dapat membatalkan order",
+      })
+    }
   }
 
   return (
@@ -221,13 +425,30 @@ export function LimitOrder() {
                       <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0" />
                     </linearGradient>
                   </defs>
-                  <path
-                    d="M 0 150 Q 50 140, 100 145 T 200 120 T 300 130 T 400 100 T 500 110 T 600 80 T 700 85 T 800 70"
-                    fill="url(#chartGradientLimit)"
-                    stroke="hsl(var(--primary))"
-                    strokeWidth="2"
-                    vectorEffect="non-scaling-stroke"
-                  />
+                  {chartPoints.length > 1 ? (
+                    <path
+                      d={chartPoints.map((value, idx) => {
+                        const x = (idx / (chartPoints.length - 1)) * 800
+                        const maxVal = Math.max(...chartPoints)
+                        const minVal = Math.min(...chartPoints)
+                        const range = maxVal - minVal || 1
+                        const y = 200 - ((value - minVal) / range) * 160 - 20
+                        return `${idx === 0 ? "M" : "L"} ${x} ${y}`
+                      }).join(" ")}
+                      fill="none"
+                      stroke="hsl(var(--primary))"
+                      strokeWidth="2"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ) : (
+                    <path
+                      d="M 0 150 Q 50 140, 100 145 T 200 120 T 300 130 T 400 100 T 500 110 T 600 80 T 700 85 T 800 70"
+                      fill="url(#chartGradientLimit)"
+                      stroke="hsl(var(--primary))"
+                      strokeWidth="2"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  )}
                   {/* Price line indicator */}
                   {currentPrice > 0 && (
                     <line
@@ -242,10 +463,10 @@ export function LimitOrder() {
                   )}
                 </svg>
                 <div className="absolute top-4 left-4 text-xs text-muted-foreground">
-                  High: ${(marketPrice * 1.05).toLocaleString()}
+                  High: ${chartHigh.toLocaleString()}
                 </div>
                 <div className="absolute bottom-4 left-4 text-xs text-muted-foreground">
-                  Low: ${(marketPrice * 0.95).toLocaleString()}
+                  Low: ${chartLow.toLocaleString()}
                 </div>
                 {currentPrice > 0 && (
                   <div className="absolute right-4 top-1/2 -translate-y-1/2 bg-secondary/20 px-2 py-1 rounded text-xs text-secondary">
@@ -259,10 +480,10 @@ export function LimitOrder() {
                 <div className="p-3 rounded-lg bg-success/10 border border-success/20">
                   <p className="text-xs text-muted-foreground mb-2">Bids</p>
                   <div className="space-y-1">
-                    {[0.02, 0.04, 0.06].map((diff, i) => (
-                      <div key={i} className="flex justify-between text-xs">
-                        <span className="text-success">${(marketPrice * (1 - diff)).toLocaleString()}</span>
-                        <span className="text-muted-foreground">{(Math.random() * 10).toFixed(3)}</span>
+                    {bids.map((level, i) => (
+                      <div key={`${level.price}-${i}`} className="flex justify-between text-xs">
+                        <span className="text-success">${level.price.toLocaleString()}</span>
+                        <span className="text-muted-foreground">{level.amount.toFixed(3)}</span>
                       </div>
                     ))}
                   </div>
@@ -270,10 +491,10 @@ export function LimitOrder() {
                 <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
                   <p className="text-xs text-muted-foreground mb-2">Asks</p>
                   <div className="space-y-1">
-                    {[0.02, 0.04, 0.06].map((diff, i) => (
-                      <div key={i} className="flex justify-between text-xs">
-                        <span className="text-destructive">${(marketPrice * (1 + diff)).toLocaleString()}</span>
-                        <span className="text-muted-foreground">{(Math.random() * 10).toFixed(3)}</span>
+                    {asks.map((level, i) => (
+                      <div key={`${level.price}-${i}`} className="flex justify-between text-xs">
+                        <span className="text-destructive">${level.price.toLocaleString()}</span>
+                        <span className="text-muted-foreground">{level.amount.toFixed(3)}</span>
                       </div>
                     ))}
                   </div>
@@ -414,7 +635,7 @@ export function LimitOrder() {
                   <div>
                     <label className="text-sm font-medium text-foreground mb-2 block">Kedaluwarsa</label>
                     <div className="grid grid-cols-3 gap-2">
-                      {expiryOptions.slice(0, 3).map((option) => (
+                      {expiryOptions.map((option) => (
                         <button
                           key={option.value}
                           onClick={() => setExpiry(option.value)}
@@ -582,7 +803,7 @@ export function LimitOrder() {
                   <div>
                     <label className="text-sm font-medium text-foreground mb-2 block">Kedaluwarsa</label>
                     <div className="grid grid-cols-3 gap-2">
-                      {expiryOptions.slice(0, 3).map((option) => (
+                      {expiryOptions.map((option) => (
                         <button
                           key={option.value}
                           onClick={() => setExpiry(option.value)}
@@ -646,7 +867,9 @@ export function LimitOrder() {
                     <div className="flex items-center gap-4">
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">{order.createdAt}</p>
-                        <p className="text-xs text-muted-foreground">Exp: {expiryOptions.find(e => e.value === order.expiry)?.label}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Exp: {expiryOptions.find(e => e.value === order.expiry)?.label || formatDateTime(order.expiry)}
+                        </p>
                       </div>
                       <Button
                         variant="ghost"
@@ -682,13 +905,30 @@ export function LimitOrder() {
                   <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0" />
                 </linearGradient>
               </defs>
-              <path
-                d="M 0 250 Q 50 230, 100 240 T 200 200 T 300 220 T 400 150 T 500 170 T 600 120 T 700 130 T 800 100"
-                fill="url(#chartGradientFull)"
-                stroke="hsl(var(--primary))"
-                strokeWidth="2"
-                vectorEffect="non-scaling-stroke"
-              />
+              {chartPoints.length > 1 ? (
+                <path
+                  d={chartPoints.map((value, idx) => {
+                    const x = (idx / (chartPoints.length - 1)) * 800
+                    const maxVal = Math.max(...chartPoints)
+                    const minVal = Math.min(...chartPoints)
+                    const range = maxVal - minVal || 1
+                    const y = 300 - ((value - minVal) / range) * 240 - 30
+                    return `${idx === 0 ? "M" : "L"} ${x} ${y}`
+                  }).join(" ")}
+                  fill="none"
+                  stroke="hsl(var(--primary))"
+                  strokeWidth="2"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : (
+                <path
+                  d="M 0 250 Q 50 230, 100 240 T 200 200 T 300 220 T 400 150 T 500 170 T 600 120 T 700 130 T 800 100"
+                  fill="url(#chartGradientFull)"
+                  stroke="hsl(var(--primary))"
+                  strokeWidth="2"
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
             </svg>
           </div>
           <div className="flex justify-center gap-2">

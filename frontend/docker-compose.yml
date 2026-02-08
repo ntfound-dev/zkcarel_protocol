@@ -1,0 +1,11 @@
+version: "3.9"
+services:
+  frontend:
+    build: .
+    container_name: zkcarel-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: "http://host.docker.internal:8080"
+      NEXT_PUBLIC_BACKEND_WS_URL: "ws://host.docker.internal:8080"
+    restart: unless-stopped

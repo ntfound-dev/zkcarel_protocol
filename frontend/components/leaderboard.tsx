@@ -4,6 +4,8 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Trophy, Medal, Crown, ChevronUp, ChevronDown, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useWallet } from "@/hooks/use-wallet"
+import { getLeaderboard } from "@/lib/api"
 
 const leaderboardData = {
   total: [
@@ -45,6 +47,17 @@ const tabs: { id: TabId; label: string }[] = [
   { id: "trading", label: "Trading Volume" },
   { id: "referral", label: "Referral" },
 ]
+
+const formatCompact = (value: number) => {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      maximumFractionDigits: 2,
+    }).format(value)
+  } catch {
+    return value.toLocaleString()
+  }
+}
 
 function RankBadge({ rank }: { rank: number }) {
   if (rank === 1) {
@@ -138,10 +151,69 @@ function LeaderboardRow({ entry, showLabel }: { entry: LeaderboardEntry; showLab
 }
 
 export function Leaderboard() {
+  const wallet = useWallet()
   const [activeTab, setActiveTab] = React.useState<TabId>("total")
   const daysRemaining = 15
+  const [entries, setEntries] = React.useState<LeaderboardEntry[]>(leaderboardData.total)
+  const [isLoading, setIsLoading] = React.useState(false)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
 
-  const currentData = leaderboardData[activeTab]
+  const isYouAddress = React.useCallback((entryAddress: string) => {
+    if (!wallet.address) return false
+    const normalizedEntry = entryAddress.toLowerCase()
+    const normalizedWallet = wallet.address.toLowerCase()
+    if (normalizedWallet.includes("...")) {
+      const [prefix, suffix] = normalizedWallet.split("...")
+      return normalizedEntry.startsWith(prefix) && normalizedEntry.endsWith(suffix)
+    }
+    return normalizedEntry === normalizedWallet
+  }, [wallet.address])
+
+  React.useEffect(() => {
+    let active = true
+    const leaderboardType =
+      activeTab === "total" ? "points" : activeTab === "trading" ? "volume" : "referrals"
+
+    ;(async () => {
+      setIsLoading(true)
+      setLoadError(null)
+      try {
+        const response = await getLeaderboard(leaderboardType)
+        if (!active) return
+        const mapped = response.entries.map((entry) => {
+          const base: LeaderboardEntry = {
+            rank: entry.rank,
+            address: entry.display_name || entry.address,
+            points: entry.value,
+            isYou: isYouAddress(entry.address),
+            change: entry.change_24h ? Math.round(entry.change_24h) : 0,
+          }
+
+          if (activeTab === "trading") {
+            base.label = `$${formatCompact(entry.value)}`
+          } else if (activeTab === "referral") {
+            base.label = `${Math.round(entry.value)} refs`
+          }
+
+          return base
+        })
+
+        setEntries(mapped)
+      } catch (error) {
+        if (!active) return
+        setLoadError(error instanceof Error ? error.message : "Failed to load leaderboard")
+        setEntries(leaderboardData[activeTab])
+      } finally {
+        if (active) setIsLoading(false)
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [activeTab, isYouAddress])
+
+  const currentData = entries
   const yourEntry = currentData.find(e => e.isYou)
   const aheadOf = currentData.find(e => e.rank === (yourEntry?.rank || 0) + 1)
   const behindOf = currentData.find(e => e.rank === (yourEntry?.rank || 0) - 1)
@@ -179,8 +251,14 @@ export function Leaderboard() {
         </div>
 
         <div className="space-y-2">
-          {currentData.map((entry) => (
-            <LeaderboardRow key={entry.rank} entry={entry} showLabel={activeTab !== "total"} />
+          {isLoading && (
+            <div className="text-sm text-muted-foreground px-2">Loading leaderboard...</div>
+          )}
+          {!isLoading && loadError && (
+            <div className="text-sm text-destructive px-2">{loadError}</div>
+          )}
+          {!isLoading && currentData.map((entry) => (
+            <LeaderboardRow key={`${entry.rank}-${entry.address}`} entry={entry} showLabel={activeTab !== "total"} />
           ))}
         </div>
 

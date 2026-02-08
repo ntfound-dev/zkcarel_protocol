@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use crate::{
     constants::{
@@ -11,7 +11,7 @@ use crate::{
     models::ApiResponse,
     services::SocialVerifier,
 };
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct VerifyTaskRequest {
@@ -39,6 +39,7 @@ fn points_for_task(task_type: &str) -> f64 {
 /// POST /api/v1/social/verify
 pub async fn verify_task(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<VerifyTaskRequest>,
 ) -> Result<Json<ApiResponse<VerifyTaskResponse>>> {
     // Gunakan 'proof' di sini agar tidak dianggap dead code
@@ -46,21 +47,21 @@ pub async fn verify_task(
     tracing::info!("Verifying task: {} with proof: {}", req.task_type, req.proof);
 
     let verifier = SocialVerifier::new(state.db.clone(), state.config.clone());
-    let user_address = "0x1234..."; // TODO: Extract from JWT
+    let user_address = require_user(&headers, &state).await?;
 
     let task_type = req.task_type.as_str();
     let verified = match task_type {
-        "twitter_follow" => verifier.verify_twitter(user_address, task_type, &req.proof).await?,
-        "twitter_retweet" => verifier.verify_twitter(user_address, task_type, &req.proof).await?,
-        "telegram_join" => verifier.verify_telegram(user_address, task_type, &req.proof).await?,
-        "discord_join" => verifier.verify_discord(user_address, task_type, &req.proof).await?,
+        "twitter_follow" => verifier.verify_twitter(&user_address, task_type, &req.proof).await?,
+        "twitter_retweet" => verifier.verify_twitter(&user_address, task_type, &req.proof).await?,
+        "telegram_join" => verifier.verify_telegram(&user_address, task_type, &req.proof).await?,
+        "discord_join" => verifier.verify_discord(&user_address, task_type, &req.proof).await?,
         _ => return Err(AppError::BadRequest("Invalid task type".into())),
     };
 
     let points = points_for_task(task_type);
 
     if verified && points > 0.0 {
-        verifier.award_points(user_address, points).await?;
+        verifier.award_points(&user_address, points).await?;
     }
     
     let response = VerifyTaskResponse {

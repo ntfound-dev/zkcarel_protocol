@@ -1,5 +1,5 @@
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
-use crate::{config::Config, error::Result, models::*};
+use crate::{config::Config, error::{AppError, Result}, models::*};
 
 #[derive(Clone)]
 pub struct Database {
@@ -99,6 +99,13 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    pub async fn get_or_create_user(&self, address: &str) -> Result<User> {
+        self.create_user(address).await?;
+        self.get_user(address)
+            .await?
+            .ok_or_else(|| AppError::NotFound("User not found".to_string()))
     }
 
     pub async fn update_last_active(&self, address: &str) -> Result<()> {
@@ -425,10 +432,11 @@ impl Database {
         Ok(order)
     }
 
-    pub async fn get_active_orders(&self) -> Result<Vec<LimitOrder>> {
+    pub async fn get_active_orders_for_owner(&self, owner: &str) -> Result<Vec<LimitOrder>> {
         let orders = sqlx::query_as::<_, LimitOrder>(
-            "SELECT * FROM limit_orders WHERE status = 0 AND expiry > NOW() ORDER BY created_at ASC",
+            "SELECT * FROM limit_orders WHERE owner = $1 AND status = 0 AND expiry > NOW() ORDER BY created_at ASC",
         )
+        .bind(owner)
         .fetch_all(&self.pool)
         .await?;
         Ok(orders)

@@ -2,8 +2,9 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { TrendingUp, TrendingDown, PieChart, ExternalLink, X } from "lucide-react"
+import { TrendingUp, TrendingDown, PieChart, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { getPortfolioAnalytics, getPortfolioOHLCV, getTransactionsHistory, type AnalyticsResponse, type PortfolioOHLCVPoint, type Transaction } from "@/lib/api"
 import {
   Dialog,
   DialogContent,
@@ -11,7 +12,33 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
-const portfolioData = {
+type PortfolioAsset = {
+  symbol: string
+  name: string
+  icon: string
+  value: number
+  percent: number
+  change: number
+}
+
+type PortfolioSnapshot = {
+  totalValue: number
+  pnl: number
+  pnlPercent: number
+  period: string
+  assets: PortfolioAsset[]
+}
+
+const assetMeta: Record<string, { name: string; icon: string }> = {
+  BTC: { name: "Bitcoin", icon: "₿" },
+  ETH: { name: "Ethereum", icon: "Ξ" },
+  CAREL: { name: "ZkCarel", icon: "◇" },
+  STRK: { name: "StarkNet", icon: "◈" },
+  USDT: { name: "Tether", icon: "₮" },
+  USDC: { name: "USD Coin", icon: "⭕" },
+}
+
+const defaultPortfolioData: PortfolioSnapshot = {
   totalValue: 100000,
   pnl: 12450,
   pnlPercent: 24.5,
@@ -25,23 +52,20 @@ const portfolioData = {
   ],
 }
 
-const chartData = [
-  { day: "Mon", value: 85000 },
-  { day: "Tue", value: 87500 },
-  { day: "Wed", value: 89000 },
-  { day: "Thu", value: 91000 },
-  { day: "Fri", value: 95000 },
-  { day: "Sat", value: 93000 },
-  { day: "Sun", value: 100000 },
-]
+type ChartPoint = { label: string; value: number }
 
-function MiniChart() {
-  const maxValue = Math.max(...chartData.map(d => d.value))
-  const minValue = Math.min(...chartData.map(d => d.value))
-  const range = maxValue - minValue
+function MiniChart({ data }: { data: ChartPoint[] }) {
+  const safeData = data.length > 1 ? data : data.length === 1 ? [data[0], data[0]] : []
+  if (safeData.length === 0) {
+    return <div className="h-40 w-full rounded-xl bg-surface/30" />
+  }
+
+  const maxValue = Math.max(...safeData.map(d => d.value))
+  const minValue = Math.min(...safeData.map(d => d.value))
+  const range = maxValue - minValue || 1
   
-  const points = chartData.map((d, i) => {
-    const x = (i / (chartData.length - 1)) * 100
+  const points = safeData.map((d, i) => {
+    const x = (i / (safeData.length - 1)) * 100
     const y = 100 - ((d.value - minValue) / range) * 80
     return `${x},${y}`
   }).join(" ")
@@ -95,8 +119,8 @@ function MiniChart() {
         />
         
         {/* Data points */}
-        {chartData.map((d, i) => {
-          const x = (i / (chartData.length - 1)) * 100
+        {safeData.map((d, i) => {
+          const x = (i / (safeData.length - 1)) * 100
           const y = 100 - ((d.value - minValue) / range) * 80
           return (
             <circle
@@ -113,15 +137,15 @@ function MiniChart() {
       
       {/* X-axis labels */}
       <div className="absolute bottom-0 left-0 right-0 flex justify-between text-xs text-muted-foreground px-1">
-        {chartData.map((d) => (
-          <span key={d.day}>{d.day}</span>
+        {safeData.map((d, i) => (
+          <span key={`${d.label}-${i}`}>{d.label}</span>
         ))}
       </div>
     </div>
   )
 }
 
-function AssetRow({ asset }: { asset: typeof portfolioData.assets[0] }) {
+function AssetRow({ asset }: { asset: PortfolioAsset }) {
   const isPositive = asset.change >= 0
   
   return (
@@ -160,18 +184,182 @@ function AssetRow({ asset }: { asset: typeof portfolioData.assets[0] }) {
   )
 }
 
-const transactionHistory = [
-  { id: 1, type: "Buy", asset: "BTC", amount: "0.5", value: "$32,500", time: "2 hours ago", status: "Completed" },
-  { id: 2, type: "Swap", asset: "ETH → CAREL", amount: "5.0", value: "$10,000", time: "5 hours ago", status: "Completed" },
-  { id: 3, type: "Sell", asset: "STRK", amount: "1000", value: "$1,250", time: "1 day ago", status: "Completed" },
-  { id: 4, type: "Buy", asset: "CAREL", amount: "5000", value: "$4,250", time: "2 days ago", status: "Completed" },
-  { id: 5, type: "Swap", asset: "BTC → ETH", amount: "0.2", value: "$13,000", time: "3 days ago", status: "Completed" },
+type UiTransaction = {
+  id: string
+  type: string
+  asset: string
+  amount: string
+  value: string
+  time: string
+  status: string
+}
+
+const fallbackTransactions: UiTransaction[] = [
+  { id: "local-1", type: "Swap", asset: "BTC → ETH", amount: "0.1", value: "$6,500", time: "2 hours ago", status: "Completed" },
+  { id: "local-2", type: "Bridge", asset: "USDC", amount: "500", value: "$500", time: "1 day ago", status: "Completed" },
 ]
 
 export function PortfolioDashboard() {
-  const isPositive = portfolioData.pnl >= 0
   const [detailsOpen, setDetailsOpen] = React.useState(false)
   const [selectedPeriod, setSelectedPeriod] = React.useState("7D")
+  const [analytics, setAnalytics] = React.useState<AnalyticsResponse | null>(null)
+  const [chartData, setChartData] = React.useState<ChartPoint[]>([])
+  const [transactions, setTransactions] = React.useState<UiTransaction[]>(fallbackTransactions)
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getPortfolioAnalytics()
+        if (!active) return
+        setAnalytics(response)
+      } catch {
+        // keep fallback data
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  React.useEffect(() => {
+    let active = true
+    const periodConfig = selectedPeriod === "24H"
+      ? { interval: "1h", limit: 24 }
+      : selectedPeriod === "7D"
+      ? { interval: "1d", limit: 7 }
+      : selectedPeriod === "30D"
+      ? { interval: "1d", limit: 30 }
+      : { interval: "1w", limit: 12 }
+    ;(async () => {
+      try {
+        const response = await getPortfolioOHLCV(periodConfig)
+        if (!active) return
+        const mapped = response.data.slice(-7).map((point: PortfolioOHLCVPoint) => {
+          const date = new Date(point.timestamp * 1000)
+          const label = selectedPeriod === "24H"
+            ? date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+            : date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+          return { label, value: point.close }
+        })
+        if (mapped.length > 0) {
+          setChartData(mapped)
+        }
+      } catch {
+        // keep existing chart data
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [selectedPeriod])
+
+  React.useEffect(() => {
+    let active = true
+    const formatRelativeTime = (iso: string) => {
+      const date = new Date(iso)
+      const diffMs = Date.now() - date.getTime()
+      const minutes = Math.floor(diffMs / 60000)
+      if (minutes < 60) return `${minutes} min ago`
+      const hours = Math.floor(minutes / 60)
+      if (hours < 24) return `${hours} hours ago`
+      const days = Math.floor(hours / 24)
+      return `${days} days ago`
+    }
+
+    const parseNumber = (value?: string | number | null) => {
+      if (value === null || value === undefined) return 0
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : 0
+    }
+
+    ;(async () => {
+      try {
+        const response = await getTransactionsHistory({ page: 1, limit: 5 })
+        if (!active) return
+        const mapped = response.items.map((tx: Transaction) => {
+          const tokenLabel = tx.token_out
+            ? `${tx.token_in || ""} → ${tx.token_out}`
+            : tx.token_in || tx.tx_type
+          const amount = parseNumber(tx.amount_in || tx.amount_out || 0)
+          const usdValue = parseNumber(tx.usd_value)
+          return {
+            id: tx.tx_hash,
+            type: tx.tx_type.toUpperCase(),
+            asset: tokenLabel.trim() || tx.tx_type,
+            amount: amount ? amount.toString() : "—",
+            value: usdValue ? `$${usdValue.toLocaleString()}` : "—",
+            time: formatRelativeTime(tx.timestamp),
+            status: tx.processed ? "Completed" : "Pending",
+          }
+        })
+        setTransactions(mapped.length > 0 ? mapped : fallbackTransactions)
+      } catch {
+        // keep fallback
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const safeNumber = (value: string | number | undefined, fallback: number) => {
+    if (value === undefined) return fallback
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+
+  const periodKey: "pnl_24h" | "pnl_7d" | "pnl_30d" | "pnl_all_time" = selectedPeriod === "24H"
+    ? "pnl_24h"
+    : selectedPeriod === "7D"
+    ? "pnl_7d"
+    : selectedPeriod === "30D"
+    ? "pnl_30d"
+    : "pnl_all_time"
+
+  const totalValue = analytics
+    ? safeNumber(analytics.portfolio.total_value_usd, defaultPortfolioData.totalValue)
+    : defaultPortfolioData.totalValue
+
+  const pnlValue = analytics
+    ? safeNumber(analytics.portfolio[periodKey], defaultPortfolioData.pnl)
+    : defaultPortfolioData.pnl
+
+  const pnlPercent = totalValue > 0
+    ? (pnlValue / totalValue) * 100
+    : defaultPortfolioData.pnlPercent
+
+  const assets: PortfolioAsset[] = analytics
+    ? analytics.portfolio.allocation.map((item) => {
+        const meta = assetMeta[item.asset] || { name: item.asset, icon: "•" }
+        return {
+          symbol: item.asset,
+          name: meta.name,
+          icon: meta.icon,
+          value: safeNumber(item.value_usd, 0),
+          percent: Number.isFinite(item.percentage) ? item.percentage : 0,
+          change: 0,
+        }
+      })
+    : defaultPortfolioData.assets
+
+  const bestPerformer = assets.reduce<PortfolioAsset | null>((best, asset) => {
+    if (!best) return asset
+    return asset.change > best.change ? asset : best
+  }, null)
+
+  const displayData: PortfolioSnapshot = {
+    totalValue,
+    pnl: pnlValue,
+    pnlPercent: Number.isFinite(pnlPercent) ? Number(pnlPercent.toFixed(2)) : defaultPortfolioData.pnlPercent,
+    period: selectedPeriod,
+    assets,
+  }
+
+  const isPositive = displayData.pnl >= 0
 
   return (
     <section id="portfolio" className="py-12">
@@ -217,18 +405,26 @@ export function PortfolioDashboard() {
               "text-3xl font-bold",
               isPositive ? "text-success" : "text-destructive"
             )}>
-              {isPositive ? "+" : ""}${portfolioData.pnl.toLocaleString()}
+              {isPositive ? "+" : ""}${displayData.pnl.toLocaleString()}
             </span>
             <span className={cn(
               "text-sm font-medium pb-1 flex items-center gap-1",
               isPositive ? "text-success" : "text-destructive"
             )}>
               {isPositive ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-              {isPositive ? "+" : ""}{portfolioData.pnlPercent}%
+              {isPositive ? "+" : ""}{displayData.pnlPercent}%
             </span>
           </div>
 
-          <MiniChart />
+          <MiniChart data={chartData.length > 0 ? chartData : [
+            { label: "Mon", value: 85000 },
+            { label: "Tue", value: 87500 },
+            { label: "Wed", value: 89000 },
+            { label: "Thu", value: 91000 },
+            { label: "Fri", value: 95000 },
+            { label: "Sat", value: 93000 },
+            { label: "Sun", value: 100000 },
+          ]} />
         </div>
 
         {/* Asset Allocation */}
@@ -238,12 +434,12 @@ export function PortfolioDashboard() {
               <span className="font-medium text-foreground">Asset Allocation</span>
             </div>
             <span className="text-2xl font-bold text-foreground">
-              ${portfolioData.totalValue.toLocaleString()}
+              ${displayData.totalValue.toLocaleString()}
             </span>
           </div>
 
           <div className="space-y-1">
-            {portfolioData.assets.map((asset) => (
+            {displayData.assets.map((asset) => (
               <AssetRow key={asset.symbol} asset={asset} />
             ))}
           </div>
@@ -265,29 +461,34 @@ export function PortfolioDashboard() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Total Value</p>
-                <p className="text-lg font-bold text-foreground">${portfolioData.totalValue.toLocaleString()}</p>
+                <p className="text-lg font-bold text-foreground">${displayData.totalValue.toLocaleString()}</p>
               </div>
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Total PnL</p>
                 <p className={cn("text-lg font-bold", isPositive ? "text-success" : "text-destructive")}>
-                  {isPositive ? "+" : ""}${portfolioData.pnl.toLocaleString()}
+                  {isPositive ? "+" : ""}${displayData.pnl.toLocaleString()}
                 </p>
               </div>
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Assets</p>
-                <p className="text-lg font-bold text-foreground">{portfolioData.assets.length}</p>
+                <p className="text-lg font-bold text-foreground">{displayData.assets.length}</p>
               </div>
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Best Performer</p>
-                <p className="text-lg font-bold text-success">CAREL +15.8%</p>
+                <p className={cn(
+                  "text-lg font-bold",
+                  bestPerformer && bestPerformer.change >= 0 ? "text-success" : "text-destructive"
+                )}>
+                  {bestPerformer ? `${bestPerformer.symbol} ${bestPerformer.change >= 0 ? "+" : ""}${bestPerformer.change}%` : "—"}
+                </p>
               </div>
             </div>
 
             {/* Asset Breakdown */}
             <div>
               <h3 className="text-sm font-medium text-foreground mb-3">Asset Breakdown</h3>
-              <div className="space-y-3">
-                {portfolioData.assets.map((asset) => (
+                <div className="space-y-3">
+                {displayData.assets.map((asset) => (
                   <div key={asset.symbol} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-lg border border-border">
@@ -300,9 +501,11 @@ export function PortfolioDashboard() {
                     </div>
                     <div className="text-right">
                       <p className="font-medium text-foreground">${asset.value.toLocaleString()}</p>
-                      <p className={cn("text-xs", asset.change >= 0 ? "text-success" : "text-destructive")}>
-                        {asset.change >= 0 ? "+" : ""}{asset.change}%
-                      </p>
+                      {asset.change !== 0 && (
+                        <p className={cn("text-xs", asset.change >= 0 ? "text-success" : "text-destructive")}>
+                          {asset.change >= 0 ? "+" : ""}{asset.change}%
+                        </p>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -313,14 +516,14 @@ export function PortfolioDashboard() {
             <div>
               <h3 className="text-sm font-medium text-foreground mb-3">Recent Transactions</h3>
               <div className="space-y-2">
-                {transactionHistory.map((tx) => (
+                {transactions.map((tx) => (
                   <div key={tx.id} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
                     <div className="flex items-center gap-3">
                       <div className={cn(
                         "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
-                        tx.type === "Buy" && "bg-success/20 text-success",
-                        tx.type === "Sell" && "bg-destructive/20 text-destructive",
-                        tx.type === "Swap" && "bg-secondary/20 text-secondary"
+                        (tx.type.toLowerCase() === "buy" || tx.type.toLowerCase() === "stake") && "bg-success/20 text-success",
+                        (tx.type.toLowerCase() === "sell" || tx.type.toLowerCase() === "unstake") && "bg-destructive/20 text-destructive",
+                        (tx.type.toLowerCase() === "swap" || tx.type.toLowerCase() === "bridge" || tx.type.toLowerCase() === "claim") && "bg-secondary/20 text-secondary"
                       )}>
                         {tx.type[0]}
                       </div>

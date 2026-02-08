@@ -4,6 +4,8 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Bot, User, Send, Sparkles, Coins, X, Minus, ChevronUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { executeAiCommand } from "@/lib/api"
+import { useNotifications } from "@/hooks/use-notifications"
 
 const aiTiers = [
   { id: 1, name: "Basic", cost: 0, costLabel: "Free", description: "General assistance" },
@@ -24,6 +26,7 @@ interface Message {
 }
 
 export function FloatingAIAssistant() {
+  const notifications = useNotifications()
   const [isOpen, setIsOpen] = React.useState(false)
   const [isMinimized, setIsMinimized] = React.useState(false)
   const [messages, setMessages] = React.useState<Message[]>(sampleMessages)
@@ -32,6 +35,7 @@ export function FloatingAIAssistant() {
   const [showTierPurchase, setShowTierPurchase] = React.useState(false)
   const [carelBalance, setCarelBalance] = React.useState(245)
   const [purchasedTiers, setPurchasedTiers] = React.useState<number[]>([1])
+  const [isSending, setIsSending] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -42,24 +46,37 @@ export function FloatingAIAssistant() {
     scrollToBottom()
   }, [messages])
 
-  const handleSend = () => {
-    if (!input.trim()) return
-    
-    setMessages(prev => [...prev, { role: "user", content: input }])
+  const handleSend = async () => {
+    const command = input.trim()
+    if (!command) return
+
+    setMessages((prev) => [...prev, { role: "user", content: command }])
     setInput("")
-    
-    // Simulate AI response based on tier
-    setTimeout(() => {
-      const tierResponses = {
-        1: "Based on my basic analysis, I'd recommend reviewing the current market trends before making any trades.",
-        2: "According to my market analysis, BTC shows strong support at $64,000. Consider setting stop-loss at $62,500 for risk management.",
-        3: "Advanced strategy recommendation: Based on on-chain metrics and whale movements, accumulation phase is ongoing. Consider DCA with 30% position now, additional 40% at $62K support, remaining 30% on confirmed breakout above $68K.",
-      }
-      setMessages(prev => [...prev, {
-        role: "assistant",
-        content: tierResponses[selectedTier as keyof typeof tierResponses]
-      }])
-    }, 1000)
+    setIsSending(true)
+
+    try {
+      const response = await executeAiCommand({
+        command,
+        context: `tier:${selectedTier}`,
+      })
+      setMessages((prev) => [...prev, { role: "assistant", content: response.response }])
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "Maaf, AI sedang tidak tersedia. Coba lagi beberapa saat atau cek koneksi backend.",
+        },
+      ])
+      notifications.addNotification({
+        type: "error",
+        title: "AI Assistant",
+        message: error instanceof Error ? error.message : "Gagal memanggil AI",
+      })
+    } finally {
+      setIsSending(false)
+    }
   }
 
   const handlePurchaseTier = (tierId: number) => {
@@ -262,9 +279,14 @@ export function FloatingAIAssistant() {
                   <Button 
                     onClick={handleSend}
                     size="sm"
+                    disabled={isSending}
                     className="bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
                   >
-                    <Send className="h-4 w-4" />
+                    {isSending ? (
+                      <span className="text-xs">...</span>
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
                   </Button>
                 </div>
               </div>

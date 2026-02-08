@@ -26,62 +26,29 @@ import {
   ArrowUpRight,
   Lock
 } from "lucide-react"
+import { getReferralCode, getReferralHistory, getReferralStats, getRewardsPoints, type ReferralHistoryItem } from "@/lib/api"
 
-// Mock referral data
-const referralHistory = [
-  { 
-    id: 1, 
-    user: "0x8f...2e4d", 
-    date: "2024-01-15", 
-    action: "Swap", 
-    volume: "$2,450", 
-    points: 245,
-    status: "completed" 
-  },
-  { 
-    id: 2, 
-    user: "0x3a...9f1c", 
-    date: "2024-01-14", 
-    action: "Bridge", 
-    volume: "$5,200", 
-    points: 520,
-    status: "completed" 
-  },
-  { 
-    id: 3, 
-    user: "0x7b...4d8a", 
-    date: "2024-01-13", 
-    action: "Swap", 
-    volume: "$890", 
-    points: 89,
-    status: "completed" 
-  },
-  { 
-    id: 4, 
-    user: "0x1e...6c2f", 
-    date: "2024-01-12", 
-    action: "Stake", 
-    volume: "$10,000", 
-    points: 1000,
-    status: "pending" 
-  },
-  { 
-    id: 5, 
-    user: "0x9d...8e1a", 
-    date: "2024-01-11", 
-    action: "Swap", 
-    volume: "$3,100", 
-    points: 310,
-    status: "completed" 
-  },
+type ReferralActivity = {
+  id: string
+  user: string
+  date: string
+  action: string
+  volume: string
+  points: number
+  status: string
+}
+
+const fallbackHistory: ReferralActivity[] = [
+  { id: "local-1", user: "0x8f...2e4d", date: "2024-01-15", action: "Swap", volume: "$2,450", points: 245, status: "completed" },
+  { id: "local-2", user: "0x3a...9f1c", date: "2024-01-14", action: "Bridge", volume: "$5,200", points: 520, status: "completed" },
 ]
 
 const tierRewards = [
-  { tier: "Bronze", referrals: 5, bonus: "5%", unlocked: true },
-  { tier: "Silver", referrals: 15, bonus: "7%", unlocked: true },
-  { tier: "Gold", referrals: 30, bonus: "10%", unlocked: false },
-  { tier: "Platinum", referrals: 50, bonus: "12%", unlocked: false },
-  { tier: "Diamond", referrals: 100, bonus: "15%", unlocked: false },
+  { tier: "Bronze", referrals: 5, bonus: "5%" },
+  { tier: "Silver", referrals: 15, bonus: "7%" },
+  { tier: "Gold", referrals: 30, bonus: "10%" },
+  { tier: "Platinum", referrals: 50, bonus: "12%" },
+  { tier: "Diamond", referrals: 100, bonus: "15%" },
 ]
 
 interface ReferralLogProps {
@@ -100,15 +67,68 @@ export function ReferralLog({
   showTrigger = true 
 }: ReferralLogProps) {
   const [copied, setCopied] = React.useState(false)
-  const referralCode = "ZKCRL-8F4E2D"
-  const referralLink = `https://zkcarel.com/ref/${referralCode}`
+  const [referralCode, setReferralCode] = React.useState("ZKCRL-8F4E2D")
+  const [referralLink, setReferralLink] = React.useState(`https://zkcarel.com/ref/ZKCRL-8F4E2D`)
+  const [history, setHistory] = React.useState<ReferralActivity[]>(fallbackHistory)
+  const [stats, setStats] = React.useState({
+    totalReferrals: 0,
+    activeReferrals: 0,
+    pendingRewards: 0,
+  })
+  const [earnedPoints, setEarnedPoints] = React.useState(pointsEarned)
   
   // Calculate if user has earned 10% bonus (simulation)
-  const hasEarnedBonus = pointsEarned >= 10000
-  const currentTier = tierRewards.find(t => !t.unlocked)?.tier || "Diamond"
-  const totalReferrals = 18
-  const activeReferrals = 12
-  const pendingRewards = 1500
+  const hasEarnedBonus = earnedPoints >= 10000
+  const totalReferrals = stats.totalReferrals
+  const activeReferrals = stats.activeReferrals
+  const pendingRewards = stats.pendingRewards
+  const tierStates = tierRewards.map((tier) => ({
+    ...tier,
+    unlocked: totalReferrals >= tier.referrals,
+  }))
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const [codeRes, statsRes, pointsRes, historyRes] = await Promise.all([
+          getReferralCode(),
+          getReferralStats(),
+          getRewardsPoints(),
+          getReferralHistory(1, 5),
+        ])
+        if (!active) return
+        setReferralCode(codeRes.code)
+        setReferralLink(codeRes.url)
+        setStats({
+          totalReferrals: statsRes.total_referrals,
+          activeReferrals: statsRes.active_referrals,
+          pendingRewards: Math.round(statsRes.total_rewards),
+        })
+        setEarnedPoints(Math.round(pointsRes.referral_points))
+
+        const mapped = historyRes.items.map((item: ReferralHistoryItem) => {
+          const usdValue = Number(item.volume_usd || 0)
+          return {
+            id: item.tx_hash,
+            user: item.user_address.slice(0, 6) + "..." + item.user_address.slice(-4),
+            date: new Date(item.timestamp).toLocaleDateString("id-ID"),
+            action: item.action.toUpperCase(),
+            volume: usdValue ? `$${usdValue.toLocaleString()}` : "—",
+            points: Math.round(Number(item.points || 0)),
+            status: item.status || "pending",
+          }
+        })
+        setHistory(mapped.length > 0 ? mapped : fallbackHistory)
+      } catch {
+        // keep fallback
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
@@ -168,7 +188,7 @@ export function ReferralLog({
               <Gift className="h-4 w-4 text-accent" />
               <span className="text-xs text-muted-foreground">Points Earned</span>
             </div>
-            <p className="text-2xl font-bold text-foreground">{pointsEarned.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-foreground">{earnedPoints.toLocaleString()}</p>
           </div>
           <div className="p-4 rounded-xl glass border border-border">
             <div className="flex items-center gap-2 mb-2">
@@ -226,7 +246,7 @@ export function ReferralLog({
                 <span>Volume</span>
                 <span>Points</span>
               </div>
-              {referralHistory.map((item) => (
+              {history.map((item) => (
                 <div 
                   key={item.id} 
                   className="grid grid-cols-5 gap-4 p-3 text-sm border-b border-border/50 last:border-0 hover:bg-surface/30 transition-colors"
@@ -251,7 +271,7 @@ export function ReferralLog({
           {/* Tier Rewards Tab */}
           <TabsContent value="tiers" className="space-y-4">
             <div className="space-y-3">
-              {tierRewards.map((tier, index) => (
+              {tierStates.map((tier, index) => (
                 <div 
                   key={tier.tier}
                   className={cn(
@@ -410,7 +430,7 @@ export function ReferralLog({
               <div>
                 <p className="font-bold text-foreground">10% Bonus Unlocked!</p>
                 <p className="text-sm text-muted-foreground">
-                  You&apos;ve earned {pointsEarned.toLocaleString()} points. Enjoy 10% extra on all referral rewards!
+                  You&apos;ve earned {earnedPoints.toLocaleString()} points. Enjoy 10% extra on all referral rewards!
                 </p>
               </div>
             </div>

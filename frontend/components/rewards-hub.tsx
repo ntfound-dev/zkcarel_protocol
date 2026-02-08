@@ -4,15 +4,16 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Gift, Diamond, Trophy, Sparkles, ArrowRight, Check, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useNotifications } from "@/hooks/use-notifications"
+import { claimRewards, convertRewards, getOwnedNfts, getPortfolioAnalytics, getRewardsPoints, mintNft, verifySocialTask, type NFTItem } from "@/lib/api"
 
-const tiers = [
+const tierDefinitions = [
   { 
     name: "Bronze", 
     points: 1000, 
     discount: "5%", 
     color: "from-amber-600 to-amber-800",
     borderColor: "border-amber-600",
-    achieved: true 
   },
   { 
     name: "Silver", 
@@ -20,7 +21,6 @@ const tiers = [
     discount: "15%", 
     color: "from-gray-300 to-gray-500",
     borderColor: "border-gray-400",
-    achieved: true 
   },
   { 
     name: "Gold", 
@@ -28,7 +28,6 @@ const tiers = [
     discount: "25%", 
     color: "from-yellow-400 to-yellow-600",
     borderColor: "border-yellow-500",
-    achieved: false 
   },
   { 
     name: "Platinum", 
@@ -36,7 +35,6 @@ const tiers = [
     discount: "35%", 
     color: "from-cyan-300 to-cyan-500",
     borderColor: "border-cyan-400",
-    achieved: false 
   },
   { 
     name: "Onyx", 
@@ -44,12 +42,12 @@ const tiers = [
     discount: "50%", 
     color: "from-purple-900 to-black",
     borderColor: "border-purple-600",
-    achieved: false 
   },
 ]
 
 const nftTiers = [
   {
+    tierId: 0,
     tier: "None",
     name: "No NFT",
     discount: "0%",
@@ -60,6 +58,7 @@ const nftTiers = [
     description: "No discount benefits",
   },
   {
+    tierId: 1,
     tier: "Bronze",
     name: "Cyberpunk Shield NFT",
     discount: "5%",
@@ -70,6 +69,7 @@ const nftTiers = [
     description: "5% fee discount on all transactions",
   },
   {
+    tierId: 2,
     tier: "Silver",
     name: "Cyberpunk Blade NFT",
     discount: "10%",
@@ -80,6 +80,7 @@ const nftTiers = [
     description: "10% fee discount on all transactions",
   },
   {
+    tierId: 3,
     tier: "Gold",
     name: "Cyberpunk Blade NFT",
     discount: "25%",
@@ -90,6 +91,7 @@ const nftTiers = [
     description: "25% fee discount on all transactions",
   },
   {
+    tierId: 4,
     tier: "Platinum",
     name: "Cyberpunk Blade NFT",
     discount: "35%",
@@ -100,6 +102,7 @@ const nftTiers = [
     description: "35% fee discount on all transactions",
   },
   {
+    tierId: 5,
     tier: "Onyx",
     name: "Cyberpunk Blade NFT",
     discount: "50%",
@@ -111,45 +114,45 @@ const nftTiers = [
   },
 ]
 
-const nfts = [
+const socialTasks = [
   {
-    name: "Cyberpunk Shield NFT",
-    tier: "Bronze",
-    discount: "5%",
-    acquired: "Owned",
+    id: "twitter_follow",
+    title: "Follow ZkCarel on X",
+    description: "Follow @zkcarel and paste your profile link or handle.",
+    placeholder: "https://x.com/your_handle",
   },
   {
-    name: "Cyberpunk Blade NFT",
-    tier: "Silver",
-    discount: "10%",
-    acquired: "Owned",
+    id: "twitter_retweet",
+    title: "Retweet Announcement",
+    description: "Retweet the latest announcement and paste the tweet URL.",
+    placeholder: "https://x.com/zkcarel/status/...",
   },
   {
-    name: "Cyberpunk Blade NFT",
-    tier: "Gold",
-    discount: "25%",
-    acquired: "Not Owned",
+    id: "telegram_join",
+    title: "Join Telegram",
+    description: "Join our Telegram community and paste your username.",
+    placeholder: "@username",
   },
   {
-    name: "Cyberpunk Blade NFT",
-    tier: "Platinum",
-    discount: "35%",
-    acquired: "Not Owned",
-  },
-  {
-    name: "Cyberpunk Blade NFT",
-    tier: "Onyx",
-    discount: "50%",
-    acquired: "Not Owned",
+    id: "discord_join",
+    title: "Join Discord",
+    description: "Join our Discord server and paste your Discord tag.",
+    placeholder: "username#1234",
   },
 ]
 
-function TierProgressBar() {
-  const currentPoints = 4200
-  const currentTierIndex = 1 // Silver
+type TierInfo = typeof tierDefinitions[number] & { achieved: boolean }
+
+function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tiers: TierInfo[] }) {
+  const currentTierIndex = Math.max(
+    0,
+    tiers.findIndex((tier, idx) => currentPoints < (tiers[idx + 1]?.points ?? Infinity))
+  )
   const nextTier = tiers[currentTierIndex + 1]
   const prevTier = tiers[currentTierIndex]
-  const progressInCurrentTier = ((currentPoints - prevTier.points) / (nextTier.points - prevTier.points)) * 100
+  const progressInCurrentTier = nextTier
+    ? Math.min(100, Math.max(0, ((currentPoints - prevTier.points) / (nextTier.points - prevTier.points)) * 100))
+    : 100
 
   return (
     <div className="p-6 rounded-2xl glass border border-border">
@@ -221,10 +224,12 @@ function TierProgressBar() {
 function NFTCard({ 
   nft, 
   isOwned, 
+  isMinting,
   onMint 
 }: { 
   nft: typeof nftTiers[0]
   isOwned: boolean
+  isMinting?: boolean
   onMint?: () => void
 }) {
   const usesPercentage = nft.maxUses > 0 ? (nft.uses / nft.maxUses) * 100 : 0
@@ -313,8 +318,9 @@ function NFTCard({
             size="sm" 
             className="w-full bg-gradient-to-r from-primary to-accent hover:opacity-90 text-xs"
             onClick={onMint}
+            disabled={isMinting}
           >
-            Mint with Points
+            {isMinting ? "Minting..." : "Mint with Points"}
           </Button>
         )}
         {isExpired && (
@@ -338,26 +344,195 @@ function NFTCard({
 }
 
 export function RewardsHub() {
-  const everPoints = 4200
-  const [usablePoints, setUsablePoints] = React.useState(5850)
-  const [ownedNFT, setOwnedNFT] = React.useState<typeof nftTiers[0] | null>({
-    ...nftTiers[1], // Bronze NFT
-    uses: 3, // 3 uses remaining out of 5
-  })
+  const notifications = useNotifications()
+  const [usablePoints, setUsablePoints] = React.useState(0)
+  const [everPoints, setEverPoints] = React.useState(0)
+  const [estimatedCAREL, setEstimatedCAREL] = React.useState(0)
+  const [ownedNfts, setOwnedNfts] = React.useState<NFTItem[]>([])
+  const [isConverting, setIsConverting] = React.useState(false)
+  const [isMintingTier, setIsMintingTier] = React.useState<number | null>(null)
+  const [taskInputs, setTaskInputs] = React.useState<Record<string, string>>({})
+  const [taskStatus, setTaskStatus] = React.useState<Record<string, { status: "idle" | "verifying" | "success" | "error"; message?: string; points?: number }>>({})
 
-  const handleMintNFT = (nft: typeof nftTiers[0]) => {
-    if (usablePoints >= nft.cost) {
-      setUsablePoints(prev => prev - nft.cost)
-      setOwnedNFT({...nft})
-      // Show success notification
-      console.log("[v0] NFT minted:", nft.tier)
-    } else {
-      console.log("[v0] Insufficient points for minting NFT")
+  const tiers = React.useMemo<TierInfo[]>(() => {
+    return tierDefinitions.map((tier) => ({
+      ...tier,
+      achieved: usablePoints >= tier.points,
+    }))
+  }, [usablePoints])
+
+  const currentTierName = React.useMemo(() => {
+    const achieved = tiers.filter((tier) => tier.achieved)
+    return achieved.length > 0 ? achieved[achieved.length - 1].name : tiers[0]?.name || "Bronze"
+  }, [tiers])
+
+  const activeNftTier = React.useMemo(() => {
+    const owned = ownedNfts.find((nft) => !nft.used)
+    if (!owned) return null
+    return nftTiers.find((tier) => tier.tierId === owned.tier) || null
+  }, [ownedNfts])
+
+  const ownedTierIds = React.useMemo(() => new Set(ownedNfts.map((nft) => nft.tier)), [ownedNfts])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const rewards = await getRewardsPoints()
+        if (!active) return
+        setUsablePoints(Math.round(rewards.total_points))
+        setEverPoints(Math.round(rewards.total_points))
+      } catch {
+        // keep fallback
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const analytics = await getPortfolioAnalytics()
+        if (!active) return
+        const estimated = Number(analytics.rewards.estimated_carel)
+        setEstimatedCAREL(Number.isFinite(estimated) ? estimated : 0)
+      } catch {
+        // keep fallback
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const nfts = await getOwnedNfts()
+        if (!active) return
+        setOwnedNfts(nfts)
+      } catch {
+        // keep fallback
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const handleMintNFT = async (nft: typeof nftTiers[number]) => {
+    if (nft.tierId === 0) return
+    if (usablePoints < nft.cost) {
+      notifications.addNotification({
+        type: "error",
+        title: "Insufficient points",
+        message: "Points Anda belum cukup untuk mint NFT ini.",
+      })
+      return
+    }
+
+    try {
+      setIsMintingTier(nft.tierId)
+      const minted = await mintNft({ tier: nft.tierId })
+      setOwnedNfts((prev) => [minted, ...prev])
+      setUsablePoints((prev) => Math.max(0, prev - nft.cost))
+      notifications.addNotification({
+        type: "success",
+        title: "NFT minted",
+        message: `NFT tier ${nft.tier} berhasil dibuat.`,
+      })
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Mint failed",
+        message: error instanceof Error ? error.message : "Gagal mint NFT.",
+      })
+    } finally {
+      setIsMintingTier(null)
     }
   }
 
-  const carelConversionRate = 0.5 // 1 point = 0.5 CAREL
-  const estimatedCAREL = usablePoints * carelConversionRate
+  const handleConvert = async () => {
+    if (usablePoints <= 0) return
+    try {
+      setIsConverting(true)
+      const result = await convertRewards({ points: usablePoints })
+      notifications.addNotification({
+        type: "success",
+        title: "Convert success",
+        message: `Converted ${result.points_converted} points to ${result.amount_carel} CAREL`,
+      })
+      setUsablePoints(0)
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Convert failed",
+        message: error instanceof Error ? error.message : "Gagal convert points.",
+      })
+    } finally {
+      setIsConverting(false)
+    }
+  }
+
+  const handleClaim = async () => {
+    try {
+      const result = await claimRewards()
+      notifications.addNotification({
+        type: "success",
+        title: "Claimed",
+        message: `Claimed ${result.amount_carel} CAREL.`,
+      })
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Claim failed",
+        message: error instanceof Error ? error.message : "Tidak ada rewards untuk diklaim.",
+      })
+    }
+  }
+
+  const handleVerifyTask = async (taskId: string) => {
+    const proof = taskInputs[taskId]
+    if (!proof) return
+    setTaskStatus((prev) => ({
+      ...prev,
+      [taskId]: { status: "verifying" },
+    }))
+    try {
+      const result = await verifySocialTask({ task_type: taskId, proof })
+      setTaskStatus((prev) => ({
+        ...prev,
+        [taskId]: { status: result.verified ? "success" : "error", message: result.message, points: result.points_earned },
+      }))
+      if (result.verified) {
+        const rewards = await getRewardsPoints()
+        setUsablePoints(Math.round(rewards.total_points))
+        setEverPoints(Math.round(rewards.total_points))
+      }
+      notifications.addNotification({
+        type: result.verified ? "success" : "error",
+        title: "Social task",
+        message: result.message,
+      })
+    } catch (error) {
+      setTaskStatus((prev) => ({
+        ...prev,
+        [taskId]: { status: "error", message: error instanceof Error ? error.message : "Verification failed" },
+      }))
+      notifications.addNotification({
+        type: "error",
+        title: "Social task",
+        message: error instanceof Error ? error.message : "Verification failed",
+      })
+    }
+  }
 
   return (
     <section id="rewards" className="py-12">
@@ -369,7 +544,7 @@ export function RewardsHub() {
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Tier Progression */}
         <div className="lg:col-span-2">
-          <TierProgressBar />
+          <TierProgressBar currentPoints={usablePoints} tiers={tiers} />
         </div>
 
         {/* Points Balance */}
@@ -383,7 +558,7 @@ export function RewardsHub() {
                 <span className="text-sm text-muted-foreground">Lifetime Points</span>
               </div>
               <p className="text-2xl font-bold text-foreground">{everPoints.toLocaleString()}</p>
-              <p className="text-xs text-muted-foreground">Current tier: Silver</p>
+              <p className="text-xs text-muted-foreground">Current tier: {currentTierName}</p>
               <p className="text-xs text-accent mt-1">Resets per season</p>
             </div>
 
@@ -394,7 +569,7 @@ export function RewardsHub() {
               </div>
               <p className="text-2xl font-bold text-secondary">{usablePoints.toLocaleString()}</p>
               <p className="text-xs text-muted-foreground">Use for NFTs or conversion</p>
-              <p className="text-xs text-accent mt-1">≈ {estimatedCAREL.toFixed(1)} CAREL</p>
+              <p className="text-xs text-accent mt-1">≈ {estimatedCAREL.toFixed(2)} CAREL</p>
             </div>
 
             <div className="p-3 rounded-lg bg-accent/10 border border-accent/20">
@@ -406,15 +581,28 @@ export function RewardsHub() {
               </div>
             </div>
 
-            <Button className="w-full bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground">
-              Convert to CAREL <ArrowRight className="h-4 w-4 ml-2" />
-            </Button>
+            <div className="grid gap-2">
+              <Button
+                onClick={handleConvert}
+                disabled={usablePoints <= 0 || isConverting}
+                className="w-full bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
+              >
+                {isConverting ? "Converting..." : "Convert to CAREL"} <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+              <Button
+                onClick={handleClaim}
+                variant="outline"
+                className="w-full bg-transparent"
+              >
+                Claim Rewards
+              </Button>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Current NFT Status */}
-      {ownedNFT && ownedNFT.tier !== "None" && (
+      {activeNftTier && (
         <div className="mt-6 p-6 rounded-2xl glass border border-primary/50">
           <div className="flex items-center justify-between">
             <div>
@@ -422,26 +610,26 @@ export function RewardsHub() {
               <p className="text-sm text-muted-foreground">Your current fee discount NFT</p>
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-primary">{ownedNFT.discount}</p>
+              <p className="text-3xl font-bold text-primary">{activeNftTier.discount}</p>
               <p className="text-sm text-muted-foreground">Fee Discount</p>
             </div>
           </div>
           <div className="mt-4 grid grid-cols-3 gap-4">
             <div className="p-3 rounded-lg bg-surface/50">
               <p className="text-xs text-muted-foreground">NFT Tier</p>
-              <p className="text-sm font-medium text-foreground">{ownedNFT.tier}</p>
+              <p className="text-sm font-medium text-foreground">{activeNftTier.tier}</p>
             </div>
             <div className="p-3 rounded-lg bg-surface/50">
               <p className="text-xs text-muted-foreground">Uses Left</p>
-              <p className="text-sm font-medium text-foreground">{ownedNFT.uses} / {ownedNFT.maxUses}</p>
+              <p className="text-sm font-medium text-foreground">{activeNftTier.maxUses} / {activeNftTier.maxUses}</p>
             </div>
             <div className="p-3 rounded-lg bg-surface/50">
               <p className="text-xs text-muted-foreground">Status</p>
               <p className={cn(
                 "text-sm font-medium",
-                ownedNFT.uses > 0 ? "text-success" : "text-destructive"
+                activeNftTier.maxUses > 0 ? "text-success" : "text-destructive"
               )}>
-                {ownedNFT.uses > 0 ? "Active" : "Expired"}
+                {activeNftTier.maxUses > 0 ? "Active" : "Expired"}
               </p>
             </div>
           </div>
@@ -460,8 +648,9 @@ export function RewardsHub() {
           {nftTiers.map((nft) => (
             <NFTCard 
               key={nft.tier} 
-              nft={nft.tier === ownedNFT?.tier ? ownedNFT : nft}
-              isOwned={nft.tier === ownedNFT?.tier}
+              nft={nft}
+              isOwned={ownedTierIds.has(nft.tierId)}
+              isMinting={isMintingTier === nft.tierId}
               onMint={() => handleMintNFT(nft)}
             />
           ))}
@@ -518,6 +707,47 @@ export function RewardsHub() {
               <span>All NFTs are non-transferable and bound to your wallet to prevent abuse. Points are earned from swap, bridge, limit order, and staking activities.</span>
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* Social Tasks */}
+      <div className="mt-8">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-foreground">Social Tasks</h3>
+          <div className="text-sm text-muted-foreground">Earn bonus points</div>
+        </div>
+        <div className="grid md:grid-cols-2 gap-4">
+          {socialTasks.map((task) => {
+            const status = taskStatus[task.id]?.status || "idle"
+            return (
+              <div key={task.id} className="p-4 rounded-2xl glass border border-border">
+                <h4 className="font-medium text-foreground mb-1">{task.title}</h4>
+                <p className="text-xs text-muted-foreground mb-3">{task.description}</p>
+                <div className="flex gap-2">
+                  <input
+                    value={taskInputs[task.id] || ""}
+                    onChange={(e) => setTaskInputs((prev) => ({ ...prev, [task.id]: e.target.value }))}
+                    placeholder={task.placeholder}
+                    className="flex-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-xs"
+                  />
+                  <Button
+                    onClick={() => handleVerifyTask(task.id)}
+                    disabled={status === "verifying" || !(taskInputs[task.id] || "").trim()}
+                  >
+                    {status === "verifying" ? "Verifying..." : "Verify"}
+                  </Button>
+                </div>
+                {taskStatus[task.id]?.message && (
+                  <p className={cn(
+                    "text-xs mt-2",
+                    status === "success" ? "text-success" : status === "error" ? "text-destructive" : "text-muted-foreground"
+                  )}>
+                    {taskStatus[task.id]?.message}
+                  </p>
+                )}
+              </div>
+            )
+          })}
         </div>
       </div>
     </section>

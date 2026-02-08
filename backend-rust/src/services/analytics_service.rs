@@ -17,6 +17,13 @@ fn pnl_multiplier(is_testnet: bool) -> f64 {
     if is_testnet { 0.5 } else { 1.0 }
 }
 
+fn fallback_price_for(token: &str) -> f64 {
+    match token.to_uppercase().as_str() {
+        "USDT" | "USDC" => 1.0,
+        _ => 0.0,
+    }
+}
+
 /// Analytics Service - Portfolio analytics and insights
 pub struct AnalyticsService {
     db: Database,
@@ -71,34 +78,61 @@ impl AnalyticsService {
     }
 
     /// Get portfolio allocation
-    pub async fn get_allocation(&self, _user_address: &str) -> Result<Vec<AssetAllocation>> {
-        // TODO: Get actual holdings
-        Ok(vec![
-            AssetAllocation {
-                asset: "BTC".to_string(),
-                value_usd: 9750.0,
-                percentage: 31.5,
-                amount: 0.15,
-            },
-            AssetAllocation {
-                asset: "ETH".to_string(),
-                value_usd: 8750.0,
-                percentage: 28.2,
-                amount: 2.5,
-            },
-            AssetAllocation {
-                asset: "CAREL".to_string(),
-                value_usd: 7500.0,
-                percentage: 24.2,
-                amount: 15000.0,
-            },
-            AssetAllocation {
-                asset: "USDT".to_string(),
-                value_usd: 5000.0,
-                percentage: 16.1,
-                amount: 5000.0,
-            },
-        ])
+    pub async fn get_allocation(&self, user_address: &str) -> Result<Vec<AssetAllocation>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT token, SUM(amount) as amount
+            FROM (
+                SELECT UPPER(token_out) as token, COALESCE(CAST(amount_out AS FLOAT), 0) as amount
+                FROM transactions
+                WHERE user_address = $1 AND token_out IS NOT NULL
+                UNION ALL
+                SELECT UPPER(token_in) as token, -COALESCE(CAST(amount_in AS FLOAT), 0) as amount
+                FROM transactions
+                WHERE user_address = $1 AND token_in IS NOT NULL
+            ) t
+            GROUP BY token
+            "#,
+        )
+        .bind(user_address)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let mut allocations = Vec::new();
+        let mut total_value = 0.0;
+        let mut values = Vec::new();
+
+        for row in rows {
+            let token: String = row.try_get("token")?;
+            let amount: f64 = row.try_get::<f64, _>("amount").unwrap_or(0.0);
+            if amount <= 0.0 {
+                continue;
+            }
+
+            let price: Option<f64> = sqlx::query_scalar(
+                "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+            )
+            .bind(&token)
+            .fetch_optional(self.db.pool())
+            .await?;
+
+            let latest_price = price.unwrap_or_else(|| fallback_price_for(&token));
+            let value_usd = amount * latest_price;
+            total_value += value_usd;
+            values.push((token, amount, value_usd));
+        }
+
+        for (token, amount, value_usd) in values {
+            let percentage = if total_value > 0.0 { (value_usd / total_value) * 100.0 } else { 0.0 };
+            allocations.push(AssetAllocation {
+                asset: token,
+                value_usd,
+                percentage,
+                amount,
+            });
+        }
+
+        Ok(allocations)
     }
 
     /// Get trading performance
@@ -108,38 +142,34 @@ impl AnalyticsService {
             r#"
             SELECT 
                 COUNT(*) AS total_trades,
-                SUM(usd_value) AS total_volume,
-                AVG(usd_value) AS avg_trade_size
+                COALESCE(SUM(usd_value), 0)::FLOAT AS total_volume,
+                COALESCE(AVG(usd_value), 0)::FLOAT AS avg_trade_size,
+                COALESCE(MAX(usd_value), 0)::FLOAT AS best_trade,
+                COALESCE(MIN(usd_value), 0)::FLOAT AS worst_trade,
+                COALESCE(AVG(CASE WHEN usd_value >= 0 THEN 1 ELSE 0 END), 0)::FLOAT * 100 AS win_rate
             FROM transactions
             WHERE user_address = $1
+              AND usd_value IS NOT NULL
             "#,
         )
         .bind(user_address)
         .fetch_one(self.db.pool())
         .await?;
 
-        // Perbaikan: Gunakan unwrap_or(0) untuk menghindari ambiguitas tipe E pada Result
-        let total_trades: i64 = row
-            .try_get::<i64, &str>("total_trades")
-            .unwrap_or(0);
-
-        // SUM/AVG can be NULL — they map to Option<Decimal>
-        let total_volume_dec: Option<rust_decimal::Decimal> =
-            row.try_get::<Option<rust_decimal::Decimal>, &str>("total_volume")?;
-        let avg_trade_dec: Option<rust_decimal::Decimal> =
-            row.try_get::<Option<rust_decimal::Decimal>, &str>("avg_trade_size")?;
-
-        let total_volume_usd = total_volume_dec.and_then(|d| d.to_f64()).unwrap_or(0.0);
-        let avg_trade_size = avg_trade_dec.and_then(|d| d.to_f64()).unwrap_or(0.0);
+        let total_trades: i64 = row.try_get::<i64, &str>("total_trades").unwrap_or(0);
+        let total_volume_usd: f64 = row.try_get::<f64, &str>("total_volume").unwrap_or(0.0);
+        let avg_trade_size: f64 = row.try_get::<f64, &str>("avg_trade_size").unwrap_or(0.0);
+        let best_trade: f64 = row.try_get::<f64, &str>("best_trade").unwrap_or(0.0);
+        let worst_trade: f64 = row.try_get::<f64, &str>("worst_trade").unwrap_or(0.0);
+        let win_rate: f64 = row.try_get::<f64, &str>("win_rate").unwrap_or(0.0);
 
         Ok(TradingPerformance {
             total_trades,
             total_volume_usd,
             avg_trade_size,
-            // TODO: compute these from trade history instead of hardcoding
-            win_rate: 68.5,
-            best_trade: 2340.50,
-            worst_trade: -450.20,
+            win_rate,
+            best_trade,
+            worst_trade,
         })
     }
 }

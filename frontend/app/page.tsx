@@ -22,8 +22,8 @@ import { ChevronDown, Lock, Eye, EyeOff, TrendingUp, Coins } from "lucide-react"
 
 export default function ZkCarelApp() {
   // Conditional section visibility
-  const [showLimitOrder, setShowLimitOrder] = React.useState(false)
-  const [showStakeEarn, setShowStakeEarn] = React.useState(false)
+  const [showLimitOrder, setShowLimitOrder] = React.useState(true)
+  const [showStakeEarn, setShowStakeEarn] = React.useState(true)
   
   // Collapsed states for revealed sections
   const [limitOrderExpanded, setLimitOrderExpanded] = React.useState(true)
@@ -77,8 +77,8 @@ export default function ZkCarelApp() {
                               <div className="text-left">
                                 <h3 className="text-lg font-bold text-foreground group-hover:text-primary transition-colors flex items-center gap-2">
                                   Limit Order
-                                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary/20 text-secondary">
-                                    Coming Soon
+                                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-success/20 text-success">
+                                    Testnet Live
                                   </span>
                                 </h3>
                                 <p className="text-sm text-muted-foreground">
@@ -109,15 +109,23 @@ export default function ZkCarelApp() {
                   ) : (
                     <section id="limit-order">
                       {/* Collapsible Header */}
-                      <button
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setLimitOrderExpanded(!limitOrderExpanded)}
-                        className="w-full mb-4"
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault()
+                            setLimitOrderExpanded(!limitOrderExpanded)
+                          }
+                        }}
+                        className="w-full mb-4 cursor-pointer"
                       >
                         <div className="flex items-center justify-between p-4 rounded-xl glass border border-border hover:border-primary/30 transition-colors">
                           <div className="flex items-center gap-3">
                             <TrendingUp className="h-5 w-5 text-primary" />
                             <span className="font-bold text-foreground">Limit Order</span>
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-secondary/20 text-secondary">Coming Soon</span>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-success/20 text-success">Testnet Live</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <button
@@ -135,7 +143,7 @@ export default function ZkCarelApp() {
                             )} />
                           </div>
                         </div>
-                      </button>
+                      </div>
                       {limitOrderExpanded && <LimitOrder />}
                     </section>
                   )}
@@ -156,8 +164,8 @@ export default function ZkCarelApp() {
                               <div className="text-left">
                                 <h3 className="text-lg font-bold text-foreground group-hover:text-primary transition-colors flex items-center gap-2">
                                   Stake & Earn
-                                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary/20 text-secondary">
-                                    Coming Soon
+                                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-success/20 text-success">
+                                    Testnet Live
                                   </span>
                                 </h3>
                                 <p className="text-sm text-muted-foreground">
@@ -188,15 +196,23 @@ export default function ZkCarelApp() {
                   ) : (
                     <section id="stake">
                       {/* Collapsible Header */}
-                      <button
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setStakeEarnExpanded(!stakeEarnExpanded)}
-                        className="w-full mb-4"
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault()
+                            setStakeEarnExpanded(!stakeEarnExpanded)
+                          }
+                        }}
+                        className="w-full mb-4 cursor-pointer"
                       >
                         <div className="flex items-center justify-between p-4 rounded-xl glass border border-border hover:border-primary/30 transition-colors">
                           <div className="flex items-center gap-3">
                             <Coins className="h-5 w-5 text-primary" />
                             <span className="font-bold text-foreground">Stake & Earn</span>
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-secondary/20 text-secondary">Coming Soon</span>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-success/20 text-success">Testnet Live</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <button
@@ -214,7 +230,7 @@ export default function ZkCarelApp() {
                             )} />
                           </div>
                         </div>
-                      </button>
+                      </div>
                       {stakeEarnExpanded && <StakeEarn />}
                     </section>
                   )}

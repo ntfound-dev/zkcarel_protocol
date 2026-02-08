@@ -1,11 +1,25 @@
 use axum::{
-    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State},
-    response::Response,
+    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State, Query},
+    http::{HeaderMap, header::AUTHORIZATION},
+    response::{Response, IntoResponse},
 };
 use futures_util::{StreamExt, SinkExt};
 use serde::Serialize;
 
-use crate::api::AppState;
+use crate::{
+    api::{auth::extract_user_from_token, AppState},
+    error::AppError,
+};
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct WsAuthQuery {
+    token: Option<String>,
+}
+
+fn token_from_headers(headers: &HeaderMap) -> Option<String> {
+    let header_value = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    header_value.strip_prefix("Bearer ").map(|token| token.to_string())
+}
 
 #[derive(Debug, Serialize)]
 struct OrderUpdate {
@@ -40,27 +54,45 @@ fn status_label(status: i16) -> &'static str {
 pub async fn handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WsAuthQuery>,
 ) -> Response {
-    ws.on_upgrade(|socket| handle_socket(socket, state))
+    let token = token_from_headers(&headers).or(query.token);
+    let token = match token {
+        Some(token) => token,
+        None => return AppError::AuthError("Missing WebSocket token".to_string()).into_response(),
+    };
+
+    let user_address = match extract_user_from_token(&token, &state.config.jwt_secret).await {
+        Ok(address) => address,
+        Err(err) => return err.into_response(),
+    };
+
+    if let Err(err) = state.db.create_user(&user_address).await {
+        return err.into_response();
+    }
+    if let Err(err) = state.db.update_last_active(&user_address).await {
+        return err.into_response();
+    }
+
+    ws.on_upgrade(|socket| handle_socket(socket, state, user_address))
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState) {
+async fn handle_socket(socket: WebSocket, state: AppState, user_address: String) {
     let (mut sender, mut receiver) = socket.split();
-
-    // TODO: Extract user from initial message
-    let _user_address = "0x1234...";
 
     // Perbaikan: Tambahkan .into() untuk menyambut koneksi
     let _ = sender.send(Message::Text(connected_payload().into())).await;
 
     // Spawn task to send order updates
     let state_clone = state.clone();
+    let owner_address = user_address.clone();
     let mut send_task = tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
             // Get user's active orders
-            let orders = match state_clone.db.get_active_orders().await {
+            let orders = match state_clone.db.get_active_orders_for_owner(&owner_address).await {
                 Ok(orders) => orders,
                 Err(_) => continue,
             };

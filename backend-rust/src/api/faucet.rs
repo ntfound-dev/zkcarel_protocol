@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize; 
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
 };
 
 
-use super::AppState;
+use super::{AppState, require_user};
 
 fn compute_next_claim_in(
     next_claim: Option<chrono::DateTime<chrono::Utc>>,
@@ -47,17 +47,17 @@ fn faucet_amount_from_options(
 /// POST /api/v1/faucet/claim
 pub async fn claim_tokens(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<FaucetClaimRequest>,
 ) -> Result<Json<ApiResponse<FaucetClaimResponse>>> {
-    // Tips: Kedepannya ambil user_address dari JWT auth state
-    let user_address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"; 
+    let user_address = require_user(&headers, &state).await?;
 
     let faucet = FaucetService::new(state.db.clone(), state.config.clone())?;
 
     // Eksekusi klaim (sekarang sudah mengecek saldo via provider)
-    let tx_hash = faucet.claim_tokens(user_address, &req.token).await?;
+    let tx_hash = faucet.claim_tokens(&user_address, &req.token).await?;
 
-    let next_claim = faucet.get_next_claim_time(user_address, &req.token).await?;
+    let next_claim = faucet.get_next_claim_time(&user_address, &req.token).await?;
     let next_claim_in = compute_next_claim_in(next_claim, chrono::Utc::now());
 
     let amount = faucet_amount_from_options(
@@ -78,18 +78,19 @@ pub async fn claim_tokens(
 /// GET /api/v1/faucet/status
 pub async fn get_status(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<FaucetStatusResponse>>> {
-    let user_address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    let user_address = require_user(&headers, &state).await?;
 
     let faucet = FaucetService::new(state.db.clone(), state.config.clone())?;
 
     let mut token_status = Vec::new();
 
     for token in &["BTC", "ETH", "STRK", "CAREL"] {
-        let can_claim = faucet.can_claim(user_address, token).await?;
-        let next_claim = faucet.get_next_claim_time(user_address, token).await?;
+        let can_claim = faucet.can_claim(&user_address, token).await?;
+        let next_claim = faucet.get_next_claim_time(&user_address, token).await?;
         let last_claim_at = faucet
-            .get_last_claim(user_address, token)
+            .get_last_claim(&user_address, token)
             .await?
             .map(|c| c.claimed_at);
 

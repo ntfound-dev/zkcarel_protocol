@@ -11,8 +11,11 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { TrendingUp, Coins, Info, Clock, Check, AlertCircle, Wallet } from "lucide-react"
+import { useWallet } from "@/hooks/use-wallet"
+import { useNotifications } from "@/hooks/use-notifications"
+import { getPortfolioBalance, getStakePools, getStakePositions, stakeDeposit, stakeWithdraw } from "@/lib/api"
 
-const stakingPools = [
+const fallbackPools = [
   {
     symbol: "USDT",
     name: "Tether",
@@ -20,6 +23,7 @@ const stakingPools = [
     type: "Stablecoin",
     apy: "8.5",
     tvl: "2.4M",
+    tvlValue: 2_400_000,
     minStake: "100",
     lockPeriod: "Flexible",
     reward: "USDT",
@@ -33,6 +37,7 @@ const stakingPools = [
     type: "Stablecoin",
     apy: "8.2",
     tvl: "1.8M",
+    tvlValue: 1_800_000,
     minStake: "100",
     lockPeriod: "Flexible",
     reward: "USDC",
@@ -46,6 +51,7 @@ const stakingPools = [
     type: "Crypto",
     apy: "5.5",
     tvl: "4.2M",
+    tvlValue: 4_200_000,
     minStake: "0.001",
     lockPeriod: "30 hari",
     reward: "BTC",
@@ -59,6 +65,7 @@ const stakingPools = [
     type: "Crypto",
     apy: "6.8",
     tvl: "3.1M",
+    tvlValue: 3_100_000,
     minStake: "0.01",
     lockPeriod: "30 hari",
     reward: "ETH",
@@ -72,6 +79,7 @@ const stakingPools = [
     type: "Crypto",
     apy: "12.5",
     tvl: "820K",
+    tvlValue: 820_000,
     minStake: "10",
     lockPeriod: "60 hari",
     reward: "STRK",
@@ -85,6 +93,7 @@ const stakingPools = [
     type: "Crypto",
     apy: "15.0",
     tvl: "650K",
+    tvlValue: 650_000,
     minStake: "100",
     lockPeriod: "90 hari",
     reward: "CAREL",
@@ -93,6 +102,26 @@ const stakingPools = [
   },
 ]
 
+const poolMeta: Record<string, { name: string; icon: string; type: string; gradient: string }> = {
+  USDT: { name: "Tether", icon: "₮", type: "Stablecoin", gradient: "from-green-400 to-emerald-600" },
+  USDC: { name: "USD Coin", icon: "⭕", type: "Stablecoin", gradient: "from-blue-400 to-cyan-600" },
+  BTC: { name: "Bitcoin", icon: "₿", type: "Crypto", gradient: "from-orange-400 to-amber-600" },
+  ETH: { name: "Ethereum", icon: "Ξ", type: "Crypto", gradient: "from-purple-400 to-indigo-600" },
+  STRK: { name: "StarkNet", icon: "◈", type: "Crypto", gradient: "from-pink-400 to-rose-600" },
+  CAREL: { name: "ZkCarel", icon: "◐", type: "Crypto", gradient: "from-violet-400 to-purple-600" },
+}
+
+const formatCompact = (value: number) => {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      maximumFractionDigits: 2,
+    }).format(value)
+  } catch {
+    return value.toLocaleString()
+  }
+}
+
 interface StakingPool {
   symbol: string
   name: string
@@ -100,6 +129,7 @@ interface StakingPool {
   type: string
   apy: string
   tvl: string
+  tvlValue: number
   minStake: string
   lockPeriod: string
   reward: string
@@ -108,7 +138,7 @@ interface StakingPool {
 }
 
 interface StakingPosition {
-  id: number
+  id: string
   pool: StakingPool
   amount: number
   stakedAt: string
@@ -117,29 +147,127 @@ interface StakingPosition {
 }
 
 export function StakeEarn() {
+  const wallet = useWallet()
+  const notifications = useNotifications()
   const [selectedPool, setSelectedPool] = React.useState<StakingPool | null>(null)
   const [stakeDialogOpen, setStakeDialogOpen] = React.useState(false)
   const [stakeAmount, setStakeAmount] = React.useState("")
   const [isStaking, setIsStaking] = React.useState(false)
   const [stakeSuccess, setStakeSuccess] = React.useState(false)
+  const [pools, setPools] = React.useState<StakingPool[]>(fallbackPools)
   const [positions, setPositions] = React.useState<StakingPosition[]>([
     {
-      id: 1,
-      pool: stakingPools[0],
+      id: "local-1",
+      pool: fallbackPools[0],
       amount: 1000,
       stakedAt: "5 hari lalu",
       rewards: 1.16,
-      status: "active"
+      status: "active",
     },
     {
-      id: 2,
-      pool: stakingPools[3],
+      id: "local-2",
+      pool: fallbackPools[3],
       amount: 0.5,
       stakedAt: "12 hari lalu",
       rewards: 0.0028,
-      status: "active"
-    }
+      status: "active",
+    },
   ])
+  const [tokenPrices, setTokenPrices] = React.useState<Record<string, number>>({})
+  const [activeStakers, setActiveStakers] = React.useState(0)
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getPortfolioBalance()
+        if (!active) return
+        const prices: Record<string, number> = {}
+        response.balances.forEach((item) => {
+          const price = item.amount > 0 ? item.value_usd / item.amount : item.price
+          prices[item.token.toUpperCase()] = price
+        })
+        setTokenPrices(prices)
+      } catch {
+        // keep fallback prices
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getStakePools()
+        if (!active) return
+        const mapped = response.map((pool) => {
+          const meta = poolMeta[pool.token] || {
+            name: pool.token,
+            icon: "●",
+            type: "Crypto",
+            gradient: "from-slate-400 to-slate-600",
+          }
+          const userBalance = wallet.balance[pool.token.toUpperCase()] || 0
+          const tvlUsd = Number.isFinite(pool.tvl_usd) ? pool.tvl_usd : pool.total_staked
+          return {
+            symbol: pool.token,
+            name: meta.name,
+            icon: meta.icon,
+            type: meta.type,
+            apy: pool.apy.toFixed(2),
+            tvl: formatCompact(tvlUsd),
+            tvlValue: tvlUsd,
+            minStake: pool.min_stake.toString(),
+            lockPeriod: pool.lock_period ? `${pool.lock_period} hari` : "Flexible",
+            reward: pool.token,
+            gradient: meta.gradient,
+            userBalance,
+          } as StakingPool
+        })
+        setPools(mapped)
+      } catch {
+        // keep fallback pools
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [wallet.balance])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getStakePositions()
+        if (!active) return
+        const poolMap = new Map(pools.map((pool) => [pool.symbol, pool]))
+        const mapped = response.map((position) => {
+          const pool = poolMap.get(position.token) || fallbackPools[0]
+          return {
+            id: position.position_id,
+            pool,
+            amount: position.amount,
+            stakedAt: new Date(position.started_at * 1000).toLocaleDateString("id-ID"),
+            rewards: position.rewards_earned,
+            status: "active",
+          } as StakingPosition
+        })
+        setPositions(mapped)
+        setActiveStakers(mapped.length)
+      } catch {
+        // keep fallback positions
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [pools])
 
   const handleStake = (pool: StakingPool) => {
     setSelectedPool(pool)
@@ -159,47 +287,104 @@ export function StakeEarn() {
     if (!selectedPool) return
     
     setIsStaking(true)
-    await new Promise(resolve => setTimeout(resolve, 1500))
-    
-    const newPosition: StakingPosition = {
-      id: positions.length + 1,
-      pool: selectedPool,
-      amount: Number.parseFloat(stakeAmount),
-      stakedAt: "Baru saja",
-      rewards: 0,
-      status: "active"
+    try {
+      const response = await stakeDeposit({
+        pool_id: selectedPool.symbol,
+        amount: stakeAmount,
+      })
+
+      const newPosition: StakingPosition = {
+        id: response.position_id,
+        pool: selectedPool,
+        amount: Number.parseFloat(stakeAmount),
+        stakedAt: "Baru saja",
+        rewards: 0,
+        status: "active",
+      }
+
+      setPositions((prev) => [newPosition, ...prev])
+      wallet.updateBalance(selectedPool.symbol, Math.max(0, selectedPool.userBalance - Number.parseFloat(stakeAmount)))
+      setStakeSuccess(true)
+      notifications.addNotification({
+        type: "success",
+        title: "Staking berhasil",
+        message: `Stake ${stakeAmount} ${selectedPool.symbol} berhasil`,
+      })
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Staking gagal",
+        message: error instanceof Error ? error.message : "Gagal melakukan staking",
+      })
+    } finally {
+      setIsStaking(false)
     }
-    
-    setPositions([newPosition, ...positions])
-    setIsStaking(false)
-    setStakeSuccess(true)
   }
 
-  const handleUnstake = (positionId: number) => {
-    setPositions(positions.map(p => 
-      p.id === positionId ? { ...p, status: "unlocking" as const } : p
-    ))
-    // Simulate unstake after delay
-    setTimeout(() => {
-      setPositions(positions.filter(p => p.id !== positionId))
-    }, 2000)
+  const handleUnstake = async (positionId: string) => {
+    const target = positions.find((pos) => pos.id === positionId)
+    if (!target) return
+
+    setPositions((prev) =>
+      prev.map((p) => (p.id === positionId ? { ...p, status: "unlocking" as const } : p))
+    )
+
+    try {
+      await stakeWithdraw({ position_id: positionId, amount: target.amount.toString() })
+      setTimeout(() => {
+        setPositions((prev) => prev.filter((p) => p.id !== positionId))
+      }, 1200)
+      notifications.addNotification({
+        type: "success",
+        title: "Unstake diproses",
+        message: `${target.amount} ${target.pool.symbol} sedang diproses`,
+      })
+    } catch (error) {
+      setPositions((prev) =>
+        prev.map((p) => (p.id === positionId ? { ...p, status: "active" as const } : p))
+      )
+      notifications.addNotification({
+        type: "error",
+        title: "Unstake gagal",
+        message: error instanceof Error ? error.message : "Gagal melakukan unstake",
+      })
+    }
   }
 
-  const handleClaimRewards = (positionId: number) => {
-    setPositions(positions.map(p => 
-      p.id === positionId ? { ...p, rewards: 0 } : p
-    ))
+  const handleClaimRewards = (positionId: string) => {
+    setPositions((prev) =>
+      prev.map((p) => (p.id === positionId ? { ...p, rewards: 0 } : p))
+    )
+    notifications.addNotification({
+      type: "success",
+      title: "Rewards diklaim",
+      message: "Rewards berhasil diklaim (simulasi)",
+    })
   }
 
   const totalStaked = positions.reduce((acc, p) => {
-    const price = p.pool.symbol === "BTC" ? 65000 : p.pool.symbol === "ETH" ? 2450 : 1
+    const price = tokenPrices[p.pool.symbol] ?? (
+      p.pool.symbol === "BTC" ? 65000 :
+      p.pool.symbol === "ETH" ? 2450 :
+      p.pool.symbol === "STRK" ? 1.25 :
+      p.pool.symbol === "CAREL" ? 0.85 :
+      1
+    )
     return acc + (p.amount * price)
   }, 0)
 
   const totalRewards = positions.reduce((acc, p) => {
-    const price = p.pool.symbol === "BTC" ? 65000 : p.pool.symbol === "ETH" ? 2450 : 1
+    const price = tokenPrices[p.pool.symbol] ?? (
+      p.pool.symbol === "BTC" ? 65000 :
+      p.pool.symbol === "ETH" ? 2450 :
+      p.pool.symbol === "STRK" ? 1.25 :
+      p.pool.symbol === "CAREL" ? 0.85 :
+      1
+    )
     return acc + (p.rewards * price)
   }, 0)
+
+  const totalValueLocked = pools.reduce((acc, pool) => acc + pool.tvlValue, 0)
 
   return (
     <section id="stake" className="py-12">
@@ -223,8 +408,10 @@ export function StakeEarn() {
               </div>
               <p className="text-sm text-muted-foreground">Total Value Locked</p>
             </div>
-            <p className="text-2xl font-bold text-foreground">$13.0M</p>
-            <p className="text-xs text-success mt-1">+12.4% bulan ini</p>
+            <p className="text-2xl font-bold text-foreground">
+              {totalValueLocked > 0 ? `$${formatCompact(totalValueLocked)}` : "—"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">Based on pool totals</p>
           </div>
 
           <div className="p-6 rounded-xl glass border border-border">
@@ -234,8 +421,10 @@ export function StakeEarn() {
               </div>
               <p className="text-sm text-muted-foreground">Staker Aktif</p>
             </div>
-            <p className="text-2xl font-bold text-foreground">4,238</p>
-            <p className="text-xs text-success mt-1">+8.2% minggu ini</p>
+            <p className="text-2xl font-bold text-foreground">
+              {activeStakers > 0 ? activeStakers.toLocaleString() : "—"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">Active positions</p>
           </div>
 
           <div className="p-6 rounded-xl glass border border-border">
@@ -280,7 +469,7 @@ export function StakeEarn() {
           <div>
             <h3 className="text-lg font-bold text-foreground mb-4">Stablecoins</h3>
             <div className="grid md:grid-cols-2 gap-4">
-              {stakingPools
+              {pools
                 .filter((pool) => pool.type === "Stablecoin")
                 .map((pool) => (
                   <StakingCard key={pool.symbol} pool={pool} onStake={() => handleStake(pool)} />
@@ -292,7 +481,7 @@ export function StakeEarn() {
           <div>
             <h3 className="text-lg font-bold text-foreground mb-4">Cryptocurrencies</h3>
             <div className="grid md:grid-cols-2 gap-4">
-              {stakingPools
+              {pools
                 .filter((pool) => pool.type === "Crypto")
                 .map((pool) => (
                   <StakingCard key={pool.symbol} pool={pool} onStake={() => handleStake(pool)} />
@@ -513,8 +702,8 @@ export function StakeEarn() {
                       <h4 className="font-medium text-foreground mb-3">Detail Pool</h4>
                       <div className="space-y-2">
                         <div className="flex justify-between">
-                          <span className="text-sm text-muted-foreground">Total Value Locked</span>
-                          <span className="text-sm font-medium text-foreground">${selectedPool.tvl}</span>
+                          <span className="text-sm text-muted-foreground">Total Staked</span>
+                          <span className="text-sm font-medium text-foreground">{selectedPool.tvl}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm text-muted-foreground">APY</span>
@@ -588,8 +777,8 @@ function StakingCard({ pool, onStake }: { pool: StakingPool; onStake: () => void
 
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div>
-          <p className="text-xs text-muted-foreground">TVL</p>
-          <p className="text-sm font-medium text-foreground">${pool.tvl}</p>
+          <p className="text-xs text-muted-foreground">Total Staked</p>
+          <p className="text-sm font-medium text-foreground">{pool.tvl}</p>
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Min. Stake</p>

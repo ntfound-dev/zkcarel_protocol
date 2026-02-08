@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -8,13 +8,14 @@ use crate::{
     crypto::hash,
 };
 
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Serialize)]
 pub struct StakingPool {
     pub pool_id: String,
     pub token: String,
     pub total_staked: f64,
+    pub tvl_usd: f64,
     pub apy: f64,
     pub rewards_per_day: f64,
     pub min_stake: f64,
@@ -65,16 +66,36 @@ fn build_withdraw_tx_hash(user_address: &str, position_id: &str, now_ts: i64) ->
     hash::hash_string(&format!("withdraw_{}{}{}", user_address, position_id, now_ts))
 }
 
+fn fallback_price_for(token: &str) -> f64 {
+    match token.to_uppercase().as_str() {
+        "USDT" | "USDC" => 1.0,
+        _ => 1.0,
+    }
+}
+
+async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
+    let token = token.to_uppercase();
+    let price: Option<f64> = sqlx::query_scalar(
+        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+    )
+    .bind(&token)
+    .fetch_optional(state.db.pool())
+    .await?;
+
+    Ok(price.unwrap_or_else(|| fallback_price_for(&token)))
+}
+
 /// GET /api/v1/stake/pools
 pub async fn get_pools(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<StakingPool>>>> {
     // Mock staking pools
-    let pools = vec![
+    let mut pools = vec![
         StakingPool {
             pool_id: "CAREL".to_string(),
             token: "CAREL".to_string(),
             total_staked: 50_000_000.0,
+            tvl_usd: 0.0,
             apy: 25.5,
             rewards_per_day: 3424.65,
             min_stake: 100.0,
@@ -84,6 +105,7 @@ pub async fn get_pools(
             pool_id: "BTC".to_string(),
             token: "BTC".to_string(),
             total_staked: 150.5,
+            tvl_usd: 0.0,
             apy: 8.2,
             rewards_per_day: 0.034,
             min_stake: 0.001,
@@ -93,6 +115,7 @@ pub async fn get_pools(
             pool_id: "STRK".to_string(),
             token: "STRK".to_string(),
             total_staked: 5_000_000.0,
+            tvl_usd: 0.0,
             apy: 12.8,
             rewards_per_day: 1753.42,
             min_stake: 10.0,
@@ -102,6 +125,7 @@ pub async fn get_pools(
             pool_id: "USDC".to_string(),
             token: "USDC".to_string(),
             total_staked: 2_500_000.0,
+            tvl_usd: 0.0,
             apy: 6.5,
             rewards_per_day: 445.21,
             min_stake: 100.0,
@@ -109,25 +133,31 @@ pub async fn get_pools(
         },
     ];
 
+    for pool in &mut pools {
+        let price = latest_price(&state, pool.token.as_str()).await?;
+        pool.tvl_usd = pool.total_staked * price;
+    }
+
     Ok(Json(ApiResponse::success(pools)))
 }
 
 /// POST /api/v1/stake/deposit
 pub async fn deposit(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<DepositRequest>,
 ) -> Result<Json<ApiResponse<DepositResponse>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
     let now = chrono::Utc::now().timestamp();
 
     let amount: f64 = req.amount.parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
 
     // 2. Gunakan hasher untuk membuat Position ID (Menghilangkan warning di hash.rs)
-    let position_id = build_position_id(user_address, &req.pool_id, now);
+    let position_id = build_position_id(&user_address, &req.pool_id, now);
 
     // 3. Gunakan hasher untuk Tx Hash
-    let tx_hash = build_stake_tx_hash(user_address, &req.pool_id, now);
+    let tx_hash = build_stake_tx_hash(&user_address, &req.pool_id, now);
 
     tracing::info!(
         "User {} staking deposit: {} in pool {} (position: {})",
@@ -146,17 +176,18 @@ pub async fn deposit(
 
 /// POST /api/v1/stake/withdraw
 pub async fn withdraw(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<WithdrawRequest>,
 ) -> Result<Json<ApiResponse<DepositResponse>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
     let now = chrono::Utc::now().timestamp();
 
     let amount: f64 = req.amount.parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
 
     // Gunakan hasher untuk Tx Hash withdraw
-    let tx_hash = build_withdraw_tx_hash(user_address, &req.position_id, now);
+    let tx_hash = build_withdraw_tx_hash(&user_address, &req.position_id, now);
 
     tracing::info!(
         "User {} stake withdraw: {} from position {}",
@@ -174,9 +205,10 @@ pub async fn withdraw(
 
 /// GET /api/v1/stake/positions
 pub async fn get_positions(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<Vec<StakingPosition>>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
     
     tracing::debug!("Fetching staking positions for user: {}", user_address);
 

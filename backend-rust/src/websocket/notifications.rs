@@ -1,11 +1,27 @@
 use axum::{
-    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State},
-    response::Response,
+    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State, Query},
+    http::{HeaderMap, header::AUTHORIZATION},
+    response::{Response, IntoResponse},
 };
+use serde::Deserialize;
 use futures_util::{StreamExt, SinkExt};
 use tokio::time::{interval, timeout, Duration};
 
-use crate::{api::AppState, constants::{WS_CLIENT_TIMEOUT_SECS, WS_HEARTBEAT_INTERVAL_SECS}};
+use crate::{
+    api::{auth::extract_user_from_token, AppState},
+    constants::{WS_CLIENT_TIMEOUT_SECS, WS_HEARTBEAT_INTERVAL_SECS},
+    error::AppError,
+};
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct WsAuthQuery {
+    token: Option<String>,
+}
+
+fn token_from_headers(headers: &HeaderMap) -> Option<String> {
+    let header_value = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    header_value.strip_prefix("Bearer ").map(|token| token.to_string())
+}
 
 fn connected_payload() -> String {
     serde_json::json!({
@@ -18,15 +34,32 @@ fn connected_payload() -> String {
 pub async fn handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WsAuthQuery>,
 ) -> Response {
-    ws.on_upgrade(|socket| handle_socket(socket, state))
+    let token = token_from_headers(&headers).or(query.token);
+    let token = match token {
+        Some(token) => token,
+        None => return AppError::AuthError("Missing WebSocket token".to_string()).into_response(),
+    };
+
+    let user_address = match extract_user_from_token(&token, &state.config.jwt_secret).await {
+        Ok(address) => address,
+        Err(err) => return err.into_response(),
+    };
+
+    if let Err(err) = state.db.create_user(&user_address).await {
+        return err.into_response();
+    }
+    if let Err(err) = state.db.update_last_active(&user_address).await {
+        return err.into_response();
+    }
+
+    ws.on_upgrade(|socket| handle_socket(socket, state, user_address))
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState) {
+async fn handle_socket(socket: WebSocket, state: AppState, user_address: String) {
     let (mut sender, mut receiver) = socket.split();
-
-    // TODO: Extract user from initial message
-    let user_address = "0x1234..."; // Placeholder
 
     // Subscribe to notifications
     let notification_service = crate::services::NotificationService::new(
@@ -104,7 +137,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 
     // Cleanup
-    notification_service.unregister_connection(user_address).await;
+    notification_service.unregister_connection(&user_address).await;
     tracing::info!("WebSocket connection closed for user: {}", user_address);
 }
 

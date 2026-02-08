@@ -1,5 +1,6 @@
 use axum::{
     extract::{State, Path},
+    http::HeaderMap,
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use crate::{
     crypto::hash,
 };
 
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Serialize)]
 pub struct CreateOrderResponse {
@@ -56,9 +57,10 @@ struct CountResult {
 /// POST /api/v1/limit-order/create
 pub async fn create_order(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CreateLimitOrderRequest>,
 ) -> Result<Json<ApiResponse<CreateOrderResponse>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     let amount: f64 = req.amount.parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
@@ -73,7 +75,7 @@ pub async fn create_order(
 
     // 2. GUNAKAN HASHER untuk membuat Order ID (Menghilangkan warning di hash.rs)
     let order_id = build_order_id(
-        user_address,
+        &user_address,
         &req.from_token,
         &req.to_token,
         amount,
@@ -108,9 +110,10 @@ pub async fn create_order(
 /// GET /api/v1/limit-order/list
 pub async fn list_orders(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<ListOrdersQuery>,
 ) -> Result<Json<ApiResponse<PaginatedResponse<LimitOrder>>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(10);
     let offset = (page - 1) * limit;
@@ -128,7 +131,7 @@ pub async fn list_orders(
         sqlx::query_as::<_, LimitOrder>(
             "SELECT * FROM limit_orders WHERE owner = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4"
         )
-        .bind(user_address)
+        .bind(&user_address)
         .bind(s)
         .bind(limit as i64)
         .bind(offset as i64)
@@ -138,7 +141,7 @@ pub async fn list_orders(
         sqlx::query_as::<_, LimitOrder>(
             "SELECT * FROM limit_orders WHERE owner = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
         )
-        .bind(user_address)
+        .bind(&user_address)
         .bind(limit as i64)
         .bind(offset as i64)
         .fetch_all(state.db.pool())
@@ -148,10 +151,10 @@ pub async fn list_orders(
     // Hitung total dengan filter status juga jika ada
     let total_query = if let Some(s) = status_int {
         sqlx::query_as::<_, CountResult>("SELECT COUNT(*) as count FROM limit_orders WHERE owner = $1 AND status = $2")
-            .bind(user_address).bind(s)
+            .bind(&user_address).bind(s)
     } else {
         sqlx::query_as::<_, CountResult>("SELECT COUNT(*) as count FROM limit_orders WHERE owner = $1")
-            .bind(user_address)
+            .bind(&user_address)
     };
     
     let total_res = total_query.fetch_one(state.db.pool()).await?;
@@ -169,10 +172,16 @@ pub async fn list_orders(
 /// DELETE /api/v1/limit-order/:order_id
 pub async fn cancel_order(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(order_id): Path<String>,
 ) -> Result<Json<ApiResponse<String>>> {
+    let user_address = require_user(&headers, &state).await?;
     let order = state.db.get_limit_order(&order_id).await?
         .ok_or(crate::error::AppError::OrderNotFound)?;
+
+    if order.owner != user_address {
+        return Err(crate::error::AppError::AuthError("Not allowed to cancel this order".to_string()));
+    }
 
     if order.status == 2 {
         return Err(crate::error::AppError::BadRequest("Order already filled".to_string()));

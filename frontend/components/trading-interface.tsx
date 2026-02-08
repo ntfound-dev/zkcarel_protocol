@@ -3,6 +3,9 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { useNotifications } from "@/hooks/use-notifications"
+import { useWallet } from "@/hooks/use-wallet"
+import { executeBridge, executeSwap, getBridgeQuote, getPortfolioBalance, getSwapQuote } from "@/lib/api"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,21 +28,39 @@ import {
   Eye, EyeOff, ChevronUp, Info, Gift, Sparkles
 } from "lucide-react"
 
-const tokens = [
-  { symbol: "BTC", name: "Bitcoin", icon: "₿", balance: 2.5, price: 65000, network: "Bitcoin" },
-  { symbol: "ETH", name: "Ethereum", icon: "Ξ", balance: 15.2, price: 2000, network: "Ethereum" },
-  { symbol: "STRK", name: "StarkNet", icon: "◈", balance: 5000, price: 1.25, network: "StarkNet" },
-  { symbol: "CAREL", name: "ZkCarel", icon: "◇", balance: 245, price: 0.85, network: "StarkNet" },
-  { symbol: "USDC", name: "USD Coin", icon: "$", balance: 10000, price: 1.0, network: "Ethereum" },
-  { symbol: "USDT", name: "Tether", icon: "₮", balance: 5000, price: 1.0, network: "Ethereum" },
-  { symbol: "WBTC", name: "Wrapped BTC", icon: "₿", balance: 0.5, price: 64950, network: "Ethereum" },
+type QuoteState = {
+  type: "swap" | "bridge"
+  toAmount: string
+  fee: number
+  estimatedTime: string
+  priceImpact?: string
+  provider?: string
+}
+
+const tokenCatalog = [
+  { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 65000, network: "Bitcoin" },
+  { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 2000, network: "Ethereum" },
+  { symbol: "STRK", name: "StarkNet", icon: "◈", price: 1.25, network: "StarkNet" },
+  { symbol: "CAREL", name: "ZkCarel", icon: "◇", price: 0.85, network: "StarkNet" },
+  { symbol: "USDC", name: "USD Coin", icon: "$", price: 1.0, network: "Ethereum" },
+  { symbol: "USDT", name: "Tether", icon: "₮", price: 1.0, network: "Ethereum" },
+  { symbol: "WBTC", name: "Wrapped BTC", icon: "₿", price: 64950, network: "Ethereum" },
 ]
 
 const slippagePresets = ["0.1", "0.3", "0.5", "1.0"]
 
+const chainFromNetwork = (network: string) => {
+  const key = network.toLowerCase()
+  if (key.includes("bitcoin")) return "bitcoin"
+  if (key.includes("ethereum")) return "ethereum"
+  if (key.includes("starknet")) return "starknet"
+  return key
+}
+
 interface TokenSelectorProps {
-  selectedToken: typeof tokens[0]
-  onSelect: (token: typeof tokens[0]) => void
+  selectedToken: TokenWithBalance
+  onSelect: (token: TokenWithBalance) => void
+  tokens: TokenWithBalance[]
   label: string
   amount: string
   onAmountChange: (value: string) => void
@@ -47,7 +68,9 @@ interface TokenSelectorProps {
   hideBalance?: boolean
 }
 
-function TokenSelector({ selectedToken, onSelect, label, amount, onAmountChange, readOnly, hideBalance }: TokenSelectorProps) {
+type TokenWithBalance = (typeof tokenCatalog)[number] & { balance: number }
+
+function TokenSelector({ selectedToken, onSelect, tokens, label, amount, onAmountChange, readOnly, hideBalance }: TokenSelectorProps) {
   const usdValue = Number.parseFloat(amount || "0") * selectedToken.price
   
   return (
@@ -129,7 +152,7 @@ function TokenSelector({ selectedToken, onSelect, label, amount, onAmountChange,
   )
 }
 
-function SimpleRouteVisualization({ fromToken, toToken, isCrossChain }: { fromToken: typeof tokens[0], toToken: typeof tokens[0], isCrossChain: boolean }) {
+function SimpleRouteVisualization({ fromToken, toToken, isCrossChain }: { fromToken: TokenWithBalance, toToken: TokenWithBalance, isCrossChain: boolean }) {
   return (
     <div className="flex items-center justify-center gap-2 py-3 text-sm">
       <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30">
@@ -151,12 +174,26 @@ function SimpleRouteVisualization({ fromToken, toToken, isCrossChain }: { fromTo
 }
 
 export function TradingInterface() {
+  const wallet = useWallet()
+  const notifications = useNotifications()
+  const [priceMap, setPriceMap] = React.useState<Record<string, number>>({})
+  const tokens = React.useMemo<TokenWithBalance[]>(() => {
+    return tokenCatalog.map((token) => ({
+      ...token,
+      balance: wallet.balance[token.symbol] ?? 0,
+      price: priceMap[token.symbol] ?? token.price,
+    }))
+  }, [wallet.balance, priceMap])
+
   const [fromToken, setFromToken] = React.useState(tokens[0])
   const [toToken, setToToken] = React.useState(tokens[1])
   const [fromAmount, setFromAmount] = React.useState("1.0")
   const [toAmount, setToAmount] = React.useState("")
   const [swapState, setSwapState] = React.useState<"idle" | "confirming" | "processing" | "success" | "error">("idle")
   const [previewOpen, setPreviewOpen] = React.useState(false)
+  const [quote, setQuote] = React.useState<QuoteState | null>(null)
+  const [isQuoteLoading, setIsQuoteLoading] = React.useState(false)
+  const [quoteError, setQuoteError] = React.useState<string | null>(null)
   
   // Privacy mode - ONLY for hiding balance in this module
   const [balanceHidden, setBalanceHidden] = React.useState(false)
@@ -166,7 +203,7 @@ export function TradingInterface() {
   const [mevProtection, setMevProtection] = React.useState(true)
   const [slippage, setSlippage] = React.useState("0.5")
   const [customSlippage, setCustomSlippage] = React.useState("")
-  const [receiveAddress, setReceiveAddress] = React.useState("0x8f...4e2d (Your Wallet)")
+  const [receiveAddress, setReceiveAddress] = React.useState("")
   
   // NFT Discount simulation
   const hasNFTDiscount = true
@@ -179,12 +216,117 @@ export function TradingInterface() {
   const isCrossChain = fromToken.network !== toToken.network
 
   React.useEffect(() => {
-    if (fromAmount && fromToken && toToken) {
-      const fromValue = Number.parseFloat(fromAmount) * fromToken.price
-      const toValue = fromValue / toToken.price
-      setToAmount(toValue.toFixed(6))
+    if (wallet.address) {
+      setReceiveAddress(wallet.address)
     }
-  }, [fromAmount, fromToken, toToken])
+  }, [wallet.address])
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getPortfolioBalance()
+        if (!active) return
+        const updated: Record<string, number> = {}
+        response.balances.forEach((item) => {
+          const price = item.amount > 0 ? item.value_usd / item.amount : item.price
+          updated[item.token.toUpperCase()] = price
+        })
+        setPriceMap((prev) => ({ ...prev, ...updated }))
+      } catch {
+        // keep fallback prices
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  React.useEffect(() => {
+    const nextFrom = tokens.find((token) => token.symbol === fromToken.symbol) || tokens[0]
+    const nextTo = tokens.find((token) => token.symbol === toToken.symbol) || tokens[1]
+    setFromToken(nextFrom)
+    setToToken(nextTo)
+  }, [tokens])
+
+  React.useEffect(() => {
+    const amountValue = Number.parseFloat(fromAmount || "0")
+    if (!amountValue || amountValue <= 0) {
+      setToAmount("")
+      setQuote(null)
+      setQuoteError(null)
+      return
+    }
+
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      setIsQuoteLoading(true)
+      setQuoteError(null)
+
+      try {
+        if (isCrossChain) {
+          const response = await getBridgeQuote({
+            from_chain: chainFromNetwork(fromToken.network),
+            to_chain: chainFromNetwork(toToken.network),
+            token: fromToken.symbol,
+            amount: fromAmount,
+          })
+          if (cancelled) return
+          setToAmount(response.estimated_receive)
+          setQuote({
+            type: "bridge",
+            toAmount: response.estimated_receive,
+            fee: Number(response.fee || 0),
+            estimatedTime: response.estimated_time,
+            provider: response.bridge_provider,
+          })
+        } else {
+          const response = await getSwapQuote({
+            from_token: fromToken.symbol,
+            to_token: toToken.symbol,
+            amount: fromAmount,
+            slippage: Number(customSlippage || slippage),
+            mode: mevProtection ? "private" : "transparent",
+          })
+          if (cancelled) return
+          setToAmount(response.to_amount)
+          setQuote({
+            type: "swap",
+            toAmount: response.to_amount,
+            fee: Number(response.fee || 0),
+            estimatedTime: response.estimated_time,
+            priceImpact: response.price_impact,
+          })
+        }
+      } catch (error) {
+        if (cancelled) return
+        setQuoteError(error instanceof Error ? error.message : "Failed to fetch quote")
+
+        // fallback to local estimate
+        const fromValue = amountValue * fromToken.price
+        const toValue = fromValue / toToken.price
+        setToAmount(toValue.toFixed(6))
+      } finally {
+        if (!cancelled) {
+          setIsQuoteLoading(false)
+        }
+      }
+    }, 350)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [
+    fromAmount,
+    fromToken,
+    toToken,
+    slippage,
+    customSlippage,
+    mevProtection,
+    isCrossChain,
+  ])
 
   const handleSwapTokens = () => {
     const tempToken = fromToken
@@ -198,14 +340,16 @@ export function TradingInterface() {
   // Calculate trade details
   const fromValueUSD = Number.parseFloat(fromAmount || "0") * fromToken.price
   const toValueUSD = Number.parseFloat(toAmount || "0") * toToken.price
-  const transactionFee = fromValueUSD * (discountedFeePercent / 100)
+  const transactionFee = quote?.fee ?? (fromValueUSD * (discountedFeePercent / 100))
   const pointsEarned = Math.floor(fromValueUSD * 10) // 10 points per $1 volume
-  const estimatedTime = isCrossChain ? "~3-5 min" : "~30 sec"
+  const estimatedTime = quote?.estimatedTime ?? (isCrossChain ? "~3-5 min" : "~30 sec")
   
   // Price Impact calculation
   const expectedAmount = fromValueUSD / toToken.price
   const actualAmount = Number.parseFloat(toAmount || "0")
-  const priceImpact = expectedAmount > 0 ? Math.abs((actualAmount - expectedAmount) / expectedAmount * 100) : 0
+  const priceImpact = quote?.priceImpact
+    ? Number.parseFloat(quote.priceImpact.replace("%", ""))
+    : expectedAmount > 0 ? Math.abs((actualAmount - expectedAmount) / expectedAmount * 100) : 0
 
   const activeSlippage = customSlippage || slippage
 
@@ -218,24 +362,57 @@ export function TradingInterface() {
     setPreviewOpen(false)
     setSwapState("confirming")
     
-    // Simulate confirmation delay
-    await new Promise(r => setTimeout(r, 1000))
+    await new Promise(r => setTimeout(r, 600))
     setSwapState("processing")
-    
-    // Simulate transaction processing
-    await new Promise(r => setTimeout(r, 2500))
-    
-    // Random success/fail for demo (90% success rate)
-    if (Math.random() > 0.1) {
+
+    try {
+      if (isCrossChain) {
+        const response = await executeBridge({
+          from_chain: chainFromNetwork(fromToken.network),
+          to_chain: chainFromNetwork(toToken.network),
+          token: fromToken.symbol,
+          amount: fromAmount,
+          recipient: wallet.address || receiveAddress,
+        })
+        notifications.addNotification({
+          type: "success",
+          title: "Bridge initiated",
+          message: `Bridge ${fromAmount} ${fromToken.symbol} to ${toToken.symbol} (${response.bridge_id})`,
+        })
+      } else {
+        const slippageValue = Number(activeSlippage || "0.5")
+        const minAmountOut = (Number.parseFloat(toAmount || "0") * (1 - slippageValue / 100)).toFixed(6)
+        const deadline = Math.floor(Date.now() / 1000) + 60 * 20
+        const response = await executeSwap({
+          from_token: fromToken.symbol,
+          to_token: toToken.symbol,
+          amount: fromAmount,
+          min_amount_out: minAmountOut,
+          slippage: slippageValue,
+          deadline,
+          recipient: wallet.address || undefined,
+          mode: mevProtection ? "private" : "transparent",
+        })
+        notifications.addNotification({
+          type: "success",
+          title: "Swap completed",
+          message: `Swap ${fromAmount} ${fromToken.symbol} → ${response.to_amount} ${toToken.symbol}`,
+          txHash: response.tx_hash,
+        })
+      }
       setSwapState("success")
-    } else {
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Trade failed",
+        message: error instanceof Error ? error.message : "Failed to execute trade",
+      })
       setSwapState("error")
+    } finally {
+      setTimeout(() => {
+        setSwapState("idle")
+      }, 2500)
     }
-    
-    // Reset after showing result
-    setTimeout(() => {
-      setSwapState("idle")
-    }, 3000)
   }
 
   return (
@@ -265,6 +442,7 @@ export function TradingInterface() {
           <TokenSelector
             selectedToken={fromToken}
             onSelect={setFromToken}
+            tokens={tokens}
             label="From"
             amount={fromAmount}
             onAmountChange={setFromAmount}
@@ -283,6 +461,7 @@ export function TradingInterface() {
           <TokenSelector
             selectedToken={toToken}
             onSelect={setToToken}
+            tokens={tokens}
             label="To"
             amount={toAmount}
             onAmountChange={setToAmount}
@@ -296,9 +475,15 @@ export function TradingInterface() {
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Zap className="h-3 w-3 text-secondary" />
-              Best Route via {isCrossChain ? "StarkGate Bridge" : "AVNU"}
+              Best Route via {quote?.type === "bridge" ? (quote.provider || "Bridge") : "Auto"}
             </span>
-            <span className="text-xs text-success">Auto-selected</span>
+            {isQuoteLoading ? (
+              <span className="text-xs text-muted-foreground">Fetching quote...</span>
+            ) : quoteError ? (
+              <span className="text-xs text-destructive">Quote unavailable</span>
+            ) : (
+              <span className="text-xs text-success">Auto-selected</span>
+            )}
           </div>
           <SimpleRouteVisualization fromToken={fromToken} toToken={toToken} isCrossChain={isCrossChain} />
         </div>

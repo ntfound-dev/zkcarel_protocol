@@ -1,7 +1,7 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use crate::{error::Result, models::ApiResponse, services::ai_service::AIService};
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct AICommandRequest {
@@ -30,15 +30,16 @@ fn confidence_score(has_api_key: bool) -> f64 {
 /// POST /api/v1/ai/execute
 pub async fn execute_command(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<AICommandRequest>,
 ) -> Result<Json<ApiResponse<AICommandResponse>>> {
-    let user_address = "0x1234..."; // TODO: Extract from JWT
+    let user_address = require_user(&headers, &state).await?;
     let config = state.config.clone();
     let service = AIService::new(state.db, config.clone());
 
     let command = build_command(&req.command, &req.context);
 
-    let ai_response = service.execute_command(user_address, &command).await?;
+    let ai_response = service.execute_command(&user_address, &command).await?;
     let confidence = confidence_score(config.openai_api_key.is_some());
 
     let response = AICommandResponse {

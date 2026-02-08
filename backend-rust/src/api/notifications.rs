@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
     utils::ensure_page_limit,
 };
 
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct ListNotificationsQuery {
@@ -45,9 +45,10 @@ fn should_mark_all(notification_ids: &[i64]) -> bool {
 /// GET /api/v1/notifications/list
 pub async fn list(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<ListNotificationsQuery>,
 ) -> Result<Json<ApiResponse<PaginatedResponse<Notification>>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(20);
@@ -55,14 +56,14 @@ pub async fn list(
 
     let service = NotificationService::new(state.db.clone(), state.config.clone());
     let notifications = service
-        .get_user_notifications(user_address, page, limit)
+        .get_user_notifications(&user_address, page, limit)
         .await?;
 
     // Perbaikan: Gunakan query_as
     let total_res: CountResult = sqlx::query_as(
         "SELECT COUNT(*) as count FROM notifications WHERE user_address = $1"
     )
-    .bind(user_address)
+    .bind(&user_address)
     .fetch_one(state.db.pool())
     .await?;
 
@@ -79,16 +80,17 @@ pub async fn list(
 /// POST /api/v1/notifications/mark-read
 pub async fn mark_read(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<MarkReadRequest>,
 ) -> Result<Json<ApiResponse<String>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
     let service = NotificationService::new(state.db.clone(), state.config.clone());
 
     if should_mark_all(&req.notification_ids) {
-        service.mark_all_as_read(user_address).await?;
+        service.mark_all_as_read(&user_address).await?;
     } else {
         for id in req.notification_ids {
-            service.mark_as_read(id, user_address).await?;
+            service.mark_as_read(id, &user_address).await?;
         }
     }
 
@@ -98,9 +100,10 @@ pub async fn mark_read(
 /// PUT /api/v1/notifications/preferences
 pub async fn update_preferences(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<NotificationPreferences>,
 ) -> Result<Json<ApiResponse<NotificationPreferences>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     // Perbaikan: Gunakan query biasa (execute) untuk INSERT/UPDATE
     sqlx::query(
@@ -112,7 +115,7 @@ pub async fn update_preferences(
              telegram_enabled = $4,
              discord_enabled = $5"
     )
-    .bind(user_address)
+    .bind(&user_address)
     .bind(req.email_enabled)
     .bind(req.push_enabled)
     .bind(req.telegram_enabled)
@@ -126,8 +129,9 @@ pub async fn update_preferences(
 /// GET /api/v1/notifications/stats
 pub async fn get_stats(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<NotificationStats>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
     let service = NotificationService::new(state.db.clone(), state.config.clone());
 
     // Hitung total notifikasi
@@ -136,12 +140,12 @@ pub async fn get_stats(
          FROM notifications
          WHERE user_address = $1"
     )
-    .bind(user_address)
+    .bind(&user_address)
     .fetch_one(state.db.pool())
     .await?;
 
     Ok(Json(ApiResponse::success(NotificationStats {
-        unread_count: service.get_unread_count(user_address).await?,
+        unread_count: service.get_unread_count(&user_address).await?,
         total_count: stats.total,
     })))
 }

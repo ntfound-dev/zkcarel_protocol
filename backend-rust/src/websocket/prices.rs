@@ -41,7 +41,7 @@ pub async fn handler(
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
-async fn handle_socket(socket: WebSocket, _state: AppState) {
+async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
     // Track subscribed tokens
@@ -52,6 +52,7 @@ async fn handle_socket(socket: WebSocket, _state: AppState) {
     let _ = sender.send(Message::Text(connected_payload().into())).await;
 
     // Spawn task to send price updates
+    let state_clone = state.clone();
     let mut send_task = tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -59,13 +60,16 @@ async fn handle_socket(socket: WebSocket, _state: AppState) {
             let tokens = subscribed_clone.read().await.clone();
             
             for token in tokens {
-                let price = get_mock_price(&token);
+                let (price, change_24h) = match latest_price_with_change(&state_clone, &token).await {
+                    Ok(result) => result,
+                    Err(_) => (fallback_price_for(&token), 0.0),
+                };
                 
                 let update = PriceUpdate {
                     msg_type: "price_update".to_string(),
                     token: token.clone(),
                     price,
-                    change_24h: (rand::random::<f64>() - 0.5) * 10.0,
+                    change_24h,
                     timestamp: chrono::Utc::now().timestamp(),
                 };
 
@@ -118,14 +122,37 @@ async fn handle_socket(socket: WebSocket, _state: AppState) {
     tracing::info!("Price WebSocket connection closed");
 }
 
-fn get_mock_price(token: &str) -> f64 {
-    match token {
-        "BTC" => 65000.0 + (rand::random::<f64>() - 0.5) * 1000.0,
-        "ETH" => 3500.0 + (rand::random::<f64>() - 0.5) * 100.0,
-        "STRK" => 2.5 + (rand::random::<f64>() - 0.5) * 0.1,
-        "CAREL" => 0.5 + (rand::random::<f64>() - 0.5) * 0.05,
-        _ => 1.0,
+fn fallback_price_for(token: &str) -> f64 {
+    match token.to_uppercase().as_str() {
+        "USDT" | "USDC" => 1.0,
+        _ => 0.0,
     }
+}
+
+async fn latest_price_with_change(state: &AppState, token: &str) -> crate::error::Result<(f64, f64)> {
+    let rows: Vec<f64> = sqlx::query_scalar(
+        "SELECT close::FLOAT FROM price_history WHERE token = $1 AND interval = $2 ORDER BY timestamp DESC LIMIT 2",
+    )
+    .bind(token)
+    .bind("1h")
+    .fetch_all(state.db.pool())
+    .await?;
+
+    let mut prices = rows;
+    if prices.is_empty() {
+        prices = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 2",
+        )
+        .bind(token)
+        .fetch_all(state.db.pool())
+        .await?;
+    }
+
+    let latest = prices.get(0).copied().unwrap_or_else(|| fallback_price_for(token));
+    let prev = prices.get(1).copied().unwrap_or(latest);
+    let change = if prev > 0.0 { ((latest - prev) / prev) * 100.0 } else { 0.0 };
+
+    Ok((latest, change))
 }
 
 #[cfg(test)]
@@ -140,9 +167,9 @@ mod tests {
     }
 
     #[test]
-    fn get_mock_price_unknown_returns_one() {
-        // Memastikan token tidak dikenal mengembalikan 1.0
-        let price = get_mock_price("UNKNOWN");
-        assert!((price - 1.0).abs() < f64::EPSILON);
+    fn fallback_price_unknown_returns_zero() {
+        // Memastikan token tidak dikenal mengembalikan 0.0
+        let price = fallback_price_for("UNKNOWN");
+        assert!((price - 0.0).abs() < f64::EPSILON);
     }
 }

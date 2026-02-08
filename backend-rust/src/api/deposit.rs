@@ -1,7 +1,7 @@
-use axum::{extract::{State, Path}, Json};
+use axum::{extract::{State, Path}, http::HeaderMap, Json};
 use serde::Deserialize;
 use crate::{error::Result, models::ApiResponse, services::DepositService};
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct BankTransferRequest {
@@ -23,12 +23,13 @@ pub struct CardPaymentRequest {
 /// POST /api/v1/deposit/bank-transfer
 pub async fn bank_transfer(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<BankTransferRequest>,
 ) -> Result<Json<ApiResponse<crate::services::deposit_service::DepositInfo>>> {
-    let user_address = "0x1234..."; // TODO: Extract from JWT
+    let user_address = require_user(&headers, &state).await?;
     
     let service = DepositService::new(state.db, state.config);
-    let deposit = service.create_bank_transfer(user_address, req.amount, &req.currency).await?;
+    let deposit = service.create_bank_transfer(&user_address, req.amount, &req.currency).await?;
     
     Ok(Json(ApiResponse::success(deposit)))
 }
@@ -36,12 +37,13 @@ pub async fn bank_transfer(
 /// POST /api/v1/deposit/qris
 pub async fn qris(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<QRISRequest>,
 ) -> Result<Json<ApiResponse<crate::services::deposit_service::DepositInfo>>> {
-    let user_address = "0x1234..."; // TODO: Extract from JWT
+    let user_address = require_user(&headers, &state).await?;
     
     let service = DepositService::new(state.db, state.config);
-    let deposit = service.create_qris(user_address, req.amount).await?;
+    let deposit = service.create_qris(&user_address, req.amount).await?;
     
     Ok(Json(ApiResponse::success(deposit)))
 }
@@ -49,12 +51,13 @@ pub async fn qris(
 /// POST /api/v1/deposit/card
 pub async fn card_payment(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CardPaymentRequest>,
 ) -> Result<Json<ApiResponse<crate::services::deposit_service::DepositInfo>>> {
-    let user_address = "0x1234..."; // TODO: Extract from JWT
+    let user_address = require_user(&headers, &state).await?;
     
     let service = DepositService::new(state.db, state.config);
-    let deposit = service.create_card_payment(user_address, req.amount, &req.currency).await?;
+    let deposit = service.create_card_payment(&user_address, req.amount, &req.currency).await?;
     
     Ok(Json(ApiResponse::success(deposit)))
 }

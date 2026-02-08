@@ -1,7 +1,7 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize;
 
-use super::AppState;
+use super::{AppState, require_user};
 use crate::{
     constants::{EPOCH_DURATION_SECONDS, POINTS_TO_CAREL_RATIO},
     error::Result,
@@ -64,17 +64,17 @@ pub struct RewardsAnalytics {
 /// GET /api/v1/portfolio/analytics
 pub async fn get_analytics(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<AnalyticsResponse>>> {
-    // TODO: Extract real user from JWT
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     let analytics = AnalyticsService::new(state.db.clone(), state.config.clone());
-    let pnl_24h = analytics.calculate_pnl(user_address, "24h").await?;
-    let pnl_7d = analytics.calculate_pnl(user_address, "7d").await?;
-    let pnl_30d = analytics.calculate_pnl(user_address, "30d").await?;
-    let pnl_all = analytics.calculate_pnl(user_address, "all_time").await?;
-    let allocation = analytics.get_allocation(user_address).await?;
-    let trading = analytics.get_trading_performance(user_address).await?;
+    let pnl_24h = analytics.calculate_pnl(&user_address, "24h").await?;
+    let pnl_7d = analytics.calculate_pnl(&user_address, "7d").await?;
+    let pnl_30d = analytics.calculate_pnl(&user_address, "30d").await?;
+    let pnl_all = analytics.calculate_pnl(&user_address, "all_time").await?;
+    let allocation = analytics.get_allocation(&user_address).await?;
+    let trading = analytics.get_trading_performance(&user_address).await?;
 
     // Current epoch (30 days window)
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
@@ -82,7 +82,7 @@ pub async fn get_analytics(
     // Explicit DB helper return type assumed: Result<Option<UserPoints>>
     let points: Option<UserPoints> = state
         .db
-        .get_user_points(user_address, current_epoch)
+        .get_user_points(&user_address, current_epoch)
         .await?;
     let total_points: Decimal = points
         .as_ref()

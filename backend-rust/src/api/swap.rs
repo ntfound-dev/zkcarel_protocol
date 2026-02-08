@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use crate::{
     constants::{token_address_for, DEX_EKUBO, DEX_HAIKO, POINTS_PER_USD_SWAP},
@@ -11,7 +11,7 @@ use crate::{
     // 1. IMPORT MODUL HASH AGAR TERPAKAI
     crypto::hash,
 };
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct ExecuteSwapRequest {
@@ -126,6 +126,7 @@ pub async fn get_quote(
 /// POST /api/v1/swap/execute
 pub async fn execute_swap(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<ExecuteSwapRequest>,
 ) -> Result<Json<ApiResponse<ExecuteSwapResponse>>> {
     // 1. VALIDASI DEADLINE
@@ -134,10 +135,10 @@ pub async fn execute_swap(
         return Err(AppError::BadRequest("Transaction deadline expired".to_string()));
     }
 
-    let user_address = "0x1234..."; // Placeholder
+    let user_address = require_user(&headers, &state).await?;
 
     // 2. LOGIKA RECIPIENT
-    let final_recipient = req.recipient.as_deref().unwrap_or(user_address);
+    let final_recipient = req.recipient.as_deref().unwrap_or(&user_address);
 
     let amount_in: f64 = req.amount.parse()
         .map_err(|_| AppError::BadRequest("Invalid amount".to_string()))?;
@@ -205,7 +206,7 @@ pub async fn execute_swap(
     let notification_service = NotificationService::new(state.db.clone(), state.config.clone());
     if let Err(e) = notification_service
         .send_notification(
-            user_address,
+            &user_address,
             NotificationType::SwapCompleted,
             "Swap completed".to_string(),
             format!(

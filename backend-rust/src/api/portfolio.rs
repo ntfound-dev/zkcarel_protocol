@@ -1,12 +1,15 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
+use chrono::TimeZone;
+use std::collections::HashMap;
+use rust_decimal::prelude::ToPrimitive;
 
 use crate::{
     error::Result,
-    models::ApiResponse,
+    models::{ApiResponse, PriceTick},
 };
 
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Serialize)]
 pub struct BalanceResponse {
@@ -41,56 +44,251 @@ pub struct HistoryQuery {
     pub period: String, // 1d, 7d, 30d, all
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PortfolioOHLCVQuery {
+    pub interval: String, // 1h, 4h, 1d, 1w
+    pub limit: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PortfolioOHLCVPoint {
+    pub timestamp: i64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PortfolioOHLCVResponse {
+    pub interval: String,
+    pub data: Vec<PortfolioOHLCVPoint>,
+}
+
+#[derive(sqlx::FromRow)]
+struct RawTokenBalance {
+    token: String,
+    amount: f64,
+}
+
+struct TokenSeries {
+    amount: f64,
+    ticks: HashMap<i64, PriceTick>,
+    last_close: Option<f64>,
+    fallback_price: f64,
+}
+
 fn total_value_usd(balances: &[TokenBalance]) -> f64 {
     balances.iter().map(|b| b.value_usd).sum()
 }
 
-fn points_count_for_period(period: &str) -> i64 {
+fn period_to_interval(period: &str) -> (&'static str, i64) {
     match period {
-        "1d" => 24,
-        "7d" => 7 * 24,
-        "30d" => 30,
-        _ => 30,
+        "1d" => ("1h", 24),
+        "7d" => ("1d", 7),
+        "30d" => ("1d", 30),
+        _ => ("1w", 26),
     }
+}
+
+fn fallback_price_for(token: &str) -> f64 {
+    match token.to_uppercase().as_str() {
+        "USDT" | "USDC" => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn decimal_to_f64(value: rust_decimal::Decimal) -> f64 {
+    value.to_f64().unwrap_or(0.0)
+}
+
+fn interval_seconds(interval: &str) -> i64 {
+    match interval {
+        "1h" => 3600,
+        "4h" => 14400,
+        "1d" => 86400,
+        "1w" => 604800,
+        _ => 3600,
+    }
+}
+
+fn clamp_ohlcv_limit(limit: Option<i32>) -> i64 {
+    limit.unwrap_or(24).clamp(2, 200) as i64
+}
+
+fn align_timestamp(timestamp: i64, interval: i64) -> i64 {
+    if interval <= 0 {
+        return timestamp;
+    }
+    timestamp - (timestamp % interval)
+}
+
+fn tick_prices(tick: &PriceTick) -> (f64, f64, f64, f64, f64) {
+    (
+        decimal_to_f64(tick.open),
+        decimal_to_f64(tick.high),
+        decimal_to_f64(tick.low),
+        decimal_to_f64(tick.close),
+        decimal_to_f64(tick.volume),
+    )
+}
+
+async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
+    let price: Option<f64> = sqlx::query_scalar(
+        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+    )
+    .bind(token)
+    .fetch_optional(state.db.pool())
+    .await?;
+
+    Ok(price.unwrap_or_else(|| fallback_price_for(token)))
+}
+
+async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64, f64)> {
+    let rows: Vec<f64> = sqlx::query_scalar(
+        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 2",
+    )
+    .bind(token)
+    .fetch_all(state.db.pool())
+    .await?;
+
+    let latest = rows.get(0).copied().unwrap_or_else(|| fallback_price_for(token));
+    let prev = rows.get(1).copied().unwrap_or(latest);
+    let change = if prev > 0.0 { ((latest - prev) / prev) * 100.0 } else { 0.0 };
+    Ok((latest, change))
+}
+
+async fn fetch_token_holdings(state: &AppState, user_address: &str) -> Result<Vec<RawTokenBalance>> {
+    let rows = sqlx::query_as::<_, RawTokenBalance>(
+        r#"
+        SELECT token, SUM(amount) as amount
+        FROM (
+            SELECT UPPER(token_out) as token, COALESCE(CAST(amount_out AS FLOAT), 0) as amount
+            FROM transactions
+            WHERE user_address = $1 AND token_out IS NOT NULL
+            UNION ALL
+            SELECT UPPER(token_in) as token, -COALESCE(CAST(amount_in AS FLOAT), 0) as amount
+            FROM transactions
+            WHERE user_address = $1 AND token_in IS NOT NULL
+        ) t
+        GROUP BY token
+        "#,
+    )
+    .bind(user_address)
+    .fetch_all(state.db.pool())
+    .await?;
+
+    Ok(rows)
+}
+
+async fn build_balances(state: &AppState, user_address: &str) -> Result<Vec<TokenBalance>> {
+    let rows = fetch_token_holdings(state, user_address).await?;
+    let mut balances = Vec::new();
+
+    for row in rows {
+        if row.amount <= 0.0 {
+            continue;
+        }
+        let (price, change) = latest_price_with_change(state, row.token.as_str()).await?;
+        let value_usd = row.amount * price;
+        balances.push(TokenBalance {
+            token: row.token,
+            amount: row.amount,
+            value_usd,
+            price,
+            change_24h: change,
+        });
+    }
+
+    Ok(balances)
+}
+
+async fn build_portfolio_ohlcv(
+    state: &AppState,
+    user_address: &str,
+    interval: &str,
+    limit: i64,
+) -> Result<Vec<PortfolioOHLCVPoint>> {
+    let holdings = fetch_token_holdings(state, user_address).await?;
+    if holdings.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let interval_secs = interval_seconds(interval);
+    let now_ts = align_timestamp(chrono::Utc::now().timestamp(), interval_secs);
+    let start_ts = now_ts - interval_secs * (limit - 1);
+    let from = chrono::Utc.timestamp_opt(start_ts, 0).single().unwrap_or_else(|| chrono::Utc::now());
+    let to = chrono::Utc.timestamp_opt(now_ts, 0).single().unwrap_or_else(|| chrono::Utc::now());
+
+    let mut series = Vec::new();
+    for holding in holdings {
+        let token = holding.token.clone();
+        let ticks = state
+            .db
+            .get_price_history(&token, interval, from, to)
+            .await?
+            .into_iter()
+            .map(|tick| (tick.timestamp.timestamp(), tick))
+            .collect::<HashMap<_, _>>();
+        let fallback = latest_price(state, token.as_str()).await?;
+
+        series.push(TokenSeries {
+            amount: holding.amount,
+            ticks,
+            last_close: None,
+            fallback_price: fallback,
+        });
+    }
+
+    let mut data = Vec::with_capacity(limit as usize);
+    for idx in 0..limit {
+        let ts = start_ts + interval_secs * idx;
+        let mut open_total = 0.0;
+        let mut high_total = 0.0;
+        let mut low_total = 0.0;
+        let mut close_total = 0.0;
+        let mut volume_total = 0.0;
+
+        for token_series in series.iter_mut() {
+            let (open, high, low, close, volume) = if let Some(tick) = token_series.ticks.get(&ts) {
+                let (o, h, l, c, v) = tick_prices(tick);
+                token_series.last_close = Some(c);
+                (o, h, l, c, v)
+            } else if let Some(last) = token_series.last_close {
+                (last, last, last, last, 0.0)
+            } else {
+                let fallback = token_series.fallback_price;
+                (fallback, fallback, fallback, fallback, 0.0)
+            };
+
+            open_total += token_series.amount * open;
+            high_total += token_series.amount * high;
+            low_total += token_series.amount * low;
+            close_total += token_series.amount * close;
+            volume_total += volume;
+        }
+
+        data.push(PortfolioOHLCVPoint {
+            timestamp: ts,
+            open: open_total,
+            high: high_total,
+            low: low_total,
+            close: close_total,
+            volume: volume_total,
+        });
+    }
+
+    Ok(data)
 }
 
 /// GET /api/v1/portfolio/balance
 pub async fn get_balance(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<BalanceResponse>>> {
-    // TODO: Extract user from JWT and get actual balances
-    
-    // Mock balances
-    let balances = vec![
-        TokenBalance {
-            token: "CAREL".to_string(),
-            amount: 15000.0,
-            value_usd: 7500.0,
-            price: 0.5,
-            change_24h: 5.2,
-        },
-        TokenBalance {
-            token: "BTC".to_string(),
-            amount: 0.15,
-            value_usd: 9750.0,
-            price: 65000.0,
-            change_24h: -1.3,
-        },
-        TokenBalance {
-            token: "ETH".to_string(),
-            amount: 2.5,
-            value_usd: 8750.0,
-            price: 3500.0,
-            change_24h: 2.1,
-        },
-        TokenBalance {
-            token: "USDT".to_string(),
-            amount: 5000.0,
-            value_usd: 5000.0,
-            price: 1.0,
-            change_24h: 0.0,
-        },
-    ];
+    let user_address = require_user(&headers, &state).await?;
+    let balances = build_balances(&state, &user_address).await?;
 
     let total_value_usd = total_value_usd(&balances);
 
@@ -104,34 +302,28 @@ pub async fn get_balance(
 
 /// GET /api/v1/portfolio/history
 pub async fn get_history(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<HistoryQuery>,
 ) -> Result<Json<ApiResponse<HistoryResponse>>> {
-    // TODO: Extract user and calculate actual history
+    let user_address = require_user(&headers, &state).await?;
+    let (interval, limit) = period_to_interval(&query.period);
+    let ohlcv = build_portfolio_ohlcv(&state, &user_address, interval, limit).await?;
+    let total_value = ohlcv
+        .iter()
+        .map(|point| HistoryPoint {
+            timestamp: point.timestamp,
+            value: point.close,
+        })
+        .collect::<Vec<_>>();
 
-    // Generate mock history data
-    let points_count = points_count_for_period(&query.period);
-
-    let mut total_value = Vec::new();
-    let base_value = 31000.0;
-    let now = chrono::Utc::now().timestamp();
-
-    for i in 0..points_count {
-        let timestamp = now - (points_count - i - 1) * 3600;
-        let variation = (rand::random::<f64>() - 0.5) * 2000.0;
-        let value = base_value + variation;
-        
-        total_value.push(HistoryPoint {
-            timestamp,
-            value,
-        });
-    }
-
-    // Calculate PnL
-    let initial_value = 28000.0;
-    let current_value = 31000.0;
-    let pnl = current_value - initial_value;
-    let pnl_percentage = (pnl / initial_value) * 100.0;
+    let (pnl, pnl_percentage) = if let (Some(first), Some(last)) = (ohlcv.first(), ohlcv.last()) {
+        let diff = last.close - first.close;
+        let pct = if first.close > 0.0 { (diff / first.close) * 100.0 } else { 0.0 };
+        (diff, pct)
+    } else {
+        (0.0, 0.0)
+    };
 
     let response = HistoryResponse {
         total_value,
@@ -140,6 +332,20 @@ pub async fn get_history(
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+/// GET /api/v1/portfolio/ohlcv
+pub async fn get_portfolio_ohlcv(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<PortfolioOHLCVQuery>,
+) -> Result<Json<ApiResponse<PortfolioOHLCVResponse>>> {
+    let user_address = require_user(&headers, &state).await?;
+    let interval = query.interval.clone();
+    let limit = clamp_ohlcv_limit(query.limit);
+    let data = build_portfolio_ohlcv(&state, &user_address, &interval, limit).await?;
+
+    Ok(Json(ApiResponse::success(PortfolioOHLCVResponse { interval, data })))
 }
 
 #[cfg(test)]
@@ -157,8 +363,22 @@ mod tests {
     }
 
     #[test]
-    fn points_count_for_period_defaults_to_30() {
-        // Memastikan periode tidak dikenal memakai default 30
-        assert_eq!(points_count_for_period("unknown"), 30);
+    fn period_to_interval_defaults_to_weekly() {
+        // Memastikan periode tidak dikenal memakai default 1w
+        let (interval, limit) = period_to_interval("unknown");
+        assert_eq!(interval, "1w");
+        assert_eq!(limit, 26);
+    }
+
+    #[test]
+    fn interval_seconds_defaults_to_hour() {
+        // Memastikan interval tidak dikenal memakai 1 jam
+        assert_eq!(interval_seconds("unknown"), 3600);
+    }
+
+    #[test]
+    fn align_timestamp_rounds_down() {
+        // Memastikan timestamp di-align ke interval
+        assert_eq!(align_timestamp(10005, 3600), 7200);
     }
 }

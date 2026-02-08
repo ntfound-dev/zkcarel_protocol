@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -7,7 +7,7 @@ use crate::{
     models::ApiResponse,
 };
 
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Serialize)]
 pub struct PointsResponse {
@@ -41,15 +41,15 @@ fn points_to_carel(points: f64) -> f64 {
 /// GET /api/v1/rewards/points
 pub async fn get_points(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<PointsResponse>>> {
-    // TODO: Extract user from JWT
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     // Get current epoch
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64; // ~30 days
 
     // Get user points
-    let points = state.db.get_user_points(user_address, current_epoch).await?
+    let points = state.db.get_user_points(&user_address, current_epoch).await?
         .unwrap_or_else(|| crate::models::UserPoints {
             user_address: user_address.to_string(),
             epoch: current_epoch,
@@ -83,16 +83,16 @@ pub async fn get_points(
 /// POST /api/v1/rewards/claim
 pub async fn claim_rewards(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<ClaimResponse>>> {
-    // TODO: Extract user from JWT
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     // Get previous epoch (finalized)
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
     let prev_epoch = current_epoch - 1;
 
     // Get user points from previous epoch
-    let points = state.db.get_user_points(user_address, prev_epoch).await?
+    let points = state.db.get_user_points(&user_address, prev_epoch).await?
         .ok_or_else(|| crate::error::AppError::NotFound("No rewards to claim".to_string()))?;
 
     // Check if finalized
@@ -127,11 +127,11 @@ pub async fn claim_rewards(
 
 /// POST /api/v1/rewards/convert
 pub async fn convert_to_carel(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<ConvertRequest>,
 ) -> Result<Json<ApiResponse<ClaimResponse>>> {
-    // TODO: Extract user from JWT
-    let _user_address = "0x1234...";
+    let _user_address = require_user(&headers, &state).await?;
 
     // Calculate CAREL amount
     let carel_amount = points_to_carel(req.points);

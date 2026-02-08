@@ -2,7 +2,7 @@ use axum::{
     extract::{State, Path},
     Json,
     response::IntoResponse,
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
 };
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
@@ -14,7 +14,7 @@ use crate::{
     utils::ensure_page_limit,
 };
 
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct HistoryQuery {
@@ -39,9 +39,10 @@ fn parse_dates(query: &HistoryQuery) -> (Option<DateTime<Utc>>, Option<DateTime<
 /// GET /api/v1/transactions/history
 pub async fn get_history(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<HistoryQuery>,
 ) -> Result<Json<ApiResponse<PaginatedResponse<Transaction>>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     let (from_date, to_date) = parse_dates(&query);
     let page = query.page.unwrap_or(1);
@@ -50,7 +51,7 @@ pub async fn get_history(
 
     let service = TransactionHistoryService::new(state.db);
     let history = service.get_user_history(
-        user_address,
+        &user_address,
         query.tx_type,
         from_date,
         to_date,
@@ -59,10 +60,10 @@ pub async fn get_history(
     ).await?;
 
     if page == 1 {
-        if let Ok(stats) = service.get_user_stats(user_address).await {
+        if let Ok(stats) = service.get_user_stats(&user_address).await {
             tracing::debug!("Transaction stats: {:?}", stats);
         }
-        if let Ok(recent) = service.get_recent_transactions(user_address).await {
+        if let Ok(recent) = service.get_recent_transactions(&user_address).await {
             tracing::debug!("Recent transaction sample count: {}", recent.len());
         }
     }
@@ -84,9 +85,10 @@ pub async fn get_details(
 /// POST /api/v1/transactions/export
 pub async fn export_csv(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(query): Json<HistoryQuery>,
 ) -> Result<impl IntoResponse> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     // Menggunakan helper parse_dates
     let (from_date, to_date) = parse_dates(&query);
@@ -97,7 +99,7 @@ pub async fn export_csv(
         query.tx_type, query.page, query.limit);
 
     let service = TransactionHistoryService::new(state.db);
-    let csv = service.export_to_csv(user_address, from_date, to_date).await?;
+    let csv = service.export_to_csv(&user_address, from_date, to_date).await?;
 
     Ok((
         StatusCode::OK,

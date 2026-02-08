@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -12,7 +12,7 @@ use crate::{
     crypto::hash,
 };
 
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct ExecuteBridgeRequest {
@@ -91,9 +91,10 @@ pub async fn get_bridge_quote(
 /// POST /api/v1/bridge/execute
 pub async fn execute_bridge(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<ExecuteBridgeRequest>,
 ) -> Result<Json<ApiResponse<ExecuteBridgeResponse>>> {
-    let user_address = "0x1234...";
+    let user_address = require_user(&headers, &state).await?;
 
     let amount: f64 = req.amount.parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
@@ -103,7 +104,7 @@ pub async fn execute_bridge(
     }
 
     // MENGGUNAKAN crypto::hash di sini agar warning di hash.rs hilang
-    let mut bridge_id = build_bridge_id(user_address, &req.from_chain, &req.to_chain, &req.amount);
+    let mut bridge_id = build_bridge_id(&user_address, &req.from_chain, &req.to_chain, &req.amount);
 
     let optimizer = RouteOptimizer::new(state.config.clone());
     let best_route = optimizer
