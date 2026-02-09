@@ -1,3 +1,7 @@
+/// @title ZkCarel Router
+/// @author CAREL Team
+/// @notice High-level router for swaps and bridge actions.
+/// @dev Applies fees, points, and optional MEV/private modes.
 #[contract]
 mod ZkCarelRouter {
     use starknet::ContractAddress;
@@ -7,8 +11,11 @@ mod ZkCarelRouter {
     use option::OptionTrait;
     use super::ICARELToken;
     use super::ITreasury;
-    use super::IZkCarelPoints;
     use super::IZkCarelNFT;
+    use crate::utils::price_oracle::{IPriceOracleDispatcher, IPriceOracleDispatcherTrait};
+    use core::num::traits::Zero;
+    use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
+    use crate::privacy::action_types::ACTION_SWAP;
 
     #[storage]
     struct Storage {
@@ -22,9 +29,13 @@ mod ZkCarelRouter {
         bridge_fee_bps: u64, // 40 = 0.4%
         mev_protection_fee_bps: u64, // 15 = 0.15%
         private_mode_fee_bps: u64, // 10 = 0.1%
+        price_oracle: ContractAddress,
+        oracle_asset_ids: LegacyMap<ContractAddress, felt252>,
+        oracle_decimals: LegacyMap<ContractAddress, u32>,
         approved_dexes: LegacyMap<ContractAddress, bool>,
         approved_bridges: LegacyMap<ContractAddress, bool>,
         route_cache: LegacyMap<felt252, Route>,
+        privacy_router: ContractAddress,
     }
 
     #[derive(Drop, Serde)]
@@ -101,6 +112,12 @@ mod ZkCarelRouter {
         fee_type: felt252,
     }
 
+    /// @notice Initializes the router.
+    /// @dev Sets owner, treasury, points, and NFT contracts plus fee defaults.
+    /// @param weth_address Wrapped ETH address.
+    /// @param treasury_address Treasury contract address.
+    /// @param points_contract_address Points contract address.
+    /// @param nft_contract_address NFT contract address.
     #[constructor]
     fn constructor(
         weth_address: ContractAddress,
@@ -118,8 +135,49 @@ mod ZkCarelRouter {
         storage.bridge_fee_bps.write(40); // 0.4%
         storage.mev_protection_fee_bps.write(15); // 0.15%
         storage.private_mode_fee_bps.write(10); // 0.1%
+        let zero: ContractAddress = 0.try_into().unwrap();
+        storage.price_oracle.write(zero);
+        storage.privacy_router.write(zero);
     }
 
+    /// @notice Sets privacy router address.
+    /// @dev Owner-only.
+    #[external(v0)]
+    fn set_privacy_router(router: ContractAddress) {
+        assert(get_caller_address() == storage.owner.read(), 'Unauthorized owner');
+        assert(!router.is_zero(), 'Privacy router required');
+        storage.privacy_router.write(router);
+    }
+
+    /// @notice Submits a private swap action proof.
+    /// @dev Routes proof through PrivacyRouter and ShieldedVault.
+    #[external(v0)]
+    fn submit_private_swap_action(
+        old_root: felt252,
+        new_root: felt252,
+        nullifiers: Span<felt252>,
+        commitments: Span<felt252>,
+        public_inputs: Span<felt252>,
+        proof: Span<felt252>
+    ) {
+        let router = storage.privacy_router.read();
+        assert(!router.is_zero(), 'Privacy router not set');
+        let dispatcher = IPrivacyRouterDispatcher { contract_address: router };
+        dispatcher.submit_action(
+            ACTION_SWAP,
+            old_root,
+            new_root,
+            nullifiers,
+            commitments,
+            public_inputs,
+            proof
+        );
+    }
+
+    /// @notice Executes a swap with optional private/MEV modes.
+    /// @dev Charges fees, routes via DEX, and credits points.
+    /// @param params Swap parameters.
+    /// @return amount_out Final output amount after fees and discounts.
     #[external(v0)]
     fn swap(params: SwapParams) -> u256 {
         // Cek deadline
@@ -157,10 +215,7 @@ mod ZkCarelRouter {
             treasury.collect_fee(fee_amount, fee_type);
         }
         
-        // Tambah points untuk user
-        let points_contract = IZkCarelPointsDispatcher { contract_address: storage.points_contract.read() };
-        let points_earned = (amount_out / 10**18) * 10; // $1 = 10 points
-        points_contract.add_points(user, points_earned, 'swap');
+        // Points are calculated off-chain from events.
         
         // Apply NFT discount jika ada
         let nft_contract = IZkCarelNFTDispatcher { contract_address: storage.nft_contract.read() };
@@ -208,6 +263,10 @@ mod ZkCarelRouter {
         final_amount_out
     }
 
+    /// @notice Initiates a bridge transfer.
+    /// @dev Charges fees, executes bridge, and credits points.
+    /// @param params Bridge parameters.
+    /// @return bridge_id Bridge tracking id.
     #[external(v0)]
     fn bridge(params: BridgeParams) -> felt252 {
         let user = get_caller_address();
@@ -235,10 +294,7 @@ mod ZkCarelRouter {
         // Execute bridge melalui provider
         let bridge_id = _execute_bridge(params.bridge_provider, params.token, amount_after_fee, params.target_chain_id, params.recipient);
         
-        // Tambah points untuk user
-        let points_contract = IZkCarelPointsDispatcher { contract_address: storage.points_contract.read() };
-        let points_earned = (amount_after_fee / 10**18) * 15; // $1 = 15 points
-        points_contract.add_points(user, points_earned, 'bridge');
+        // Points are calculated off-chain from events.
         
         let mut events = array![];
         events.append(Event::BridgeInitiated(BridgeInitiated {
@@ -263,6 +319,14 @@ mod ZkCarelRouter {
         bridge_id
     }
 
+    /// @notice Returns a swap quote and route data.
+    /// @dev Applies fee calculation and route selection.
+    /// @param from_token Input token address.
+    /// @param to_token Output token address.
+    /// @param amount_in Input amount.
+    /// @param use_private_mode Whether private mode fee applies.
+    /// @param use_mev_protection Whether MEV fee applies.
+    /// @return quote Tuple of expected output, fee, path, and dexes.
     #[external(v0)]
     fn get_quote(
         from_token: ContractAddress,
@@ -281,18 +345,30 @@ mod ZkCarelRouter {
         (route.expected_amount_out, fee_amount, route.path, route.dexes)
     }
 
+    /// @notice Adds a DEX to the approved list.
+    /// @dev Owner-only to control routing targets.
+    /// @param dex_address DEX contract address.
     #[external(v0)]
     fn add_dex(dex_address: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Ownable: caller is not owner');
         storage.approved_dexes.write(dex_address, true);
     }
 
+    /// @notice Adds a bridge to the approved list.
+    /// @dev Owner-only to control bridge targets.
+    /// @param bridge_address Bridge contract address.
     #[external(v0)]
     fn add_bridge(bridge_address: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Ownable: caller is not owner');
         storage.approved_bridges.write(bridge_address, true);
     }
 
+    /// @notice Updates router fee configuration.
+    /// @dev Owner-only to prevent unauthorized fee changes.
+    /// @param swap_fee Swap fee in bps.
+    /// @param bridge_fee Bridge fee in bps.
+    /// @param mev_fee MEV protection fee in bps.
+    /// @param private_fee Private mode fee in bps.
     #[external(v0)]
     fn set_fees(
         swap_fee: u64,
@@ -305,6 +381,27 @@ mod ZkCarelRouter {
         storage.bridge_fee_bps.write(bridge_fee);
         storage.mev_protection_fee_bps.write(mev_fee);
         storage.private_mode_fee_bps.write(private_fee);
+    }
+
+    /// @notice Sets the price oracle address.
+    /// @dev Owner-only to keep oracle trust boundaries.
+    /// @param oracle Price oracle contract address.
+    #[external(v0)]
+    fn set_price_oracle(oracle: ContractAddress) {
+        assert(get_caller_address() == storage.owner.read(), 'Ownable: caller is not owner');
+        storage.price_oracle.write(oracle);
+    }
+
+    /// @notice Sets oracle metadata for a token.
+    /// @dev Owner-only to map token to oracle asset id and decimals.
+    /// @param token Token address.
+    /// @param asset_id Oracle asset id.
+    /// @param decimals Token decimals.
+    #[external(v0)]
+    fn set_token_oracle_config(token: ContractAddress, asset_id: felt252, decimals: u32) {
+        assert(get_caller_address() == storage.owner.read(), 'Ownable: caller is not owner');
+        storage.oracle_asset_ids.write(token, asset_id);
+        storage.oracle_decimals.write(token, decimals);
     }
 
     fn _calculate_fee(
@@ -342,14 +439,12 @@ mod ZkCarelRouter {
         to_token: ContractAddress,
         amount: u256
     ) -> Route {
-        // Implementasi sederhana route finding
-        // Di production, gunakan algoritma yang lebih kompleks
-        
         let path = array![from_token, storage.weth.read(), to_token];
-        let dexes = array![ContractAddress::default()]; // Default DEX
-        
-        // Simulasi price (1:1 untuk simplicity)
-        let expected_amount_out = amount;
+        let zero: ContractAddress = 0.try_into().unwrap();
+        let dexes = array![zero]; // Default DEX
+
+        let expected_amount_out = _oracle_quote(from_token, to_token, amount);
+        assert(expected_amount_out > 0, 'Oracle quote unavailable');
         let fee_amount = (amount * 30.into()) / 10000; // 0.3%
         
         Route {
@@ -358,6 +453,51 @@ mod ZkCarelRouter {
             expected_amount_out: expected_amount_out,
             fee_amount: fee_amount,
         }
+    }
+
+    fn _oracle_quote(
+        from_token: ContractAddress,
+        to_token: ContractAddress,
+        amount: u256
+    ) -> u256 {
+        let oracle_address = storage.price_oracle.read();
+        let zero: ContractAddress = 0.try_into().unwrap();
+        if oracle_address == zero {
+            return 0;
+        }
+
+        let from_asset_id = storage.oracle_asset_ids.read(from_token);
+        let to_asset_id = storage.oracle_asset_ids.read(to_token);
+        if from_asset_id == 0 || to_asset_id == 0 {
+            return 0;
+        }
+
+        let from_decimals = storage.oracle_decimals.read(from_token);
+        let to_decimals = storage.oracle_decimals.read(to_token);
+
+        let oracle = IPriceOracleDispatcher { contract_address: oracle_address };
+        let value_usd = oracle.get_price_usd(from_token, from_asset_id, amount, from_decimals);
+        if value_usd == 0 {
+            return 0;
+        }
+
+        let to_price = oracle.get_price(to_token, to_asset_id);
+        if to_price == 0 {
+            return 0;
+        }
+
+        let scale = _pow10(to_decimals);
+        (value_usd * scale) / to_price
+    }
+
+    fn _pow10(decimals: u32) -> u256 {
+        let mut value: u256 = 1;
+        let mut i: u32 = 0;
+        while i < decimals {
+            value *= 10;
+            i += 1;
+        };
+        value
     }
 
     fn _execute_swap(route: Route, amount: u256, recipient: ContractAddress) -> u256 {

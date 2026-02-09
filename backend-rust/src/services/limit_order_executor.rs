@@ -1,4 +1,4 @@
-use crate::{config::Config, constants::{DEX_EKUBO, ORDER_EXECUTOR_INTERVAL_SECS}, db::Database, error::Result, models::LimitOrder};
+use crate::{config::Config, constants::{DEX_EKUBO, ORDER_EXECUTOR_INTERVAL_SECS, POINTS_PER_USD_SWAP}, db::Database, error::Result, models::{LimitOrder, Transaction}};
 use std::sync::Arc;
 use sqlx::Row; // Penting untuk .get()
 use rust_decimal::prelude::ToPrimitive; // Penting untuk f64 conversion
@@ -111,6 +111,9 @@ impl LimitOrderExecutor {
         let tx_hash = self.execute_swap_on_chain(order, &route).await?;
 
         let filled_amount = order.amount - order.filled;
+        let amount_in = filled_amount.to_f64().unwrap_or(0.0);
+        let _amount_out = (filled_amount * order.price).to_f64().unwrap_or(0.0);
+        let points = amount_in * POINTS_PER_USD_SWAP;
 
         self.db.fill_order(&order.order_id, filled_amount).await?;
 
@@ -122,9 +125,26 @@ impl LimitOrderExecutor {
         .bind("keeper")
         .bind(filled_amount)
         .bind(order.price)
-        .bind(tx_hash)
+        .bind(&tx_hash)
         .execute(self.db.pool())
         .await?;
+
+        let tx = Transaction {
+            tx_hash: tx_hash.clone(),
+            block_number: 0,
+            user_address: order.owner.clone(),
+            tx_type: "limit_order".to_string(),
+            token_in: Some(order.from_token.clone()),
+            token_out: Some(order.to_token.clone()),
+            amount_in: Some(filled_amount),
+            amount_out: Some(filled_amount * order.price),
+            usd_value: Some(rust_decimal::Decimal::from_f64_retain(amount_in).unwrap_or_default()),
+            fee_paid: None,
+            points_earned: Some(rust_decimal::Decimal::from_f64_retain(points).unwrap_or_default()),
+            timestamp: chrono::Utc::now(),
+            processed: false,
+        };
+        self.db.save_transaction(&tx).await?;
 
         tracing::info!(
             "Order {} filled: {} {} → {} {} at price {}",

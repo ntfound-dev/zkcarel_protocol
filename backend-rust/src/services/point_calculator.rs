@@ -17,17 +17,26 @@ use crate::{
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use sqlx::Row;
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::Decimal;
+use starknet_core::types::{Call, Felt};
+use starknet_core::utils::get_selector_from_name;
+use crate::services::onchain::{OnchainInvoker, parse_felt};
 
 /// Point Calculator - Calculates trading points with anti-wash trading detection
 pub struct PointCalculator {
     db: Database,
     config: Config,
+    onchain: Option<OnchainInvoker>,
 }
+
+const REFERRAL_MIN_POINTS: i64 = 100;
+const REFERRAL_BONUS_BPS: i64 = 1000; // 10%
 
 impl PointCalculator {
     pub fn new(db: Database, config: Config) -> Self {
-        Self { db, config }
+        let onchain = OnchainInvoker::from_config(&config).ok().flatten();
+        Self { db, config, onchain }
     }
 
     /// Start point calculation loop
@@ -79,14 +88,24 @@ impl PointCalculator {
             return Ok(());
         }
 
+        let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+        let prev_total: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2"
+        )
+        .bind(&tx.user_address)
+        .bind(current_epoch)
+        .fetch_optional(self.db.pool())
+        .await?
+        .unwrap_or(Decimal::ZERO);
+
         let points = match tx.tx_type.as_str() {
             "swap" => self.calculate_swap_points(tx).await?,
+            "limit_order" => self.calculate_swap_points(tx).await?,
             "bridge" => self.calculate_bridge_points(tx).await?,
             "stake" => self.calculate_stake_points(tx).await?,
             _ => 0.0,
         };
 
-        let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
         let points_decimal = rust_decimal::Decimal::from_f64_retain(points).unwrap_or_default();
         
         match tx.tx_type.as_str() {
@@ -122,6 +141,17 @@ impl PointCalculator {
 
         // Apply multipliers after point updates
         self.apply_multipliers(&tx.user_address, current_epoch).await?;
+
+        let new_total: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2"
+        )
+        .bind(&tx.user_address)
+        .bind(current_epoch)
+        .fetch_one(self.db.pool())
+        .await?;
+
+        self.apply_referral_bonus(&tx.user_address, current_epoch, prev_total, new_total)
+            .await?;
 
         sqlx::query("UPDATE transactions SET points_earned = $1, processed = true WHERE tx_hash = $2")
             .bind(points_decimal)
@@ -215,6 +245,117 @@ impl PointCalculator {
 
         Ok(())
     }
+
+    async fn apply_referral_bonus(
+        &self,
+        referee_address: &str,
+        epoch: i64,
+        prev_total: Decimal,
+        new_total: Decimal,
+    ) -> Result<()> {
+        if new_total <= prev_total {
+            return Ok(());
+        }
+
+        let referrer: Option<String> = sqlx::query_scalar(
+            "SELECT referrer FROM users WHERE address = $1"
+        )
+        .bind(referee_address)
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        let Some(referrer) = referrer else {
+            return Ok(());
+        };
+        if referrer.trim().is_empty() {
+            return Ok(());
+        }
+
+        let min_points = Decimal::from_i64(REFERRAL_MIN_POINTS).unwrap_or(Decimal::ZERO);
+        if new_total < min_points {
+            return Ok(());
+        }
+
+        let delta = new_total - prev_total;
+        let bonus = delta * Decimal::from_i64(REFERRAL_BONUS_BPS).unwrap_or(Decimal::ZERO) / Decimal::new(10000, 0);
+        if bonus <= Decimal::ZERO {
+            return Ok(());
+        }
+
+        self.db.add_referral_points(&referrer, epoch, bonus).await?;
+        self.apply_multipliers(&referrer, epoch).await?;
+
+        if let Err(err) = self.sync_referral_onchain(epoch, referee_address, new_total).await {
+            tracing::warn!(
+                "Failed to sync referral onchain: referee={}, epoch={}, error={}",
+                referee_address,
+                epoch,
+                err
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn sync_referral_onchain(
+        &self,
+        epoch: i64,
+        referee_address: &str,
+        total_points: Decimal,
+    ) -> Result<()> {
+        let referral_contract = match &self.config.referral_system_address {
+            Some(addr) if !addr.trim().is_empty() => addr,
+            _ => return Ok(()),
+        };
+        let Some(invoker) = &self.onchain else {
+            return Ok(());
+        };
+
+        let points_u128 = total_points.trunc().to_u128().unwrap_or(0);
+        if points_u128 == 0 {
+            return Ok(());
+        }
+
+        let call = build_referral_call(
+            referral_contract,
+            epoch as u64,
+            referee_address,
+            points_u128,
+        )?;
+
+        let tx_hash = invoker.invoke(call).await?;
+        tracing::info!(
+            "Referral points synced onchain: referee={}, epoch={}, tx={}",
+            referee_address,
+            epoch,
+            tx_hash
+        );
+
+        Ok(())
+    }
+}
+
+ 
+
+fn build_referral_call(
+    contract: &str,
+    epoch: u64,
+    referee: &str,
+    total_points: u128,
+) -> Result<Call> {
+    let to = parse_felt(contract)?;
+    let selector = get_selector_from_name("record_referee_points")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let referee_felt = parse_felt(referee)?;
+
+    let calldata = vec![
+        Felt::from(epoch as u128),
+        referee_felt,
+        Felt::from(total_points),
+        Felt::from(0_u128),
+    ];
+
+    Ok(Call { to, selector, calldata })
 }
 
 fn staking_multiplier_for(stake_amount: f64) -> f64 {

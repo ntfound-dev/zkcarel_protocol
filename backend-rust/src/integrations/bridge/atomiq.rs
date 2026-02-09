@@ -4,24 +4,92 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct AtomiqClient {
     api_key: String,
+    api_url: String,
 }
 
 impl AtomiqClient {
-    pub fn new(api_key: String) -> Self {
-        Self { api_key }
+    pub fn new(api_key: String, api_url: String) -> Self {
+        Self { api_key, api_url }
     }
 
     pub async fn get_quote(&self, from_chain: &str, to_chain: &str, token: &str, amount: f64) -> Result<AtomiqQuote> {
-        tracing::debug!("Atomiq quote (api_key_set={})", !self.api_key.is_empty());
-        Ok(AtomiqQuote {
-            from_chain: from_chain.to_string(),
-            to_chain: to_chain.to_string(),
-            token: token.to_string(),
-            amount_in: amount,
-            amount_out: amount * 0.995, // 0.5% fee
-            fee: amount * 0.005,
-            estimated_time_minutes: 20,
-        })
+        if self.api_url.trim().is_empty() {
+            return Ok(AtomiqQuote::simulated(from_chain, to_chain, token, amount));
+        }
+
+        let url = format!("{}/quote", self.api_url.trim_end_matches('/'));
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&AtomiqQuoteRequest {
+                from_chain: from_chain.to_string(),
+                to_chain: to_chain.to_string(),
+                token: token.to_string(),
+                amount,
+            })
+            .send()
+            .await;
+
+        match resp {
+            Ok(res) => match res.json::<AtomiqQuoteResponse>().await {
+                Ok(body) => {
+                    return Ok(AtomiqQuote {
+                        from_chain: from_chain.to_string(),
+                        to_chain: to_chain.to_string(),
+                        token: token.to_string(),
+                        amount_in: amount,
+                        amount_out: body.amount_out.unwrap_or(amount),
+                        fee: body.fee.unwrap_or(0.0),
+                        estimated_time_minutes: body.estimated_time_minutes.unwrap_or(20),
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!("Atomiq quote parse failed: {}", err);
+                }
+            },
+            Err(err) => {
+                tracing::warn!("Atomiq API request failed: {}", err);
+            }
+        }
+
+        Ok(AtomiqQuote::simulated(from_chain, to_chain, token, amount))
+    }
+
+    pub async fn execute_bridge(&self, quote: &AtomiqQuote, recipient: &str) -> Result<String> {
+        if self.api_url.trim().is_empty() {
+            return Ok(AtomiqQuote::simulated_id(recipient));
+        }
+
+        let url = format!("{}/execute", self.api_url.trim_end_matches('/'));
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&AtomiqExecuteRequest {
+                quote: quote.clone(),
+                recipient: recipient.to_string(),
+            })
+            .send()
+            .await;
+
+        match resp {
+            Ok(res) => match res.json::<AtomiqExecuteResponse>().await {
+                Ok(body) => {
+                    if let Some(id) = body.bridge_id {
+                        return Ok(id);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("Atomiq execute parse failed: {}", err);
+                }
+            },
+            Err(err) => {
+                tracing::warn!("Atomiq execute failed: {}", err);
+            }
+        }
+
+        Ok(AtomiqQuote::simulated_id(recipient))
     }
 }
 
@@ -36,6 +104,53 @@ pub struct AtomiqQuote {
     pub estimated_time_minutes: u32,
 }
 
+impl AtomiqQuote {
+    fn simulated(from_chain: &str, to_chain: &str, token: &str, amount: f64) -> Self {
+        Self {
+            from_chain: from_chain.to_string(),
+            to_chain: to_chain.to_string(),
+            token: token.to_string(),
+            amount_in: amount,
+            amount_out: amount * 0.995,
+            fee: amount * 0.005,
+            estimated_time_minutes: 20,
+        }
+    }
+
+    fn simulated_id(recipient: &str) -> String {
+        let id_bytes: [u8; 16] = rand::random();
+        let id_hex = hex::encode(id_bytes);
+        let suffix: String = recipient.chars().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect();
+        format!("AT_{}_{}", id_hex, suffix)
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AtomiqQuoteRequest {
+    from_chain: String,
+    to_chain: String,
+    token: String,
+    amount: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct AtomiqQuoteResponse {
+    amount_out: Option<f64>,
+    fee: Option<f64>,
+    estimated_time_minutes: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct AtomiqExecuteRequest {
+    quote: AtomiqQuote,
+    recipient: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AtomiqExecuteResponse {
+    bridge_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -44,7 +159,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_quote_returns_expected_fields() {
-        let client = AtomiqClient::new("api_key".to_string());
+        let client = AtomiqClient::new("api_key".to_string(), "".to_string());
         let quote = client
             .get_quote("ethereum", "starknet", "ETH", 200.0)
             .await

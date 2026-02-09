@@ -22,6 +22,11 @@ pub mod webhooks;
 pub mod ai;
 pub mod deposit;
 pub mod market;
+pub mod privacy;
+pub mod private_btc_swap;
+pub mod dark_pool;
+pub mod private_payments;
+pub mod anonymous_credentials;
 
 use axum::http::{header::AUTHORIZATION, HeaderMap};
 use crate::error::{AppError, Result};

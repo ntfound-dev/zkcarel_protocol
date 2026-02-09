@@ -1,6 +1,38 @@
+use core::traits::TryInto;
+use starknet::ContractAddress;
+use snforge_std::{
+    declare, ContractClassTrait, DeclareResultTrait,
+    start_cheat_caller_address, stop_cheat_caller_address,
+    start_cheat_block_timestamp
+};
+
 // Import dispatcher and structs from the project's namespace
 // Replace 'smartcontract' with the actual [package] name in your Scarb.toml
-use smartcontract::governance::timelock::{ITimelockDispatcher, ITimelockDispatcherTrait, QueuedTransaction};
+#[starknet::interface]
+pub trait ITargetMock<TContractState> {
+    fn execute(ref self: TContractState) -> Span<felt252>;
+}
+
+use smartcontract::governance::timelock::{ITimelockDispatcher, ITimelockDispatcherTrait};
+
+#[starknet::contract]
+mod TargetMock {
+    #[storage]
+    struct Storage {}
+
+    #[abi(embed_v0)]
+    impl TargetMockImpl of super::ITargetMock<ContractState> {
+        fn execute(ref self: ContractState) -> Span<felt252> {
+            array![].span()
+        }
+    }
+}
+
+fn deploy_target() -> ContractAddress {
+    let contract = declare("TargetMock").unwrap().contract_class();
+    let (addr, _) = contract.deploy(@array![]).unwrap();
+    addr
+}
 
 /// Helper to deploy Timelock
 fn deploy_timelock(admin: ContractAddress, min_delay: u64) -> ITimelockDispatcher {
@@ -25,7 +57,8 @@ fn test_queue_transaction_success() {
     let eta = 200000_u64; // Sufficiently in the future (timestamp 0 + 200k)
 
     start_cheat_caller_address(dispatcher.contract_address, admin);
-    let tx_id = dispatcher.queue_transaction(target, 0, calldata, eta);
+    let selector = selector!("execute");
+    let tx_id = dispatcher.queue_transaction(target, selector, 0, calldata, eta);
     stop_cheat_caller_address(dispatcher.contract_address);
 
     let tx = dispatcher.get_transaction(tx_id);
@@ -41,7 +74,10 @@ fn test_queue_fails_below_min_delay() {
     let dispatcher = deploy_timelock(admin, min_delay);
     
     // ETA is only 50 seconds in the future, but min_delay is 100
-    dispatcher.queue_transaction(0x456.try_into().unwrap(), 0, array![].span(), 50);
+    start_cheat_caller_address(dispatcher.contract_address, admin);
+    let selector = selector!("execute");
+    dispatcher.queue_transaction(0x456.try_into().unwrap(), selector, 0, array![].span(), 50);
+    stop_cheat_caller_address(dispatcher.contract_address);
 }
 
 #[test]
@@ -50,17 +86,18 @@ fn test_execute_after_delay() {
     let min_delay = 100_u64;
     let dispatcher = deploy_timelock(admin, min_delay);
     
-    let target: ContractAddress = 0x456.try_into().unwrap();
+    let target: ContractAddress = deploy_target();
     let calldata: Span<felt252> = array![].span();
     let eta = 150_u64;
 
     start_cheat_caller_address(dispatcher.contract_address, admin);
-    let tx_id = dispatcher.queue_transaction(target, 0, calldata, eta);
+    let selector = selector!("execute");
+    let tx_id = dispatcher.queue_transaction(target, selector, 0, calldata, eta);
 
     // Warp time to eta
     start_cheat_block_timestamp(dispatcher.contract_address, eta);
     
-    dispatcher.execute_transaction(target, 0, calldata, eta);
+    dispatcher.execute_transaction(target, selector, 0, calldata, eta);
     
     let tx = dispatcher.get_transaction(tx_id);
     assert!(tx.executed);
@@ -78,10 +115,11 @@ fn test_execute_fails_too_early() {
     let eta = 150_u64;
 
     start_cheat_caller_address(dispatcher.contract_address, admin);
-    dispatcher.queue_transaction(target, 0, calldata, eta);
+    let selector = selector!("execute");
+    dispatcher.queue_transaction(target, selector, 0, calldata, eta);
     
     // Current timestamp is 0, eta is 150. Execution should fail.
-    dispatcher.execute_transaction(target, 0, calldata, eta);
+    dispatcher.execute_transaction(target, selector, 0, calldata, eta);
 }
 
 #[test]
@@ -93,7 +131,8 @@ fn test_cancel_by_authorized_proposer() {
     let eta = 150_u64;
 
     start_cheat_caller_address(dispatcher.contract_address, admin);
-    let tx_id = dispatcher.queue_transaction(target, 0, array![].span(), eta);
+    let selector = selector!("execute");
+    let tx_id = dispatcher.queue_transaction(target, selector, 0, array![].span(), eta);
     
     dispatcher.cancel_transaction(tx_id);
     

@@ -34,12 +34,12 @@ pub const MULTIPLIER_TIER_3: f64 = 1.5;   // 50k - 100k CAREL
 pub const MULTIPLIER_TIER_4: f64 = 2.0;   // 100k+ CAREL
 
 // NFT discount tiers
-pub const NFT_TIER_1_DISCOUNT: f64 = 5.0;   // 5%
-pub const NFT_TIER_2_DISCOUNT: f64 = 10.0;  // 10%
-pub const NFT_TIER_3_DISCOUNT: f64 = 15.0;  // 15%
-pub const NFT_TIER_4_DISCOUNT: f64 = 20.0;  // 20%
-pub const NFT_TIER_5_DISCOUNT: f64 = 30.0;  // 30%
-pub const NFT_TIER_6_DISCOUNT: f64 = 50.0;  // 50%
+pub const NFT_TIER_1_DISCOUNT: f64 = 5.0;   // Bronze
+pub const NFT_TIER_2_DISCOUNT: f64 = 10.0;  // Silver
+pub const NFT_TIER_3_DISCOUNT: f64 = 25.0;  // Gold
+pub const NFT_TIER_4_DISCOUNT: f64 = 35.0;  // Platinum
+pub const NFT_TIER_5_DISCOUNT: f64 = 50.0;  // Onyx
+pub const NFT_TIER_6_DISCOUNT: f64 = 50.0;  // reserved
 
 // Epoch configuration
 pub const EPOCH_DURATION_SECONDS: i64 = 2592000; // 30 days
@@ -66,6 +66,7 @@ pub const GAS_PRICE_INSTANT: f64 = 0.005;
 pub const BRIDGE_LAYERSWAP: &str = "LayerSwap";
 pub const BRIDGE_ATOMIQ: &str = "Atomiq";
 pub const BRIDGE_STARKGATE: &str = "StarkGate";
+pub const BRIDGE_GARDEN: &str = "Garden";
 
 // DEX providers
 pub const DEX_EKUBO: &str = "Ekubo";

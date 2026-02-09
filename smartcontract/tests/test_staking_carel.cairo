@@ -111,7 +111,7 @@ fn test_rewards_accrual_after_one_year() {
     let one_year_later = start_time + 31536000;
     start_cheat_block_timestamp(staking.contract_address, one_year_later);
 
-    let expected_rewards = 2000 * one_carel;
+    let expected_rewards = 1500 * one_carel;
     let actual_rewards = staking.calculate_rewards(user);
     
     assert!(actual_rewards == expected_rewards, "Reward mismatch");

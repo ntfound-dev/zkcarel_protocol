@@ -1,30 +1,55 @@
-use crate::{config::Config, constants::POINTS_TO_CAREL_RATIO, db::Database, error::Result};
-use sha3::{Digest, Keccak256};
+use crate::{config::Config, db::Database, error::Result};
+use starknet_crypto::{Felt, poseidon_hash_many};
 use sqlx::Row;
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::Decimal;
 
-fn create_leaf_hash(address: &str, amount: f64) -> Vec<u8> {
-    let mut hasher = Keccak256::new();
-    hasher.update(address.as_bytes());
-    hasher.update(amount.to_string().as_bytes());
-    hasher.finalize().to_vec()
+const ONE_CAREL_WEI: i128 = 1_000_000_000_000_000_000;
+const TOTAL_SUPPLY_CAREL: i64 = 1_000_000_000;
+const ECOSYSTEM_BPS: i64 = 4000;
+const BPS_DENOM: i64 = 10000;
+const ECOSYSTEM_MONTHS: i64 = 36;
+
+fn monthly_ecosystem_pool() -> Decimal {
+    let total_supply = Decimal::from_i64(TOTAL_SUPPLY_CAREL).unwrap();
+    let bps = Decimal::from_i64(ECOSYSTEM_BPS).unwrap();
+    let denom = Decimal::from_i64(BPS_DENOM).unwrap();
+    let months = Decimal::from_i64(ECOSYSTEM_MONTHS).unwrap();
+    total_supply * bps / denom / months
 }
 
-fn hash_pair_sorted(left: &[u8], right: &[u8]) -> Vec<u8> {
-    let mut hasher = Keccak256::new();
+fn carel_to_wei(carel_amount: Decimal) -> u128 {
+    let wei = carel_amount * Decimal::from_i128(ONE_CAREL_WEI).unwrap();
+    wei.trunc().to_u128().unwrap_or(0)
+}
 
-    if left <= right {
-        hasher.update(left);
-        hasher.update(right);
+fn felt_from_address(address: &str) -> Result<Felt> {
+    let addr = address.trim();
+    let normalized = if addr.starts_with("0x") {
+        addr.to_string()
     } else {
-        hasher.update(right);
-        hasher.update(left);
-    }
-
-    hasher.finalize().to_vec()
+        format!("0x{addr}")
+    };
+    Ok(Felt::from_hex(&normalized).map_err(|e| crate::error::AppError::Internal(format!("Invalid address: {}", e)))?)
 }
 
-fn build_merkle_tree_from_leaves(mut leaves: Vec<Vec<u8>>) -> Result<MerkleTree> {
+fn create_leaf_hash(address: &str, amount_wei: u128, epoch: i64) -> Result<Felt> {
+    let user = felt_from_address(address)?;
+    let amount_low = Felt::from(amount_wei);
+    let amount_high = Felt::from(0_u128);
+    let epoch_felt = Felt::from(epoch as u128);
+    Ok(poseidon_hash_many(&[user, amount_low, amount_high, epoch_felt]))
+}
+
+fn hash_pair_sorted(left: Felt, right: Felt) -> Felt {
+    if left <= right {
+        poseidon_hash_many(&[left, right])
+    } else {
+        poseidon_hash_many(&[right, left])
+    }
+}
+
+fn build_merkle_tree_from_leaves(mut leaves: Vec<Felt>) -> Result<MerkleTree> {
     if leaves.is_empty() {
         return Err(crate::error::AppError::BadRequest(
             "Cannot build tree with no leaves".to_string(),
@@ -34,15 +59,15 @@ fn build_merkle_tree_from_leaves(mut leaves: Vec<Vec<u8>>) -> Result<MerkleTree>
     leaves.sort();
 
     let mut current_level = leaves.clone();
-    let mut all_levels = vec![current_level.clone()];
+    let mut all_levels: Vec<Vec<Felt>> = vec![current_level.clone()];
 
     while current_level.len() > 1 {
         let mut next_level = Vec::new();
 
         for i in (0..current_level.len()).step_by(2) {
-            let left = &current_level[i];
+            let left = current_level[i];
             let right = if i + 1 < current_level.len() {
-                &current_level[i + 1]
+                current_level[i + 1]
             } else {
                 left
             };
@@ -55,7 +80,7 @@ fn build_merkle_tree_from_leaves(mut leaves: Vec<Vec<u8>>) -> Result<MerkleTree>
         current_level = next_level;
     }
 
-    let root = current_level[0].clone();
+    let root = current_level[0];
 
     Ok(MerkleTree {
         root,
@@ -64,11 +89,11 @@ fn build_merkle_tree_from_leaves(mut leaves: Vec<Vec<u8>>) -> Result<MerkleTree>
     })
 }
 
-fn verify_merkle_proof(root: &[u8], leaf: &[u8], proof: &[Vec<u8>]) -> bool {
-    let mut current_hash = leaf.to_vec();
+fn verify_merkle_proof(root: Felt, leaf: Felt, proof: &[Felt]) -> bool {
+    let mut current_hash = leaf;
 
     for sibling in proof {
-        current_hash = hash_pair_sorted(&current_hash, sibling);
+        current_hash = hash_pair_sorted(current_hash, *sibling);
     }
 
     current_hash == root
@@ -106,15 +131,31 @@ impl MerkleGenerator {
             ));
         }
 
-        // Create leaves: hash(address, amount)
-        let mut leaves = Vec::new();
+        // Calculate total points for proportional distribution
+        let mut total_points_dec = rust_decimal::Decimal::ZERO;
+        for row in &rows {
+            let points: rust_decimal::Decimal = row.get("total_points");
+            total_points_dec += points;
+        }
+        if total_points_dec == Decimal::ZERO {
+            return Err(crate::error::AppError::NotFound(
+                "Total points is zero".to_string(),
+            ));
+        }
+
+        let monthly_pool = monthly_ecosystem_pool();
+
+        // Create leaves: poseidon(user, amount_wei, epoch)
+        let mut leaves: Vec<Felt> = Vec::new();
         for row in &rows {
             let address: String = row.get("user_address");
             let points: rust_decimal::Decimal = row.get("total_points");
             
-            // Konversi Decimal ke f64 dengan lebih aman
-            let amount_carel = points.to_f64().unwrap_or(0.0) * POINTS_TO_CAREL_RATIO;
-            let leaf = self.create_leaf(&address, amount_carel);
+            let share = points / total_points_dec;
+            let amount_carel = share * monthly_pool;
+            let amount_wei = carel_to_wei(amount_carel);
+
+            let leaf = self.create_leaf(&address, amount_wei, epoch)?;
             leaves.push(leaf);
         }
 
@@ -125,21 +166,28 @@ impl MerkleGenerator {
             "Merkle tree generated for epoch {}: {} users, root: {}",
             epoch,
             rows.len(),
-            hex::encode(&tree.root)
+            tree.root.to_fixed_hex_string()
         );
 
         Ok(tree)
     }
 
-    /// Create a leaf node: keccak256(address + keccak256(amount))
-    /// Catatan: Menggunakan string f64 bisa berisiko presisi di smart contract, 
-    /// pertimbangkan menggunakan format integer/wei di masa depan.
-    fn create_leaf(&self, address: &str, amount: f64) -> Vec<u8> {
-        create_leaf_hash(address, amount)
+    pub fn calculate_reward_amount_wei(&self, user_points: Decimal, total_points: Decimal) -> u128 {
+        if total_points == Decimal::ZERO {
+            return 0;
+        }
+        let share = user_points / total_points;
+        let amount_carel = share * monthly_ecosystem_pool();
+        carel_to_wei(amount_carel)
+    }
+
+    /// Create a leaf node: poseidon(user, amount_wei, epoch)
+    fn create_leaf(&self, address: &str, amount_wei: u128, epoch: i64) -> Result<Felt> {
+        create_leaf_hash(address, amount_wei, epoch)
     }
 
     /// Build merkle tree from leaves
-    fn build_merkle_tree(&self, leaves: Vec<Vec<u8>>) -> Result<MerkleTree> {
+    fn build_merkle_tree(&self, leaves: Vec<Felt>) -> Result<MerkleTree> {
         build_merkle_tree_from_leaves(leaves)
     }
 
@@ -147,9 +195,10 @@ impl MerkleGenerator {
         &self,
         tree: &MerkleTree,
         user_address: &str,
-        amount: f64,
-    ) -> Result<Vec<Vec<u8>>> {
-        let leaf = self.create_leaf(user_address, amount);
+        amount_wei: u128,
+        epoch: i64,
+    ) -> Result<Vec<Felt>> {
+        let leaf = self.create_leaf(user_address, amount_wei, epoch)?;
 
         let leaf_index = tree
             .leaves
@@ -159,29 +208,29 @@ impl MerkleGenerator {
                 crate::error::AppError::NotFound("User not found in tree".to_string())
             })?;
 
-        let mut proof = Vec::new();
+        let mut proof: Vec<Felt> = Vec::new();
         let mut index = leaf_index;
 
         for level in &tree.levels[..tree.levels.len() - 1] {
             let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
 
             if sibling_index < level.len() {
-                proof.push(level[sibling_index].clone());
+                proof.push(level[sibling_index]);
             }
 
             index /= 2;
         }
 
-        let _ = self.verify_proof(&tree.root, &leaf, &proof);
+        let _ = self.verify_proof(tree.root, leaf, &proof);
         Ok(proof)
     }
 
-    pub fn verify_proof(&self, root: &[u8], leaf: &[u8], proof: &[Vec<u8>]) -> bool {
+    pub fn verify_proof(&self, root: Felt, leaf: Felt, proof: &[Felt]) -> bool {
         verify_merkle_proof(root, leaf, proof)
     }
 
-    pub async fn save_merkle_root(&self, epoch: i64, root: &[u8]) -> Result<()> {
-        let root_hex = hex::encode(root);
+    pub async fn save_merkle_root(&self, epoch: i64, root: Felt) -> Result<()> {
+        let root_hex = root.to_fixed_hex_string();
 
         sqlx::query(
             "INSERT INTO merkle_roots (epoch, root, created_at)
@@ -197,14 +246,14 @@ impl MerkleGenerator {
         Ok(())
     }
 
-    pub async fn get_merkle_root(&self, epoch: i64) -> Result<Vec<u8>> {
+    pub async fn get_merkle_root(&self, epoch: i64) -> Result<Felt> {
         let row = sqlx::query("SELECT root FROM merkle_roots WHERE epoch = $1")
             .bind(epoch)
             .fetch_one(self.db.pool())
             .await?;
 
         let root_str: String = row.get("root");
-        let root = hex::decode(root_str)
+        let root = Felt::from_hex(&root_str)
             .map_err(|e| crate::error::AppError::Internal(format!("Invalid hex: {}", e)))?;
 
         Ok(root)
@@ -213,9 +262,9 @@ impl MerkleGenerator {
 
 #[derive(Debug, Clone)]
 pub struct MerkleTree {
-    pub root: Vec<u8>,
-    pub leaves: Vec<Vec<u8>>,
-    pub levels: Vec<Vec<Vec<u8>>>,
+    pub root: Felt,
+    pub leaves: Vec<Felt>,
+    pub levels: Vec<Vec<Felt>>,
 }
 
 #[cfg(test)]
@@ -225,8 +274,8 @@ mod tests {
     #[test]
     fn create_leaf_hash_is_deterministic() {
         // Memastikan hash leaf sama untuk input yang sama
-        let a = create_leaf_hash("0xabc", 1.5);
-        let b = create_leaf_hash("0xabc", 1.5);
+        let a = create_leaf_hash("0xabc", 150_u128, 1).unwrap();
+        let b = create_leaf_hash("0xabc", 150_u128, 1).unwrap();
         assert_eq!(a, b);
     }
 
@@ -240,11 +289,11 @@ mod tests {
     #[test]
     fn verify_merkle_proof_valid_for_two_leaves() {
         // Memastikan proof valid untuk tree sederhana
-        let leaf_a = create_leaf_hash("0x1", 1.0);
-        let leaf_b = create_leaf_hash("0x2", 2.0);
+        let leaf_a = create_leaf_hash("0x1", 100_u128, 1).unwrap();
+        let leaf_b = create_leaf_hash("0x2", 200_u128, 1).unwrap();
         let tree = build_merkle_tree_from_leaves(vec![leaf_a.clone(), leaf_b.clone()])
             .expect("tree harus dibuat");
         let proof = vec![leaf_b.clone()];
-        assert!(verify_merkle_proof(&tree.root, &leaf_a, &proof));
+        assert!(verify_merkle_proof(tree.root, leaf_a, &proof));
     }
 }

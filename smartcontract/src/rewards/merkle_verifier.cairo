@@ -1,7 +1,17 @@
 use starknet::ContractAddress;
 
+/// @title Merkle Verifier Interface
+/// @author CAREL Team
+/// @notice Defines Merkle proof verification helpers for rewards.
+/// @dev Uses Poseidon hashing for deterministic proofs.
 #[starknet::interface]
 pub trait IMerkleVerifier<TContractState> {
+    /// @notice Verifies a Merkle proof against a root.
+    /// @dev Recomputes the root from the leaf and proof.
+    /// @param leaf Leaf hash.
+    /// @param proof Merkle proof array.
+    /// @param root Expected Merkle root.
+    /// @return valid True if proof is valid.
     fn verify_proof(
         self: @TContractState, 
         leaf: felt252, 
@@ -9,6 +19,12 @@ pub trait IMerkleVerifier<TContractState> {
         root: felt252
     ) -> bool;
 
+    /// @notice Hashes a reward leaf from user data.
+    /// @dev Ensures a deterministic leaf for reward claims.
+    /// @param user User address.
+    /// @param amount Claimable amount.
+    /// @param epoch Reward epoch.
+    /// @return leaf Leaf hash.
     fn hash_leaf(
         self: @TContractState, 
         user: ContractAddress, 
@@ -16,6 +32,11 @@ pub trait IMerkleVerifier<TContractState> {
         epoch: u64
     ) -> felt252;
 
+    /// @notice Hashes a pair of nodes for Merkle tree construction.
+    /// @dev Orders pair to keep hashes deterministic.
+    /// @param left Left node hash.
+    /// @param right Right node hash.
+    /// @return hash Parent hash.
     fn hash_pair(
         self: @TContractState, 
         left: felt252, 
@@ -23,6 +44,10 @@ pub trait IMerkleVerifier<TContractState> {
     ) -> felt252;
 }
 
+/// @title Merkle Verifier Contract
+/// @author CAREL Team
+/// @notice On-chain Merkle verification utilities for reward claims.
+/// @dev Uses Poseidon hashing consistent with off-chain generation.
 #[starknet::contract]
 pub mod MerkleVerifier {
     use starknet::ContractAddress;
@@ -35,6 +60,12 @@ pub mod MerkleVerifier {
 
     #[abi(embed_v0)]
     pub impl MerkleVerifierImpl of super::IMerkleVerifier<ContractState> {
+        /// @notice Verifies a Merkle proof against a root.
+        /// @dev Recomputes the root from the leaf and proof.
+        /// @param leaf Leaf hash.
+        /// @param proof Merkle proof array.
+        /// @param root Expected Merkle root.
+        /// @return valid True if proof is valid.
         fn verify_proof(
             self: @ContractState, 
             leaf: felt252, 
@@ -50,6 +81,12 @@ pub mod MerkleVerifier {
             computed_hash == root
         }
 
+        /// @notice Hashes a reward leaf from user data.
+        /// @dev Ensures a deterministic leaf for reward claims.
+        /// @param user User address.
+        /// @param amount Claimable amount.
+        /// @param epoch Reward epoch.
+        /// @return leaf Leaf hash.
         fn hash_leaf(
             self: @ContractState, 
             user: ContractAddress, 
@@ -63,6 +100,11 @@ pub mod MerkleVerifier {
                 .finalize()
         }
 
+        /// @notice Hashes a pair of nodes for Merkle tree construction.
+        /// @dev Orders pair to keep hashes deterministic.
+        /// @param left Left node hash.
+        /// @param right Right node hash.
+        /// @return hash Parent hash.
         fn hash_pair(
             self: @ContractState, 
             left: felt252, 

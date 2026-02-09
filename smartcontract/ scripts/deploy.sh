@@ -69,3 +69,7 @@ echo "ZkCarelPoints: 0x..."
 echo "ZkCarelNFT: 0x..."
 echo "ZkCarelStaking: 0x..."
 echo "ZkCarelRouter: 0x..."
+
+echo ""
+echo "Deploying Price Oracle and wiring adapters..."
+bash " scripts/05_deploy_price_oracle.sh"

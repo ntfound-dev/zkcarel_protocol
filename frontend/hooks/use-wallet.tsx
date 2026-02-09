@@ -16,6 +16,7 @@ interface WalletState {
 
 interface WalletContextType extends WalletState {
   connect: (provider: WalletProviderType) => Promise<void>
+  connectWithSumo: (sumoToken: string, address?: string) => Promise<boolean>
   disconnect: () => void
   switchNetwork: (network: string) => Promise<void>
   updateBalance: (symbol: string, amount: number) => void
@@ -96,6 +97,39 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  const connectWithSumo = useCallback(async (sumoToken: string, address?: string) => {
+    const userAddress = address || "0x0000000000000000000000000000000000000000"
+    let token: string | null = null
+    try {
+      const auth = await connectWallet({
+        address: userAddress,
+        signature: "",
+        message: "",
+        chain_id: 0,
+        sumo_login_token: sumoToken,
+      })
+      token = auth.token
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("auth_token", auth.token)
+        window.sessionStorage.setItem("sumo_login_token", sumoToken)
+        if (address) {
+          window.sessionStorage.setItem("sumo_login_address", address)
+        }
+      }
+    } catch {
+      token = null
+    }
+
+    setWallet((prev) => ({
+      ...prev,
+      isConnected: true,
+      address: userAddress,
+      provider: prev.provider,
+      token,
+    }))
+    return !!token
+  }, [])
+
   const disconnect = useCallback(() => {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("auth_token")
@@ -120,6 +154,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       value={{
         ...wallet,
         connect,
+        connectWithSumo,
         disconnect,
         switchNetwork,
         updateBalance,

@@ -76,7 +76,7 @@ fn test_bridge_fee_forwarding() {
         FeeCollected { 
             category: 'BRIDGE', 
             total_amount: 40, 
-            treasury_part: 40 
+            treasury_part: 10 
         }
     );
 

@@ -1,5 +1,6 @@
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
+use starknet_core::utils::get_selector_from_name;
 
 fn rpc_request(method: &str, params: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
@@ -10,12 +11,21 @@ fn rpc_request(method: &str, params: serde_json::Value) -> serde_json::Value {
     })
 }
 
-fn call_contract_params(contract_address: &str, function: &str, calldata: Vec<String>) -> serde_json::Value {
+fn call_contract_params(contract_address: &str, entry_point_selector: &str, calldata: Vec<String>) -> serde_json::Value {
     serde_json::json!({
         "contract_address": contract_address,
-        "entry_point_selector": function,
+        "entry_point_selector": entry_point_selector,
         "calldata": calldata
     })
+}
+
+fn resolve_entry_point_selector(function: &str) -> Result<String> {
+    if function.starts_with("0x") {
+        return Ok(function.to_string());
+    }
+    let selector = get_selector_from_name(function)
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    Ok(format!("{selector:#x}"))
 }
 
 /// Starknet RPC Client
@@ -137,10 +147,11 @@ impl StarknetClient {
         function: &str,
         calldata: Vec<String>,
     ) -> Result<Vec<String>> {
+        let entry_point_selector = resolve_entry_point_selector(function)?;
         let request = rpc_request(
             "starknet_call",
             serde_json::json!([
-                call_contract_params(contract_address, function, calldata),
+                call_contract_params(contract_address, &entry_point_selector, calldata),
                 "latest"
             ]),
         );

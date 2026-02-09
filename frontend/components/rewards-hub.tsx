@@ -143,6 +143,8 @@ const socialTasks = [
 
 type TierInfo = typeof tierDefinitions[number] & { achieved: boolean }
 
+const MONTHLY_POOL_CAREL = (1_000_000_000 * 0.4) / 36
+
 function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tiers: TierInfo[] }) {
   const currentTierIndex = Math.max(
     0,
@@ -353,6 +355,10 @@ export function RewardsHub() {
   const [isMintingTier, setIsMintingTier] = React.useState<number | null>(null)
   const [taskInputs, setTaskInputs] = React.useState<Record<string, string>>({})
   const [taskStatus, setTaskStatus] = React.useState<Record<string, { status: "idle" | "verifying" | "success" | "error"; message?: string; points?: number }>>({})
+  const monthlyPoolLabel = React.useMemo(
+    () => MONTHLY_POOL_CAREL.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+    []
+  )
 
   const tiers = React.useMemo<TierInfo[]>(() => {
     return tierDefinitions.map((tier) => ({
@@ -569,7 +575,8 @@ export function RewardsHub() {
               </div>
               <p className="text-2xl font-bold text-secondary">{usablePoints.toLocaleString()}</p>
               <p className="text-xs text-muted-foreground">Use for NFTs or conversion</p>
-              <p className="text-xs text-accent mt-1">≈ {estimatedCAREL.toFixed(2)} CAREL</p>
+              <p className="text-xs text-muted-foreground">Monthly pool: {monthlyPoolLabel} CAREL</p>
+              <p className="text-xs text-accent mt-1">Estimated reward: ≈ {estimatedCAREL.toFixed(2)} CAREL</p>
             </div>
 
             <div className="p-3 rounded-lg bg-accent/10 border border-accent/20">

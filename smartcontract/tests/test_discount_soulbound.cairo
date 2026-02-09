@@ -15,7 +15,7 @@ use smartcontract::nft::discount_soulbound::{
 // 1. Mock PointStorage untuk isolasi testing
 #[starknet::interface]
 pub trait IPointStorageMock<TContractState> {
-    fn consume_points(ref self: TContractState, user: ContractAddress, amount: u256);
+    fn consume_points(ref self: TContractState, epoch: u64, user: ContractAddress, amount: u256);
 }
 
 #[starknet::contract]
@@ -26,7 +26,7 @@ mod PointStorageMock {
 
     #[abi(embed_v0)]
     impl IPointStorageMockImpl of super::IPointStorageMock<ContractState> {
-        fn consume_points(ref self: ContractState, user: ContractAddress, amount: u256) {
+        fn consume_points(ref self: ContractState, epoch: u64, user: ContractAddress, amount: u256) {
             // Mock sukses tanpa logika internal
         }
     }
@@ -86,34 +86,16 @@ fn test_usage_cycle_and_autoburn() {
     let user: ContractAddress = 0x456.try_into().unwrap();
 
     start_cheat_caller_address(dispatcher.contract_address, user);
-    dispatcher.mint_nft(1); // Max usage = 5
+    dispatcher.mint_nft(1); // Default max usage = 30
 
-    // Gunakan diskon 4 kali
-    let mut i: u8 = 0;
-    while i < 4 {
-        dispatcher.use_discount(user);
-        i += 1;
-    };
+    // Use up default tier-1 limit (30)
+    dispatcher.use_discount_batch(user, 30);
+    assert!(dispatcher.get_user_discount(user) == 0, "Usage exhausted should disable discount");
 
-    // Pastikan NFT masih ada sebelum penggunaan terakhir
-    assert!(dispatcher.get_user_discount(user) == 5, "NFT harusnya masih aktif");
-
-    // Penggunaan ke-5 (Memicu Auto-burn)
-    let mut spy = spy_events();
+    // Recharge and use again
+    dispatcher.recharge_nft();
+    assert!(dispatcher.get_user_discount(user) == 5, "Recharge should restore discount");
     dispatcher.use_discount(user);
-
-    // Verifikasi NFT sudah hangus (Default/Zero state)
-    let info_after = dispatcher.get_user_discount(user);
-    assert!(info_after == 0, "NFT harusnya sudah di-burn otomatis");
-    
-    spy.assert_emitted(@array![
-        (
-            dispatcher.contract_address,
-            DiscountSoulbound::Event::NFTBurned(
-                DiscountSoulbound::NFTBurned { user, token_id: 1 }
-            )
-        )
-    ]);
 
     stop_cheat_caller_address(dispatcher.contract_address);
 }

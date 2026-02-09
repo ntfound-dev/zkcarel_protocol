@@ -20,6 +20,7 @@ pub struct ConnectWalletRequest {
     pub signature: String,
     pub message: String,
     pub chain_id: u64,
+    pub sumo_login_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,8 +55,22 @@ pub async fn connect_wallet(
     State(state): State<AppState>,
     Json(req): Json<ConnectWalletRequest>,
 ) -> Result<Json<ApiResponse<ConnectWalletResponse>>> {
-    // 1. Verify signature menggunakan SignatureVerifier asli
-    verify_signature(&req.address, &req.message, &req.signature, req.chain_id)?;
+    // 1. Verify signature OR Sumo Login token
+    if let Some(token) = req.sumo_login_token.as_ref() {
+        let client = crate::integrations::sumo_login::SumoLoginClient::new(
+            state.config.sumo_login_api_url.clone(),
+            state.config.sumo_login_api_key.clone(),
+        );
+        let ok = client
+            .verify_login(token)
+            .await
+            .map_err(|e| AppError::AuthError(format!("Sumo login failed: {}", e)))?;
+        if !ok {
+            return Err(AppError::AuthError("Invalid Sumo login token".to_string()));
+        }
+    } else {
+        verify_signature(&req.address, &req.message, &req.signature, req.chain_id)?;
+    }
 
     // 2. Create or get user
     state.db.create_user(&req.address).await?;

@@ -77,7 +77,7 @@ fn test_stake_and_reward_accumulation() {
 
     let pending_rewards = dispatcher.calculate_rewards(user, usdt_addr);
     // Corrected assertion syntax for custom error messages
-    assert!(pending_rewards == 50000, "Reward 5% APY tidak akurat");
+    assert!(pending_rewards == 70000, "Reward 7% APY tidak akurat");
 
     stop_cheat_caller_address(dispatcher.contract_address);
     stop_cheat_block_timestamp(dispatcher.contract_address);

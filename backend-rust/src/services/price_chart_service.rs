@@ -1,10 +1,12 @@
 use crate::{
     config::Config,
     constants::PRICE_UPDATER_INTERVAL_SECS,
+    constants::token_address_for,
     db::Database,
     error::{AppError, Result},
     models::PriceTick,
 };
+use crate::indexer::starknet_client::StarknetClient;
 
 use chrono::{DateTime, Timelike, Utc};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
@@ -65,7 +67,18 @@ impl PriceChartService {
         let tokens = ["BTC", "ETH", "STRK", "CAREL", "USDT", "USDC"];
 
         for token in tokens {
-            let price = self.fetch_price_from_oracle(token).await?;
+            let price = match self.fetch_price_from_oracle(token).await {
+                Ok(value) => value,
+                Err(err) => {
+                    tracing::warn!("Oracle price fetch failed for {}: {}", token, err);
+                    let cache = self.price_cache.read().await;
+                    if let Some(last_price) = cache.get(token) {
+                        *last_price
+                    } else {
+                        continue;
+                    }
+                }
+            };
 
             let mut cache = self.price_cache.write().await;
             let last_price = cache.get(token).copied();
@@ -82,24 +95,23 @@ impl PriceChartService {
         Ok(())
     }
 
-    /// Mock oracle
     async fn fetch_price_from_oracle(&self, token: &str) -> Result<Decimal> {
-        let base_price: f64 = match token {
-            "BTC" => 65_000.0,
-            "ETH" => 3_500.0,
-            "STRK" => 2.5,
-            "CAREL" => 0.5,
-            "USDT" | "USDC" => 1.0,
-            _ => 1.0,
-        };
+        let asset_id = self.config.oracle_asset_id_for(token)
+            .ok_or_else(|| AppError::NotFound(format!("Missing asset_id for {}", token)))?;
+        let token_address = token_address_for(token)
+            .ok_or_else(|| AppError::InvalidToken)?;
 
-        let mut variation = (rand::random::<f64>() - 0.5) * 0.02;
-        if self.config.is_testnet() {
-            variation *= 0.5;
-        }
-        let price = base_price * (1.0 + variation);
+        let client = StarknetClient::new(self.config.starknet_rpc_url.clone());
+        let result = client
+            .call_contract(
+                &self.config.price_oracle_address,
+                "get_price",
+                vec![token_address.to_string(), asset_id],
+            )
+            .await?;
 
-        Decimal::from_f64(price)
+        let price = parse_u256_low(&result)?;
+        Decimal::from_u128(price)
             .ok_or_else(|| AppError::Internal("Failed to convert price".into()))
     }
 
@@ -327,6 +339,28 @@ impl PriceChartService {
         }
 
         Ok(out)
+    }
+}
+
+fn parse_u256_low(values: &[String]) -> Result<u128> {
+    if values.len() < 2 {
+        return Err(AppError::Internal("Invalid u256 response".into()));
+    }
+    let low = parse_felt_u128(&values[0])?;
+    let high = parse_felt_u128(&values[1])?;
+    if high != 0 {
+        return Err(AppError::Internal("u256 value too large".into()));
+    }
+    Ok(low)
+}
+
+fn parse_felt_u128(value: &str) -> Result<u128> {
+    if let Some(stripped) = value.strip_prefix("0x") {
+        u128::from_str_radix(stripped, 16)
+            .map_err(|e| AppError::Internal(format!("Invalid felt hex: {}", e)))
+    } else {
+        value.parse::<u128>()
+            .map_err(|e| AppError::Internal(format!("Invalid felt dec: {}", e)))
     }
 }
 

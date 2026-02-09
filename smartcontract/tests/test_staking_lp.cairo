@@ -46,7 +46,7 @@ fn setup() -> (ILPStakingDispatcher, ContractAddress, ContractAddress, ContractA
     let (staking_addr, _) = staking_class.deploy(@constructor_args).unwrap();
     let dispatcher = ILPStakingDispatcher { contract_address: staking_addr };
 
-    // 3. Register Pool (25% APY = 2500 BPS)
+    // 3. Register Pool (18% APY = 1800 BPS)
     start_cheat_caller_address(staking_addr, owner);
     let pool_id: ContractAddress = 0x999.try_into().unwrap();
     dispatcher.add_pool(
@@ -54,7 +54,7 @@ fn setup() -> (ILPStakingDispatcher, ContractAddress, ContractAddress, ContractA
         lp_token, 
         0x1.try_into().unwrap(), 
         0x2.try_into().unwrap(), 
-        2500,                    
+        1800,                    
         5                        
     );
     stop_cheat_caller_address(staking_addr);
@@ -79,7 +79,7 @@ fn test_lp_stake_and_reward_accuracy() {
     start_cheat_block_timestamp(dispatcher.contract_address, one_year_later);
 
     let rewards = dispatcher.calculate_rewards(user, pool_id);
-    assert!(rewards == 2500, "25% APY calculation mismatch");
+    assert!(rewards == 1800, "18% APY calculation mismatch");
 
     stop_cheat_caller_address(dispatcher.contract_address);
     stop_cheat_block_timestamp(dispatcher.contract_address);

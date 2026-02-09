@@ -11,7 +11,8 @@ use snforge_std::{
 
 // Import from 'smartcontract' package and include the DispatcherTrait
 use smartcontract::ai::ai_executor::{
-    IAIExecutorDispatcher, IAIExecutorDispatcherTrait, ActionType
+    IAIExecutorDispatcher, IAIExecutorDispatcherTrait, ActionType,
+    IAIExecutorAdminDispatcher, IAIExecutorAdminDispatcherTrait
 };
 
 fn setup() -> (IAIExecutorDispatcher, ContractAddress, ContractAddress, ContractAddress) {
@@ -25,7 +26,15 @@ fn setup() -> (IAIExecutorDispatcher, ContractAddress, ContractAddress, Contract
     backend_signer.serialize(ref constructor_args);
     
     let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
-    
+
+    // Disable fees and signature verification for unit tests.
+    let admin = backend_signer;
+    start_cheat_caller_address(contract_address, admin);
+    let admin_dispatcher = IAIExecutorAdminDispatcher { contract_address };
+    admin_dispatcher.set_fee_config(1_000_000_000_000_000_000, 2_000_000_000_000_000_000, false);
+    admin_dispatcher.set_signature_verification(0.try_into().unwrap(), false);
+    stop_cheat_caller_address(contract_address);
+
     (IAIExecutorDispatcher { contract_address }, backend_signer, user, carel_token)
 }
 

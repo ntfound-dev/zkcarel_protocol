@@ -344,6 +344,7 @@ export async function connectWallet(payload: {
   signature: string
   message: string
   chain_id: number
+  sumo_login_token?: string
 }) {
   return apiFetch<ConnectWalletResponse>("/api/v1/auth/connect", {
     method: "POST",
@@ -388,6 +389,18 @@ export async function getPortfolioOHLCV(params: { interval: string; limit?: numb
 
 export async function getLeaderboard(type: "points" | "volume" | "referrals") {
   return apiFetch<LeaderboardResponse>(`/api/v1/leaderboard/${type}`)
+}
+
+export async function getLeaderboardGlobalMetrics() {
+  return apiFetch<{ points_total: number; volume_total: number; referral_total: number }>(
+    "/api/v1/leaderboard/global"
+  )
+}
+
+export async function getLeaderboardGlobalMetricsEpoch(epoch: number) {
+  return apiFetch<{ points_total: number; volume_total: number; referral_total: number }>(
+    `/api/v1/leaderboard/global/${epoch}`
+  )
 }
 
 export async function getLeaderboardUserRank(address: string) {
@@ -480,6 +493,7 @@ export async function executeBridge(payload: {
   token: string
   amount: string
   recipient: string
+  xverse_user_id?: string
 }) {
   return apiFetch<ExecuteBridgeResponse>("/api/v1/bridge/execute", {
     method: "POST",

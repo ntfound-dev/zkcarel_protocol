@@ -1,5 +1,7 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::Decimal;
 
 use crate::{
     constants::{EPOCH_DURATION_SECONDS, POINTS_TO_CAREL_RATIO},
@@ -36,6 +38,21 @@ pub struct ConvertRequest {
 
 fn points_to_carel(points: f64) -> f64 {
     points * POINTS_TO_CAREL_RATIO
+}
+
+fn monthly_ecosystem_pool_carel() -> Decimal {
+    let total_supply = Decimal::from_i64(1_000_000_000).unwrap();
+    let bps = Decimal::from_i64(4000).unwrap();
+    let denom = Decimal::from_i64(10000).unwrap();
+    let months = Decimal::from_i64(36).unwrap();
+    total_supply * bps / denom / months
+}
+
+fn calculate_epoch_reward(points: Decimal, total_points: Decimal) -> Decimal {
+    if total_points.is_zero() {
+        return Decimal::ZERO;
+    }
+    (points / total_points) * monthly_ecosystem_pool_carel()
 }
 
 /// GET /api/v1/rewards/points
@@ -102,9 +119,18 @@ pub async fn claim_rewards(
         ));
     }
 
-    // Calculate CAREL amount (1 point = 0.1 CAREL)
+    // Calculate CAREL amount based on monthly ecosystem pool
+    let total_points_epoch: rust_decimal::Decimal = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1"
+    )
+    .bind(prev_epoch)
+    .fetch_one(state.db.pool())
+    .await?;
+
+    let carel_amount_dec = calculate_epoch_reward(points.total_points, total_points_epoch);
+    let net_carel_dec = carel_amount_dec * Decimal::new(95, 2); // 95% after tax
+    let carel_amount = net_carel_dec.to_f64().unwrap_or(0.0);
     let total_points: f64 = points.total_points.to_string().parse().unwrap_or(0.0);
-    let carel_amount = points_to_carel(total_points);
 
     // Execute claim transaction (mock)
     let tx_hash = format!("0x{}", hex::encode(&rand::random::<[u8; 32]>()));

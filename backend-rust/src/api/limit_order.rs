@@ -8,9 +8,15 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::Result,
     models::{ApiResponse, LimitOrder, PaginatedResponse, CreateLimitOrderRequest},
+    constants::POINTS_PER_USD_SWAP,
     // 1. Import modul hash agar terpakai
     crypto::hash,
 };
+use crate::services::notification_service::{NotificationService, NotificationType};
+use crate::services::onchain::{OnchainInvoker, parse_felt};
+use rust_decimal::prelude::ToPrimitive;
+use starknet_core::types::Call;
+use starknet_core::utils::get_selector_from_name;
 
 use super::{AppState, require_user};
 
@@ -97,6 +103,21 @@ pub async fn create_order(
     };
 
     state.db.create_limit_order(&order).await?;
+    let points = award_limit_order_points(&state, &user_address, amount, price).await?;
+    let notification_service = NotificationService::new(state.db.clone(), state.config.clone());
+    let _ = notification_service
+        .send_notification(
+            &user_address,
+            NotificationType::PointsAwarded,
+            "Limit order points awarded".to_string(),
+            format!("You earned {:.2} points for creating a limit order.", points),
+            Some(serde_json::json!({
+                "source": "limit_order.create",
+                "points": points,
+                "order_id": order_id,
+            })),
+        )
+        .await;
 
     let response = CreateOrderResponse {
         order_id,
@@ -105,6 +126,83 @@ pub async fn create_order(
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+async fn award_limit_order_points(
+    state: &AppState,
+    user_address: &str,
+    amount: f64,
+    price: f64,
+) -> Result<f64> {
+    let epoch = (chrono::Utc::now().timestamp() / crate::constants::EPOCH_DURATION_SECONDS) as i64;
+    let usd_value = amount * price;
+    let points = usd_value * POINTS_PER_USD_SWAP;
+    let points_decimal = rust_decimal::Decimal::from_f64_retain(points)
+        .unwrap_or(rust_decimal::Decimal::ZERO);
+
+    state.db.create_or_update_points(
+        user_address,
+        epoch,
+        points_decimal,
+        rust_decimal::Decimal::ZERO,
+        rust_decimal::Decimal::ZERO,
+    ).await?;
+
+    sync_points_onchain(state, epoch as u64, user_address, points_decimal).await?;
+    tracing::info!(
+        "Limit order points awarded: user={} epoch={} points={}",
+        user_address,
+        epoch,
+        points
+    );
+    Ok(points)
+}
+
+async fn sync_points_onchain(
+    state: &AppState,
+    epoch: u64,
+    user_address: &str,
+    points: rust_decimal::Decimal,
+) -> Result<()> {
+    let contract = state.config.point_storage_address.trim();
+    if contract.is_empty() || contract.starts_with("0x0000") {
+        return Ok(());
+    }
+
+    let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
+        return Ok(());
+    };
+
+    let points_u128 = points.trunc().to_u128().unwrap_or(0);
+    if points_u128 == 0 {
+        return Ok(());
+    }
+
+    let call = build_add_points_call(contract, epoch, user_address, points_u128)?;
+    let _ = invoker.invoke(call).await?;
+    Ok(())
+}
+
+fn build_add_points_call(
+    contract: &str,
+    epoch: u64,
+    user: &str,
+    points: u128,
+) -> Result<Call> {
+    let to = parse_felt(contract)?;
+    let selector = get_selector_from_name("add_points")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let user_felt = parse_felt(user)?;
+
+    let calldata = vec![
+        starknet_core::types::Felt::from(epoch),
+        user_felt,
+        // u256 low/high
+        starknet_core::types::Felt::from(points),
+        starknet_core::types::Felt::from(0_u128),
+    ];
+
+    Ok(Call { to, selector, calldata })
 }
 
 /// GET /api/v1/limit-order/list

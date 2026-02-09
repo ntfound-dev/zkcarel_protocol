@@ -3,6 +3,8 @@ use axum::{
     Json,
 };
 use serde::Serialize;
+use rust_decimal::Decimal;
+use async_trait::async_trait;
 
 use crate::{
     constants::EPOCH_DURATION_SECONDS,
@@ -38,6 +40,89 @@ pub struct LeaderboardResponse {
     pub leaderboard_type: String,
     pub entries: Vec<LeaderboardEntry>,
     pub total_users: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlobalMetricsResponse {
+    pub points_total: f64,
+    pub volume_total: f64,
+    pub referral_total: i64,
+}
+
+#[async_trait]
+trait GlobalMetricsStore {
+    async fn points_total(&self, epoch: i64) -> Result<f64>;
+    async fn volume_total(&self, start: chrono::DateTime<chrono::Utc>, end: chrono::DateTime<chrono::Utc>) -> Result<f64>;
+    async fn referral_total(&self, start: chrono::DateTime<chrono::Utc>, end: chrono::DateTime<chrono::Utc>) -> Result<i64>;
+}
+
+struct PgMetricsStore<'a> {
+    pool: &'a sqlx::PgPool,
+}
+
+#[async_trait]
+impl<'a> GlobalMetricsStore for PgMetricsStore<'a> {
+    async fn points_total(&self, epoch: i64) -> Result<f64> {
+        let value: Decimal = sqlx::query_scalar::<_, Decimal>(
+            "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1",
+        )
+        .bind(epoch)
+        .fetch_one(self.pool)
+        .await?;
+        Ok(value.to_string().parse().unwrap_or(0.0))
+    }
+
+    async fn volume_total(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<f64> {
+        let value: Decimal = sqlx::query_scalar::<_, Decimal>(
+            "SELECT COALESCE(SUM(usd_value), 0) FROM transactions WHERE timestamp >= $1 AND timestamp < $2",
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_one(self.pool)
+        .await?;
+        Ok(value.to_string().parse().unwrap_or(0.0))
+    }
+
+    async fn referral_total(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<i64> {
+        let value: i64 = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM users WHERE referrer IS NOT NULL AND created_at >= $1 AND created_at < $2",
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_one(self.pool)
+        .await?;
+        Ok(value)
+    }
+}
+
+fn epoch_window(epoch: i64) -> Result<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    let start = chrono::DateTime::<chrono::Utc>::from_timestamp(epoch * EPOCH_DURATION_SECONDS, 0)
+        .ok_or_else(|| crate::error::AppError::BadRequest("Invalid epoch".to_string()))?;
+    let end = start + chrono::Duration::seconds(EPOCH_DURATION_SECONDS);
+    Ok((start, end))
+}
+
+async fn get_global_metrics_epoch_with<S: GlobalMetricsStore + Sync>(
+    store: &S,
+    epoch: i64,
+) -> Result<GlobalMetricsResponse> {
+    let (start, end) = epoch_window(epoch)?;
+    let points_total = store.points_total(epoch).await?;
+    let volume_total = store.volume_total(start, end).await?;
+    let referral_total = store.referral_total(start, end).await?;
+    Ok(GlobalMetricsResponse {
+        points_total,
+        volume_total,
+        referral_total,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -138,6 +223,48 @@ pub async fn get_user_rank(
     })))
 }
 
+/// GET /api/v1/leaderboard/global
+pub async fn get_global_metrics(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<GlobalMetricsResponse>>> {
+    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+
+    let points_total: Decimal = sqlx::query_scalar::<_, Decimal>(
+        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1",
+    )
+    .bind(current_epoch)
+    .fetch_one(state.db.pool())
+    .await?;
+
+    let volume_total: Decimal = sqlx::query_scalar::<_, Decimal>(
+        "SELECT COALESCE(SUM(total_volume_usd), 0) FROM users",
+    )
+    .fetch_one(state.db.pool())
+    .await?;
+
+    let referral_total: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM users WHERE referrer IS NOT NULL",
+    )
+    .fetch_one(state.db.pool())
+    .await?;
+
+    Ok(Json(ApiResponse::success(GlobalMetricsResponse {
+        points_total: points_total.to_string().parse().unwrap_or(0.0),
+        volume_total: volume_total.to_string().parse().unwrap_or(0.0),
+        referral_total,
+    })))
+}
+
+/// GET /api/v1/leaderboard/global/{epoch}
+pub async fn get_global_metrics_epoch(
+    State(state): State<AppState>,
+    Path(epoch): Path<i64>,
+) -> Result<Json<ApiResponse<GlobalMetricsResponse>>> {
+    let store = PgMetricsStore { pool: state.db.pool() };
+    let metrics = get_global_metrics_epoch_with(&store, epoch).await?;
+    Ok(Json(ApiResponse::success(metrics)))
+}
+
 /// GET /api/v1/leaderboard/user/:address/categories
 pub async fn get_user_categories(
     State(state): State<AppState>,
@@ -183,7 +310,7 @@ pub async fn get_user_categories(
             .fetch_one(state.db.pool())
             .await?;
 
-    let referral_count: i64 = sqlx::query_scalar(
+    let referral_count: i64 = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM users WHERE referrer = $1",
     )
     .bind(&address)
@@ -307,6 +434,7 @@ async fn get_referrals_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEn
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
 
     #[test]
     fn compute_percentile_handles_basic_case() {
@@ -327,5 +455,48 @@ mod tests {
         // Memastikan rank di atas total menghasilkan 0
         let percentile = compute_percentile(10, 5);
         assert!((percentile - 0.0).abs() < f64::EPSILON);
+    }
+
+    struct MockMetricsStore {
+        points_total: f64,
+        volume_total: f64,
+        referral_total: i64,
+    }
+
+    #[async_trait]
+    impl GlobalMetricsStore for MockMetricsStore {
+        async fn points_total(&self, _epoch: i64) -> Result<f64> {
+            Ok(self.points_total)
+        }
+
+        async fn volume_total(
+            &self,
+            _start: chrono::DateTime<chrono::Utc>,
+            _end: chrono::DateTime<chrono::Utc>,
+        ) -> Result<f64> {
+            Ok(self.volume_total)
+        }
+
+        async fn referral_total(
+            &self,
+            _start: chrono::DateTime<chrono::Utc>,
+            _end: chrono::DateTime<chrono::Utc>,
+        ) -> Result<i64> {
+            Ok(self.referral_total)
+        }
+    }
+
+    #[tokio::test]
+    async fn global_metrics_epoch_uses_store_values() {
+        let store = MockMetricsStore {
+            points_total: 1234.0,
+            volume_total: 4567.0,
+            referral_total: 42,
+        };
+
+        let metrics = get_global_metrics_epoch_with(&store, 1).await.unwrap();
+        assert_eq!(metrics.points_total, 1234.0);
+        assert_eq!(metrics.volume_total, 4567.0);
+        assert_eq!(metrics.referral_total, 42);
     }
 }

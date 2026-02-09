@@ -204,6 +204,7 @@ export function TradingInterface() {
   const [slippage, setSlippage] = React.useState("0.5")
   const [customSlippage, setCustomSlippage] = React.useState("")
   const [receiveAddress, setReceiveAddress] = React.useState("")
+  const [xverseUserId, setXverseUserId] = React.useState("")
   
   // NFT Discount simulation
   const hasNFTDiscount = true
@@ -220,6 +221,21 @@ export function TradingInterface() {
       setReceiveAddress(wallet.address)
     }
   }, [wallet.address])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const stored = window.sessionStorage.getItem("xverse_user_id") || ""
+    if (stored) {
+      setXverseUserId(stored)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    if (xverseUserId) {
+      window.sessionStorage.setItem("xverse_user_id", xverseUserId)
+    }
+  }, [xverseUserId])
 
   React.useEffect(() => {
     let active = true
@@ -373,6 +389,7 @@ export function TradingInterface() {
           token: fromToken.symbol,
           amount: fromAmount,
           recipient: wallet.address || receiveAddress,
+          xverse_user_id: !receiveAddress && xverseUserId ? xverseUserId : undefined,
         })
         notifications.addNotification({
           type: "success",
@@ -402,6 +419,13 @@ export function TradingInterface() {
       }
       setSwapState("success")
     } catch (error) {
+      if (isCrossChain && error instanceof Error && error.message.toLowerCase().includes("xverse")) {
+        notifications.addNotification({
+          type: "error",
+          title: "Xverse address not found",
+          message: "We could not resolve your BTC address. Please check the Xverse User ID or enter a receive address.",
+        })
+      }
       notifications.addNotification({
         type: "error",
         title: "Trade failed",
@@ -572,7 +596,25 @@ export function TradingInterface() {
                 onChange={(e) => setReceiveAddress(e.target.value)}
                 className="w-full py-2 px-3 rounded-lg text-sm bg-surface text-foreground border border-border focus:border-primary outline-none"
               />
+              {isCrossChain && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  If you use Xverse and see “Address not found”, enter a BTC address manually or provide a valid Xverse User ID.
+                </p>
+              )}
             </div>
+
+            {isCrossChain && (
+              <div>
+                <label className="text-sm text-foreground mb-2 block">Xverse User ID (optional)</label>
+                <input
+                  type="text"
+                  value={xverseUserId}
+                  onChange={(e) => setXverseUserId(e.target.value)}
+                  placeholder="Use if BTC address is managed by Xverse"
+                  className="w-full py-2 px-3 rounded-lg text-sm bg-surface text-foreground border border-border focus:border-primary outline-none"
+                />
+              </div>
+            )}
 
             {/* Transaction Fee Breakdown */}
             <div className="space-y-2 p-3 rounded-lg bg-surface/50">

@@ -1,5 +1,6 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
+use rust_decimal::prelude::FromPrimitive;
 use crate::{
     constants::{
         EPOCH_DURATION_SECONDS,
@@ -13,7 +14,7 @@ use crate::{
     error::Result,
     models::ApiResponse,
 };
-use super::AppState;
+use super::{AppState, require_user};
 
 #[derive(Debug, Serialize)]
 pub struct NFT {
@@ -29,23 +30,51 @@ pub struct MintRequest {
     pub tier: i32,
 }
 
+fn points_cost_for_tier(tier: i32) -> i64 {
+    match tier {
+        1 => 5_000,
+        2 => 15_000,
+        3 => 50_000,
+        4 => 150_000,
+        5 => 500_000,
+        _ => 0,
+    }
+}
+
 fn discount_for_tier(tier: i32) -> f64 {
     match tier {
+        0 => 0.0,
         1 => NFT_TIER_1_DISCOUNT,
         2 => NFT_TIER_2_DISCOUNT,
         3 => NFT_TIER_3_DISCOUNT,
         4 => NFT_TIER_4_DISCOUNT,
         5 => NFT_TIER_5_DISCOUNT,
         6 => NFT_TIER_6_DISCOUNT,
-        _ => NFT_TIER_1_DISCOUNT,
+        _ => 0.0,
     }
 }
 
 /// POST /api/v1/nft/mint
 pub async fn mint_nft(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<MintRequest>,
 ) -> Result<Json<ApiResponse<NFT>>> {
+    let user_address = require_user(&headers, &state).await?;
+    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+
+    let cost_points = points_cost_for_tier(req.tier);
+    if cost_points > 0 {
+        state
+            .db
+            .consume_points(
+                &user_address,
+                current_epoch,
+                rust_decimal::Decimal::from_i64(cost_points).unwrap(),
+            )
+            .await?;
+    }
+
     let token_id = format!("NFT_{}", hex::encode(&rand::random::<[u8; 16]>()));
     let discount = discount_for_tier(req.tier);
     
@@ -82,9 +111,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discount_for_tier_defaults_to_tier1() {
-        // Memastikan tier di luar range memakai diskon tier 1
-        assert_eq!(discount_for_tier(99), NFT_TIER_1_DISCOUNT);
+    fn discount_for_tier_defaults_to_zero() {
+        // Memastikan tier di luar range memakai diskon 0
+        assert_eq!(discount_for_tier(99), 0.0);
     }
 
     #[test]

@@ -145,6 +145,14 @@ fn build_router(state: api::AppState) -> Router {
             get(api::leaderboard::get_leaderboard),
         )
         .route(
+            "/api/v1/leaderboard/global",
+            get(api::leaderboard::get_global_metrics),
+        )
+        .route(
+            "/api/v1/leaderboard/global/{epoch}",
+            get(api::leaderboard::get_global_metrics_epoch),
+        )
+        .route(
             "/api/v1/leaderboard/user/{address}", // PERBAIKAN: :address -> {address}
             get(api::leaderboard::get_user_rank),
         )
@@ -168,6 +176,50 @@ fn build_router(state: api::AppState) -> Router {
         .route("/api/v1/referral/history", get(api::referral::get_history))
         // Social Tasks
         .route("/api/v1/social/verify", post(api::social::verify_task))
+        // Privacy
+        .route("/api/v1/privacy/submit", post(api::privacy::submit_private_action))
+        // Private BTC swap
+        .route(
+            "/api/v1/private-btc-swap/initiate",
+            post(api::private_btc_swap::initiate_private_btc_swap),
+        )
+        .route(
+            "/api/v1/private-btc-swap/finalize",
+            post(api::private_btc_swap::finalize_private_btc_swap),
+        )
+        .route(
+            "/api/v1/private-btc-swap/nullifier/{nullifier}",
+            get(api::private_btc_swap::is_nullifier_used),
+        )
+        // Dark pool
+        .route("/api/v1/dark-pool/order", post(api::dark_pool::submit_order))
+        .route("/api/v1/dark-pool/match", post(api::dark_pool::match_order))
+        .route(
+            "/api/v1/dark-pool/nullifier/{nullifier}",
+            get(api::dark_pool::is_nullifier_used),
+        )
+        // Private payments
+        .route(
+            "/api/v1/private-payments/submit",
+            post(api::private_payments::submit_private_payment),
+        )
+        .route(
+            "/api/v1/private-payments/finalize",
+            post(api::private_payments::finalize_private_payment),
+        )
+        .route(
+            "/api/v1/private-payments/nullifier/{nullifier}",
+            get(api::private_payments::is_nullifier_used),
+        )
+        // Anonymous credentials
+        .route(
+            "/api/v1/credentials/submit",
+            post(api::anonymous_credentials::submit_credential_proof),
+        )
+        .route(
+            "/api/v1/credentials/nullifier/{nullifier}",
+            get(api::anonymous_credentials::is_nullifier_used),
+        )
         // Faucet (Testnet)
         .route("/api/v1/faucet/claim", post(api::faucet::claim_tokens))
         .route("/api/v1/faucet/status", get(api::faucet::get_status))

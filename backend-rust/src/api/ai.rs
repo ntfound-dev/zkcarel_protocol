@@ -1,12 +1,15 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use crate::{error::Result, models::ApiResponse, services::ai_service::AIService};
+use crate::indexer::starknet_client::StarknetClient;
 use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct AICommandRequest {
     pub command: String,
     pub context: Option<String>,
+    pub level: Option<u8>,
+    pub action_id: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -14,6 +17,7 @@ pub struct AICommandResponse {
     pub response: String,
     pub actions: Vec<String>,
     pub confidence: f64,
+    pub level: u8,
 }
 
 fn build_command(command: &str, context: &Option<String>) -> String {
@@ -38,6 +42,18 @@ pub async fn execute_command(
     let service = AIService::new(state.db, config.clone());
 
     let command = build_command(&req.command, &req.context);
+    let level = req.level.unwrap_or(1);
+
+    if level == 0 || level > 3 {
+        return Err(crate::error::AppError::BadRequest("Invalid AI level".into()));
+    }
+
+    if level >= 2 {
+        let Some(action_id) = req.action_id else {
+            return Err(crate::error::AppError::BadRequest("Missing on-chain AI action_id".into()));
+        };
+        ensure_onchain_action(&config, &user_address, action_id).await?;
+    }
 
     let ai_response = service.execute_command(&user_address, &command).await?;
     let confidence = confidence_score(config.openai_api_key.is_some());
@@ -46,9 +62,60 @@ pub async fn execute_command(
         response: ai_response.message,
         actions: ai_response.actions,
         confidence,
+        level,
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+async fn ensure_onchain_action(
+    config: &crate::config::Config,
+    user_address: &str,
+    action_id: u64,
+) -> Result<()> {
+    if action_id == 0 {
+        return Err(crate::error::AppError::BadRequest("Invalid on-chain AI action_id".into()));
+    }
+
+    let contract = config.ai_executor_address.trim();
+    if contract.is_empty() || contract.starts_with("0x0000") {
+        return Err(crate::error::AppError::BadRequest("AI executor not configured".into()));
+    }
+
+    let client = StarknetClient::new(config.starknet_rpc_url.clone());
+    let start_offset = action_id.saturating_sub(1).to_string();
+    let result = client
+        .call_contract(
+            contract,
+            "get_pending_actions_page",
+            vec![user_address.to_string(), start_offset, "1".to_string()],
+        )
+        .await?;
+
+    let mut pending = vec![];
+    if let Some(len_hex) = result.get(0) {
+        let len = parse_felt_u64(len_hex).unwrap_or(0);
+        for i in 0..len as usize {
+            if let Some(val) = result.get(i + 1) {
+                if let Some(parsed) = parse_felt_u64(val) {
+                    pending.push(parsed);
+                }
+            }
+        }
+    }
+
+    if !pending.contains(&action_id) {
+        return Err(crate::error::AppError::BadRequest("Invalid or missing on-chain AI action".into()));
+    }
+    Ok(())
+}
+
+fn parse_felt_u64(value: &str) -> Option<u64> {
+    if let Some(stripped) = value.strip_prefix("0x") {
+        u64::from_str_radix(stripped, 16).ok()
+    } else {
+        value.parse::<u64>().ok()
+    }
 }
 
 #[cfg(test)]

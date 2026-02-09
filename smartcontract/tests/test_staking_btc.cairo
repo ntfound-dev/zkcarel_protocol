@@ -74,7 +74,8 @@ fn test_successful_stake() {
 fn test_reward_accumulation_after_one_year() {
     let (dispatcher, btc_wrapper, _, _) = setup();
     let user: ContractAddress = 0x222.try_into().unwrap();
-    let amount: u256 = 10000; 
+    let one_token: u256 = 1_000_000_000_000_000_000_u256;
+    let amount: u256 = 100 * one_token; 
     let start_time: u64 = 1000;
 
     start_cheat_block_timestamp(dispatcher.contract_address, start_time);
@@ -87,7 +88,7 @@ fn test_reward_accumulation_after_one_year() {
     start_cheat_block_timestamp(dispatcher.contract_address, one_year_later);
 
     let rewards = dispatcher.calculate_rewards(user, btc_wrapper);
-    assert!(rewards == 1200, "Reward 12% APY calculation mismatch");
+    assert!(rewards == (amount * 6) / 100, "Reward 6% APY calculation mismatch");
 
     stop_cheat_caller_address(dispatcher.contract_address);
     stop_cheat_block_timestamp(dispatcher.contract_address);

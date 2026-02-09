@@ -26,6 +26,14 @@ mod tests {
             point_storage_address: "0x0000000000000000000000000000000000000003".to_string(),
             price_oracle_address: "0x0000000000000000000000000000000000000004".to_string(),
             limit_order_book_address: "0x0000000000000000000000000000000000000005".to_string(),
+            referral_system_address: None,
+            ai_executor_address: "0x0000000000000000000000000000000000000006".to_string(),
+            bridge_aggregator_address: "0x0000000000000000000000000000000000000007".to_string(),
+            zk_privacy_router_address: "0x0000000000000000000000000000000000000008".to_string(),
+            private_btc_swap_address: "0x0000000000000000000000000000000000000009".to_string(),
+            dark_pool_address: "0x0000000000000000000000000000000000000010".to_string(),
+            private_payments_address: "0x0000000000000000000000000000000000000011".to_string(),
+            anonymous_credentials_address: "0x0000000000000000000000000000000000000012".to_string(),
             faucet_wallet_private_key: None,
             faucet_btc_amount: None,
             faucet_strk_amount: None,
@@ -33,17 +41,30 @@ mod tests {
             faucet_cooldown_hours: None,
             backend_private_key: "test_private".to_string(),
             backend_public_key: "test_public".to_string(),
+            backend_account_address: None,
             jwt_secret: "test_secret".to_string(),
             jwt_expiry_hours: 24,
             openai_api_key: None,
             twitter_bearer_token: None,
             telegram_bot_token: None,
             discord_bot_token: None,
+            layerswap_api_key: None,
+            layerswap_api_url: "https://api.layerswap.io/api/v2".to_string(),
+            atomiq_api_key: None,
+            atomiq_api_url: "".to_string(),
+            garden_api_key: None,
+            garden_api_url: "".to_string(),
+            sumo_login_api_key: None,
+            sumo_login_api_url: "".to_string(),
+            xverse_api_key: None,
+            xverse_api_url: "".to_string(),
             stripe_secret_key: None,
             moonpay_api_key: None,
             rate_limit_public: 1,
             rate_limit_authenticated: 1,
             cors_allowed_origins: "*".to_string(),
+            oracle_asset_ids: "".to_string(),
+            bridge_provider_ids: "".to_string(),
         }
     }
 
@@ -168,6 +189,67 @@ impl Database {
         .bind(total)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    pub async fn consume_points(
+        &self,
+        address: &str,
+        epoch: i64,
+        amount: rust_decimal::Decimal,
+    ) -> Result<()> {
+        let current: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+            "SELECT total_points FROM points WHERE user_address = $1 AND epoch = $2",
+        )
+        .bind(address)
+        .bind(epoch)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let current_points = current.unwrap_or(rust_decimal::Decimal::ZERO);
+        if current_points < amount {
+            return Err(crate::error::AppError::BadRequest(
+                "Insufficient points".to_string(),
+            ));
+        }
+
+        sqlx::query(
+            "UPDATE points
+             SET total_points = total_points - $3
+             WHERE user_address = $1 AND epoch = $2",
+        )
+        .bind(address)
+        .bind(epoch)
+        .bind(amount)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn add_referral_points(
+        &self,
+        address: &str,
+        epoch: i64,
+        amount: rust_decimal::Decimal,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO points
+                (user_address, epoch, referral_points, total_points)
+            VALUES ($1, $2, $3, $3)
+            ON CONFLICT (user_address, epoch) DO UPDATE
+            SET referral_points = points.referral_points + EXCLUDED.referral_points,
+                total_points = points.total_points + EXCLUDED.total_points,
+                updated_at = NOW()
+            "#
+        )
+        .bind(address)
+        .bind(epoch)
+        .bind(amount)
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 }

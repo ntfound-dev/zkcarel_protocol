@@ -11,6 +11,12 @@ echo "2. Generating testnet accounts..."
 starkli account oz init .testnet-wallets/deployer --network sepolia
 starkli account oz init .testnet-wallets/treasury --network sepolia
 starkli account oz init .testnet-wallets/dev --network sepolia
+starkli account oz init .testnet-wallets/investor --network sepolia
+starkli account oz init .testnet-wallets/early_access --network sepolia
+starkli account oz init .testnet-wallets/team --network sepolia
+starkli account oz init .testnet-wallets/marketing --network sepolia
+starkli account oz init .testnet-wallets/listing --network sepolia
+starkli account oz init .testnet-wallets/ecosystem --network sepolia
 
 # 3. Fund accounts from faucet
 echo "3. Funding accounts from faucet..."
@@ -30,6 +36,12 @@ RPC_URL=https://starknet-sepolia.public.blastapi.io
 DEPLOYER_ADDRESS=$(cat .testnet-wallets/deployer/account.json | jq -r '.address')
 TREASURY_ADDRESS=$(cat .testnet-wallets/treasury/account.json | jq -r '.address')
 DEV_WALLET=$(cat .testnet-wallets/dev/account.json | jq -r '.address')
+INVESTOR_ADDRESS=$(cat .testnet-wallets/investor/account.json | jq -r '.address')
+EARLY_ACCESS_ADDRESS=$(cat .testnet-wallets/early_access/account.json | jq -r '.address')
+TEAM_ADDRESS=$(cat .testnet-wallets/team/account.json | jq -r '.address')
+MARKETING_ADDRESS=$(cat .testnet-wallets/marketing/account.json | jq -r '.address')
+LISTING_ADDRESS=$(cat .testnet-wallets/listing/account.json | jq -r '.address')
+ECOSYSTEM_ADDRESS=$(cat .testnet-wallets/ecosystem/account.json | jq -r '.address')
 
 # Emergency Council (Testnet)
 COUNCIL_1=0x...

@@ -61,6 +61,7 @@ fn setup() -> (ISnapshotDistributorDispatcher, ContractAddress, ContractAddress)
     let token = ICarelTokenDispatcher { contract_address: token_addr };
     start_cheat_caller_address(token_addr, admin);
     token.set_minter(dist_addr);
+    token.set_burner(dist_addr);
     stop_cheat_caller_address(token_addr);
 
     (dist, signer, staking_addr)
@@ -76,7 +77,7 @@ fn test_successful_claim() {
     let staking = IStakingMockDispatcher { contract_address: staking_addr };
     staking.set_user_stake(user, 100_000_000_000_000_000_000_u256);
 
-    let leaf = PoseidonTrait::new().update_with(user).update_with(amount).finalize();
+    let leaf = PoseidonTrait::new().update_with(user).update_with(amount).update_with(epoch).finalize();
     
     start_cheat_caller_address(dist.contract_address, signer);
     dist.submit_merkle_root(epoch, leaf);

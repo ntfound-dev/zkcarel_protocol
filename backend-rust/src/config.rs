@@ -26,6 +26,14 @@ pub struct Config {
     pub point_storage_address: String,
     pub price_oracle_address: String,
     pub limit_order_book_address: String,
+    pub referral_system_address: Option<String>,
+    pub ai_executor_address: String,
+    pub bridge_aggregator_address: String,
+    pub zk_privacy_router_address: String,
+    pub private_btc_swap_address: String,
+    pub dark_pool_address: String,
+    pub private_payments_address: String,
+    pub anonymous_credentials_address: String,
     
     // Faucet
     pub faucet_wallet_private_key: Option<String>,
@@ -37,6 +45,7 @@ pub struct Config {
     // Backend Signing
     pub backend_private_key: String,
     pub backend_public_key: String,
+    pub backend_account_address: Option<String>,
     
     // JWT
     pub jwt_secret: String,
@@ -47,6 +56,16 @@ pub struct Config {
     pub twitter_bearer_token: Option<String>,
     pub telegram_bot_token: Option<String>,
     pub discord_bot_token: Option<String>,
+    pub layerswap_api_key: Option<String>,
+    pub layerswap_api_url: String,
+    pub atomiq_api_key: Option<String>,
+    pub atomiq_api_url: String,
+    pub garden_api_key: Option<String>,
+    pub garden_api_url: String,
+    pub sumo_login_api_key: Option<String>,
+    pub sumo_login_api_url: String,
+    pub xverse_api_key: Option<String>,
+    pub xverse_api_url: String,
     
     // Payment Providers
     pub stripe_secret_key: Option<String>,
@@ -58,6 +77,8 @@ pub struct Config {
     
     // CORS
     pub cors_allowed_origins: String,
+    pub oracle_asset_ids: String,
+    pub bridge_provider_ids: String,
 }
 
 impl Config {
@@ -87,6 +108,14 @@ impl Config {
             point_storage_address: env::var("POINT_STORAGE_ADDRESS")?,
             price_oracle_address: env::var("PRICE_ORACLE_ADDRESS")?,
             limit_order_book_address: env::var("LIMIT_ORDER_BOOK_ADDRESS")?,
+            referral_system_address: env::var("REFERRAL_SYSTEM_ADDRESS").ok(),
+            ai_executor_address: env::var("AI_EXECUTOR_ADDRESS")?,
+            bridge_aggregator_address: env::var("BRIDGE_AGGREGATOR_ADDRESS")?,
+            zk_privacy_router_address: env::var("ZK_PRIVACY_ROUTER_ADDRESS")?,
+            private_btc_swap_address: env::var("PRIVATE_BTC_SWAP_ADDRESS")?,
+            dark_pool_address: env::var("DARK_POOL_ADDRESS")?,
+            private_payments_address: env::var("PRIVATE_PAYMENTS_ADDRESS")?,
+            anonymous_credentials_address: env::var("ANONYMOUS_CREDENTIALS_ADDRESS")?,
             
             faucet_wallet_private_key: env::var("FAUCET_WALLET_PRIVATE_KEY").ok(),
             faucet_btc_amount: env::var("FAUCET_BTC_AMOUNT").ok().and_then(|s| s.parse().ok()),
@@ -96,6 +125,7 @@ impl Config {
             
             backend_private_key: env::var("BACKEND_PRIVATE_KEY")?,
             backend_public_key: env::var("BACKEND_PUBLIC_KEY")?,
+            backend_account_address: env::var("BACKEND_ACCOUNT_ADDRESS").ok(),
             
             jwt_secret: env::var("JWT_SECRET")?,
             jwt_expiry_hours: env::var("JWT_EXPIRY_HOURS")
@@ -106,6 +136,17 @@ impl Config {
             twitter_bearer_token: env::var("TWITTER_BEARER_TOKEN").ok(),
             telegram_bot_token: env::var("TELEGRAM_BOT_TOKEN").ok(),
             discord_bot_token: env::var("DISCORD_BOT_TOKEN").ok(),
+            layerswap_api_key: env::var("LAYERSWAP_API_KEY").ok(),
+            layerswap_api_url: env::var("LAYERSWAP_API_URL")
+                .unwrap_or_else(|_| "https://api.layerswap.io/api/v2".to_string()),
+            atomiq_api_key: env::var("ATOMIQ_API_KEY").ok(),
+            atomiq_api_url: env::var("ATOMIQ_API_URL").unwrap_or_else(|_| "".to_string()),
+            garden_api_key: env::var("GARDEN_API_KEY").ok(),
+            garden_api_url: env::var("GARDEN_API_URL").unwrap_or_else(|_| "".to_string()),
+            sumo_login_api_key: env::var("SUMO_LOGIN_API_KEY").ok(),
+            sumo_login_api_url: env::var("SUMO_LOGIN_API_URL").unwrap_or_else(|_| "".to_string()),
+            xverse_api_key: env::var("XVERSE_API_KEY").ok(),
+            xverse_api_url: env::var("XVERSE_API_URL").unwrap_or_else(|_| "".to_string()),
             
             stripe_secret_key: env::var("STRIPE_SECRET_KEY").ok(),
             moonpay_api_key: env::var("MOONPAY_API_KEY").ok(),
@@ -119,6 +160,8 @@ impl Config {
             
             cors_allowed_origins: env::var("CORS_ALLOWED_ORIGINS")
                 .unwrap_or_else(|_| "*".to_string()),
+            oracle_asset_ids: env::var("ORACLE_ASSET_IDS").unwrap_or_else(|_| "".to_string()),
+            bridge_provider_ids: env::var("BRIDGE_PROVIDER_IDS").unwrap_or_else(|_| "".to_string()),
         })
     }
     
@@ -154,6 +197,27 @@ impl Config {
         if self.limit_order_book_address.starts_with("0x0000") {
             tracing::warn!("Using placeholder limit order book address");
         }
+        if self.ai_executor_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder AI executor address");
+        }
+        if self.bridge_aggregator_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder bridge aggregator address");
+        }
+        if self.zk_privacy_router_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder ZK privacy router address");
+        }
+        if self.private_btc_swap_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder private BTC swap address");
+        }
+        if self.dark_pool_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder dark pool address");
+        }
+        if self.private_payments_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder private payments address");
+        }
+        if self.anonymous_credentials_address.starts_with("0x0000") {
+            tracing::warn!("Using placeholder anonymous credentials address");
+        }
 
         if self.backend_private_key.contains("123456") || self.jwt_secret.contains("super_secret") {
             tracing::warn!("Detected dev credentials in config");
@@ -171,9 +235,21 @@ impl Config {
         let _ = &self.twitter_bearer_token;
         let _ = &self.telegram_bot_token;
         let _ = &self.discord_bot_token;
+        let _ = &self.layerswap_api_key;
+        let _ = &self.layerswap_api_url;
+        let _ = &self.atomiq_api_key;
+        let _ = &self.atomiq_api_url;
+        let _ = &self.garden_api_key;
+        let _ = &self.garden_api_url;
+        let _ = &self.sumo_login_api_key;
+        let _ = &self.sumo_login_api_url;
+        let _ = &self.xverse_api_key;
+        let _ = &self.xverse_api_url;
         let _ = &self.stripe_secret_key;
         let _ = &self.moonpay_api_key;
         let _ = &self.starknet_chain_id;
+        let _ = &self.oracle_asset_ids;
+        let _ = &self.bridge_provider_ids;
 
         Ok(())
     }
@@ -185,4 +261,32 @@ impl Config {
         let chain = self.starknet_chain_id.to_ascii_uppercase();
         chain.contains("SEPOLIA") || chain.contains("GOERLI")
     }
+}
+
+impl Config {
+    pub fn oracle_asset_id_for(&self, symbol: &str) -> Option<String> {
+        parse_kv_map(&self.oracle_asset_ids, symbol)
+    }
+
+    pub fn bridge_provider_id_for(&self, provider: &str) -> Option<String> {
+        parse_kv_map(&self.bridge_provider_ids, provider)
+    }
+}
+
+fn parse_kv_map(raw: &str, key: &str) -> Option<String> {
+    if raw.trim().is_empty() {
+        return None;
+    }
+    raw.split(',')
+        .filter_map(|entry| {
+            let mut parts = entry.split(':');
+            let k = parts.next()?.trim();
+            let v = parts.next()?.trim();
+            if k.eq_ignore_ascii_case(key) {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        })
+        .next()
 }

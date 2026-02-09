@@ -3,14 +3,17 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { useTheme } from "@/components/theme-provider"
 import { useWallet } from "@/hooks/use-wallet"
+import { useNotifications } from "@/hooks/use-notifications"
 import { Moon, Sun, Globe, Eye, EyeOff, Bell, Shield, Wallet, Trash2 } from "lucide-react"
 
 export function SettingsPage() {
   const { mode, toggleMode } = useTheme()
   const wallet = useWallet()
+  const notifications = useNotifications()
   const [theme, setTheme] = React.useState<"dark" | "light">("dark")
   const [language, setLanguage] = React.useState<"en" | "id">("en")
   const [notifications, setNotifications] = React.useState({
@@ -24,6 +27,8 @@ export function SettingsPage() {
     privateMode: mode === "private",
     analytics: true,
   })
+  const [sumoToken, setSumoToken] = React.useState("")
+  const [sumoAddress, setSumoAddress] = React.useState("")
 
   const handleThemeChange = (newTheme: "dark" | "light") => {
     setTheme(newTheme)
@@ -36,6 +41,14 @@ export function SettingsPage() {
       toggleMode()
     }
   }
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const storedToken = window.sessionStorage.getItem("sumo_login_token") || ""
+    const storedAddress = window.sessionStorage.getItem("sumo_login_address") || ""
+    setSumoToken(storedToken)
+    setSumoAddress(storedAddress)
+  }, [])
 
   return (
     <section id="settings" className="py-12">
@@ -297,6 +310,44 @@ export function SettingsPage() {
                     Disconnect
                   </Button>
                 </div>
+                <div className="p-4 rounded-lg bg-surface/30 border border-border">
+                  <p className="text-sm font-medium text-foreground mb-2">Sumo Login</p>
+                  <div className="space-y-2">
+                    <Input
+                      value={sumoToken}
+                      onChange={(e) => setSumoToken(e.target.value)}
+                      placeholder="Sumo login token"
+                    />
+                    <Input
+                      value={sumoAddress}
+                      onChange={(e) => setSumoAddress(e.target.value)}
+                      placeholder="Wallet address (optional)"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        const ok = await wallet.connectWithSumo(sumoToken, sumoAddress || undefined)
+                        if (!ok) {
+                          notifications.addNotification({
+                            type: "error",
+                            title: "Sumo Login failed",
+                            message: "Invalid token or connection error.",
+                          })
+                          return
+                        }
+                        notifications.addNotification({
+                          type: "success",
+                          title: "Sumo Login connected",
+                          message: "Your Sumo Login session is now linked.",
+                        })
+                      }}
+                      disabled={!sumoToken}
+                    >
+                      Link Sumo Login
+                    </Button>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="p-8 rounded-lg bg-surface/30 border border-border text-center">
@@ -307,6 +358,24 @@ export function SettingsPage() {
                 </Button>
               </div>
             )}
+          </div>
+
+          {/* Bridge Preferences */}
+          <div className="p-6 rounded-2xl glass-strong border border-border">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
+                <Wallet className="h-5 w-5 text-accent" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-foreground">Bridge Preferences</h3>
+                <p className="text-sm text-muted-foreground">BTC routing and address resolution</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border bg-surface/30 p-4 text-sm text-muted-foreground">
+              If you use Xverse, enter the Xverse User ID in the bridge form. If you see
+              “Address not found”, verify the ID or paste a BTC receive address manually.
+            </div>
           </div>
 
           {/* Danger Zone */}

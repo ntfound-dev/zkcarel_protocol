@@ -1,3 +1,7 @@
+/// @title Rewards Module
+/// @author CAREL Team
+/// @notice Reward distribution, points, referrals, and Merkle verification.
+/// @dev Keeps reward-related contracts grouped for clear integration paths.
 pub mod snapshot_distributor;
 pub mod point_storage;
 pub mod referral_system;

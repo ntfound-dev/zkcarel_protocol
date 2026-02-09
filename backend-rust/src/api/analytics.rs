@@ -3,20 +3,33 @@ use serde::Serialize;
 
 use super::{AppState, require_user};
 use crate::{
-    constants::{EPOCH_DURATION_SECONDS, POINTS_TO_CAREL_RATIO},
+    constants::EPOCH_DURATION_SECONDS,
     error::Result,
     models::{ApiResponse, UserPoints},
     services::AnalyticsService,
 };
 
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 
 fn decimal_or_zero(value: f64) -> Decimal {
     Decimal::from_f64_retain(value).unwrap_or(Decimal::ZERO)
 }
 
-fn estimated_carel_from_points(total_points: Decimal) -> Decimal {
-    total_points * decimal_or_zero(POINTS_TO_CAREL_RATIO)
+fn monthly_ecosystem_pool_carel() -> Decimal {
+    let total_supply = Decimal::from_i64(1_000_000_000).unwrap();
+    let bps = Decimal::from_i64(4000).unwrap();
+    let denom = Decimal::from_i64(10000).unwrap();
+    let months = Decimal::from_i64(36).unwrap();
+    total_supply * bps / denom / months
+}
+
+fn estimated_carel_from_points(total_points: Decimal, total_epoch_points: Decimal) -> Decimal {
+    if total_epoch_points == Decimal::ZERO {
+        return Decimal::ZERO;
+    }
+    let gross = (total_points / total_epoch_points) * monthly_ecosystem_pool_carel();
+    gross * Decimal::new(95, 2) // 5% tax
 }
 
 #[derive(Debug, Serialize)]
@@ -98,6 +111,13 @@ pub async fn get_analytics(
         })
         .collect::<Vec<_>>();
 
+    let total_epoch_points: Decimal = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1"
+    )
+    .bind(current_epoch)
+    .fetch_one(state.db.pool())
+    .await?;
+
     let response = AnalyticsResponse {
         portfolio: PortfolioAnalytics {
             total_value_usd: decimal_or_zero(pnl_all.current_value),
@@ -117,7 +137,7 @@ pub async fn get_analytics(
         },
         rewards: RewardsAnalytics {
             total_points,
-            estimated_carel: estimated_carel_from_points(total_points),
+            estimated_carel: estimated_carel_from_points(total_points, total_epoch_points),
             rank: 1234,
             percentile: 85.5,
         },
@@ -142,10 +162,11 @@ mod tests {
     }
 
     #[test]
-    fn estimated_carel_uses_ratio_constant() {
-        // Memastikan konversi poin ke CAREL mengikuti konstanta
+    fn estimated_carel_uses_pool_math() {
+        // Memastikan konversi poin memakai pool bulanan + tax
         let points = Decimal::from_f64_retain(100.0).unwrap();
-        let expected = points * decimal_or_zero(POINTS_TO_CAREL_RATIO);
-        assert_eq!(estimated_carel_from_points(points), expected);
+        let total_points = Decimal::from_f64_retain(1000.0).unwrap();
+        let expected = (points / total_points) * monthly_ecosystem_pool_carel() * Decimal::new(95, 2);
+        assert_eq!(estimated_carel_from_points(points, total_points), expected);
     }
 }

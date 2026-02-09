@@ -9,26 +9,44 @@ mod tests {
     use smartcontract::rewards::referral_system::{IReferralSystemDispatcher, IReferralSystemDispatcherTrait};
     use smartcontract::rewards::referral_system::ReferralSystem;
     use smartcontract::rewards::referral_system::ReferralSystem::{ReferralRegistered, BonusClaimed};
+    use smartcontract::rewards::point_storage::{IPointStorageAdminDispatcher, IPointStorageAdminDispatcherTrait, IPointStorageDispatcher, IPointStorageDispatcherTrait};
     
     // PENTING: Import semua trait storage agar .entry(), .read(), dan .write() dapat dikenali
     use starknet::storage::*;
     use core::array::ArrayTrait;
 
-    fn deploy_referral() -> IReferralSystemDispatcher {
+    fn deploy_point_storage(signer: ContractAddress) -> IPointStorageDispatcher {
+        let contract = declare("PointStorage").unwrap().contract_class();
+        let mut args = array![];
+        signer.serialize(ref args);
+        let (contract_address, _) = contract.deploy(@args).unwrap();
+        IPointStorageDispatcher { contract_address }
+    }
+
+    fn deploy_referral(admin: ContractAddress, signer: ContractAddress, point_storage: ContractAddress) -> IReferralSystemDispatcher {
         let contract = declare("ReferralSystem").unwrap().contract_class();
-        let (contract_address, _) = contract.deploy(@array![]).unwrap();
+        let mut args = array![];
+        admin.serialize(ref args);
+        signer.serialize(ref args);
+        point_storage.serialize(ref args);
+        let (contract_address, _) = contract.deploy(@args).unwrap();
         IReferralSystemDispatcher { contract_address }
     }
 
     #[test]
     fn test_registration_success() {
-        let dispatcher = deploy_referral();
+        let admin: ContractAddress = 0x1.try_into().unwrap();
+        let signer: ContractAddress = 0x2.try_into().unwrap();
+        let point_storage = deploy_point_storage(signer);
+        let dispatcher = deploy_referral(admin, signer, point_storage.contract_address);
         let mut spy = spy_events();
 
         let referrer: ContractAddress = 0x111.try_into().unwrap();
         let referee: ContractAddress = 0x222.try_into().unwrap();
 
+        start_cheat_caller_address(dispatcher.contract_address, referee);
         dispatcher.register_referral(referrer, referee);
+        stop_cheat_caller_address(dispatcher.contract_address);
 
         assert!(dispatcher.get_referrer(referee) == referrer, "Referrer mismatch");
         let referrals = dispatcher.get_referrals(referrer);
@@ -50,61 +68,81 @@ mod tests {
     #[test]
     #[should_panic(expected: "Cannot refer yourself")]
     fn test_cannot_refer_self() {
-        let dispatcher = deploy_referral();
+        let admin: ContractAddress = 0x1.try_into().unwrap();
+        let signer: ContractAddress = 0x2.try_into().unwrap();
+        let point_storage = deploy_point_storage(signer);
+        let dispatcher = deploy_referral(admin, signer, point_storage.contract_address);
         let user: ContractAddress = 0x111.try_into().unwrap();
+        start_cheat_caller_address(dispatcher.contract_address, user);
         dispatcher.register_referral(user, user);
+        stop_cheat_caller_address(dispatcher.contract_address);
     }
 
     #[test]
     fn test_valid_referral_threshold() {
-        let dispatcher = deploy_referral();
+        let admin: ContractAddress = 0x1.try_into().unwrap();
+        let signer: ContractAddress = 0x2.try_into().unwrap();
+        let point_storage = deploy_point_storage(signer);
+        let dispatcher = deploy_referral(admin, signer, point_storage.contract_address);
         let referee: ContractAddress = 0x222.try_into().unwrap();
+        let epoch: u64 = 1;
 
         // Menggunakan interact_with_state untuk memanipulasi storage internal
         interact_with_state(dispatcher.contract_address, || {
             let mut state = ReferralSystem::contract_state_for_testing();
             // Sekarang .entry() dan .write() valid karena trait sudah diimport
-            state.referral_points.entry(referee).write(50_u256);
+            state.referee_points.entry((referee, epoch)).write(50_u256);
         });
 
-        assert!(!dispatcher.is_valid_referral(referee), "Should be invalid");
+        assert!(!dispatcher.is_valid_referral(referee, epoch), "Should be invalid");
 
         interact_with_state(dispatcher.contract_address, || {
             let mut state = ReferralSystem::contract_state_for_testing();
-            state.referral_points.entry(referee).write(150_u256);
+            state.referee_points.entry((referee, epoch)).write(150_u256);
         });
 
-        assert!(dispatcher.is_valid_referral(referee), "Should be valid");
+        assert!(dispatcher.is_valid_referral(referee, epoch), "Should be valid");
     }
 
     #[test]
     fn test_claim_bonus_logic() {
-        let dispatcher = deploy_referral();
+        let admin: ContractAddress = 0x1.try_into().unwrap();
+        let signer: ContractAddress = 0x2.try_into().unwrap();
+        let point_storage = deploy_point_storage(signer);
+        let dispatcher = deploy_referral(admin, signer, point_storage.contract_address);
         let referrer: ContractAddress = 0x111.try_into().unwrap();
+        let referee: ContractAddress = 0x222.try_into().unwrap();
         let mut spy = spy_events();
+        let epoch = 1_u64;
 
-        interact_with_state(dispatcher.contract_address, || {
-            let mut state = ReferralSystem::contract_state_for_testing();
-            state.referral_points.entry(referrer).write(1000_u256);
-        });
+        // Authorize referral system as producer in PointStorage
+        let point_admin = IPointStorageAdminDispatcher { contract_address: point_storage.contract_address };
+        start_cheat_caller_address(point_storage.contract_address, signer);
+        point_admin.add_producer(dispatcher.contract_address);
+        stop_cheat_caller_address(point_storage.contract_address);
+
+        // Register referral (caller must be referee)
+        start_cheat_caller_address(dispatcher.contract_address, referee);
+        dispatcher.register_referral(referrer, referee);
+        stop_cheat_caller_address(dispatcher.contract_address);
+
+        // Backend signer records referee points (total points)
+        start_cheat_caller_address(dispatcher.contract_address, signer);
+        dispatcher.record_referee_points(epoch, referee, 200_u256);
+        stop_cheat_caller_address(dispatcher.contract_address);
 
         start_cheat_caller_address(dispatcher.contract_address, referrer);
         
-        let epoch = 1_u64;
         let bonus = dispatcher.claim_referral_bonus(epoch);
 
-        assert!(bonus == 100_u256, "Bonus calculation wrong");
-
-        interact_with_state(dispatcher.contract_address, || {
-            let mut state = ReferralSystem::contract_state_for_testing();
-            assert!(state.referral_points.entry(referrer).read() == 0, "Points not reset");
-        });
+        assert!(bonus == 20_u256, "Bonus calculation wrong");
+        assert!(point_storage.get_user_points(epoch, referrer) == 20_u256, "PointStorage not updated");
 
         spy.assert_emitted(@array![
             (
                 dispatcher.contract_address,
                 ReferralSystem::Event::BonusClaimed(
-                    BonusClaimed { referrer, amount: 100_u256, epoch }
+                    BonusClaimed { referrer, amount: 20_u256, epoch }
                 )
             )
         ]);

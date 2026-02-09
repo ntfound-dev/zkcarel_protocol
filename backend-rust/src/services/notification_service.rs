@@ -144,7 +144,7 @@ impl NotificationService {
 
 #[derive(Debug, Clone)]
 pub enum NotificationType {
-    SwapCompleted, SwapFailed, OrderFilled, OrderExpired, StakeRewards, NFTExpired, RewardClaimable, PriceAlert, System,
+    SwapCompleted, SwapFailed, OrderFilled, OrderExpired, PointsAwarded, StakeRewards, NFTExpired, RewardClaimable, PriceAlert, System,
 }
 
 impl ToString for NotificationType {
@@ -154,6 +154,7 @@ impl ToString for NotificationType {
             Self::SwapFailed => "swap.failed",
             Self::OrderFilled => "order.filled",
             Self::OrderExpired => "order.expired",
+            Self::PointsAwarded => "points.awarded",
             Self::StakeRewards => "stake.rewards",
             Self::NFTExpired => "nft.expired",
             Self::RewardClaimable => "reward.claimable",
@@ -171,6 +172,7 @@ impl NotificationType {
             Self::SwapFailed,
             Self::OrderFilled,
             Self::OrderExpired,
+            Self::PointsAwarded,
             Self::StakeRewards,
             Self::NFTExpired,
             Self::RewardClaimable,
@@ -188,6 +190,7 @@ mod tests {
     fn notification_type_to_string_maps() {
         // Memastikan mapping enum ke string berjalan benar
         assert_eq!(NotificationType::SwapCompleted.to_string(), "swap.completed");
+        assert_eq!(NotificationType::PointsAwarded.to_string(), "points.awarded");
         assert_eq!(NotificationType::System.to_string(), "system");
     }
 

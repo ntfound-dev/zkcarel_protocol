@@ -16,6 +16,7 @@ pub mod deposit_service;
 pub mod analytics_service;
 pub mod webhook_service;
 pub mod gas_optimizer;
+pub mod onchain;
 
 // Re-export for convenience
 pub use notification_service::{NotificationService};
@@ -34,7 +35,6 @@ pub use analytics_service::AnalyticsService;
 pub use webhook_service::WebhookService;
 
 use crate::{config::Config, db::Database};
-use rust_decimal::prelude::ToPrimitive;
 use sqlx::Row;
 use std::sync::Arc;
 
@@ -69,7 +69,7 @@ pub async fn start_background_services(db: Database, config: Config) {
         let merkle = MerkleGenerator::new(db.clone(), config.clone());
 
         if let Ok(tree) = merkle.generate_for_epoch(finalize_epoch).await {
-            let _ = merkle.save_merkle_root(finalize_epoch, &tree.root).await;
+            let _ = merkle.save_merkle_root(finalize_epoch, tree.root).await;
 
             if let Ok(sample) = sqlx::query(
                 "SELECT user_address, total_points FROM points
@@ -83,9 +83,16 @@ pub async fn start_background_services(db: Database, config: Config) {
                 if let Some(row) = sample {
                     let address: String = row.get("user_address");
                     let points: rust_decimal::Decimal = row.get("total_points");
-                    let amount_carel =
-                        points.to_f64().unwrap_or(0.0) * crate::constants::POINTS_TO_CAREL_RATIO;
-                    let _ = merkle.generate_proof(&tree, &address, amount_carel).await;
+                    if let Ok(total_points) = sqlx::query_scalar::<_, rust_decimal::Decimal>(
+                        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1"
+                    )
+                    .bind(finalize_epoch)
+                    .fetch_one(db.pool())
+                    .await
+                    {
+                        let amount_wei = merkle.calculate_reward_amount_wei(points, total_points);
+                        let _ = merkle.generate_proof(&tree, &address, amount_wei, finalize_epoch).await;
+                    }
                     let _ = merkle.get_merkle_root(finalize_epoch).await;
                 }
             }

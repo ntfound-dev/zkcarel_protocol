@@ -8,6 +8,9 @@ use snforge_std::{
 use smartcontract::bridge::swap_aggregator::{
     ISwapAggregatorDispatcher, ISwapAggregatorDispatcherTrait
 };
+use smartcontract::utils::price_oracle::{
+    IPriceOracle, IPriceOracleDispatcher, IPriceOracleDispatcherTrait
+};
 
 // Interface ini akan otomatis men-generate IMockDEXDispatcher dan IMockDEXDispatcherTrait
 #[starknet::interface]
@@ -40,6 +43,55 @@ pub mod MockDEX {
     impl IMockDEXImpl of super::IMockDEX<ContractState> {
         fn set_price(ref self: ContractState, price: u256) {
             self.price.write(price);
+        }
+    }
+}
+
+#[starknet::contract]
+pub mod MockPriceOracle {
+    use starknet::ContractAddress;
+    use starknet::storage::*;
+
+    #[storage]
+    pub struct Storage {
+        pub prices: Map<ContractAddress, u256>,
+    }
+
+    #[abi(embed_v0)]
+    impl OracleImpl of super::IPriceOracle<ContractState> {
+        fn get_price(self: @ContractState, token: ContractAddress, asset_id: felt252) -> u256 {
+            let _ = asset_id;
+            self.prices.entry(token).read()
+        }
+
+        fn get_price_usd(
+            self: @ContractState,
+            token: ContractAddress,
+            asset_id: felt252,
+            amount: u256,
+            decimals: u32
+        ) -> u256 {
+            let _ = asset_id;
+            let price = self.prices.entry(token).read();
+            let mut divisor: u256 = 1;
+            let mut i: u32 = 0;
+            while i < decimals {
+                divisor *= 10;
+                i += 1;
+            };
+            (amount * price) / divisor
+        }
+
+        fn update_price_manual(ref self: ContractState, token: ContractAddress, price: u256) {
+            self.prices.entry(token).write(price);
+        }
+
+        fn set_fallback_price(ref self: ContractState, token: ContractAddress, price: u256) {
+            self.prices.entry(token).write(price);
+        }
+
+        fn set_paused(ref self: ContractState, paused: bool) {
+            let _ = paused;
         }
     }
 }
@@ -115,4 +167,30 @@ fn test_execute_swap_with_mev_protection() {
     start_cheat_caller_address(dispatcher.contract_address, user);
     dispatcher.execute_swap(route, token_a, token_b, 10000, true);
     stop_cheat_caller_address(dispatcher.contract_address);
+}
+
+#[test]
+fn test_oracle_quote_uses_price_oracle() {
+    let (dispatcher, token_a, token_b, owner) = setup();
+
+    let oracle_class = declare("MockPriceOracle").unwrap().contract_class();
+    let (oracle_addr, _) = oracle_class.deploy(@array![]).unwrap();
+
+    start_cheat_caller_address(dispatcher.contract_address, owner);
+    dispatcher.set_price_oracle(oracle_addr);
+    dispatcher.set_token_oracle_config(token_a, 1, 18);
+    dispatcher.set_token_oracle_config(token_b, 2, 18);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    // Set token prices: token_a = $2, token_b = $1
+    start_cheat_caller_address(oracle_addr, owner);
+    IPriceOracleDispatcher { contract_address: oracle_addr }
+        .update_price_manual(token_a, 2);
+    IPriceOracleDispatcher { contract_address: oracle_addr }
+        .update_price_manual(token_b, 1);
+    stop_cheat_caller_address(oracle_addr);
+
+    let amount_in: u256 = 1_000_000_000_000_000_000;
+    let quote = dispatcher.get_oracle_quote(token_a, token_b, amount_in);
+    assert(quote == 2_000_000_000_000_000_000, 'Oracle quote mismatch');
 }
