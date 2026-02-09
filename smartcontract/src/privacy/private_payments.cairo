@@ -58,25 +58,6 @@ pub trait IPrivatePaymentsAdmin<TContractState> {
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
 }
 
-/// @title Private Payments Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for private payments.
-#[starknet::interface]
-pub trait IPrivatePaymentsPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
-    fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private payments action proof.
-    fn submit_private_payments_action(
-        ref self: TContractState,
-        old_root: felt252,
-        new_root: felt252,
-        nullifiers: Span<felt252>,
-        commitments: Span<felt252>,
-        public_inputs: Span<felt252>,
-        proof: Span<felt252>
-    );
-}
-
 /// @title Private Payments Contract
 /// @author CAREL Team
 /// @notice Confidential payments via encrypted commitments.
@@ -89,8 +70,6 @@ pub mod PrivatePayments {
     use core::num::traits::Zero;
     use super::PaymentCommitment;
     use super::super::zk_privacy_router::{IProofVerifierDispatcher, IProofVerifierDispatcherTrait};
-    use super::super::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
-    use super::super::action_types::ACTION_PRIVATE_PAYMENTS;
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
 
@@ -104,7 +83,6 @@ pub mod PrivatePayments {
         pub payments: Map<u64, PaymentCommitment>,
         pub nullifiers: Map<felt252, bool>,
         pub payment_count: u64,
-        pub privacy_router: ContractAddress,
         #[substorage(v0)]
         pub ownable: OwnableComponent::Storage,
     }
@@ -193,38 +171,6 @@ pub mod PrivatePayments {
             assert!(!verifier.is_zero(), "Verifier required");
             self.verifier.write(verifier);
             self.emit(Event::VerifierUpdated(VerifierUpdated { verifier }));
-        }
-    }
-
-    #[abi(embed_v0)]
-    impl PrivatePaymentsPrivacyImpl of super::IPrivatePaymentsPrivacy<ContractState> {
-        fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
-            self.ownable.assert_only_owner();
-            assert!(!router.is_zero(), "Privacy router required");
-            self.privacy_router.write(router);
-        }
-
-        fn submit_private_payments_action(
-            ref self: ContractState,
-            old_root: felt252,
-            new_root: felt252,
-            nullifiers: Span<felt252>,
-            commitments: Span<felt252>,
-            public_inputs: Span<felt252>,
-            proof: Span<felt252>
-        ) {
-            let router = self.privacy_router.read();
-            assert!(!router.is_zero(), "Privacy router not set");
-            let dispatcher = IPrivacyRouterDispatcher { contract_address: router };
-            dispatcher.submit_action(
-                ACTION_PRIVATE_PAYMENTS,
-                old_root,
-                new_root,
-                nullifiers,
-                commitments,
-                public_inputs,
-                proof
-            );
         }
     }
 }
