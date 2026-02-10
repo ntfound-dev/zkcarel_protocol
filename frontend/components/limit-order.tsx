@@ -266,6 +266,11 @@ export function LimitOrder() {
       const fromToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
       const toToken = orderType === "buy" ? selectedToken.symbol : receiveToken.symbol
 
+      notifications.addNotification({
+        type: "info",
+        title: "Order pending",
+        message: `Membuat order ${orderType === "buy" ? "beli" : "jual"} ${amount} ${selectedToken.symbol}...`,
+      })
       const response = await createLimitOrder({
         from_token: fromToken,
         to_token: toToken,

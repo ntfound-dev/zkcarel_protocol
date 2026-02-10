@@ -288,6 +288,11 @@ export function StakeEarn() {
     
     setIsStaking(true)
     try {
+      notifications.addNotification({
+        type: "info",
+        title: "Staking pending",
+        message: `Stake ${stakeAmount} ${selectedPool.symbol} sedang diproses...`,
+      })
       const response = await stakeDeposit({
         pool_id: selectedPool.symbol,
         amount: stakeAmount,
@@ -330,6 +335,11 @@ export function StakeEarn() {
     )
 
     try {
+      notifications.addNotification({
+        type: "info",
+        title: "Unstake pending",
+        message: `${target.amount} ${target.pool.symbol} sedang diproses...`,
+      })
       await stakeWithdraw({ position_id: positionId, amount: target.amount.toString() })
       setTimeout(() => {
         setPositions((prev) => prev.filter((p) => p.id !== positionId))

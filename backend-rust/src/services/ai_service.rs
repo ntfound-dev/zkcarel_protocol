@@ -1,4 +1,6 @@
-use crate::{config::Config, constants::{EPOCH_DURATION_SECONDS, POINTS_TO_CAREL_RATIO}, db::Database, error::Result};
+use crate::{config::Config, constants::EPOCH_DURATION_SECONDS, db::Database, error::Result};
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 fn extract_token_from_text(text: &str) -> String {
@@ -174,12 +176,26 @@ impl AIService {
             .map(|p| p.total_points.to_string().parse::<f64>().unwrap_or(0.0))
             .unwrap_or(0.0);
 
+        let total_points_epoch: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1"
+        )
+        .bind(epoch)
+        .fetch_one(self.db.pool())
+        .await?;
+
+        let estimated_carel = estimate_carel_from_points(
+            Decimal::from_f64_retain(total).unwrap_or(Decimal::ZERO),
+            total_points_epoch,
+        )
+        .to_f64()
+        .unwrap_or(0.0);
+
         Ok(AIResponse {
             message: format!("You have {} points this epoch! 🎉", total),
             actions: vec!["show_points_breakdown".to_string()],
             data: Some(serde_json::json!({
                 "total_points": total,
-                "estimated_carel": total * POINTS_TO_CAREL_RATIO,
+                "estimated_carel": estimated_carel,
             })),
         })
     }
@@ -236,6 +252,21 @@ pub struct AIResponse {
     pub message: String,
     pub actions: Vec<String>,
     pub data: Option<serde_json::Value>,
+}
+
+fn monthly_ecosystem_pool_carel() -> Decimal {
+    let total_supply = Decimal::from_i64(1_000_000_000).unwrap();
+    let bps = Decimal::from_i64(4000).unwrap();
+    let denom = Decimal::from_i64(10000).unwrap();
+    let months = Decimal::from_i64(36).unwrap();
+    total_supply * bps / denom / months
+}
+
+fn estimate_carel_from_points(points: Decimal, total_points: Decimal) -> Decimal {
+    if total_points.is_zero() {
+        return Decimal::ZERO;
+    }
+    (points / total_points) * monthly_ecosystem_pool_carel()
 }
 
 #[cfg(test)]

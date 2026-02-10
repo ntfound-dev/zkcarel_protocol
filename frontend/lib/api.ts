@@ -209,6 +209,29 @@ export interface AIResponse {
   confidence: number
 }
 
+export interface PendingActionsResponse {
+  pending: number[]
+}
+
+export interface PrivacySubmitResponse {
+  tx_hash: string
+}
+
+export type PrivacyActionPayload = {
+  // V2
+  action_type?: string
+  old_root?: string
+  new_root?: string
+  nullifiers?: string[]
+  commitments?: string[]
+  // V1
+  nullifier?: string
+  commitment?: string
+  // Shared
+  proof: string[]
+  public_inputs: string[]
+}
+
 export interface PortfolioHistoryPoint {
   timestamp: number
   value: number
@@ -573,7 +596,7 @@ export async function claimRewards() {
   )
 }
 
-export async function convertRewards(payload: { points: number }) {
+export async function convertRewards(payload: { points?: number; epoch?: number; total_distribution_carel?: number }) {
   return apiFetch<{ tx_hash: string; amount_carel: number; points_converted: number }>(
     "/api/v1/rewards/convert",
     {
@@ -605,8 +628,20 @@ export async function verifySocialTask(payload: { task_type: string; proof: stri
   })
 }
 
-export async function executeAiCommand(payload: { command: string; context?: string }) {
+export async function executeAiCommand(payload: { command: string; context?: string; level?: number; action_id?: number }) {
   return apiFetch<AIResponse>("/api/v1/ai/execute", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getAiPendingActions(offset = 0, limit = 10) {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  return apiFetch<PendingActionsResponse>(`/api/v1/ai/pending?${params.toString()}`)
+}
+
+export async function submitPrivacyAction(payload: PrivacyActionPayload) {
+  return apiFetch<PrivacySubmitResponse>("/api/v1/privacy/submit", {
     method: "POST",
     body: JSON.stringify(payload),
   })

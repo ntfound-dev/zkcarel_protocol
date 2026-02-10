@@ -18,6 +18,104 @@ use smartcontract::rewards::point_storage::{
 };
 use smartcontract::nft::discount_soulbound::{IDiscountSoulboundDispatcher, IDiscountSoulboundDispatcherTrait};
 use smartcontract::rewards::referral_system::{IReferralSystemDispatcher, IReferralSystemDispatcherTrait};
+use smartcontract::staking::staking_carel::{IStakingCarelDispatcher, IStakingCarelDispatcherTrait};
+use smartcontract::core::treasury::{ITreasuryDispatcher, ITreasuryDispatcherTrait};
+use smartcontract::privacy::private_payments::{
+    IPrivatePaymentsDispatcher, IPrivatePaymentsDispatcherTrait, PaymentCommitment
+};
+use smartcontract::trading::dark_pool::{IDarkPoolDispatcher, IDarkPoolDispatcherTrait, DarkOrder};
+use smartcontract::ai::ai_executor::{
+    IAIExecutorDispatcher, IAIExecutorDispatcherTrait, IAIExecutorAdminDispatcher, IAIExecutorAdminDispatcherTrait, ActionType
+};
+use smartcontract::governance::governance::{IGovernanceDispatcher, IGovernanceDispatcherTrait};
+use smartcontract::governance::timelock::{ITimelockDispatcher, ITimelockDispatcherTrait};
+use snforge_std::start_cheat_block_timestamp;
+
+#[starknet::interface]
+pub trait IMockToken<TContractState> {
+    fn set_balance(ref self: TContractState, account: ContractAddress, amount: u256);
+    fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+    fn transfer_from(
+        ref self: TContractState,
+        sender: ContractAddress,
+        recipient: ContractAddress,
+        amount: u256
+    ) -> bool;
+    fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
+    fn burn(ref self: TContractState, amount: u256);
+}
+
+#[starknet::contract]
+pub mod MockERC20 {
+    use starknet::ContractAddress;
+    use starknet::storage::*;
+
+    #[storage]
+    pub struct Storage {
+        pub balances: Map<ContractAddress, u256>
+    }
+
+    #[abi(embed_v0)]
+    impl MockTokenImpl of super::IMockToken<ContractState> {
+        fn set_balance(ref self: ContractState, account: ContractAddress, amount: u256) {
+            self.balances.entry(account).write(amount);
+        }
+
+        fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool {
+            let _ = recipient;
+            let _ = amount;
+            true
+        }
+
+        fn transfer_from(
+            ref self: ContractState,
+            sender: ContractAddress,
+            recipient: ContractAddress,
+            amount: u256
+        ) -> bool {
+            let _ = sender;
+            let _ = recipient;
+            let _ = amount;
+            true
+        }
+
+        fn balance_of(self: @ContractState, account: ContractAddress) -> u256 {
+            self.balances.entry(account).read()
+        }
+
+        fn burn(ref self: ContractState, amount: u256) {
+            let _ = amount;
+        }
+    }
+}
+
+#[starknet::interface]
+pub trait IExecTarget<TContractState> {
+    fn execute(ref self: TContractState);
+    fn get_value(self: @TContractState) -> u256;
+}
+
+#[starknet::contract]
+pub mod MockExecTarget {
+    use starknet::storage::*;
+
+    #[storage]
+    pub struct Storage {
+        pub value: u256
+    }
+
+    #[abi(embed_v0)]
+    impl ExecImpl of super::IExecTarget<ContractState> {
+        fn execute(ref self: ContractState) {
+            let current = self.value.read();
+            self.value.write(current + 1);
+        }
+
+        fn get_value(self: @ContractState) -> u256 {
+            self.value.read()
+        }
+    }
+}
 
 #[starknet::interface]
 pub trait IMockDEX<TContractState> {
@@ -92,6 +190,12 @@ fn deploy_point_storage(signer: ContractAddress) -> IPointStorageDispatcher {
     IPointStorageDispatcher { contract_address }
 }
 
+fn deploy_mock_erc20() -> ContractAddress {
+    let contract = declare("MockERC20").unwrap().contract_class();
+    let (contract_address, _) = contract.deploy(@array![]).unwrap();
+    contract_address
+}
+
 fn deploy_discount_soulbound(point_storage: ContractAddress, epoch: u64) -> IDiscountSoulboundDispatcher {
     let contract = declare("DiscountSoulbound").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -109,6 +213,89 @@ fn deploy_referral_system(admin: ContractAddress, signer: ContractAddress, point
     point_storage.serialize(ref constructor_args);
     let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
     IReferralSystemDispatcher { contract_address }
+}
+
+fn deploy_staking_carel(token: ContractAddress, reward_pool: ContractAddress) -> IStakingCarelDispatcher {
+    let contract = declare("StakingCarel").unwrap().contract_class();
+    let mut constructor_args = array![];
+    token.serialize(ref constructor_args);
+    reward_pool.serialize(ref constructor_args);
+    let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
+    IStakingCarelDispatcher { contract_address }
+}
+
+fn deploy_treasury(owner: ContractAddress, token: ContractAddress) -> ITreasuryDispatcher {
+    let contract = declare("Treasury").unwrap().contract_class();
+    let mut constructor_args = array![];
+    owner.serialize(ref constructor_args);
+    token.serialize(ref constructor_args);
+    let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
+    ITreasuryDispatcher { contract_address }
+}
+
+fn deploy_governance(voting_delay: u64, voting_period: u64) -> IGovernanceDispatcher {
+    let contract = declare("Governance").unwrap().contract_class();
+    let mut constructor_args = array![];
+    voting_delay.serialize(ref constructor_args);
+    voting_period.serialize(ref constructor_args);
+    let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
+    IGovernanceDispatcher { contract_address }
+}
+
+fn deploy_timelock(admin: ContractAddress, min_delay: u64) -> ITimelockDispatcher {
+    let contract = declare("Timelock").unwrap().contract_class();
+    let mut constructor_args = array![];
+    admin.serialize(ref constructor_args);
+    min_delay.serialize(ref constructor_args);
+    let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
+    ITimelockDispatcher { contract_address }
+}
+
+fn deploy_private_payments(admin: ContractAddress, verifier: ContractAddress) -> IPrivatePaymentsDispatcher {
+    let contract = declare("PrivatePayments").unwrap().contract_class();
+    let mut constructor_args = array![];
+    admin.serialize(ref constructor_args);
+    verifier.serialize(ref constructor_args);
+    let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
+    IPrivatePaymentsDispatcher { contract_address }
+}
+
+fn deploy_dark_pool(admin: ContractAddress, verifier: ContractAddress) -> IDarkPoolDispatcher {
+    let contract = declare("DarkPool").unwrap().contract_class();
+    let mut constructor_args = array![];
+    admin.serialize(ref constructor_args);
+    verifier.serialize(ref constructor_args);
+    let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
+    IDarkPoolDispatcher { contract_address }
+}
+
+fn deploy_ai_executor(token: ContractAddress, backend_signer: ContractAddress) -> IAIExecutorDispatcher {
+    let contract = declare("AIExecutor").unwrap().contract_class();
+    let mut constructor_args = array![];
+    token.serialize(ref constructor_args);
+    backend_signer.serialize(ref constructor_args);
+    let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
+    let admin = IAIExecutorAdminDispatcher { contract_address };
+    start_cheat_caller_address(contract_address, backend_signer);
+    admin.set_fee_config(1_000_000_000_000_000_000, 2_000_000_000_000_000_000, false);
+    admin.set_signature_verification(0.try_into().unwrap(), false);
+    stop_cheat_caller_address(contract_address);
+    IAIExecutorDispatcher { contract_address }
+}
+
+fn deploy_mock_verifier(admin: ContractAddress) -> ContractAddress {
+    let contract = declare("MockGaragaVerifier").unwrap().contract_class();
+    let mut constructor_args = array![];
+    admin.serialize(ref constructor_args);
+    true.serialize(ref constructor_args);
+    let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
+    contract_address
+}
+
+fn deploy_exec_target() -> ContractAddress {
+    let contract = declare("MockExecTarget").unwrap().contract_class();
+    let (contract_address, _) = contract.deploy(@array![]).unwrap();
+    contract_address
 }
 
 #[test]
@@ -201,6 +388,7 @@ fn test_user_points_flow() {
     let initial_points: u256 = 1_000;
     let consume_amount: u256 = 200;
     let total_points: u256 = 800;
+    let total_distribution: u256 = 1_000_000;
 
     start_cheat_caller_address(dispatcher.contract_address, signer);
     dispatcher.submit_points(epoch, user, initial_points);
@@ -211,6 +399,24 @@ fn test_user_points_flow() {
     assert(dispatcher.get_user_points(epoch, user) == total_points, 'User points mismatch');
     assert(dispatcher.get_global_points(epoch) == total_points, 'Global points mismatch');
     assert(dispatcher.is_epoch_finalized(epoch), 'Epoch should be finalized');
+    let carel_amount = dispatcher.convert_points_to_carel(epoch, total_points, total_distribution);
+    assert(carel_amount == total_distribution, 'Conversion mismatch');
+}
+
+#[test]
+fn test_points_convert_zero_total_returns_zero() {
+    let signer: ContractAddress = 0x777.try_into().unwrap();
+    let user: ContractAddress = 0x999.try_into().unwrap();
+    let dispatcher = deploy_point_storage(signer);
+    let epoch: u64 = 2;
+
+    start_cheat_caller_address(dispatcher.contract_address, signer);
+    dispatcher.submit_points(epoch, user, 500);
+    dispatcher.finalize_epoch(epoch, 0);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    let carel_amount = dispatcher.convert_points_to_carel(epoch, 500, 1_000_000);
+    assert(carel_amount == 0, 'Conversion zero');
 }
 
 #[test]
@@ -270,4 +476,142 @@ fn test_user_referral_flow() {
 
     assert(claimed == 100, 'Referral bonus mismatch');
     assert(point_storage.get_user_points(epoch, referrer) == 100, 'Point storage bonus mismatch');
+}
+
+#[test]
+fn test_user_staking_flow() {
+    let user: ContractAddress = 0x1111.try_into().unwrap();
+    let token = deploy_mock_erc20();
+    let staking = deploy_staking_carel(token, token);
+    let amount: u256 = 100_000_000_000_000_000_000;
+
+    start_cheat_caller_address(staking.contract_address, user);
+    staking.stake(amount);
+    stop_cheat_caller_address(staking.contract_address);
+
+    assert(staking.get_user_stake(user) == amount, 'Stake amount mismatch');
+}
+
+#[test]
+fn test_user_governance_flow() {
+    let governance = deploy_governance(0, 10);
+    let target = deploy_exec_target();
+    let mut targets = array![];
+    targets.append(target);
+    let mut calldata_list = array![];
+    calldata_list.append(array![].span());
+
+    let proposer: ContractAddress = 0x2222.try_into().unwrap();
+    start_cheat_caller_address(governance.contract_address, proposer);
+    let proposal_id = governance.propose(targets.span(), calldata_list.span(), "Test proposal");
+    stop_cheat_caller_address(governance.contract_address);
+
+    let voter: ContractAddress = 0x3333.try_into().unwrap();
+    start_cheat_caller_address(governance.contract_address, voter);
+    governance.vote(proposal_id, 1);
+    stop_cheat_caller_address(governance.contract_address);
+
+    governance.execute(proposal_id, targets.span(), calldata_list.span());
+
+    let target_dispatcher = IExecTargetDispatcher { contract_address: target };
+    assert(target_dispatcher.get_value() == 1, 'Governance execute failed');
+}
+
+#[test]
+fn test_user_timelock_flow() {
+    let admin: ContractAddress = 0x4444.try_into().unwrap();
+    let timelock = deploy_timelock(admin, 0);
+    let target = deploy_exec_target();
+    let selector = selector!("execute");
+    let eta: u64 = 1;
+
+    start_cheat_caller_address(timelock.contract_address, admin);
+    let tx_id = timelock.queue_transaction(target, selector, 0, array![].span(), eta);
+    start_cheat_block_timestamp(timelock.contract_address, eta);
+    timelock.execute_transaction(target, selector, 0, array![].span(), eta);
+    stop_cheat_caller_address(timelock.contract_address);
+
+    let queued = timelock.get_transaction(tx_id);
+    assert(queued.executed, 'Timelock tx not executed');
+}
+
+#[test]
+fn test_user_treasury_flow() {
+    let owner: ContractAddress = 0x5555.try_into().unwrap();
+    let collector: ContractAddress = 0x6666.try_into().unwrap();
+    let token = deploy_mock_erc20();
+    let treasury = deploy_treasury(owner, token);
+    let token_dispatcher = IMockTokenDispatcher { contract_address: token };
+
+    token_dispatcher.set_balance(treasury.contract_address, 1_000);
+
+    start_cheat_caller_address(treasury.contract_address, owner);
+    treasury.add_fee_collector(collector);
+    treasury.set_burn_config(0, false);
+    stop_cheat_caller_address(treasury.contract_address);
+
+    start_cheat_caller_address(treasury.contract_address, collector);
+    treasury.receive_fee(500);
+    stop_cheat_caller_address(treasury.contract_address);
+
+    let balance = treasury.get_treasury_balance();
+    assert(balance == 1_000, 'Treasury balance mismatch');
+}
+
+#[test]
+fn test_user_private_payments_flow() {
+    let admin: ContractAddress = 0x7777.try_into().unwrap();
+    let verifier = deploy_mock_verifier(admin);
+    let payments = deploy_private_payments(admin, verifier);
+
+    let payment = PaymentCommitment {
+        ciphertext: 1,
+        commitment: 2,
+        amount_commitment: 3,
+        finalized: false
+    };
+
+    let payment_id = payments.submit_private_payment(payment, array![].span(), array![].span());
+    payments.finalize_private_payment(payment_id, 0x123.try_into().unwrap(), 0xabc, array![].span(), array![].span());
+    assert(payments.is_nullifier_used(0xabc), 'Nullifier should be used');
+}
+
+#[test]
+fn test_user_dark_pool_flow() {
+    let admin: ContractAddress = 0x8888.try_into().unwrap();
+    let verifier = deploy_mock_verifier(admin);
+    let pool = deploy_dark_pool(admin, verifier);
+
+    let order = DarkOrder {
+        ciphertext: 1,
+        commitment: 2,
+        filled: false
+    };
+
+    let order_id = pool.submit_order(order, array![].span(), array![].span());
+    pool.match_order(order_id, 0xdef, array![].span(), array![].span());
+    assert(pool.is_nullifier_used(0xdef), 'Nullifier should be used');
+}
+
+#[test]
+fn test_user_ai_executor_flow() {
+    let backend: ContractAddress = 0x9999.try_into().unwrap();
+    let user: ContractAddress = 0xaaaa.try_into().unwrap();
+    let token = deploy_mock_erc20();
+    let executor = deploy_ai_executor(token, backend);
+
+    start_cheat_caller_address(executor.contract_address, user);
+    let start_id = executor.batch_submit_actions(ActionType::Swap, "swap", 3);
+    let pending = executor.get_pending_actions(user);
+    stop_cheat_caller_address(executor.contract_address);
+
+    assert(start_id == 1, 'Start id mismatch');
+    assert(pending.len() == 3, 'Pending count mismatch');
+
+    start_cheat_caller_address(executor.contract_address, backend);
+    executor.batch_execute_actions(array![1, 2, 3].span(), array![].span());
+    stop_cheat_caller_address(executor.contract_address);
+
+    let pending_after = executor.get_pending_actions(user);
+    assert(pending_after.len() == 0, 'Pending not cleared');
 }

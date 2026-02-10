@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{error::Result, models::ApiResponse, services::ai_service::AIService};
 use crate::indexer::starknet_client::StarknetClient;
 use super::{AppState, require_user};
+use axum::extract::Query;
 
 #[derive(Debug, Deserialize)]
 pub struct AICommandRequest {
@@ -18,6 +19,17 @@ pub struct AICommandResponse {
     pub actions: Vec<String>,
     pub confidence: f64,
     pub level: u8,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PendingActionsQuery {
+    pub offset: Option<u64>,
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingActionsResponse {
+    pub pending: Vec<u64>,
 }
 
 fn build_command(command: &str, context: &Option<String>) -> String {
@@ -43,6 +55,12 @@ pub async fn execute_command(
 
     let command = build_command(&req.command, &req.context);
     let level = req.level.unwrap_or(1);
+    tracing::info!(
+        "AI execute: user={}, level={}, action_id={:?}",
+        user_address,
+        level,
+        req.action_id
+    );
 
     if level == 0 || level > 3 {
         return Err(crate::error::AppError::BadRequest("Invalid AI level".into()));
@@ -66,6 +84,44 @@ pub async fn execute_command(
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+/// GET /api/v1/ai/pending?offset=0&limit=10
+pub async fn get_pending_actions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PendingActionsQuery>,
+) -> Result<Json<ApiResponse<PendingActionsResponse>>> {
+    let user_address = require_user(&headers, &state).await?;
+    let contract = state.config.ai_executor_address.trim();
+    if contract.is_empty() || contract.starts_with("0x0000") {
+        return Err(crate::error::AppError::BadRequest("AI executor not configured".into()));
+    }
+
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(10).min(50);
+    let client = StarknetClient::new(state.config.starknet_rpc_url.clone());
+    let result = client
+        .call_contract(
+            contract,
+            "get_pending_actions_page",
+            vec![user_address.to_string(), offset.to_string(), limit.to_string()],
+        )
+        .await?;
+
+    let mut pending = vec![];
+    if let Some(len_hex) = result.get(0) {
+        let len = parse_felt_u64(len_hex).unwrap_or(0);
+        for i in 0..len as usize {
+            if let Some(val) = result.get(i + 1) {
+                if let Some(parsed) = parse_felt_u64(val) {
+                    pending.push(parsed);
+                }
+            }
+        }
+    }
+
+    Ok(Json(ApiResponse::success(PendingActionsResponse { pending })))
 }
 
 async fn ensure_onchain_action(

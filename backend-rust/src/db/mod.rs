@@ -30,6 +30,7 @@ mod tests {
             ai_executor_address: "0x0000000000000000000000000000000000000006".to_string(),
             bridge_aggregator_address: "0x0000000000000000000000000000000000000007".to_string(),
             zk_privacy_router_address: "0x0000000000000000000000000000000000000008".to_string(),
+            privacy_router_address: None,
             private_btc_swap_address: "0x0000000000000000000000000000000000000009".to_string(),
             dark_pool_address: "0x0000000000000000000000000000000000000010".to_string(),
             private_payments_address: "0x0000000000000000000000000000000000000011".to_string(),

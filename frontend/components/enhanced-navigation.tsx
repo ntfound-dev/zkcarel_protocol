@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { useWallet, type WalletProviderType } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
 import { Button } from "@/components/ui/button"
+import { PrivacyRouterPanel } from "@/components/privacy-router-panel"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,11 +31,9 @@ import {
 } from "lucide-react"
 
 const walletProviders: { id: WalletProviderType; name: string; icon: string }[] = [
-  { id: 'metamask', name: 'MetaMask', icon: '🦊' },
-  { id: 'okx', name: 'OKX Wallet', icon: '⭕' },
-  { id: 'walletconnect', name: 'WalletConnect', icon: '🔗' },
-  { id: 'coinbase', name: 'Coinbase Wallet', icon: '💙' },
-  { id: 'trust', name: 'Trust Wallet', icon: '🛡️' },
+  { id: 'starknet', name: 'Starknet Wallet', icon: '✨' },
+  { id: 'argentx', name: 'Argent X', icon: '🧡' },
+  { id: 'braavos', name: 'Braavos', icon: '🛡️' },
 ]
 
 const faucetTokens = [
@@ -70,6 +69,7 @@ export function EnhancedNavigation() {
   const [txHistoryOpen, setTxHistoryOpen] = React.useState(false)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [topUpOpen, setTopUpOpen] = React.useState(false)
+  const [privacyOpen, setPrivacyOpen] = React.useState(false)
   const [claimedFaucet, setClaimedFaucet] = React.useState<string[]>([])
   const [copiedAddress, setCopiedAddress] = React.useState(false)
   const [txFilter, setTxFilter] = React.useState("all")
@@ -490,6 +490,10 @@ export function EnhancedNavigation() {
                   <History className="h-4 w-4 mr-2" />
                   Transaction History
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setPrivacyOpen(true)}>
+                  <Lock className="h-4 w-4 mr-2" />
+                  Privacy Router
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -521,6 +525,17 @@ export function EnhancedNavigation() {
                   Connect Wallet
                 </Button>
               )}
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPrivacyOpen(true)
+                  setMobileMenuOpen(false)
+                }}
+                className="w-full"
+              >
+                <Lock className="h-4 w-4 mr-2" />
+                Privacy Router
+              </Button>
               <Link href="#trade" className="block px-4 py-3 rounded-lg hover:bg-surface transition-colors">
                 <div className="flex items-center gap-2">
                   <ArrowRightLeft className="h-5 w-5 text-primary" />
@@ -745,6 +760,19 @@ export function EnhancedNavigation() {
                 </a>
               </div>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Privacy Router Dialog */}
+      <Dialog open={privacyOpen} onOpenChange={setPrivacyOpen}>
+        <DialogContent className="glass-strong border-border max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Privacy Router</DialogTitle>
+            <DialogDescription>Submit privacy proofs (V2/V1) through the backend.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto pr-1">
+            <PrivacyRouterPanel compact />
           </div>
         </DialogContent>
       </Dialog>

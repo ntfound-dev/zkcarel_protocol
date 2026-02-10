@@ -118,3 +118,103 @@ fn test_execute_action_unauthorized_fails() {
     
     dispatcher.execute_action(action_id, array![].span());
 }
+
+#[test]
+fn test_batch_submit_and_execute() {
+    let (dispatcher, backend, user, _) = setup();
+
+    start_cheat_caller_address(dispatcher.contract_address, user);
+    let start_id = dispatcher.batch_submit_actions(ActionType::Swap, "batch", 3);
+    let pending = dispatcher.get_pending_actions(user);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    assert!(start_id == 1, "Start id mismatch");
+    assert!(pending.len() == 3, "Pending count mismatch");
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    dispatcher.batch_execute_actions(array![1, 2, 3].span(), array![].span());
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    let pending_after = dispatcher.get_pending_actions(user);
+    assert!(pending_after.len() == 0, "Pending not cleared");
+}
+
+#[test]
+fn test_get_pending_actions_page() {
+    let (dispatcher, _, user, _) = setup();
+
+    start_cheat_caller_address(dispatcher.contract_address, user);
+    let _ = dispatcher.batch_submit_actions(ActionType::Swap, "page", 5);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    let page1 = dispatcher.get_pending_actions_page(user, 0, 2);
+    let page2 = dispatcher.get_pending_actions_page(user, 2, 2);
+    let page3 = dispatcher.get_pending_actions_page(user, 4, 2);
+
+    assert!(page1.len() == 2, "Page1 size");
+    assert!(page2.len() == 2, "Page2 size");
+    assert!(page3.len() == 1, "Page3 size");
+}
+
+#[test]
+#[should_panic(expected: "Batch too large")]
+fn test_batch_execute_too_large_panics() {
+    let (dispatcher, backend, user, _) = setup();
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+    admin.set_max_batch_execute(2);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, user);
+    let _ = dispatcher.batch_submit_actions(ActionType::Swap, "batch", 3);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    dispatcher.batch_execute_actions(array![1, 2, 3].span(), array![].span());
+}
+
+#[test]
+#[should_panic(expected: "Too many pending actions")]
+fn test_max_actions_per_user_enforced() {
+    let (dispatcher, backend, user, _) = setup();
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+    admin.set_max_actions_per_user(2);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, user);
+    dispatcher.submit_action(ActionType::Swap, "one", array![].span());
+    dispatcher.submit_action(ActionType::Swap, "two", array![].span());
+    dispatcher.submit_action(ActionType::Swap, "three", array![].span());
+}
+
+#[test]
+fn test_get_pending_actions_page_limit_zero_returns_empty() {
+    let (dispatcher, _, user, _) = setup();
+
+    start_cheat_caller_address(dispatcher.contract_address, user);
+    let _ = dispatcher.batch_submit_actions(ActionType::Swap, "page", 2);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    let page = dispatcher.get_pending_actions_page(user, 0, 0);
+    assert!(page.len() == 0, "Limit zero should return empty");
+}
+
+#[test]
+fn test_get_pending_actions_respects_max_scan() {
+    let (dispatcher, backend, user, _) = setup();
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+    admin.set_max_pending_scan(1);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, user);
+    let _ = dispatcher.batch_submit_actions(ActionType::Swap, "scan", 3);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    let pending = dispatcher.get_pending_actions(user);
+    assert!(pending.len() == 1, "Max scan should cap results");
+}

@@ -355,6 +355,10 @@ export function RewardsHub() {
   const [isMintingTier, setIsMintingTier] = React.useState<number | null>(null)
   const [taskInputs, setTaskInputs] = React.useState<Record<string, string>>({})
   const [taskStatus, setTaskStatus] = React.useState<Record<string, { status: "idle" | "verifying" | "success" | "error"; message?: string; points?: number }>>({})
+  const [currentEpoch, setCurrentEpoch] = React.useState<number | null>(null)
+  const [convertEpoch, setConvertEpoch] = React.useState("")
+  const [convertDistribution, setConvertDistribution] = React.useState("")
+  const [showAdvancedConvert, setShowAdvancedConvert] = React.useState(false)
   const monthlyPoolLabel = React.useMemo(
     () => MONTHLY_POOL_CAREL.toLocaleString(undefined, { maximumFractionDigits: 2 }),
     []
@@ -388,6 +392,10 @@ export function RewardsHub() {
         if (!active) return
         setUsablePoints(Math.round(rewards.total_points))
         setEverPoints(Math.round(rewards.total_points))
+        setCurrentEpoch(rewards.current_epoch)
+        if (!convertEpoch) {
+          setConvertEpoch(String(rewards.current_epoch))
+        }
       } catch {
         // keep fallback
       }
@@ -469,7 +477,43 @@ export function RewardsHub() {
     if (usablePoints <= 0) return
     try {
       setIsConverting(true)
-      const result = await convertRewards({ points: usablePoints })
+      notifications.addNotification({
+        type: "info",
+        title: "Convert pending",
+        message: "Konversi points ke CAREL sedang diproses...",
+      })
+      const payload: { points?: number; epoch?: number; total_distribution_carel?: number } = {
+        points: usablePoints,
+      }
+      if (showAdvancedConvert) {
+        const epochValue = Number(convertEpoch)
+        if (convertEpoch.trim() !== "") {
+          if (!Number.isFinite(epochValue) || epochValue < 0) {
+            notifications.addNotification({
+              type: "error",
+              title: "Invalid epoch",
+              message: "Epoch harus angka >= 0.",
+            })
+            setIsConverting(false)
+            return
+          }
+          payload.epoch = Math.floor(epochValue)
+        }
+        const distValue = Number(convertDistribution)
+        if (convertDistribution.trim() !== "" && (!Number.isFinite(distValue) || distValue < 0)) {
+          notifications.addNotification({
+            type: "error",
+            title: "Invalid distribution",
+            message: "Total distribution harus angka positif.",
+          })
+          setIsConverting(false)
+          return
+        }
+        if (Number.isFinite(distValue) && convertDistribution.trim() !== "") {
+          payload.total_distribution_carel = distValue
+        }
+      }
+      const result = await convertRewards(payload)
       notifications.addNotification({
         type: "success",
         title: "Convert success",
@@ -489,6 +533,11 @@ export function RewardsHub() {
 
   const handleClaim = async () => {
     try {
+      notifications.addNotification({
+        type: "info",
+        title: "Claim pending",
+        message: "Claim rewards sedang diproses...",
+      })
       const result = await claimRewards()
       notifications.addNotification({
         type: "success",
@@ -589,6 +638,36 @@ export function RewardsHub() {
             </div>
 
             <div className="grid gap-2">
+              <button
+                onClick={() => setShowAdvancedConvert((prev) => !prev)}
+                className="text-xs text-muted-foreground text-left"
+              >
+                {showAdvancedConvert ? "Hide advanced convert" : "Advanced convert (epoch/distribution)"}
+              </button>
+              {showAdvancedConvert && (
+                <div className="grid gap-2 p-3 rounded-lg bg-surface/50 border border-border">
+                  <div>
+                    <label className="text-xs text-muted-foreground">Epoch</label>
+                    <input
+                      type="number"
+                      value={convertEpoch}
+                      onChange={(e) => setConvertEpoch(e.target.value)}
+                      placeholder={currentEpoch ? String(currentEpoch) : "0"}
+                      className="w-full mt-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Total distribution (CAREL)</label>
+                    <input
+                      type="number"
+                      value={convertDistribution}
+                      onChange={(e) => setConvertDistribution(e.target.value)}
+                      placeholder="Optional"
+                      className="w-full mt-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-sm"
+                    />
+                  </div>
+                </div>
+              )}
               <Button
                 onClick={handleConvert}
                 disabled={usablePoints <= 0 || isConverting}

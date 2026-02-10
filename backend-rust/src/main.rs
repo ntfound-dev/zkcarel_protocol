@@ -274,6 +274,7 @@ fn build_router(state: api::AppState) -> Router {
         .route("/api/v1/webhooks/logs", get(api::webhooks::get_logs))
         // AI Assistant
         .route("/api/v1/ai/execute", post(api::ai::execute_command))
+        .route("/api/v1/ai/pending", get(api::ai::get_pending_actions))
         // WebSocket endpoints
         .route("/ws/notifications", get(websocket::notifications::handler))
         .route("/ws/prices", get(websocket::prices::handler))

@@ -61,3 +61,6 @@ public/           # Static assets
 ## Catatan Integrasi
 - JWT disimpan di `localStorage` dengan key `auth_token` dan otomatis disertakan sebagai header `Authorization`.
 - WebSocket notifications menggunakan query `?token=`.
+- Wallet: frontend memakai injected Starknet wallet (Argent X/Braavos). Jika tidak ada, fallback ke demo address.
+- AI Tier 2/3 membutuhkan `action_id` on-chain (frontend meminta input).
+- Privacy Router tersedia lewat menu (More → Privacy Router) untuk submit proof V2/V1.

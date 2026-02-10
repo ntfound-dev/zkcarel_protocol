@@ -45,6 +45,18 @@ pub trait IPointStorage<TContractState> {
     /// @param epoch Epoch identifier.
     /// @return finalized True if finalized.
     fn is_epoch_finalized(self: @TContractState, epoch: u64) -> bool;
+    /// @notice Converts user points into CAREL distribution for an epoch.
+    /// @dev Uses total distribution and global epoch points.
+    /// @param epoch Epoch identifier.
+    /// @param user_points User points for the epoch.
+    /// @param total_distribution Total CAREL to distribute for the epoch.
+    /// @return carel_amount CAREL amount for the user.
+    fn convert_points_to_carel(
+        self: @TContractState,
+        epoch: u64,
+        user_points: u256,
+        total_distribution: u256
+    ) -> u256;
 }
 
 /// @title Point Storage Privacy Interface
@@ -219,6 +231,28 @@ pub mod PointStorage {
         /// @return finalized True if finalized.
         fn is_epoch_finalized(self: @ContractState, epoch: u64) -> bool {
             self.epoch_finalized.entry(epoch).read()
+        }
+
+        /// @notice Converts user points into CAREL distribution for an epoch.
+        /// @dev Uses total distribution and global epoch points.
+        /// @param epoch Epoch identifier.
+        /// @param user_points User points for the epoch.
+        /// @param total_distribution Total CAREL to distribute for the epoch.
+        /// @return carel_amount CAREL amount for the user.
+        fn convert_points_to_carel(
+            self: @ContractState,
+            epoch: u64,
+            user_points: u256,
+            total_distribution: u256
+        ) -> u256 {
+            if !self.epoch_finalized.entry(epoch).read() {
+                return 0;
+            }
+            let total_points = self.global_points.entry(epoch).read();
+            if total_points == 0 {
+                return 0;
+            }
+            (user_points * total_distribution) / total_points
         }
     }
 

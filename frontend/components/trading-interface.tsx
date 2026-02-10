@@ -383,6 +383,11 @@ export function TradingInterface() {
 
     try {
       if (isCrossChain) {
+        notifications.addNotification({
+          type: "info",
+          title: "Bridge pending",
+          message: `Bridge ${fromAmount} ${fromToken.symbol} in progress...`,
+        })
         const response = await executeBridge({
           from_chain: chainFromNetwork(fromToken.network),
           to_chain: chainFromNetwork(toToken.network),
@@ -400,6 +405,11 @@ export function TradingInterface() {
         const slippageValue = Number(activeSlippage || "0.5")
         const minAmountOut = (Number.parseFloat(toAmount || "0") * (1 - slippageValue / 100)).toFixed(6)
         const deadline = Math.floor(Date.now() / 1000) + 60 * 20
+        notifications.addNotification({
+          type: "info",
+          title: "Swap pending",
+          message: `Swap ${fromAmount} ${fromToken.symbol} in progress...`,
+        })
         const response = await executeSwap({
           from_token: fromToken.symbol,
           to_token: toToken.symbol,

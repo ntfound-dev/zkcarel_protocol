@@ -4,7 +4,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Bot, User, Send, Sparkles, Coins, X, Minus, ChevronUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { executeAiCommand } from "@/lib/api"
+import { executeAiCommand, getAiPendingActions } from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
 
 const aiTiers = [
@@ -36,6 +36,9 @@ export function FloatingAIAssistant() {
   const [carelBalance, setCarelBalance] = React.useState(245)
   const [purchasedTiers, setPurchasedTiers] = React.useState<number[]>([1])
   const [isSending, setIsSending] = React.useState(false)
+  const [actionId, setActionId] = React.useState("")
+  const [pendingActions, setPendingActions] = React.useState<number[]>([])
+  const [isLoadingActions, setIsLoadingActions] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -54,10 +57,27 @@ export function FloatingAIAssistant() {
     setInput("")
     setIsSending(true)
 
+    let actionIdValue: number | undefined = undefined
+    if (selectedTier >= 2) {
+      const parsed = Number(actionId)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        notifications.addNotification({
+          type: "error",
+          title: "AI Tier requires action_id",
+          message: "Masukkan action_id on-chain untuk Tier 2/3.",
+        })
+        setIsSending(false)
+        return
+      }
+      actionIdValue = Math.floor(parsed)
+    }
+
     try {
       const response = await executeAiCommand({
         command,
         context: `tier:${selectedTier}`,
+        level: selectedTier,
+        action_id: actionIdValue,
       })
       setMessages((prev) => [...prev, { role: "assistant", content: response.response }])
     } catch (error) {
@@ -76,6 +96,29 @@ export function FloatingAIAssistant() {
       })
     } finally {
       setIsSending(false)
+    }
+  }
+
+  const fetchPendingActions = async () => {
+    setIsLoadingActions(true)
+    try {
+      const response = await getAiPendingActions(0, 10)
+      setPendingActions(response.pending || [])
+      if ((response.pending || []).length === 0) {
+        notifications.addNotification({
+          type: "info",
+          title: "AI Actions",
+          message: "Tidak ada pending action untuk akun ini.",
+        })
+      }
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "AI Actions",
+        message: error instanceof Error ? error.message : "Gagal mengambil pending actions.",
+      })
+    } finally {
+      setIsLoadingActions(false)
     }
   }
 
@@ -235,6 +278,48 @@ export function FloatingAIAssistant() {
                     )
                   })}
                 </div>
+                {selectedTier >= 2 && (
+                  <div className="mt-2">
+                    <label className="text-[11px] text-muted-foreground block mb-1">
+                      Action ID (on-chain, required for Tier 2/3)
+                    </label>
+                    <input
+                      type="number"
+                      value={actionId}
+                      onChange={(e) => setActionId(e.target.value)}
+                      placeholder="e.g. 12"
+                      className="w-full px-2 py-1.5 rounded-md bg-surface border border-border text-foreground text-xs placeholder:text-muted-foreground focus:border-primary focus:outline-none transition-all"
+                      min={1}
+                    />
+                    <div className="flex items-center justify-between mt-2">
+                      <button
+                        onClick={fetchPendingActions}
+                        disabled={isLoadingActions}
+                        className="text-[11px] text-primary hover:underline disabled:opacity-50"
+                      >
+                        {isLoadingActions ? "Loading..." : "Fetch pending action_id"}
+                      </button>
+                      {pendingActions.length > 0 && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {pendingActions.length} pending
+                        </span>
+                      )}
+                    </div>
+                    {pendingActions.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {pendingActions.map((id) => (
+                          <button
+                            key={id}
+                            onClick={() => setActionId(String(id))}
+                            className="px-2 py-0.5 rounded-full text-[10px] bg-primary/10 text-primary hover:bg-primary/20"
+                          >
+                            {id}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               
               {/* Messages */}
