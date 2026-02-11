@@ -13,10 +13,36 @@ const parseList = (value: string) =>
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
 
+type PrivacyHistoryStatus = "pending" | "confirmed" | "failed"
+
+type PrivacyHistoryItem = {
+  id: string
+  mode: "v1" | "v2"
+  actionType?: string
+  txHash: string
+  createdAt: string
+  status: PrivacyHistoryStatus
+}
+
+const HISTORY_KEY = "privacy_history_v2"
+
+const shortHash = (hash: string) => {
+  if (!hash) return ""
+  if (hash.length <= 12) return hash
+  return `${hash.slice(0, 8)}...${hash.slice(-4)}`
+}
+
+const statusStyle: Record<PrivacyHistoryStatus, string> = {
+  pending: "bg-secondary/20 text-secondary",
+  confirmed: "bg-success/20 text-success",
+  failed: "bg-destructive/20 text-destructive",
+}
+
 export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
   const notifications = useNotifications()
   const [mode, setMode] = React.useState<"v2" | "v1">("v2")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [history, setHistory] = React.useState<PrivacyHistoryItem[]>([])
 
   const [actionType, setActionType] = React.useState("")
   const [oldRoot, setOldRoot] = React.useState("")
@@ -29,6 +55,49 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
 
   const [publicInputs, setPublicInputs] = React.useState("")
   const [proof, setProof] = React.useState("")
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const raw = window.localStorage.getItem(HISTORY_KEY)
+    if (!raw) return
+    try {
+      const parsed = JSON.parse(raw) as PrivacyHistoryItem[]
+      if (Array.isArray(parsed)) {
+        setHistory(parsed)
+      }
+    } catch {
+      // ignore corrupted cache
+    }
+  }, [])
+
+  const persistHistory = (items: PrivacyHistoryItem[]) => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(items))
+  }
+
+  const pushHistory = (entry: PrivacyHistoryItem) => {
+    setHistory((prev) => {
+      const next = [entry, ...prev].slice(0, 15)
+      persistHistory(next)
+      return next
+    })
+  }
+
+  const updateHistoryStatus = (id: string, status: PrivacyHistoryStatus) => {
+    setHistory((prev) => {
+      const next = prev.map((item) => (item.id === id ? { ...item, status } : item))
+      persistHistory(next)
+      return next
+    })
+  }
+
+  const removeHistory = (id: string) => {
+    setHistory((prev) => {
+      const next = prev.filter((item) => item.id !== id)
+      persistHistory(next)
+      return next
+    })
+  }
 
   const handleSubmit = async () => {
     const shared: Pick<PrivacyActionPayload, "proof" | "public_inputs"> = {
@@ -78,6 +147,14 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
         message: "Mengirim privacy action ke backend...",
       })
       const result = await submitPrivacyAction(payload)
+      pushHistory({
+        id: result.tx_hash,
+        mode,
+        actionType: mode === "v2" ? actionType : undefined,
+        txHash: result.tx_hash,
+        createdAt: new Date().toISOString(),
+        status: "pending",
+      })
       notifications.addNotification({
         type: "success",
         title: "Privacy submitted",
@@ -224,6 +301,78 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
             {isSubmitting ? "Submitting..." : "Submit Privacy Action"}
             <Send className="h-4 w-4 ml-2" />
           </Button>
+        </div>
+
+        <div className="mt-6 border-t border-border/60 pt-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-foreground">History</h3>
+            <span className="text-xs text-muted-foreground">{history.length} entries</span>
+          </div>
+          {history.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/70 p-4 text-xs text-muted-foreground">
+              Belum ada submit proof. Setelah submit, riwayat akan muncul di sini.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {history.map((item) => (
+                <div key={item.id} className="rounded-xl border border-border bg-surface/40 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-foreground">{shortHash(item.txHash)}</span>
+                      <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase", statusStyle[item.status])}>
+                        {item.status}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary uppercase">
+                        {item.mode}
+                      </span>
+                      {item.actionType && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                          {item.actionType}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">
+                      {new Date(item.createdAt).toLocaleString("id-ID")}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigator.clipboard.writeText(item.txHash)}
+                    >
+                      Copy TX
+                    </Button>
+                    {item.status !== "confirmed" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => updateHistoryStatus(item.id, "confirmed")}
+                      >
+                        Mark Confirmed
+                      </Button>
+                    )}
+                    {item.status !== "failed" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => updateHistoryStatus(item.id, "failed")}
+                      >
+                        Mark Failed
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeHistory(item.id)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </section>

@@ -4,10 +4,13 @@ import * as React from 'react'
 import { createContext, useContext, useEffect, useState } from 'react'
 
 type Theme = 'dark' | 'light'
+type Mode = 'private' | 'transparent'
 
 interface ThemeProviderContextValue {
   theme: Theme
   setTheme: (theme: Theme) => void
+  mode: Mode
+  toggleMode: () => void
 }
 
 const ThemeProviderContext = createContext<ThemeProviderContextValue | undefined>(undefined)
@@ -22,6 +25,11 @@ export function ThemeProvider({
   defaultTheme = 'dark',
 }: ThemeProviderProps) {
   const [theme, setTheme] = useState<Theme>(defaultTheme)
+  const [mode, setMode] = useState<Mode>(defaultTheme === 'dark' ? 'private' : 'transparent')
+
+  const toggleMode = React.useCallback(() => {
+    setMode((prev) => (prev === 'private' ? 'transparent' : 'private'))
+  }, [])
 
   useEffect(() => {
     const root = window.document.documentElement
@@ -34,6 +42,8 @@ export function ThemeProvider({
       value={{
         theme,
         setTheme,
+        mode,
+        toggleMode,
       }}
     >
       {children}

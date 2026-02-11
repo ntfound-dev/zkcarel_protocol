@@ -8,10 +8,16 @@ use crate::{
     error::Result,
     models::ApiResponse,
 };
+use crate::services::onchain::{OnchainInvoker, OnchainReader, parse_felt, u256_to_felts, u256_from_felts};
+use crate::services::MerkleGenerator;
 
 use super::{AppState, require_user};
 use crate::indexer::starknet_client::StarknetClient;
 use crate::error::AppError;
+use starknet_core::types::{Call, FunctionCall};
+use starknet_core::utils::get_selector_from_name;
+use starknet_core::types::Felt;
+use starknet_crypto::Felt as CryptoFelt;
 
 #[derive(Debug, Serialize)]
 pub struct PointsResponse {
@@ -53,6 +59,57 @@ fn calculate_epoch_reward(points: Decimal, total_points: Decimal, total_distribu
         return Decimal::ZERO;
     }
     (points / total_points) * total_distribution
+}
+
+const ONE_CAREL_WEI: u128 = 1_000_000_000_000_000_000;
+
+fn wei_to_carel_amount(wei: u128) -> Decimal {
+    let wei_dec = Decimal::from_u128(wei).unwrap_or(Decimal::ZERO);
+    let denom = Decimal::from_u128(ONE_CAREL_WEI).unwrap_or(Decimal::ONE);
+    wei_dec / denom
+}
+
+fn crypto_felt_to_core(value: &CryptoFelt) -> Result<Felt> {
+    let hex = value.to_fixed_hex_string();
+    Ok(Felt::from_hex(&hex).map_err(|e| AppError::Internal(format!("Invalid felt hex: {}", e)))?)
+}
+
+async fn fetch_treasury_distribution_onchain(state: &AppState) -> Result<Option<Decimal>> {
+    let Some(treasury_address) = state.config.treasury_address.as_deref() else {
+        return Ok(None);
+    };
+    if treasury_address.trim().is_empty() || treasury_address.starts_with("0x0000") {
+        return Ok(None);
+    }
+
+    let reader = OnchainReader::from_config(&state.config)?;
+    let call = FunctionCall {
+        contract_address: parse_felt(treasury_address)?,
+        entry_point_selector: get_selector_from_name("get_treasury_balance")
+            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?,
+        calldata: vec![],
+    };
+    let result = reader.call(call).await?;
+    if result.len() < 2 {
+        return Ok(None);
+    }
+    let balance = u256_from_felts(&result[0], &result[1])?;
+    let balance_dec = Decimal::from_u128(balance).unwrap_or(Decimal::ZERO);
+    let denom = Decimal::from_u128(ONE_CAREL_WEI).unwrap_or(Decimal::ONE);
+    Ok(Some(balance_dec / denom))
+}
+
+async fn resolve_total_distribution(
+    state: &AppState,
+    requested: Option<f64>,
+) -> Result<Decimal> {
+    if let Some(val) = requested {
+        return Ok(Decimal::from_f64_retain(val).unwrap_or(Decimal::ZERO));
+    }
+    if let Some(onchain) = fetch_treasury_distribution_onchain(state).await? {
+        return Ok(onchain);
+    }
+    Ok(monthly_ecosystem_pool_carel())
 }
 
 /// GET /api/v1/rewards/points
@@ -127,13 +184,32 @@ pub async fn claim_rewards(
     .fetch_one(state.db.pool())
     .await?;
 
-    let carel_amount_dec = calculate_epoch_reward(points.total_points, total_points_epoch, monthly_ecosystem_pool_carel());
+    let total_distribution = resolve_total_distribution(&state, None).await?;
+    let carel_amount_dec = calculate_epoch_reward(points.total_points, total_points_epoch, total_distribution);
     let net_carel_dec = carel_amount_dec * Decimal::new(95, 2); // 95% after tax
     let carel_amount = net_carel_dec.to_f64().unwrap_or(0.0);
     let total_points: f64 = points.total_points.to_string().parse().unwrap_or(0.0);
 
-    // Execute claim transaction (mock)
-    let tx_hash = format!("0x{}", hex::encode(&rand::random::<[u8; 32]>()));
+    let mut tx_hash = format!("0x{}", hex::encode(&rand::random::<[u8; 32]>()));
+    let mut carel_amount_out = carel_amount;
+
+    match claim_rewards_onchain(
+        &state,
+        prev_epoch,
+        &user_address,
+        points.total_points,
+        total_points_epoch,
+        total_distribution,
+    ).await {
+        Ok(Some((onchain_tx, net_amount))) => {
+            tx_hash = onchain_tx;
+            carel_amount_out = net_amount.to_f64().unwrap_or(carel_amount);
+        }
+        Ok(None) => {}
+        Err(err) => {
+            return Err(err);
+        }
+    }
 
     tracing::info!(
         "Rewards claimed: {} CAREL for {} points (user: {})",
@@ -144,7 +220,7 @@ pub async fn claim_rewards(
 
     let response = ClaimResponse {
         tx_hash,
-        amount_carel: carel_amount,
+        amount_carel: carel_amount_out,
         points_converted: total_points,
     };
 
@@ -192,10 +268,7 @@ pub async fn convert_to_carel(
     .fetch_one(state.db.pool())
     .await?;
 
-    let total_distribution = req
-        .total_distribution_carel
-        .and_then(Decimal::from_f64)
-        .unwrap_or_else(monthly_ecosystem_pool_carel);
+    let total_distribution = resolve_total_distribution(&state, req.total_distribution_carel).await?;
 
     let mut carel_amount_dec = calculate_epoch_reward(points_value, total_points_epoch, total_distribution);
     tracing::info!(
@@ -233,6 +306,52 @@ pub async fn convert_to_carel(
     Ok(Json(ApiResponse::success(response)))
 }
 
+async fn claim_rewards_onchain(
+    state: &AppState,
+    epoch: i64,
+    user_address: &str,
+    user_points: Decimal,
+    total_points_epoch: Decimal,
+    total_distribution: Decimal,
+) -> Result<Option<(String, Decimal)>> {
+    let contract = state.config.snapshot_distributor_address.trim();
+    if contract.is_empty() || contract.starts_with("0x0000") {
+        return Ok(None);
+    }
+
+    let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
+        return Ok(None);
+    };
+
+    let merkle = MerkleGenerator::new(state.db.clone(), state.config.clone());
+    let tree = merkle
+        .generate_for_epoch_with_distribution(epoch, total_distribution)
+        .await?;
+    let amount_wei = merkle.calculate_reward_amount_wei_with_distribution(
+        user_points,
+        total_points_epoch,
+        total_distribution,
+    );
+    let proof = merkle.generate_proof(&tree, user_address, amount_wei, epoch).await?;
+
+    let proof_core: Vec<Felt> = proof
+        .iter()
+        .map(crypto_felt_to_core)
+        .collect::<Result<Vec<_>>>()?;
+
+    let root_core = crypto_felt_to_core(&tree.root)?;
+    let submit_call = build_submit_root_call(contract, epoch as u64, root_core)?;
+    let _ = invoker.invoke(submit_call).await?;
+
+    let call = build_batch_claim_call(contract, epoch as u64, user_address, amount_wei, &proof_core)?;
+    let tx_hash = invoker.invoke(call).await?;
+
+    let net_wei = amount_wei.saturating_mul(95).saturating_div(100);
+    let net_amount = wei_to_carel_amount(net_wei);
+
+    Ok(Some((tx_hash.to_string(), net_amount)))
+}
+
 async fn convert_points_onchain(
     state: &AppState,
     epoch: i64,
@@ -268,6 +387,42 @@ async fn convert_points_onchain(
 
 fn to_u256_strings(value: u128) -> (String, String) {
     (value.to_string(), "0".to_string())
+}
+
+fn build_batch_claim_call(
+    contract: &str,
+    epoch: u64,
+    user: &str,
+    amount_wei: u128,
+    proofs: &[Felt],
+) -> Result<Call> {
+    let to = parse_felt(contract)?;
+    let selector = get_selector_from_name("batch_claim_rewards")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let user_felt = parse_felt(user)?;
+    let (amount_low, amount_high) = u256_to_felts(amount_wei);
+
+    let mut calldata = Vec::new();
+    calldata.push(Felt::from(epoch as u128));
+    calldata.push(Felt::from(1_u128)); // claims length
+    calldata.push(user_felt);
+    calldata.push(amount_low);
+    calldata.push(amount_high);
+    calldata.push(Felt::from(0_u128)); // proof_offset
+    calldata.push(Felt::from(proofs.len() as u128)); // proof_len
+    calldata.push(Felt::from(proofs.len() as u128)); // proofs length
+    calldata.extend_from_slice(proofs);
+
+    Ok(Call { to, selector, calldata })
+}
+
+fn build_submit_root_call(contract: &str, epoch: u64, root: Felt) -> Result<Call> {
+    let to = parse_felt(contract)?;
+    let selector = get_selector_from_name("submit_merkle_root")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let calldata = vec![Felt::from(epoch as u128), root];
+    Ok(Call { to, selector, calldata })
 }
 
 fn parse_u256_low(values: &[String]) -> Result<u128> {

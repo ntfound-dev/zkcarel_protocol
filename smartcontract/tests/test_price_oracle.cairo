@@ -10,18 +10,18 @@ mod tests {
 
     use smartcontract::utils::price_oracle::{
         IPriceOracleDispatcher, IPriceOracleDispatcherTrait,
-        PragmaPricesResponse
+        DataType, PragmaPricesResponse
     };
 
     #[starknet::interface]
     pub trait IMockPragma<TState> {
         fn set_price(ref self: TState, price: u128, timestamp: u64);
-        fn get_data_median(self: @TState, data_type: felt252) -> PragmaPricesResponse;
+        fn get_data_median(self: @TState, data_type: DataType) -> PragmaPricesResponse;
     }
 
     #[starknet::contract]
     pub mod MockPragma {
-        use super::PragmaPricesResponse;
+        use super::{DataType, PragmaPricesResponse};
         // Rule: Gunakan starknet secara langsung untuk storage wildcard
         use starknet::storage::*;
 
@@ -38,13 +38,14 @@ mod tests {
                 self.timestamp.write(timestamp);
             }
 
-            fn get_data_median(self: @ContractState, data_type: felt252) -> PragmaPricesResponse {
+            fn get_data_median(self: @ContractState, data_type: DataType) -> PragmaPricesResponse {
+                let _ = data_type;
                 PragmaPricesResponse {
                     price: self.price.read(),
                     decimals: 8,
                     last_updated_timestamp: self.timestamp.read(),
                     num_sources_aggregated: 1,
-                    maybe_errors: 0
+                    expiration_timestamp: Option::None
                 }
             }
         }

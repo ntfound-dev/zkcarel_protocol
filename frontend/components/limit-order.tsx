@@ -18,15 +18,18 @@ import {
 } from "@/components/ui/dialog"
 import { ChevronDown, TrendingUp, TrendingDown, Info, Expand, X, Check, AlertCircle } from "lucide-react"
 import { useNotifications } from "@/hooks/use-notifications"
+import { useWallet } from "@/hooks/use-wallet"
 import { cancelLimitOrder, createLimitOrder, getMarketDepth, getPortfolioBalance, getTokenOHLCV, listLimitOrders } from "@/lib/api"
+import { useLivePrices } from "@/hooks/use-live-prices"
+import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 
 const tokenCatalog = [
-  { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 65000, change: 0 },
-  { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 2450, change: 0 },
-  { symbol: "STRK", name: "StarkNet", icon: "◈", price: 1.25, change: 0 },
-  { symbol: "CAREL", name: "ZkCarel", icon: "◐", price: 0.85, change: 0 },
-  { symbol: "USDT", name: "Tether", icon: "₮", price: 1, change: 0 },
-  { symbol: "USDC", name: "USD Coin", icon: "⭕", price: 1, change: 0 },
+  { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 0, change: 0 },
+  { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 0, change: 0 },
+  { symbol: "STRK", name: "StarkNet", icon: "◈", price: 0, change: 0 },
+  { symbol: "CAREL", name: "ZkCarel", icon: "◐", price: 0, change: 0 },
+  { symbol: "USDT", name: "Tether", icon: "₮", price: 0, change: 0 },
+  { symbol: "USDC", name: "USD Coin", icon: "⭕", price: 0, change: 0 },
 ]
 
 type TokenItem = (typeof tokenCatalog)[number]
@@ -62,11 +65,6 @@ type UiOrder = {
   createdAt: string
 }
 
-const fallbackOrders: UiOrder[] = [
-  { id: "local-1", type: "buy", token: "BTC", amount: "0.1", price: "62000", expiry: "1d", status: "active", createdAt: "2 jam lalu" },
-  { id: "local-2", type: "sell", token: "ETH", amount: "2.5", price: "2600", expiry: "7d", status: "active", createdAt: "5 jam lalu" },
-]
-
 const stableSymbols = new Set(["USDT", "USDC"])
 
 const formatDateTime = (value: string) => {
@@ -77,6 +75,11 @@ const formatDateTime = (value: string) => {
 
 export function LimitOrder() {
   const notifications = useNotifications()
+  const wallet = useWallet()
+  const { prices: livePrices, changes: liveChanges } = useLivePrices(
+    React.useMemo(() => tokenCatalog.map((token) => token.symbol), []),
+    { fallbackPrices: { CAREL: 1, USDC: 1, USDT: 1 } }
+  )
   const [tokens, setTokens] = React.useState<TokenItem[]>(tokenCatalog)
   const [selectedToken, setSelectedToken] = React.useState(tokens[0])
   const [payToken, setPayToken] = React.useState(tokens[4])
@@ -87,7 +90,7 @@ export function LimitOrder() {
   const [expiry, setExpiry] = React.useState(expiryOptions[2].value)
   const [chartModalOpen, setChartModalOpen] = React.useState(false)
   const [chartPeriod, setChartPeriod] = React.useState("24H")
-  const [orders, setOrders] = React.useState<UiOrder[]>(fallbackOrders)
+  const [orders, setOrders] = React.useState<UiOrder[]>([])
   const [showConfirmDialog, setShowConfirmDialog] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [submitSuccess, setSubmitSuccess] = React.useState(false)
@@ -112,7 +115,7 @@ export function LimitOrder() {
           })
         )
       } catch {
-        // keep fallback prices
+        // keep existing prices
       }
     })()
 
@@ -120,6 +123,22 @@ export function LimitOrder() {
       active = false
     }
   }, [])
+
+  React.useEffect(() => {
+    if (!livePrices || Object.keys(livePrices).length === 0) return
+    setTokens((prev) =>
+      prev.map((token) => {
+        const price = livePrices[token.symbol]
+        const change = liveChanges[token.symbol]
+        if (!Number.isFinite(price)) return token
+        return {
+          ...token,
+          price,
+          change: Number.isFinite(change) ? change : token.change,
+        }
+      })
+    )
+  }, [livePrices, liveChanges])
 
   React.useEffect(() => {
     const nextSelected = tokens.find((token) => token.symbol === selectedToken.symbol) || tokens[0]
@@ -169,7 +188,7 @@ export function LimitOrder() {
           setChartPoints(closes)
         }
       } catch {
-        // keep fallback chart
+        // keep existing chart
       }
     })()
 
@@ -196,6 +215,25 @@ export function LimitOrder() {
     }
   }, [selectedToken.symbol])
 
+  const applyOrderUpdate = React.useCallback((update: OrderUpdate) => {
+    setOrders((prev) =>
+      prev.map((order) => {
+        if (order.id !== update.order_id) return order
+        const status = update.status === "filled"
+          ? "filled"
+          : update.status === "cancelled" || update.status === "expired"
+          ? "cancelled"
+          : "active"
+        return { ...order, status }
+      })
+    )
+  }, [])
+
+  useOrderUpdates(wallet.token, {
+    enabled: wallet.isConnected,
+    onUpdate: applyOrderUpdate,
+  })
+
   React.useEffect(() => {
     let active = true
     ;(async () => {
@@ -217,7 +255,8 @@ export function LimitOrder() {
         })
         setOrders(mapped)
       } catch {
-        // keep fallback
+        if (!active) return
+        setOrders([])
       }
     })()
 
@@ -233,24 +272,21 @@ export function LimitOrder() {
   }
 
   const marketPrice = selectedToken.price
-  const chartHigh = chartPoints.length > 0 ? Math.max(...chartPoints) : marketPrice * 1.05
-  const chartLow = chartPoints.length > 0 ? Math.min(...chartPoints) : marketPrice * 0.95
+  const hasMarketPrice = marketPrice > 0
+  const chartHigh = chartPoints.length > 0 ? Math.max(...chartPoints) : null
+  const chartLow = chartPoints.length > 0 ? Math.min(...chartPoints) : null
   const currentPrice = Number.parseFloat(price) || 0
-  const priceChange = marketPrice ? ((currentPrice - marketPrice) / marketPrice * 100).toFixed(2) : "0"
-  const fallbackBids = [0.02, 0.04, 0.06].map((diff, i) => ({
-    price: marketPrice * (1 - diff),
-    amount: marketPrice / (1000 * (i + 1)),
-  }))
-  const fallbackAsks = [0.02, 0.04, 0.06].map((diff, i) => ({
-    price: marketPrice * (1 + diff),
-    amount: marketPrice / (900 * (i + 1)),
-  }))
-  const bids = orderBook.bids.length > 0 ? orderBook.bids : fallbackBids
-  const asks = orderBook.asks.length > 0 ? orderBook.asks : fallbackAsks
+  const priceChange = hasMarketPrice
+    ? ((currentPrice - marketPrice) / marketPrice * 100).toFixed(2)
+    : null
+  const priceChangeValue = priceChange === null ? null : Number.parseFloat(priceChange)
+  const bids = orderBook.bids
+  const asks = orderBook.asks
 
   const handleAmountPreset = (percent: number) => {
-    // Mock balance
-    const balance = orderType === "buy" ? 10000 : 5
+    const balance = orderType === "buy"
+      ? (wallet.balance[payToken.symbol] ?? 0)
+      : (wallet.balance[selectedToken.symbol] ?? 0)
     setAmount((balance * percent / 100).toString())
   }
 
@@ -372,24 +408,34 @@ export function LimitOrder() {
                             <p className="font-medium">{token.symbol}</p>
                             <p className="text-xs text-muted-foreground">{token.name}</p>
                           </div>
-                          <span className="ml-auto">${token.price.toLocaleString()}</span>
+                          <span className="ml-auto">
+                            {token.price > 0 ? `$${token.price.toLocaleString()}` : "—"}
+                          </span>
                         </DropdownMenuItem>
                       ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
                   
                   <div>
-                    <p className="text-2xl font-bold text-foreground">${selectedToken.price.toLocaleString()}</p>
+                    <p className="text-2xl font-bold text-foreground">
+                      {hasMarketPrice ? `$${selectedToken.price.toLocaleString()}` : "—"}
+                    </p>
                     <p className={cn(
                       "text-sm flex items-center gap-1",
-                      selectedToken.change >= 0 ? "text-success" : "text-destructive"
+                      priceChange === null
+                        ? "text-muted-foreground"
+                        : (priceChangeValue ?? 0) >= 0
+                        ? "text-success"
+                        : "text-destructive"
                     )}>
-                      {selectedToken.change >= 0 ? (
+                      {priceChange === null ? (
+                        "—"
+                      ) : (priceChangeValue ?? 0) >= 0 ? (
                         <TrendingUp className="h-3 w-3" />
                       ) : (
                         <TrendingDown className="h-3 w-3" />
                       )}
-                      {selectedToken.change >= 0 ? "+" : ""}{selectedToken.change}%
+                      {priceChange === null ? "" : `${(priceChangeValue ?? 0) >= 0 ? "+" : ""}${priceChange}%`}
                     </p>
                   </div>
                 </div>
@@ -445,17 +491,9 @@ export function LimitOrder() {
                       strokeWidth="2"
                       vectorEffect="non-scaling-stroke"
                     />
-                  ) : (
-                    <path
-                      d="M 0 150 Q 50 140, 100 145 T 200 120 T 300 130 T 400 100 T 500 110 T 600 80 T 700 85 T 800 70"
-                      fill="url(#chartGradientLimit)"
-                      stroke="hsl(var(--primary))"
-                      strokeWidth="2"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  )}
+                  ) : null}
                   {/* Price line indicator */}
-                  {currentPrice > 0 && (
+                  {currentPrice > 0 && marketPrice > 0 && (
                     <line
                       x1="0"
                       y1={200 - (currentPrice / marketPrice) * 100}
@@ -468,14 +506,19 @@ export function LimitOrder() {
                   )}
                 </svg>
                 <div className="absolute top-4 left-4 text-xs text-muted-foreground">
-                  High: ${chartHigh.toLocaleString()}
+                  High: {chartHigh !== null ? `$${chartHigh.toLocaleString()}` : "—"}
                 </div>
                 <div className="absolute bottom-4 left-4 text-xs text-muted-foreground">
-                  Low: ${chartLow.toLocaleString()}
+                  Low: {chartLow !== null ? `$${chartLow.toLocaleString()}` : "—"}
                 </div>
                 {currentPrice > 0 && (
                   <div className="absolute right-4 top-1/2 -translate-y-1/2 bg-secondary/20 px-2 py-1 rounded text-xs text-secondary">
                     Target: ${currentPrice.toLocaleString()}
+                  </div>
+                )}
+                {chartPoints.length <= 1 && (
+                  <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+                    No price data
                   </div>
                 )}
               </div>
@@ -484,25 +527,33 @@ export function LimitOrder() {
               <div className="mt-4 grid grid-cols-2 gap-4">
                 <div className="p-3 rounded-lg bg-success/10 border border-success/20">
                   <p className="text-xs text-muted-foreground mb-2">Bids</p>
-                  <div className="space-y-1">
-                    {bids.map((level, i) => (
-                      <div key={`${level.price}-${i}`} className="flex justify-between text-xs">
-                        <span className="text-success">${level.price.toLocaleString()}</span>
-                        <span className="text-muted-foreground">{level.amount.toFixed(3)}</span>
-                      </div>
-                    ))}
-                  </div>
+                  {bids.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No bids</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {bids.map((level, i) => (
+                        <div key={`${level.price}-${i}`} className="flex justify-between text-xs">
+                          <span className="text-success">${level.price.toLocaleString()}</span>
+                          <span className="text-muted-foreground">{level.amount.toFixed(3)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
                   <p className="text-xs text-muted-foreground mb-2">Asks</p>
-                  <div className="space-y-1">
-                    {asks.map((level, i) => (
-                      <div key={`${level.price}-${i}`} className="flex justify-between text-xs">
-                        <span className="text-destructive">${level.price.toLocaleString()}</span>
-                        <span className="text-muted-foreground">{level.amount.toFixed(3)}</span>
-                      </div>
-                    ))}
-                  </div>
+                  {asks.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No asks</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {asks.map((level, i) => (
+                        <div key={`${level.price}-${i}`} className="flex justify-between text-xs">
+                          <span className="text-destructive">${level.price.toLocaleString()}</span>
+                          <span className="text-muted-foreground">{level.amount.toFixed(3)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -575,9 +626,9 @@ export function LimitOrder() {
                     {currentPrice > 0 && (
                       <p className={cn(
                         "text-xs mt-2",
-                        Number.parseFloat(priceChange) < 0 ? "text-success" : "text-muted-foreground"
+                        (priceChangeValue ?? 0) < 0 ? "text-success" : "text-muted-foreground"
                       )}>
-                        {Number.parseFloat(priceChange) < 0 ? priceChange : `+${priceChange}`}% dari market
+                        {(priceChangeValue ?? 0) < 0 ? priceChange : `+${priceChange}`}% dari market
                       </p>
                     )}
                   </div>
@@ -614,7 +665,9 @@ export function LimitOrder() {
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-foreground">Jumlah</label>
-                      <span className="text-xs text-muted-foreground">Saldo: 10,000 {payToken.symbol}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Saldo: {(wallet.balance[payToken.symbol] ?? 0).toLocaleString()} {payToken.symbol}
+                      </span>
                     </div>
                     <input
                       type="number"
@@ -782,7 +835,9 @@ export function LimitOrder() {
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-foreground">Jumlah</label>
-                      <span className="text-xs text-muted-foreground">Saldo: 5.0 {selectedToken.symbol}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Saldo: {(wallet.balance[selectedToken.symbol] ?? 0).toLocaleString()} {selectedToken.symbol}
+                      </span>
                     </div>
                     <input
                       type="number"
@@ -795,7 +850,7 @@ export function LimitOrder() {
                       {[25, 50, 75, 100].map((percent) => (
                         <button
                           key={percent}
-                          onClick={() => setAmount((5 * percent / 100).toString())}
+                          onClick={() => handleAmountPreset(percent)}
                           className="flex-1 px-2 py-1 text-xs rounded-md bg-surface text-muted-foreground hover:text-foreground hover:bg-surface/80 transition-colors"
                         >
                           {percent}%
@@ -851,9 +906,11 @@ export function LimitOrder() {
           </div>
 
           {/* Active Orders */}
-          {orders.length > 0 && (
-            <div className="mt-8 p-6 rounded-2xl glass-strong border border-border">
-              <h3 className="text-lg font-bold text-foreground mb-4">Order Aktif</h3>
+          <div className="mt-8 p-6 rounded-2xl glass-strong border border-border">
+            <h3 className="text-lg font-bold text-foreground mb-4">Order Aktif</h3>
+            {orders.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">Tidak ada order aktif</div>
+            ) : (
               <div className="space-y-3">
                 {orders.map((order) => (
                   <div key={order.id} className="flex items-center justify-between p-4 rounded-xl bg-surface/50 border border-border">
@@ -876,20 +933,30 @@ export function LimitOrder() {
                           Exp: {expiryOptions.find(e => e.value === order.expiry)?.label || formatDateTime(order.expiry)}
                         </p>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => cancelOrder(order.id)}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
+                      {order.status === "active" ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => cancelOrder(order.id)}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      ) : order.status === "filled" ? (
+                        <span className="text-xs text-success flex items-center gap-1">
+                          <Check className="h-3 w-3" /> Filled
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          <X className="h-3 w-3" /> Cancelled
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </section>
 
@@ -925,16 +992,13 @@ export function LimitOrder() {
                   strokeWidth="2"
                   vectorEffect="non-scaling-stroke"
                 />
-              ) : (
-                <path
-                  d="M 0 250 Q 50 230, 100 240 T 200 200 T 300 220 T 400 150 T 500 170 T 600 120 T 700 130 T 800 100"
-                  fill="url(#chartGradientFull)"
-                  stroke="hsl(var(--primary))"
-                  strokeWidth="2"
-                  vectorEffect="non-scaling-stroke"
-                />
-              )}
+              ) : null}
             </svg>
+            {chartPoints.length <= 1 && (
+              <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+                No price data
+              </div>
+            )}
           </div>
           <div className="flex justify-center gap-2">
             {["1H", "24H", "7D", "30D", "1Y"].map((period) => (

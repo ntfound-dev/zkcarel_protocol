@@ -214,7 +214,7 @@ impl PointCalculator {
 
     pub async fn apply_multipliers(&self, user_address: &str, epoch: i64) -> Result<()> {
         let stake_points: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-            "SELECT stake_points FROM points WHERE user_address = $1 AND epoch = $2"
+            "SELECT COALESCE(stake_points, 0) FROM points WHERE user_address = $1 AND epoch = $2"
         )
         .bind(user_address)
         .bind(epoch)
@@ -257,17 +257,18 @@ impl PointCalculator {
             return Ok(());
         }
 
-        let referrer: Option<String> = sqlx::query_scalar(
-            "SELECT referrer FROM users WHERE address = $1"
+        let referrer_raw: Option<String> = sqlx::query_scalar(
+            "SELECT COALESCE(referrer, '') FROM users WHERE address = $1"
         )
         .bind(referee_address)
         .fetch_optional(self.db.pool())
         .await?;
 
-        let Some(referrer) = referrer else {
-            return Ok(());
+        let referrer = match referrer_raw {
+            Some(value) => value.trim().to_string(),
+            None => return Ok(()),
         };
-        if referrer.trim().is_empty() {
+        if referrer.is_empty() {
             return Ok(());
         }
 

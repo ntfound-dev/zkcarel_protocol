@@ -38,19 +38,6 @@ const assetMeta: Record<string, { name: string; icon: string }> = {
   USDC: { name: "USD Coin", icon: "⭕" },
 }
 
-const defaultPortfolioData: PortfolioSnapshot = {
-  totalValue: 100000,
-  pnl: 12450,
-  pnlPercent: 24.5,
-  period: "7D",
-  assets: [
-    { symbol: "BTC", name: "Bitcoin", icon: "₿", value: 45000, percent: 45, change: 5.2 },
-    { symbol: "ETH", name: "Ethereum", icon: "Ξ", value: 25000, percent: 25, change: -2.1 },
-    { symbol: "CAREL", name: "ZkCarel", icon: "◇", value: 15000, percent: 15, change: 15.8 },
-    { symbol: "STRK", name: "StarkNet", icon: "◈", value: 10000, percent: 10, change: 8.3 },
-    { symbol: "Other", name: "Other Assets", icon: "•", value: 5000, percent: 5, change: 1.2 },
-  ],
-}
 
 type ChartPoint = { label: string; value: number }
 
@@ -194,17 +181,12 @@ type UiTransaction = {
   status: string
 }
 
-const fallbackTransactions: UiTransaction[] = [
-  { id: "local-1", type: "Swap", asset: "BTC → ETH", amount: "0.1", value: "$6,500", time: "2 hours ago", status: "Completed" },
-  { id: "local-2", type: "Bridge", asset: "USDC", amount: "500", value: "$500", time: "1 day ago", status: "Completed" },
-]
-
 export function PortfolioDashboard() {
   const [detailsOpen, setDetailsOpen] = React.useState(false)
   const [selectedPeriod, setSelectedPeriod] = React.useState("7D")
   const [analytics, setAnalytics] = React.useState<AnalyticsResponse | null>(null)
   const [chartData, setChartData] = React.useState<ChartPoint[]>([])
-  const [transactions, setTransactions] = React.useState<UiTransaction[]>(fallbackTransactions)
+  const [transactions, setTransactions] = React.useState<UiTransaction[]>([])
 
   React.useEffect(() => {
     let active = true
@@ -214,7 +196,8 @@ export function PortfolioDashboard() {
         if (!active) return
         setAnalytics(response)
       } catch {
-        // keep fallback data
+        if (!active) return
+        setAnalytics(null)
       }
     })()
 
@@ -243,11 +226,10 @@ export function PortfolioDashboard() {
             : date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
           return { label, value: point.close }
         })
-        if (mapped.length > 0) {
-          setChartData(mapped)
-        }
+        setChartData(mapped)
       } catch {
-        // keep existing chart data
+        if (!active) return
+        setChartData([])
       }
     })()
 
@@ -295,9 +277,10 @@ export function PortfolioDashboard() {
             status: tx.processed ? "Completed" : "Pending",
           }
         })
-        setTransactions(mapped.length > 0 ? mapped : fallbackTransactions)
+        setTransactions(mapped)
       } catch {
-        // keep fallback
+        if (!active) return
+        setTransactions([])
       }
     })()
 
@@ -320,17 +303,18 @@ export function PortfolioDashboard() {
     ? "pnl_30d"
     : "pnl_all_time"
 
+  const hasAnalytics = Boolean(analytics)
   const totalValue = analytics
-    ? safeNumber(analytics.portfolio.total_value_usd, defaultPortfolioData.totalValue)
-    : defaultPortfolioData.totalValue
+    ? safeNumber(analytics.portfolio.total_value_usd, 0)
+    : 0
 
   const pnlValue = analytics
-    ? safeNumber(analytics.portfolio[periodKey], defaultPortfolioData.pnl)
-    : defaultPortfolioData.pnl
+    ? safeNumber(analytics.portfolio[periodKey], 0)
+    : 0
 
   const pnlPercent = totalValue > 0
     ? (pnlValue / totalValue) * 100
-    : defaultPortfolioData.pnlPercent
+    : 0
 
   const assets: PortfolioAsset[] = analytics
     ? analytics.portfolio.allocation.map((item) => {
@@ -344,7 +328,7 @@ export function PortfolioDashboard() {
           change: 0,
         }
       })
-    : defaultPortfolioData.assets
+    : []
 
   const bestPerformer = assets.reduce<PortfolioAsset | null>((best, asset) => {
     if (!best) return asset
@@ -354,12 +338,12 @@ export function PortfolioDashboard() {
   const displayData: PortfolioSnapshot = {
     totalValue,
     pnl: pnlValue,
-    pnlPercent: Number.isFinite(pnlPercent) ? Number(pnlPercent.toFixed(2)) : defaultPortfolioData.pnlPercent,
+    pnlPercent: Number.isFinite(pnlPercent) ? Number(pnlPercent.toFixed(2)) : 0,
     period: selectedPeriod,
     assets,
   }
 
-  const isPositive = displayData.pnl >= 0
+  const isPositive = hasAnalytics ? displayData.pnl >= 0 : true
 
   return (
     <section id="portfolio" className="py-12">
@@ -405,26 +389,24 @@ export function PortfolioDashboard() {
               "text-3xl font-bold",
               isPositive ? "text-success" : "text-destructive"
             )}>
-              {isPositive ? "+" : ""}${displayData.pnl.toLocaleString()}
+              {hasAnalytics ? `${isPositive ? "+" : ""}$${displayData.pnl.toLocaleString()}` : "—"}
             </span>
             <span className={cn(
               "text-sm font-medium pb-1 flex items-center gap-1",
               isPositive ? "text-success" : "text-destructive"
             )}>
-              {isPositive ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-              {isPositive ? "+" : ""}{displayData.pnlPercent}%
+              {hasAnalytics ? (
+                <>
+                  {isPositive ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+                  {isPositive ? "+" : ""}{displayData.pnlPercent}%
+                </>
+              ) : (
+                "—"
+              )}
             </span>
           </div>
 
-          <MiniChart data={chartData.length > 0 ? chartData : [
-            { label: "Mon", value: 85000 },
-            { label: "Tue", value: 87500 },
-            { label: "Wed", value: 89000 },
-            { label: "Thu", value: 91000 },
-            { label: "Fri", value: 95000 },
-            { label: "Sat", value: 93000 },
-            { label: "Sun", value: 100000 },
-          ]} />
+          <MiniChart data={chartData} />
         </div>
 
         {/* Asset Allocation */}
@@ -434,14 +416,18 @@ export function PortfolioDashboard() {
               <span className="font-medium text-foreground">Asset Allocation</span>
             </div>
             <span className="text-2xl font-bold text-foreground">
-              ${displayData.totalValue.toLocaleString()}
+              {hasAnalytics ? `$${displayData.totalValue.toLocaleString()}` : "—"}
             </span>
           </div>
 
           <div className="space-y-1">
-            {displayData.assets.map((asset) => (
-              <AssetRow key={asset.symbol} asset={asset} />
-            ))}
+            {displayData.assets.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">No portfolio data</div>
+            ) : (
+              displayData.assets.map((asset) => (
+                <AssetRow key={asset.symbol} asset={asset} />
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -461,17 +447,21 @@ export function PortfolioDashboard() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Total Value</p>
-                <p className="text-lg font-bold text-foreground">${displayData.totalValue.toLocaleString()}</p>
+                <p className="text-lg font-bold text-foreground">
+                  {hasAnalytics ? `$${displayData.totalValue.toLocaleString()}` : "—"}
+                </p>
               </div>
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Total PnL</p>
                 <p className={cn("text-lg font-bold", isPositive ? "text-success" : "text-destructive")}>
-                  {isPositive ? "+" : ""}${displayData.pnl.toLocaleString()}
+                  {hasAnalytics ? `${isPositive ? "+" : ""}$${displayData.pnl.toLocaleString()}` : "—"}
                 </p>
               </div>
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Assets</p>
-                <p className="text-lg font-bold text-foreground">{displayData.assets.length}</p>
+                <p className="text-lg font-bold text-foreground">
+                  {hasAnalytics ? displayData.assets.length : "—"}
+                </p>
               </div>
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Best Performer</p>
@@ -487,28 +477,32 @@ export function PortfolioDashboard() {
             {/* Asset Breakdown */}
             <div>
               <h3 className="text-sm font-medium text-foreground mb-3">Asset Breakdown</h3>
-                <div className="space-y-3">
-                {displayData.assets.map((asset) => (
-                  <div key={asset.symbol} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-lg border border-border">
-                        {asset.icon}
+              <div className="space-y-3">
+                {displayData.assets.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground">No asset data</div>
+                ) : (
+                  displayData.assets.map((asset) => (
+                    <div key={asset.symbol} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-lg border border-border">
+                          {asset.icon}
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground">{asset.symbol}</p>
+                          <p className="text-xs text-muted-foreground">{asset.name}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium text-foreground">{asset.symbol}</p>
-                        <p className="text-xs text-muted-foreground">{asset.name}</p>
+                      <div className="text-right">
+                        <p className="font-medium text-foreground">${asset.value.toLocaleString()}</p>
+                        {asset.change !== 0 && (
+                          <p className={cn("text-xs", asset.change >= 0 ? "text-success" : "text-destructive")}>
+                            {asset.change >= 0 ? "+" : ""}{asset.change}%
+                          </p>
+                        )}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="font-medium text-foreground">${asset.value.toLocaleString()}</p>
-                      {asset.change !== 0 && (
-                        <p className={cn("text-xs", asset.change >= 0 ? "text-success" : "text-destructive")}>
-                          {asset.change >= 0 ? "+" : ""}{asset.change}%
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
 
@@ -516,28 +510,32 @@ export function PortfolioDashboard() {
             <div>
               <h3 className="text-sm font-medium text-foreground mb-3">Recent Transactions</h3>
               <div className="space-y-2">
-                {transactions.map((tx) => (
-                  <div key={tx.id} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
-                    <div className="flex items-center gap-3">
-                      <div className={cn(
-                        "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
-                        (tx.type.toLowerCase() === "buy" || tx.type.toLowerCase() === "stake") && "bg-success/20 text-success",
-                        (tx.type.toLowerCase() === "sell" || tx.type.toLowerCase() === "unstake") && "bg-destructive/20 text-destructive",
-                        (tx.type.toLowerCase() === "swap" || tx.type.toLowerCase() === "bridge" || tx.type.toLowerCase() === "claim") && "bg-secondary/20 text-secondary"
-                      )}>
-                        {tx.type[0]}
+                {transactions.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground">No recent transactions</div>
+                ) : (
+                  transactions.map((tx) => (
+                    <div key={tx.id} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
+                      <div className="flex items-center gap-3">
+                        <div className={cn(
+                          "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
+                          (tx.type.toLowerCase() === "buy" || tx.type.toLowerCase() === "stake") && "bg-success/20 text-success",
+                          (tx.type.toLowerCase() === "sell" || tx.type.toLowerCase() === "unstake") && "bg-destructive/20 text-destructive",
+                          (tx.type.toLowerCase() === "swap" || tx.type.toLowerCase() === "bridge" || tx.type.toLowerCase() === "claim") && "bg-secondary/20 text-secondary"
+                        )}>
+                          {tx.type[0]}
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground">{tx.type} {tx.asset}</p>
+                          <p className="text-xs text-muted-foreground">{tx.time}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium text-foreground">{tx.type} {tx.asset}</p>
-                        <p className="text-xs text-muted-foreground">{tx.time}</p>
+                      <div className="text-right">
+                        <p className="font-medium text-foreground">{tx.value}</p>
+                        <p className="text-xs text-success">{tx.status}</p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="font-medium text-foreground">{tx.value}</p>
-                      <p className="text-xs text-success">{tx.status}</p>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </div>

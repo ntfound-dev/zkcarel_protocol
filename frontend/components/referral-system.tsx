@@ -6,14 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Copy, Check, Users, Gift, TrendingUp, ExternalLink } from "lucide-react"
 import { useWallet } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
-import { getReferralCode, getReferralStats } from "@/lib/api"
-
-const fallbackStats = {
-  totalReferrals: 42,
-  activeReferrals: 35,
-  totalEarnings: 1250,
-  lifetimeVolume: 45600,
-}
+import { getReferralCode, getReferralHistory, getReferralStats, type ReferralHistoryItem } from "@/lib/api"
 
 const referralTiers = [
   { tier: 1, refs: "1-10", commission: "10%", bonus: "50 CAREL" },
@@ -22,32 +15,36 @@ const referralTiers = [
   { tier: 4, refs: "51+", commission: "25%", bonus: "1000 CAREL" },
 ]
 
-const recentReferrals = [
-  { address: "0xab...c3f1", date: "2024-01-15", volume: "$1,240", earnings: "124 CAREL", status: "Active" },
-  { address: "0x12...45a9", date: "2024-01-14", volume: "$890", earnings: "89 CAREL", status: "Active" },
-  { address: "0xcd...67b2", date: "2024-01-12", volume: "$2,100", earnings: "210 CAREL", status: "Active" },
-  { address: "0xef...89c4", date: "2024-01-10", volume: "$450", earnings: "45 CAREL", status: "Inactive" },
-  { address: "0x23...d1e5", date: "2024-01-08", volume: "$3,200", earnings: "320 CAREL", status: "Active" },
-]
-
 export function ReferralSystem() {
   const wallet = useWallet()
   const notifications = useNotifications()
   const [copiedCode, setCopiedCode] = React.useState(false)
   const [copiedLink, setCopiedLink] = React.useState(false)
-  const [stats, setStats] = React.useState(fallbackStats)
-  const [referralCode, setReferralCode] = React.useState(
-    `CAREL-${wallet.address?.slice(2, 8).toUpperCase() || "000000"}`
-  )
-  const [referralLink, setReferralLink] = React.useState(
-    `https://zkcarel.com/ref/${wallet.address || "0x0000"}`
-  )
+  const [stats, setStats] = React.useState<{
+    totalReferrals: number
+    activeReferrals: number
+    totalEarnings: number
+    lifetimeVolume: number
+  } | null>(null)
+  const [recentReferrals, setRecentReferrals] = React.useState<Array<{
+    address: string
+    date: string
+    volume: string
+    earnings: string
+    status: string
+  }>>([])
+  const [referralCode, setReferralCode] = React.useState("")
+  const [referralLink, setReferralLink] = React.useState("")
 
   React.useEffect(() => {
     let active = true
     ;(async () => {
       try {
-        const [codeRes, statsRes] = await Promise.all([getReferralCode(), getReferralStats()])
+        const [codeRes, statsRes, historyRes] = await Promise.all([
+          getReferralCode(),
+          getReferralStats(),
+          getReferralHistory(1, 5),
+        ])
         if (!active) return
         setReferralCode(codeRes.code)
         setReferralLink(codeRes.url)
@@ -57,8 +54,21 @@ export function ReferralSystem() {
           totalEarnings: statsRes.total_rewards,
           lifetimeVolume: statsRes.total_volume,
         })
+        const mapped = historyRes.items.map((item: ReferralHistoryItem) => {
+          const volume = Number(item.volume_usd || 0)
+          return {
+            address: `${item.user_address.slice(0, 6)}...${item.user_address.slice(-4)}`,
+            date: new Date(item.timestamp).toLocaleDateString("id-ID"),
+            volume: volume ? `$${volume.toLocaleString()}` : "—",
+            earnings: `${Math.round(Number(item.points || 0)).toLocaleString()} CAREL`,
+            status: item.status || "Pending",
+          }
+        })
+        setRecentReferrals(mapped)
       } catch {
-        // keep fallback data
+        if (!active) return
+        setStats(null)
+        setRecentReferrals([])
       }
     })()
 
@@ -83,15 +93,21 @@ export function ReferralSystem() {
     })
   }
 
+  const totalReferrals = stats?.totalReferrals ?? 0
+  const activeReferrals = stats?.activeReferrals ?? 0
+  const totalEarnings = stats?.totalEarnings ?? 0
+  const lifetimeVolume = stats?.lifetimeVolume ?? 0
+  const hasStats = Boolean(stats)
+
   const currentTier = referralTiers.find(
     (tier, idx) => 
-      stats.totalReferrals >= Number.parseInt(tier.refs.split('-')[0]) &&
-      (idx === referralTiers.length - 1 || stats.totalReferrals < Number.parseInt(referralTiers[idx + 1].refs.split('-')[0]))
+      totalReferrals >= Number.parseInt(tier.refs.split('-')[0]) &&
+      (idx === referralTiers.length - 1 || totalReferrals < Number.parseInt(referralTiers[idx + 1].refs.split('-')[0]))
   ) || referralTiers[0]
 
   const nextTier = referralTiers[referralTiers.indexOf(currentTier) + 1]
   const progressToNextTier = nextTier 
-    ? ((stats.totalReferrals - Number.parseInt(currentTier.refs.split('-')[0])) / 
+    ? ((totalReferrals - Number.parseInt(currentTier.refs.split('-')[0])) / 
        (Number.parseInt(nextTier.refs.split('-')[0]) - Number.parseInt(currentTier.refs.split('-')[0]))) * 100
     : 100
 
@@ -110,8 +126,8 @@ export function ReferralSystem() {
               <Users className="h-5 w-5 text-primary" />
               <p className="text-sm text-muted-foreground">Total Referrals</p>
             </div>
-            <p className="text-3xl font-bold text-foreground">{stats.totalReferrals}</p>
-            <p className="text-xs text-success mt-1">{stats.activeReferrals} active</p>
+            <p className="text-3xl font-bold text-foreground">{hasStats ? totalReferrals : "—"}</p>
+            <p className="text-xs text-success mt-1">{hasStats ? `${activeReferrals} active` : "—"}</p>
           </div>
 
           <div className="p-6 rounded-xl glass border border-border">
@@ -119,7 +135,7 @@ export function ReferralSystem() {
               <Gift className="h-5 w-5 text-accent" />
               <p className="text-sm text-muted-foreground">Total Earnings</p>
             </div>
-            <p className="text-3xl font-bold text-foreground">{stats.totalEarnings}</p>
+            <p className="text-3xl font-bold text-foreground">{hasStats ? totalEarnings : "—"}</p>
             <p className="text-xs text-muted-foreground mt-1">CAREL</p>
           </div>
 
@@ -128,7 +144,9 @@ export function ReferralSystem() {
               <TrendingUp className="h-5 w-5 text-secondary" />
               <p className="text-sm text-muted-foreground">Lifetime Volume</p>
             </div>
-            <p className="text-3xl font-bold text-foreground">${(stats.lifetimeVolume / 1000).toFixed(1)}K</p>
+            <p className="text-3xl font-bold text-foreground">
+              {hasStats ? `$${(lifetimeVolume / 1000).toFixed(1)}K` : "—"}
+            </p>
             <p className="text-xs text-success mt-1">From referrals</p>
           </div>
 
@@ -137,8 +155,12 @@ export function ReferralSystem() {
               <Gift className="h-5 w-5 text-primary" />
               <p className="text-sm text-muted-foreground">Current Tier</p>
             </div>
-            <p className="text-3xl font-bold text-foreground">Tier {referralTiers.indexOf(currentTier) + 1}</p>
-            <p className="text-xs text-muted-foreground mt-1">{currentTier.commission} commission</p>
+            <p className="text-3xl font-bold text-foreground">
+              {hasStats ? `Tier ${referralTiers.indexOf(currentTier) + 1}` : "—"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {hasStats ? `${currentTier.commission} commission` : "—"}
+            </p>
           </div>
         </div>
 
@@ -153,7 +175,7 @@ export function ReferralSystem() {
                 <label className="text-sm text-muted-foreground mb-2 block">Referral Code</label>
                 <div className="flex gap-2">
                   <div className="flex-1 px-4 py-3 rounded-lg bg-surface border border-border font-mono text-lg text-foreground">
-                    {referralCode}
+                    {referralCode || "—"}
                   </div>
                   <Button
                     onClick={() => copyToClipboard(referralCode, "code")}
@@ -179,7 +201,7 @@ export function ReferralSystem() {
                 <label className="text-sm text-muted-foreground mb-2 block">Referral Link</label>
                 <div className="flex gap-2">
                   <div className="flex-1 px-4 py-3 rounded-lg bg-surface border border-border text-foreground overflow-x-auto">
-                    <p className="text-sm whitespace-nowrap">{referralLink}</p>
+                    <p className="text-sm whitespace-nowrap">{referralLink || "—"}</p>
                   </div>
                   <Button
                     onClick={() => copyToClipboard(referralLink, "link")}
@@ -221,31 +243,35 @@ export function ReferralSystem() {
             <div className="p-6 rounded-2xl glass-strong border border-border">
               <h3 className="text-lg font-bold text-foreground mb-4">Recent Referrals</h3>
               <div className="space-y-2">
-                {recentReferrals.map((ref, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-surface/50 border border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
-                        <Users className="h-5 w-5 text-primary" />
+                {recentReferrals.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground">No referrals yet</div>
+                ) : (
+                  recentReferrals.map((ref, i) => (
+                    <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-surface/50 border border-border">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
+                          <Users className="h-5 w-5 text-primary" />
+                        </div>
+                        <div>
+                          <p className="font-mono text-sm text-foreground">{ref.address}</p>
+                          <p className="text-xs text-muted-foreground">{ref.date}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-mono text-sm text-foreground">{ref.address}</p>
-                        <p className="text-xs text-muted-foreground">{ref.date}</p>
+                      <div className="text-right">
+                        <p className="text-sm font-medium text-foreground">{ref.earnings}</p>
+                        <p className="text-xs text-muted-foreground">{ref.volume} volume</p>
+                        <span className={cn(
+                          "text-xs px-2 py-0.5 rounded-full",
+                          ref.status.toLowerCase() === "active" 
+                            ? "bg-success/20 text-success"
+                            : "bg-muted text-muted-foreground"
+                        )}>
+                          {ref.status}
+                        </span>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-foreground">{ref.earnings}</p>
-                      <p className="text-xs text-muted-foreground">{ref.volume} volume</p>
-                      <span className={cn(
-                        "text-xs px-2 py-0.5 rounded-full",
-                        ref.status === "Active" 
-                          ? "bg-success/20 text-success"
-                          : "bg-muted text-muted-foreground"
-                      )}>
-                        {ref.status}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -269,7 +295,9 @@ export function ReferralSystem() {
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {Number.parseInt(nextTier.refs.split('-')[0]) - stats.totalReferrals} more referrals to Tier {referralTiers.indexOf(nextTier) + 1}
+                    {hasStats
+                      ? `${Number.parseInt(nextTier.refs.split('-')[0]) - totalReferrals} more referrals to Tier ${referralTiers.indexOf(nextTier) + 1}`
+                      : "—"}
                   </p>
                 </>
               )}

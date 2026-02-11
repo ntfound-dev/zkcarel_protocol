@@ -1,30 +1,58 @@
 #!/bin/bash
 set -euo pipefail
 
-ENV_FILE="../.env"
-WALLETS_DIR="../.testnet-wallets"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="$ROOT/.env"
+cd "$ROOT"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing $ENV_FILE" >&2
   exit 1
 fi
 
-required=(deployer treasury dev investor early_access team marketing listing ecosystem)
-for name in "${required[@]}"; do
-  if [ ! -f "$WALLETS_DIR/$name/account.json" ]; then
-    echo "Missing wallet: $WALLETS_DIR/$name/account.json" >&2
-    exit 1
+if ! command -v sncast >/dev/null 2>&1; then
+  echo "sncast not found in PATH" >&2
+  exit 1
+fi
+
+NET=${NET:-}
+if [ -z "$NET" ]; then
+  if [ "${NETWORK:-}" = "starknet-sepolia" ]; then
+    NET=sepolia
+  else
+    NET=${NETWORK:-sepolia}
   fi
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "jq is required to parse account.json" >&2
-    exit 1
-  fi
-  done
+fi
+
+ACCOUNT_LIST="$(sncast account list 2>/dev/null || true)"
+if [ -z "$ACCOUNT_LIST" ]; then
+  echo "No accounts found. Create with: sncast account create --network $NET --name <name>" >&2
+  exit 1
+fi
 
 get_addr() {
   local name="$1"
-  jq -r '.address' "$WALLETS_DIR/$name/account.json"
+  local addr
+  addr=$(echo "$ACCOUNT_LIST" | awk -v n="$name" '
+    $1=="-" && $2==n":" {found=1; next}
+    found && $1=="address:" {print $2; exit}
+    found && $1=="-" {found=0}
+  ')
+  if [ -z "$addr" ]; then
+    echo "" >&2
+    return 1
+  fi
+  echo "$addr"
 }
+
+required=(deployer treasury dev investor early_access team marketing listing ecosystem)
+for name in "${required[@]}"; do
+  if ! get_addr "$name" >/dev/null; then
+    echo "Missing sncast account: $name" >&2
+    echo "Create with: sncast account create --network $NET --name $name" >&2
+    exit 1
+  fi
+done
 
 OWNER_ADDRESS=$(get_addr deployer)
 DEPLOYER_ADDRESS=$(get_addr deployer)
@@ -44,7 +72,7 @@ update_key() {
   local key="$1"
   local value="$2"
   if grep -q "^${key}=" "$ENV_FILE"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+    perl -0pi -e "s|^${key}=.*$|${key}=${value}|mg" "$ENV_FILE"
   else
     echo "${key}=${value}" >> "$ENV_FILE"
   fi
@@ -64,4 +92,4 @@ update_key MARKETING_ADDRESS "$MARKETING_ADDRESS"
 update_key LISTING_ADDRESS "$LISTING_ADDRESS"
 update_key ECOSYSTEM_ADDRESS "$ECOSYSTEM_ADDRESS"
 
-echo "Updated $ENV_FILE from $WALLETS_DIR"
+echo "Updated $ENV_FILE from sncast accounts"

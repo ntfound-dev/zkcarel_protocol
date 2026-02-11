@@ -7,6 +7,9 @@ use crate::{
     // 1. Import hasher agar fungsi di hash.rs terhitung "used"
     crypto::hash,
 };
+use crate::services::onchain::{OnchainReader, parse_felt, u256_from_felts, felt_to_u128};
+use starknet_core::types::FunctionCall;
+use starknet_core::utils::get_selector_from_name;
 
 use super::{AppState, require_user};
 
@@ -71,6 +74,12 @@ fn fallback_price_for(token: &str) -> f64 {
         "USDT" | "USDC" => 1.0,
         _ => 1.0,
     }
+}
+
+const CAREL_DECIMALS: f64 = 1_000_000_000_000_000_000.0;
+
+fn u128_to_token_amount(value: u128) -> f64 {
+    (value as f64) / CAREL_DECIMALS
 }
 
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
@@ -209,31 +218,87 @@ pub async fn get_positions(
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<Vec<StakingPosition>>>> {
     let user_address = require_user(&headers, &state).await?;
-    
+
     tracing::debug!("Fetching staking positions for user: {}", user_address);
 
-    let positions = vec![
-        StakingPosition {
-            position_id: "POS_001".to_string(),
-            pool_id: "CAREL".to_string(),
-            token: "CAREL".to_string(),
-            amount: 10000.0,
-            rewards_earned: 234.56,
-            started_at: chrono::Utc::now().timestamp() - 86400 * 15,
-            unlock_at: None,
-        },
-        StakingPosition {
-            position_id: "POS_002".to_string(),
-            pool_id: "BTC".to_string(),
-            token: "BTC".to_string(),
-            amount: 0.5,
-            rewards_earned: 0.0023,
-            started_at: chrono::Utc::now().timestamp() - 86400 * 7,
-            unlock_at: Some(chrono::Utc::now().timestamp() + 86400 * 23),
-        },
-    ];
+    let mut positions = Vec::new();
+    let Some(contract) = state.config.staking_carel_address.as_deref() else {
+        return Ok(Json(ApiResponse::success(positions)));
+    };
+    if contract.trim().is_empty() || contract.starts_with("0x0000") {
+        return Ok(Json(ApiResponse::success(positions)));
+    }
+
+    let reader = OnchainReader::from_config(&state.config)?;
+    if let Some(info) = fetch_carel_stake_info(&reader, contract, &user_address).await? {
+        if info.amount > 0 {
+            let rewards = fetch_carel_rewards(&reader, contract, &user_address).await.unwrap_or(0);
+            let started_at = info.start_time as i64;
+            let unlock_at = started_at + 604800; // 7 days lock period (contract constant)
+            positions.push(StakingPosition {
+                position_id: build_position_id(&user_address, "CAREL", started_at),
+                pool_id: "CAREL".to_string(),
+                token: "CAREL".to_string(),
+                amount: u128_to_token_amount(info.amount),
+                rewards_earned: u128_to_token_amount(rewards),
+                started_at,
+                unlock_at: Some(unlock_at),
+            });
+        }
+    }
 
     Ok(Json(ApiResponse::success(positions)))
+}
+
+struct CarelStakeInfo {
+    amount: u128,
+    start_time: u64,
+}
+
+async fn fetch_carel_stake_info(
+    reader: &OnchainReader,
+    contract: &str,
+    user_address: &str,
+) -> Result<Option<CarelStakeInfo>> {
+    let call = FunctionCall {
+        contract_address: parse_felt(contract)?,
+        entry_point_selector: get_selector_from_name("get_stake_info")
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?,
+        calldata: vec![parse_felt(user_address)?],
+    };
+
+    let result = reader.call(call).await?;
+    if result.len() < 7 {
+        return Ok(None);
+    }
+
+    let amount = u256_from_felts(&result[0], &result[1])?;
+    let start_time = felt_to_u128(&result[3])? as u64;
+
+    Ok(Some(CarelStakeInfo {
+        amount,
+        start_time,
+    }))
+}
+
+async fn fetch_carel_rewards(
+    reader: &OnchainReader,
+    contract: &str,
+    user_address: &str,
+) -> Result<u128> {
+    let call = FunctionCall {
+        contract_address: parse_felt(contract)?,
+        entry_point_selector: get_selector_from_name("calculate_rewards")
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?,
+        calldata: vec![parse_felt(user_address)?],
+    };
+
+    let result = reader.call(call).await?;
+    if result.len() < 2 {
+        return Ok(0);
+    }
+
+    u256_from_felts(&result[0], &result[1])
 }
 
 #[cfg(test)]

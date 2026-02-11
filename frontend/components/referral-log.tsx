@@ -17,14 +17,10 @@ import {
   Copy, 
   Check, 
   TrendingUp, 
-  Coins, 
   Clock, 
-  ChevronRight,
   Share2,
   Star,
   Sparkles,
-  ArrowUpRight,
-  Lock
 } from "lucide-react"
 import { getReferralCode, getReferralHistory, getReferralStats, getRewardsPoints, type ReferralHistoryItem } from "@/lib/api"
 
@@ -37,11 +33,6 @@ type ReferralActivity = {
   points: number
   status: string
 }
-
-const fallbackHistory: ReferralActivity[] = [
-  { id: "local-1", user: "0x8f...2e4d", date: "2024-01-15", action: "Swap", volume: "$2,450", points: 245, status: "completed" },
-  { id: "local-2", user: "0x3a...9f1c", date: "2024-01-14", action: "Bridge", volume: "$5,200", points: 520, status: "completed" },
-]
 
 const tierRewards = [
   { tier: "Bronze", referrals: 5, bonus: "5%" },
@@ -63,13 +54,13 @@ export function ReferralLog({
   isOpen, 
   onOpenChange, 
   trigger,
-  pointsEarned = 12500,
+  pointsEarned = 0,
   showTrigger = true 
 }: ReferralLogProps) {
   const [copied, setCopied] = React.useState(false)
-  const [referralCode, setReferralCode] = React.useState("ZKCRL-8F4E2D")
-  const [referralLink, setReferralLink] = React.useState(`https://zkcarel.com/ref/ZKCRL-8F4E2D`)
-  const [history, setHistory] = React.useState<ReferralActivity[]>(fallbackHistory)
+  const [referralCode, setReferralCode] = React.useState("")
+  const [referralLink, setReferralLink] = React.useState("")
+  const [history, setHistory] = React.useState<ReferralActivity[]>([])
   const [stats, setStats] = React.useState({
     totalReferrals: 0,
     activeReferrals: 0,
@@ -77,7 +68,7 @@ export function ReferralLog({
   })
   const [earnedPoints, setEarnedPoints] = React.useState(pointsEarned)
   
-  // Calculate if user has earned 10% bonus (simulation)
+  // Calculate if user has earned 10% bonus
   const hasEarnedBonus = earnedPoints >= 10000
   const totalReferrals = stats.totalReferrals
   const activeReferrals = stats.activeReferrals
@@ -119,9 +110,10 @@ export function ReferralLog({
             status: item.status || "pending",
           }
         })
-        setHistory(mapped.length > 0 ? mapped : fallbackHistory)
+        setHistory(mapped)
       } catch {
-        // keep fallback
+        if (!active) return
+        setHistory([])
       }
     })()
 
@@ -204,7 +196,7 @@ export function ReferralLog({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <p className="text-sm font-medium text-foreground mb-1">Your Referral Link</p>
-              <p className="text-xs text-muted-foreground truncate max-w-xs">{referralLink}</p>
+              <p className="text-xs text-muted-foreground truncate max-w-xs">{referralLink || "—"}</p>
             </div>
             <div className="flex gap-2">
               <Button 
@@ -230,10 +222,9 @@ export function ReferralLog({
 
         {/* Tabs */}
         <Tabs defaultValue="history" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 mb-4">
+          <TabsList className="grid w-full grid-cols-2 mb-4">
             <TabsTrigger value="history">Activity Log</TabsTrigger>
             <TabsTrigger value="tiers">Tier Rewards</TabsTrigger>
-            <TabsTrigger value="simulation">Simulation</TabsTrigger>
           </TabsList>
 
           {/* Activity Log Tab */}
@@ -246,25 +237,29 @@ export function ReferralLog({
                 <span>Volume</span>
                 <span>Points</span>
               </div>
-              {history.map((item) => (
-                <div 
-                  key={item.id} 
-                  className="grid grid-cols-5 gap-4 p-3 text-sm border-b border-border/50 last:border-0 hover:bg-surface/30 transition-colors"
-                >
-                  <span className="text-foreground font-mono">{item.user}</span>
-                  <span className="text-muted-foreground">{item.date}</span>
-                  <span className="text-foreground">{item.action}</span>
-                  <span className="text-foreground">{item.volume}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-success font-medium">+{item.points}</span>
-                    {item.status === "pending" && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/20 text-secondary">
-                        Pending
-                      </span>
-                    )}
+              {history.length === 0 ? (
+                <div className="p-4 text-center text-muted-foreground">No referral activity</div>
+              ) : (
+                history.map((item) => (
+                  <div 
+                    key={item.id} 
+                    className="grid grid-cols-5 gap-4 p-3 text-sm border-b border-border/50 last:border-0 hover:bg-surface/30 transition-colors"
+                  >
+                    <span className="text-foreground font-mono">{item.user}</span>
+                    <span className="text-muted-foreground">{item.date}</span>
+                    <span className="text-foreground">{item.action}</span>
+                    <span className="text-foreground">{item.volume}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-success font-medium">+{item.points}</span>
+                      {item.status === "pending" && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/20 text-secondary">
+                          Pending
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </TabsContent>
 
@@ -327,97 +322,6 @@ export function ReferralLog({
             </div>
           </TabsContent>
 
-          {/* Simulation Tab - For Coming Soon Features */}
-          <TabsContent value="simulation" className="space-y-4">
-            <div className="p-4 rounded-xl bg-secondary/10 border border-secondary/20 mb-4">
-              <div className="flex items-start gap-3">
-                <Sparkles className="h-5 w-5 text-secondary flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-foreground">Simulation Mode</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Preview how Limit Order and Stake rewards will work in the referral program.
-                    These features are coming soon to mainnet.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Limit Order Simulation */}
-            <div className="p-6 rounded-xl glass border border-border relative overflow-hidden">
-              <div className="absolute top-3 right-3 px-2 py-1 rounded-full bg-secondary/20 text-secondary text-xs font-medium flex items-center gap-1">
-                <Lock className="h-3 w-3" />
-                Coming Soon
-              </div>
-              
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-secondary via-primary to-accent flex items-center justify-center">
-                  <TrendingUp className="h-6 w-6 text-white" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-foreground">Limit Order Referrals</h4>
-                  <p className="text-sm text-muted-foreground">Earn from referral limit orders</p>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-4 mb-4">
-                <div className="p-3 rounded-lg bg-surface/50">
-                  <p className="text-xs text-muted-foreground mb-1">Simulated Orders</p>
-                  <p className="text-lg font-bold text-foreground">24</p>
-                </div>
-                <div className="p-3 rounded-lg bg-surface/50">
-                  <p className="text-xs text-muted-foreground mb-1">Est. Volume</p>
-                  <p className="text-lg font-bold text-foreground">$45,200</p>
-                </div>
-                <div className="p-3 rounded-lg bg-surface/50">
-                  <p className="text-xs text-muted-foreground mb-1">Est. Points</p>
-                  <p className="text-lg font-bold text-success">+4,520</p>
-                </div>
-              </div>
-              
-              <Button disabled className="w-full cursor-not-allowed">
-                <Lock className="h-4 w-4 mr-2" />
-                Available in Mainnet
-              </Button>
-            </div>
-
-            {/* Stake Simulation */}
-            <div className="p-6 rounded-xl glass border border-border relative overflow-hidden">
-              <div className="absolute top-3 right-3 px-2 py-1 rounded-full bg-secondary/20 text-secondary text-xs font-medium flex items-center gap-1">
-                <Lock className="h-3 w-3" />
-                Coming Soon
-              </div>
-              
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-accent via-secondary to-primary flex items-center justify-center">
-                  <Coins className="h-6 w-6 text-white" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-foreground">Staking Referrals</h4>
-                  <p className="text-sm text-muted-foreground">Earn from referral staking rewards</p>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-4 mb-4">
-                <div className="p-3 rounded-lg bg-surface/50">
-                  <p className="text-xs text-muted-foreground mb-1">Simulated TVL</p>
-                  <p className="text-lg font-bold text-foreground">$125K</p>
-                </div>
-                <div className="p-3 rounded-lg bg-surface/50">
-                  <p className="text-xs text-muted-foreground mb-1">Est. APY Bonus</p>
-                  <p className="text-lg font-bold text-foreground">+2.5%</p>
-                </div>
-                <div className="p-3 rounded-lg bg-surface/50">
-                  <p className="text-xs text-muted-foreground mb-1">Est. Points</p>
-                  <p className="text-lg font-bold text-success">+12,500</p>
-                </div>
-              </div>
-              
-              <Button disabled className="w-full cursor-not-allowed">
-                <Lock className="h-4 w-4 mr-2" />
-                Available in Mainnet
-              </Button>
-            </div>
-          </TabsContent>
         </Tabs>
 
         {/* 10% Bonus Banner - Shows when earned */}

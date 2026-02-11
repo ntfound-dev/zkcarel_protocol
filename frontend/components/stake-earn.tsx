@@ -13,94 +13,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { TrendingUp, Coins, Info, Clock, Check, AlertCircle, Wallet } from "lucide-react"
 import { useWallet } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
-import { getPortfolioBalance, getStakePools, getStakePositions, stakeDeposit, stakeWithdraw } from "@/lib/api"
-
-const fallbackPools = [
-  {
-    symbol: "USDT",
-    name: "Tether",
-    icon: "₮",
-    type: "Stablecoin",
-    apy: "8.5",
-    tvl: "2.4M",
-    tvlValue: 2_400_000,
-    minStake: "100",
-    lockPeriod: "Flexible",
-    reward: "USDT",
-    gradient: "from-green-400 to-emerald-600",
-    userBalance: 5000,
-  },
-  {
-    symbol: "USDC",
-    name: "USD Coin",
-    icon: "⭕",
-    type: "Stablecoin",
-    apy: "8.2",
-    tvl: "1.8M",
-    tvlValue: 1_800_000,
-    minStake: "100",
-    lockPeriod: "Flexible",
-    reward: "USDC",
-    gradient: "from-blue-400 to-cyan-600",
-    userBalance: 3000,
-  },
-  {
-    symbol: "BTC",
-    name: "Bitcoin",
-    icon: "₿",
-    type: "Crypto",
-    apy: "5.5",
-    tvl: "4.2M",
-    tvlValue: 4_200_000,
-    minStake: "0.001",
-    lockPeriod: "30 hari",
-    reward: "BTC",
-    gradient: "from-orange-400 to-amber-600",
-    userBalance: 0.5,
-  },
-  {
-    symbol: "ETH",
-    name: "Ethereum",
-    icon: "Ξ",
-    type: "Crypto",
-    apy: "6.8",
-    tvl: "3.1M",
-    tvlValue: 3_100_000,
-    minStake: "0.01",
-    lockPeriod: "30 hari",
-    reward: "ETH",
-    gradient: "from-purple-400 to-indigo-600",
-    userBalance: 2.5,
-  },
-  {
-    symbol: "STRK",
-    name: "StarkNet",
-    icon: "◈",
-    type: "Crypto",
-    apy: "12.5",
-    tvl: "820K",
-    tvlValue: 820_000,
-    minStake: "10",
-    lockPeriod: "60 hari",
-    reward: "STRK",
-    gradient: "from-pink-400 to-rose-600",
-    userBalance: 500,
-  },
-  {
-    symbol: "CAREL",
-    name: "ZkCarel",
-    icon: "◐",
-    type: "Crypto",
-    apy: "15.0",
-    tvl: "650K",
-    tvlValue: 650_000,
-    minStake: "100",
-    lockPeriod: "90 hari",
-    reward: "CAREL",
-    gradient: "from-violet-400 to-purple-600",
-    userBalance: 1000,
-  },
-]
+import { useLivePrices } from "@/hooks/use-live-prices"
+import { getStakePools, getStakePositions, stakeDeposit, stakeWithdraw } from "@/lib/api"
 
 const poolMeta: Record<string, { name: string; icon: string; type: string; gradient: string }> = {
   USDT: { name: "Tether", icon: "₮", type: "Stablecoin", gradient: "from-green-400 to-emerald-600" },
@@ -130,6 +44,7 @@ interface StakingPool {
   apy: string
   tvl: string
   tvlValue: number
+  spotPrice: number
   minStake: string
   lockPeriod: string
   reward: string
@@ -154,49 +69,20 @@ export function StakeEarn() {
   const [stakeAmount, setStakeAmount] = React.useState("")
   const [isStaking, setIsStaking] = React.useState(false)
   const [stakeSuccess, setStakeSuccess] = React.useState(false)
-  const [pools, setPools] = React.useState<StakingPool[]>(fallbackPools)
-  const [positions, setPositions] = React.useState<StakingPosition[]>([
-    {
-      id: "local-1",
-      pool: fallbackPools[0],
-      amount: 1000,
-      stakedAt: "5 hari lalu",
-      rewards: 1.16,
-      status: "active",
-    },
-    {
-      id: "local-2",
-      pool: fallbackPools[3],
-      amount: 0.5,
-      stakedAt: "12 hari lalu",
-      rewards: 0.0028,
-      status: "active",
-    },
-  ])
-  const [tokenPrices, setTokenPrices] = React.useState<Record<string, number>>({})
-  const [activeStakers, setActiveStakers] = React.useState(0)
+  const [pools, setPools] = React.useState<StakingPool[]>([])
+  const [positions, setPositions] = React.useState<StakingPosition[]>([])
+  const { prices: tokenPrices } = useLivePrices(Object.keys(poolMeta), {
+    fallbackPrices: { CAREL: 1, USDC: 1, USDT: 1 },
+  })
+  const [activePositions, setActivePositions] = React.useState(0)
 
-  React.useEffect(() => {
-    let active = true
-    ;(async () => {
-      try {
-        const response = await getPortfolioBalance()
-        if (!active) return
-        const prices: Record<string, number> = {}
-        response.balances.forEach((item) => {
-          const price = item.amount > 0 ? item.value_usd / item.amount : item.price
-          prices[item.token.toUpperCase()] = price
-        })
-        setTokenPrices(prices)
-      } catch {
-        // keep fallback prices
-      }
-    })()
-
-    return () => {
-      active = false
-    }
-  }, [])
+  const displayPools = React.useMemo(() => {
+    if (pools.length === 0) return []
+    return pools.map((pool) => ({
+      ...pool,
+      spotPrice: tokenPrices[pool.symbol] ?? pool.spotPrice,
+    }))
+  }, [pools, tokenPrices])
 
   React.useEffect(() => {
     let active = true
@@ -221,6 +107,7 @@ export function StakeEarn() {
             apy: pool.apy.toFixed(2),
             tvl: formatCompact(tvlUsd),
             tvlValue: tvlUsd,
+            spotPrice: 0,
             minStake: pool.min_stake.toString(),
             lockPeriod: pool.lock_period ? `${pool.lock_period} hari` : "Flexible",
             reward: pool.token,
@@ -230,7 +117,8 @@ export function StakeEarn() {
         })
         setPools(mapped)
       } catch {
-        // keep fallback pools
+        if (!active) return
+        setPools([])
       }
     })()
 
@@ -239,15 +127,14 @@ export function StakeEarn() {
     }
   }, [wallet.balance])
 
-  React.useEffect(() => {
-    let active = true
-    ;(async () => {
-      try {
-        const response = await getStakePositions()
-        if (!active) return
-        const poolMap = new Map(pools.map((pool) => [pool.symbol, pool]))
-        const mapped = response.map((position) => {
-          const pool = poolMap.get(position.token) || fallbackPools[0]
+  const refreshPositions = React.useCallback(async () => {
+    try {
+      const response = await getStakePositions()
+      const poolMap = new Map(pools.map((pool) => [pool.symbol, pool]))
+      const mapped = response
+        .map((position) => {
+          const pool = poolMap.get(position.token)
+          if (!pool) return null
           return {
             id: position.position_id,
             pool,
@@ -257,17 +144,26 @@ export function StakeEarn() {
             status: "active",
           } as StakingPosition
         })
-        setPositions(mapped)
-        setActiveStakers(mapped.length)
-      } catch {
-        // keep fallback positions
-      }
-    })()
+        .filter((item): item is StakingPosition => item !== null)
+      setPositions(mapped)
+      setActivePositions(mapped.length)
+    } catch {
+      setPositions([])
+      setActivePositions(0)
+    }
+  }, [pools])
 
+  React.useEffect(() => {
+    if (pools.length === 0) return
+    let active = true
+    ;(async () => {
+      if (!active) return
+      await refreshPositions()
+    })()
     return () => {
       active = false
     }
-  }, [pools])
+  }, [pools, refreshPositions])
 
   const handleStake = (pool: StakingPool) => {
     setSelectedPool(pool)
@@ -293,22 +189,12 @@ export function StakeEarn() {
         title: "Staking pending",
         message: `Stake ${stakeAmount} ${selectedPool.symbol} sedang diproses...`,
       })
-      const response = await stakeDeposit({
+      await stakeDeposit({
         pool_id: selectedPool.symbol,
         amount: stakeAmount,
       })
-
-      const newPosition: StakingPosition = {
-        id: response.position_id,
-        pool: selectedPool,
-        amount: Number.parseFloat(stakeAmount),
-        stakedAt: "Baru saja",
-        rewards: 0,
-        status: "active",
-      }
-
-      setPositions((prev) => [newPosition, ...prev])
-      wallet.updateBalance(selectedPool.symbol, Math.max(0, selectedPool.userBalance - Number.parseFloat(stakeAmount)))
+      await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
+      await refreshPositions()
       setStakeSuccess(true)
       notifications.addNotification({
         type: "success",
@@ -341,9 +227,8 @@ export function StakeEarn() {
         message: `${target.amount} ${target.pool.symbol} sedang diproses...`,
       })
       await stakeWithdraw({ position_id: positionId, amount: target.amount.toString() })
-      setTimeout(() => {
-        setPositions((prev) => prev.filter((p) => p.id !== positionId))
-      }, 1200)
+      await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
+      await refreshPositions()
       notifications.addNotification({
         type: "success",
         title: "Unstake diproses",
@@ -361,40 +246,17 @@ export function StakeEarn() {
     }
   }
 
-  const handleClaimRewards = (positionId: string) => {
-    setPositions((prev) =>
-      prev.map((p) => (p.id === positionId ? { ...p, rewards: 0 } : p))
-    )
-    notifications.addNotification({
-      type: "success",
-      title: "Rewards diklaim",
-      message: "Rewards berhasil diklaim (simulasi)",
-    })
-  }
-
   const totalStaked = positions.reduce((acc, p) => {
-    const price = tokenPrices[p.pool.symbol] ?? (
-      p.pool.symbol === "BTC" ? 65000 :
-      p.pool.symbol === "ETH" ? 2450 :
-      p.pool.symbol === "STRK" ? 1.25 :
-      p.pool.symbol === "CAREL" ? 0.85 :
-      1
-    )
+    const price = tokenPrices[p.pool.symbol] ?? 0
     return acc + (p.amount * price)
   }, 0)
 
   const totalRewards = positions.reduce((acc, p) => {
-    const price = tokenPrices[p.pool.symbol] ?? (
-      p.pool.symbol === "BTC" ? 65000 :
-      p.pool.symbol === "ETH" ? 2450 :
-      p.pool.symbol === "STRK" ? 1.25 :
-      p.pool.symbol === "CAREL" ? 0.85 :
-      1
-    )
+    const price = tokenPrices[p.pool.symbol] ?? 0
     return acc + (p.rewards * price)
   }, 0)
 
-  const totalValueLocked = pools.reduce((acc, pool) => acc + pool.tvlValue, 0)
+  const totalValueLocked = displayPools.reduce((acc, pool) => acc + pool.tvlValue, 0)
 
   return (
     <section id="stake" className="py-12">
@@ -429,10 +291,10 @@ export function StakeEarn() {
               <div className="w-10 h-10 rounded-full bg-secondary/20 flex items-center justify-center">
                 <Coins className="h-5 w-5 text-secondary" />
               </div>
-              <p className="text-sm text-muted-foreground">Staker Aktif</p>
+              <p className="text-sm text-muted-foreground">Posisi Aktif</p>
             </div>
             <p className="text-2xl font-bold text-foreground">
-              {activeStakers > 0 ? activeStakers.toLocaleString() : "—"}
+              {activePositions > 0 ? activePositions.toLocaleString() : "—"}
             </p>
             <p className="text-xs text-muted-foreground mt-1">Active positions</p>
           </div>
@@ -444,7 +306,9 @@ export function StakeEarn() {
               </div>
               <p className="text-sm text-muted-foreground">Total Staked Anda</p>
             </div>
-            <p className="text-2xl font-bold text-foreground">${totalStaked.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-foreground">
+              {totalStaked > 0 ? `$${totalStaked.toLocaleString()}` : "—"}
+            </p>
             <p className="text-xs text-muted-foreground mt-1">{positions.length} posisi aktif</p>
           </div>
 
@@ -455,7 +319,9 @@ export function StakeEarn() {
               </div>
               <p className="text-sm text-muted-foreground">Total Rewards</p>
             </div>
-            <p className="text-2xl font-bold text-success">${totalRewards.toFixed(2)}</p>
+            <p className="text-2xl font-bold text-success">
+              {totalRewards > 0 ? `$${totalRewards.toFixed(2)}` : "—"}
+            </p>
             <p className="text-xs text-muted-foreground mt-1">Siap diklaim</p>
           </div>
         </div>
@@ -467,7 +333,7 @@ export function StakeEarn() {
             <div>
               <p className="text-sm font-medium text-foreground">Mode Testnet</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Staking menggunakan token testnet. Rewards dihitung secara simulasi dan tidak menggunakan dana riil.
+                Staking menggunakan token testnet. Rewards mengikuti kontrak testnet dan dapat berubah sesuai kondisi pool.
               </p>
             </div>
           </div>
@@ -475,29 +341,37 @@ export function StakeEarn() {
 
         {/* Staking Pools */}
         <div className="space-y-6">
-          {/* Stablecoins Section */}
-          <div>
-            <h3 className="text-lg font-bold text-foreground mb-4">Stablecoins</h3>
-            <div className="grid md:grid-cols-2 gap-4">
-              {pools
-                .filter((pool) => pool.type === "Stablecoin")
-                .map((pool) => (
-                  <StakingCard key={pool.symbol} pool={pool} onStake={() => handleStake(pool)} />
-                ))}
+          {displayPools.length === 0 ? (
+            <div className="p-6 rounded-xl glass border border-border text-center text-muted-foreground">
+              No staking pools available
             </div>
-          </div>
+          ) : (
+            <>
+              {/* Stablecoins Section */}
+              <div>
+                <h3 className="text-lg font-bold text-foreground mb-4">Stablecoins</h3>
+                <div className="grid md:grid-cols-2 gap-4">
+                  {displayPools
+                    .filter((pool) => pool.type === "Stablecoin")
+                    .map((pool) => (
+                      <StakingCard key={pool.symbol} pool={pool} onStake={() => handleStake(pool)} />
+                    ))}
+                </div>
+              </div>
 
-          {/* Cryptocurrencies Section */}
-          <div>
-            <h3 className="text-lg font-bold text-foreground mb-4">Cryptocurrencies</h3>
-            <div className="grid md:grid-cols-2 gap-4">
-              {pools
-                .filter((pool) => pool.type === "Crypto")
-                .map((pool) => (
-                  <StakingCard key={pool.symbol} pool={pool} onStake={() => handleStake(pool)} />
-                ))}
-            </div>
-          </div>
+              {/* Cryptocurrencies Section */}
+              <div>
+                <h3 className="text-lg font-bold text-foreground mb-4">Cryptocurrencies</h3>
+                <div className="grid md:grid-cols-2 gap-4">
+                  {displayPools
+                    .filter((pool) => pool.type === "Crypto")
+                    .map((pool) => (
+                      <StakingCard key={pool.symbol} pool={pool} onStake={() => handleStake(pool)} />
+                    ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Your Staking Positions */}
@@ -558,16 +432,6 @@ export function StakeEarn() {
                         </p>
                       </div>
                       <div className="flex gap-2">
-                        {position.rewards > 0 && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleClaimRewards(position.id)}
-                            className="text-success border-success/30 hover:bg-success/10"
-                          >
-                            Klaim
-                          </Button>
-                        )}
                         <Button
                           size="sm"
                           variant="outline"
@@ -689,7 +553,7 @@ export function StakeEarn() {
                       <div className="flex items-start gap-2">
                         <AlertCircle className="h-4 w-4 text-secondary flex-shrink-0 mt-0.5" />
                         <p className="text-xs text-foreground">
-                          Token testnet. Rewards dihitung secara simulasi.
+                          Token testnet. Rewards mengikuti kontrak testnet.
                         </p>
                       </div>
                     </div>
@@ -789,6 +653,12 @@ function StakingCard({ pool, onStake }: { pool: StakingPool; onStake: () => void
         <div>
           <p className="text-xs text-muted-foreground">Total Staked</p>
           <p className="text-sm font-medium text-foreground">{pool.tvl}</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Harga Spot</p>
+          <p className="text-sm font-medium text-foreground">
+            {pool.spotPrice > 0 ? `$${pool.spotPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : "—"}
+          </p>
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Min. Stake</p>

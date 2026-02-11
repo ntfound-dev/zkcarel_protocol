@@ -7,39 +7,6 @@ import { Button } from "@/components/ui/button"
 import { useWallet } from "@/hooks/use-wallet"
 import { getLeaderboard } from "@/lib/api"
 
-const leaderboardData = {
-  total: [
-    { rank: 1, address: "0x8f...4e2d", points: 45200, isYou: true, change: 2 },
-    { rank: 2, address: "0xab...c3f1", points: 42800, isYou: false, change: -1 },
-    { rank: 3, address: "0x12...45a9", points: 39500, isYou: false, change: 1 },
-    { rank: 4, address: "0xcd...67b2", points: 37100, isYou: false, change: 0 },
-    { rank: 5, address: "0xef...89c4", points: 35900, isYou: false, change: -2 },
-    { rank: 6, address: "0x23...d1e5", points: 34200, isYou: false, change: 3 },
-    { rank: 7, address: "0x56...f2a7", points: 32800, isYou: false, change: 0 },
-    { rank: 8, address: "0x78...b3c9", points: 31500, isYou: false, change: -1 },
-  ],
-  trading: [
-    { rank: 1, address: "0xde...7a3c", points: 2450000, isYou: false, change: 0, label: "$2.45M" },
-    { rank: 2, address: "0x8f...4e2d", points: 1890000, isYou: true, change: 3, label: "$1.89M" },
-    { rank: 3, address: "0xab...c3f1", points: 1520000, isYou: false, change: -1, label: "$1.52M" },
-    { rank: 4, address: "0x45...9f2e", points: 1180000, isYou: false, change: 2, label: "$1.18M" },
-    { rank: 5, address: "0x12...45a9", points: 980000, isYou: false, change: -2, label: "$980K" },
-    { rank: 6, address: "0xcd...67b2", points: 750000, isYou: false, change: 1, label: "$750K" },
-    { rank: 7, address: "0x89...3d1f", points: 620000, isYou: false, change: 0, label: "$620K" },
-    { rank: 8, address: "0xef...89c4", points: 540000, isYou: false, change: -1, label: "$540K" },
-  ],
-  referral: [
-    { rank: 1, address: "0x67...8b4a", points: 156, isYou: false, change: 1, label: "156 refs" },
-    { rank: 2, address: "0xbc...5e9d", points: 142, isYou: false, change: -1, label: "142 refs" },
-    { rank: 3, address: "0x8f...4e2d", points: 98, isYou: true, change: 5, label: "98 refs" },
-    { rank: 4, address: "0xab...c3f1", points: 87, isYou: false, change: 0, label: "87 refs" },
-    { rank: 5, address: "0x23...d1e5", points: 72, isYou: false, change: 2, label: "72 refs" },
-    { rank: 6, address: "0xf1...2c8e", points: 65, isYou: false, change: -2, label: "65 refs" },
-    { rank: 7, address: "0x12...45a9", points: 54, isYou: false, change: 1, label: "54 refs" },
-    { rank: 8, address: "0xcd...67b2", points: 48, isYou: false, change: 0, label: "48 refs" },
-  ],
-}
-
 type TabId = "total" | "trading" | "referral"
 
 const tabs: { id: TabId; label: string }[] = [
@@ -153,8 +120,7 @@ function LeaderboardRow({ entry, showLabel }: { entry: LeaderboardEntry; showLab
 export function Leaderboard() {
   const wallet = useWallet()
   const [activeTab, setActiveTab] = React.useState<TabId>("total")
-  const daysRemaining = 15
-  const [entries, setEntries] = React.useState<LeaderboardEntry[]>(leaderboardData.total)
+  const [entries, setEntries] = React.useState<LeaderboardEntry[]>([])
   const [isLoading, setIsLoading] = React.useState(false)
   const [loadError, setLoadError] = React.useState<string | null>(null)
 
@@ -202,7 +168,7 @@ export function Leaderboard() {
       } catch (error) {
         if (!active) return
         setLoadError(error instanceof Error ? error.message : "Failed to load leaderboard")
-        setEntries(leaderboardData[activeTab])
+        setEntries([])
       } finally {
         if (active) setIsLoading(false)
       }
@@ -225,11 +191,11 @@ export function Leaderboard() {
           <div>
             <div className="flex items-center gap-3">
               <Trophy className="h-6 w-6 text-primary" />
-              <h2 className="text-2xl font-bold text-foreground">Season 5 Leaderboard</h2>
+              <h2 className="text-2xl font-bold text-foreground">Leaderboard</h2>
             </div>
             <div className="flex items-center gap-2 mt-2 text-muted-foreground">
               <Clock className="h-4 w-4" />
-              <span className="text-sm">{daysRemaining} days remaining</span>
+              <span className="text-sm">Testnet season</span>
             </div>
           </div>
           <div className="flex gap-2">
@@ -256,6 +222,9 @@ export function Leaderboard() {
           )}
           {!isLoading && loadError && (
             <div className="text-sm text-destructive px-2">{loadError}</div>
+          )}
+          {!isLoading && currentData.length === 0 && (
+            <div className="text-sm text-muted-foreground px-2">No leaderboard data</div>
           )}
           {!isLoading && currentData.map((entry) => (
             <LeaderboardRow key={`${entry.rank}-${entry.address}`} entry={entry} showLabel={activeTab !== "total"} />

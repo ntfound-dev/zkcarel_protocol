@@ -8,6 +8,8 @@ import {
   type BackendNotification,
 } from "@/lib/api"
 import { useWallet } from "@/hooks/use-wallet"
+import { emitEvent } from "@/lib/events"
+import { useWebSocket } from "@/hooks/use-websocket"
 
 export interface Notification {
   id: number
@@ -51,30 +53,9 @@ function mapBackendNotification(notification: BackendNotification): Notification
   }
 }
 
-const fallbackNotifications: Notification[] = [
-  {
-    id: 1,
-    type: "success",
-    title: "Swap Berhasil",
-    message: "Swap 0.5 ETH ke 1,250 USDT berhasil",
-    timestamp: new Date(Date.now() - 1000 * 60 * 5),
-    read: false,
-    txHash: "0xabc...123",
-  },
-  {
-    id: 2,
-    type: "info",
-    title: "Bridge Dimulai",
-    message: "Bridge 500 USDC dari Ethereum ke Arbitrum",
-    timestamp: new Date(Date.now() - 1000 * 60 * 30),
-    read: true,
-    txHash: "0xdef...456",
-  },
-]
-
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   const wallet = useWallet()
-  const [notifications, setNotifications] = useState<Notification[]>(fallbackNotifications)
+  const [notifications, setNotifications] = useState<Notification[]>([])
 
   const unreadCount = useMemo(
     () => notifications.filter((n) => !n.read).length,
@@ -90,7 +71,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         if (!active) return
         setNotifications(data.items.map(mapBackendNotification))
       } catch {
-        // keep fallback
+        // keep empty
       }
     })()
 
@@ -99,14 +80,27 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     }
   }, [wallet.isConnected, wallet.token])
 
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const token = wallet.token || window.localStorage.getItem("auth_token")
-    if (!token) return
-    const wsUrl = `${WS_BASE_URL.replace(/\/$/, "")}/ws/notifications?token=${encodeURIComponent(token)}`
-    const ws = new WebSocket(wsUrl)
+  const token = typeof window !== "undefined"
+    ? wallet.token || window.localStorage.getItem("auth_token")
+    : wallet.token
 
-    ws.onmessage = (event) => {
+  const wsUrl = token
+    ? `${WS_BASE_URL.replace(/\/$/, "")}/ws/notifications?token=${encodeURIComponent(token)}`
+    : null
+
+  useWebSocket({
+    url: wsUrl,
+    enabled: Boolean(token),
+    onOpen: () => {
+      emitEvent("ws:status", { channel: "notifications", status: "connected" })
+    },
+    onClose: () => {
+      emitEvent("ws:status", { channel: "notifications", status: "disconnected" })
+    },
+    onError: () => {
+      emitEvent("ws:status", { channel: "notifications", status: "error", error: "WebSocket error" })
+    },
+    onMessage: (event) => {
       try {
         const payload = JSON.parse(event.data)
         if (payload?.notif_type) {
@@ -116,12 +110,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       } catch {
         // ignore invalid payloads
       }
-    }
-
-    return () => {
-      ws.close()
-    }
-  }, [wallet.token])
+    },
+  })
 
   const addNotification = useCallback(
     (notification: Omit<Notification, "id" | "timestamp" | "read">) => {

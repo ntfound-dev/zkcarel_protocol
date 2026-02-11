@@ -99,3 +99,27 @@ pub fn parse_felt(value: &str) -> Result<Felt> {
     Felt::from_dec_str(trimmed)
         .map_err(|e| crate::error::AppError::Internal(format!("Invalid felt dec: {}", e)))
 }
+
+pub fn felt_to_u128(value: &Felt) -> Result<u128> {
+    let text = value.to_string();
+    if let Some(stripped) = text.strip_prefix("0x") {
+        u128::from_str_radix(stripped, 16)
+            .map_err(|e| crate::error::AppError::Internal(format!("Invalid felt hex: {}", e)))
+    } else {
+        text.parse::<u128>()
+            .map_err(|e| crate::error::AppError::Internal(format!("Invalid felt dec: {}", e)))
+    }
+}
+
+pub fn u256_from_felts(low: &Felt, high: &Felt) -> Result<u128> {
+    let low = felt_to_u128(low)?;
+    let high = felt_to_u128(high)?;
+    if high != 0 {
+        return Err(crate::error::AppError::Internal("u256 value too large".to_string()));
+    }
+    Ok(low)
+}
+
+pub fn u256_to_felts(value: u128) -> (Felt, Felt) {
+    (Felt::from(value), Felt::from(0_u128))
+}

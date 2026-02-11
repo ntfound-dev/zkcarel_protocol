@@ -51,7 +51,8 @@ fn build_order_id(
     now_ts: i64,
 ) -> String {
     let order_data = format!("{}{}{}{}{}", user_address, from_token, to_token, amount, now_ts);
-    format!("ORD_{}", hash::hash_string(&order_data))
+    // Keep length <= 66 to fit DB (varchar(66))
+    hash::hash_string(&order_data)
 }
 
 // Struct bantuan untuk menghitung total
@@ -306,7 +307,7 @@ mod tests {
         // Memastikan order_id konsisten untuk input yang sama
         let id = build_order_id("0xabc", "ETH", "USDT", 10.0, 1_700_000_000);
         let order_data = format!("{}{}{}{}{}", "0xabc", "ETH", "USDT", 10.0, 1_700_000_000);
-        let expected = format!("ORD_{}", hash::hash_string(&order_data));
+        let expected = hash::hash_string(&order_data);
         assert_eq!(id, expected);
     }
 }

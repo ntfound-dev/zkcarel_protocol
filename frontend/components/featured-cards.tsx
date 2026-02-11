@@ -3,9 +3,10 @@
 import * as React from "react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
-import { ArrowRightLeft, TrendingUp, Coins, Sparkles, ChevronLeft, ChevronRight, Users, ExternalLink } from "lucide-react"
+import { ArrowRightLeft, TrendingUp, Coins, ChevronLeft, ChevronRight, Users, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ReferralLog } from "@/components/referral-log"
+import { getPortfolioAnalytics, getReferralStats, getRewardsPoints, getStakePools, listLimitOrders } from "@/lib/api"
 
 // Animated counter for dynamic stats - starts at 0 on server, animates on client
 function useAnimatedValue(end: number, duration: number = 1500) {
@@ -54,69 +55,17 @@ function useAnimatedValue(end: number, duration: number = 1500) {
   return { value, ref }
 }
 
-const features = [
-  {
-    id: "swap-bridge",
-    title: "Swap & Bridge",
-    description: "Trade tokens seamlessly across chains with zero-knowledge privacy",
-    icon: ArrowRightLeft,
-    gradient: "from-primary via-accent to-secondary",
-    href: "#trade",
-    stats: [
-      { label: "Volume 24H", value: "$2.4M", numericValue: 2400000, prefix: "$" },
-      { label: "Transactions", value: "12.5K", numericValue: 12500, suffix: "" },
-    ],
-    cta: "Explore",
-  },
-  {
-    id: "limit-order",
-    title: "Limit Order",
-    description: "Set your price and let the market come to you with advanced order types",
-    icon: TrendingUp,
-    gradient: "from-secondary via-primary to-accent",
-    href: "#limit-order",
-    stats: [
-      { label: "Active Orders", value: "3,420", numericValue: 3420 },
-      { label: "Success Rate", value: "94%", numericValue: 94, suffix: "%" },
-    ],
-    comingSoon: true,
-    cta: "Preview",
-  },
-  {
-    id: "stake-earn",
-    title: "Stake & Earn",
-    description: "Earn passive income by staking your crypto assets with competitive APY",
-    icon: Coins,
-    gradient: "from-accent via-secondary to-primary",
-    href: "#stake",
-    stats: [
-      { label: "TVL", value: "$8.2M", numericValue: 8200000, prefix: "$" },
-      { label: "APY", value: "Up to 12%", numericValue: 12, prefix: "Up to ", suffix: "%" },
-    ],
-    comingSoon: true,
-    cta: "Preview",
-  },
-  {
-    id: "referral",
-    title: "Referral Program",
-    description: "Invite friends and earn 10% bonus points on their trading activity",
-    icon: Users,
-    gradient: "from-success via-primary to-accent",
-    href: "#referral",
-    stats: [
-      { label: "Total Referrals", value: "8,420", numericValue: 8420 },
-      { label: "Points Earned", value: "2.1M", numericValue: 2100000 },
-    ],
-    isReferral: true,
-    cta: "View Log",
-  },
-]
+ 
 
 export function FeaturedCards() {
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = React.useState(false)
   const [canScrollRight, setCanScrollRight] = React.useState(true)
   const [referralOpen, setReferralOpen] = React.useState(false)
+  const [swapStats, setSwapStats] = React.useState<{ volume?: number; trades?: number }>({})
+  const [limitStats, setLimitStats] = React.useState<{ activeOrders?: number }>({})
+  const [stakeStats, setStakeStats] = React.useState<{ tvl?: number; maxApy?: number }>({})
+  const [referralStats, setReferralStats] = React.useState<{ totalReferrals?: number; referralPoints?: number }>({})
 
   const checkScroll = () => {
     if (scrollContainerRef.current) {
@@ -132,6 +81,62 @@ export function FeaturedCards() {
     return () => window.removeEventListener('resize', checkScroll)
   }, [])
 
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      const [analyticsRes, limitRes, poolsRes, referralRes, pointsRes] = await Promise.allSettled([
+        getPortfolioAnalytics(),
+        listLimitOrders(1, 1, "active"),
+        getStakePools(),
+        getReferralStats(),
+        getRewardsPoints(),
+      ])
+
+      if (!active) return
+
+      if (analyticsRes.status === "fulfilled") {
+        const volume = Number(analyticsRes.value.trading.total_volume_usd)
+        const trades = Number(analyticsRes.value.trading.total_trades)
+        setSwapStats({
+          volume: Number.isFinite(volume) ? volume : undefined,
+          trades: Number.isFinite(trades) ? trades : undefined,
+        })
+      }
+
+      if (limitRes.status === "fulfilled") {
+        const total = Number(limitRes.value.total)
+        setLimitStats({ activeOrders: Number.isFinite(total) ? total : undefined })
+      }
+
+      if (poolsRes.status === "fulfilled") {
+        const totalTvl = poolsRes.value.reduce((acc, pool) => acc + (Number(pool.tvl_usd) || 0), 0)
+        const maxApy = poolsRes.value.reduce((acc, pool) => Math.max(acc, Number(pool.apy) || 0), 0)
+        setStakeStats({
+          tvl: Number.isFinite(totalTvl) ? totalTvl : undefined,
+          maxApy: Number.isFinite(maxApy) ? maxApy : undefined,
+        })
+      }
+
+      if (referralRes.status === "fulfilled") {
+        setReferralStats((prev) => ({
+          ...prev,
+          totalReferrals: referralRes.value.total_referrals,
+        }))
+      }
+
+      if (pointsRes.status === "fulfilled") {
+        setReferralStats((prev) => ({
+          ...prev,
+          referralPoints: Number(pointsRes.value.referral_points) || 0,
+        }))
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
   const scroll = (direction: 'left' | 'right') => {
     if (scrollContainerRef.current) {
       const scrollAmount = 400
@@ -145,6 +150,62 @@ export function FeaturedCards() {
       })
     }
   }
+
+  const features: Feature[] = React.useMemo(() => [
+    {
+      id: "swap-bridge",
+      title: "Swap & Bridge",
+      description: "Trade tokens seamlessly across chains with zero-knowledge privacy",
+      icon: ArrowRightLeft,
+      gradient: "from-primary via-accent to-secondary",
+      href: "#trade",
+      stats: [
+        { label: "Your Volume", value: "—", numericValue: swapStats.volume, prefix: "$" },
+        { label: "Your Trades", value: "—", numericValue: swapStats.trades },
+      ],
+      cta: "Explore",
+    },
+    {
+      id: "limit-order",
+      title: "Limit Order",
+      description: "Set your price and let the market come to you with advanced order types",
+      icon: TrendingUp,
+      gradient: "from-secondary via-primary to-accent",
+      href: "#limit-order",
+      stats: [
+        { label: "Active Orders", value: "—", numericValue: limitStats.activeOrders },
+        { label: "Success Rate", value: "—" },
+      ],
+      cta: "Open",
+    },
+    {
+      id: "stake-earn",
+      title: "Stake & Earn",
+      description: "Earn passive income by staking your crypto assets with competitive APY",
+      icon: Coins,
+      gradient: "from-accent via-secondary to-primary",
+      href: "#stake",
+      stats: [
+        { label: "TVL", value: "—", numericValue: stakeStats.tvl, prefix: "$" },
+        { label: "APY", value: stakeStats.maxApy ? `Up to ${stakeStats.maxApy.toFixed(2)}%` : "—", numericValue: stakeStats.maxApy, prefix: "Up to ", suffix: "%" },
+      ],
+      cta: "Open",
+    },
+    {
+      id: "referral",
+      title: "Referral Program",
+      description: "Invite friends and earn bonus points on their trading activity",
+      icon: Users,
+      gradient: "from-success via-primary to-accent",
+      href: "#referral",
+      stats: [
+        { label: "Total Referrals", value: "—", numericValue: referralStats.totalReferrals },
+        { label: "Points Earned", value: "—", numericValue: referralStats.referralPoints },
+      ],
+      isReferral: true,
+      cta: "View Log",
+    },
+  ], [swapStats, limitStats, stakeStats, referralStats])
 
   return (
     <section className="relative">
@@ -206,7 +267,7 @@ export function FeaturedCards() {
         isOpen={referralOpen} 
         onOpenChange={setReferralOpen}
         showTrigger={false}
-        pointsEarned={12500}
+        pointsEarned={referralStats.referralPoints || 0}
       />
     </section>
   )
@@ -242,7 +303,7 @@ function FeatureCard({
   const stat2 = useAnimatedValue(feature.stats[1]?.numericValue || 0)
   
   const formatValue = (stat: Feature['stats'][0], animatedValue: number) => {
-    if (!stat.numericValue) return stat.value
+    if (stat.numericValue === undefined || stat.numericValue === null) return stat.value
     
     const prefix = stat.prefix || ''
     const suffix = stat.suffix || ''
@@ -255,125 +316,133 @@ function FeatureCard({
     return `${prefix}${animatedValue.toLocaleString()}${suffix}`
   }
 
-  const handleClick = (e: React.MouseEvent) => {
-    if (feature.isReferral) {
-      e.preventDefault()
-      onReferralClick()
-    }
-  }
+  const wrapperClass = cn(
+    "group flex-shrink-0 w-[350px] snap-start text-left cursor-pointer",
+    feature.comingSoon && "cursor-default"
+  )
 
-  const CardWrapper = feature.isReferral ? 'div' : Link
-  const cardProps = feature.isReferral 
-    ? { onClick: handleClick, role: 'button', tabIndex: 0 }
-    : { href: feature.href }
-
-  return (
-    <CardWrapper
-      {...cardProps}
+  const cardBody = (
+    <div 
+      ref={stat1.ref}
       className={cn(
-        "group flex-shrink-0 w-[350px] snap-start text-left cursor-pointer",
-        feature.comingSoon && "cursor-default"
+        "relative h-full p-6 rounded-2xl border border-border glass overflow-hidden transition-all duration-300",
+        !feature.comingSoon && "hover:border-primary/50 hover:shadow-lg hover:shadow-primary/20 hover:-translate-y-1"
       )}
     >
-      <div 
-        ref={stat1.ref}
-        className={cn(
-          "relative h-full p-6 rounded-2xl border border-border glass overflow-hidden transition-all duration-300",
-          !feature.comingSoon && "hover:border-primary/50 hover:shadow-lg hover:shadow-primary/20 hover:-translate-y-1"
-        )}
-      >
-        {/* Background Gradient */}
+      {/* Background Gradient */}
+      <div className={cn(
+        "absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-500 bg-gradient-to-br",
+        feature.gradient
+      )} />
+
+      {/* Content */}
+      <div className="relative z-10">
+        {/* Icon */}
         <div className={cn(
-          "absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-500 bg-gradient-to-br",
-          feature.gradient
-        )} />
-
-        {/* Content */}
-        <div className="relative z-10">
-          {/* Icon */}
-          <div className={cn(
-            "w-14 h-14 rounded-xl flex items-center justify-center mb-4 transition-all duration-300",
-            !feature.comingSoon && "group-hover:scale-110",
-            feature.comingSoon ? "bg-muted/20" : "bg-gradient-to-br " + feature.gradient
-          )}>
-            <feature.icon className={cn(
-              "h-7 w-7",
-              feature.comingSoon ? "text-muted-foreground" : "text-white"
-            )} />
-          </div>
-
-          {/* Title & Description */}
-          <h3 className={cn(
-            "text-xl font-bold mb-2 transition-colors",
-            feature.comingSoon ? "text-muted-foreground" : "text-foreground group-hover:text-primary"
-          )}>
-            {feature.title}
-            {feature.comingSoon && (
-              <span className="ml-2 text-xs font-medium px-2 py-1 rounded-full bg-secondary/20 text-secondary">
-                Soon
-              </span>
-            )}
-          </h3>
-          <p className={cn(
-            "text-sm mb-6",
-            feature.comingSoon ? "text-muted-foreground/60" : "text-muted-foreground"
-          )}>
-            {feature.description}
-          </p>
-
-          {/* Stats with Animation */}
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div className={cn(
-              "p-3 rounded-lg transition-colors",
-              feature.comingSoon ? "bg-surface/20" : "bg-surface/50 group-hover:bg-surface"
-            )}>
-              <p className="text-xs text-muted-foreground mb-1">{feature.stats[0].label}</p>
-              <p className={cn(
-                "text-sm font-bold",
-                feature.comingSoon ? "text-muted-foreground" : "text-foreground"
-              )}>
-                {formatValue(feature.stats[0], stat1.value)}
-              </p>
-            </div>
-            <div className={cn(
-              "p-3 rounded-lg transition-colors",
-              feature.comingSoon ? "bg-surface/20" : "bg-surface/50 group-hover:bg-surface"
-            )}>
-              <p className="text-xs text-muted-foreground mb-1">{feature.stats[1].label}</p>
-              <p className={cn(
-                "text-sm font-bold",
-                feature.comingSoon ? "text-muted-foreground" : "text-foreground"
-              )}>
-                {formatValue(feature.stats[1], stat2.value)}
-              </p>
-            </div>
-          </div>
-
-          {/* CTA Button */}
-          {!feature.comingSoon && (
-            <div className="mt-4">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="w-full gap-2 border-primary/30 hover:border-primary hover:bg-primary/10 text-primary"
-              >
-                <span>{feature.cta || "Explore"}</span>
-                {feature.isReferral ? (
-                  <ExternalLink className="h-4 w-4" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                )}
-              </Button>
-            </div>
-          )}
+          "w-14 h-14 rounded-xl flex items-center justify-center mb-4 transition-all duration-300",
+          !feature.comingSoon && "group-hover:scale-110",
+          feature.comingSoon ? "bg-muted/20" : "bg-gradient-to-br " + feature.gradient
+        )}>
+          <feature.icon className={cn(
+            "h-7 w-7",
+            feature.comingSoon ? "text-muted-foreground" : "text-white"
+          )} />
         </div>
 
-        {/* Decorative Elements */}
-        <div className={cn(
-          "absolute -right-8 -bottom-8 w-32 h-32 rounded-full blur-3xl opacity-0 group-hover:opacity-20 transition-opacity duration-500",
-          feature.comingSoon ? "bg-muted" : "bg-primary"
-        )} />
+        {/* Title & Description */}
+        <h3 className={cn(
+          "text-xl font-bold mb-2 transition-colors",
+          feature.comingSoon ? "text-muted-foreground" : "text-foreground group-hover:text-primary"
+        )}>
+          {feature.title}
+          {feature.comingSoon && (
+            <span className="ml-2 text-xs font-medium px-2 py-1 rounded-full bg-secondary/20 text-secondary">
+              Soon
+            </span>
+          )}
+        </h3>
+        <p className={cn(
+          "text-sm mb-6",
+          feature.comingSoon ? "text-muted-foreground/60" : "text-muted-foreground"
+        )}>
+          {feature.description}
+        </p>
+
+        {/* Stats with Animation */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className={cn(
+            "p-3 rounded-lg transition-colors",
+            feature.comingSoon ? "bg-surface/20" : "bg-surface/50 group-hover:bg-surface"
+          )}>
+            <p className="text-xs text-muted-foreground mb-1">{feature.stats[0].label}</p>
+            <p className={cn(
+              "text-sm font-bold",
+              feature.comingSoon ? "text-muted-foreground" : "text-foreground"
+            )}>
+              {formatValue(feature.stats[0], stat1.value)}
+            </p>
+          </div>
+          <div className={cn(
+            "p-3 rounded-lg transition-colors",
+            feature.comingSoon ? "bg-surface/20" : "bg-surface/50 group-hover:bg-surface"
+          )}>
+            <p className="text-xs text-muted-foreground mb-1">{feature.stats[1].label}</p>
+            <p className={cn(
+              "text-sm font-bold",
+              feature.comingSoon ? "text-muted-foreground" : "text-foreground"
+            )}>
+              {formatValue(feature.stats[1], stat2.value)}
+            </p>
+          </div>
+        </div>
+
+        {/* CTA Button */}
+        {!feature.comingSoon && (
+          <div className="mt-4">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="w-full gap-2 border-primary/30 hover:border-primary hover:bg-primary/10 text-primary"
+            >
+              <span>{feature.cta || "Explore"}</span>
+              {feature.isReferral ? (
+                <ExternalLink className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
+              )}
+            </Button>
+          </div>
+        )}
       </div>
-    </CardWrapper>
+
+      {/* Decorative Elements */}
+      <div className={cn(
+        "absolute -right-8 -bottom-8 w-32 h-32 rounded-full blur-3xl opacity-0 group-hover:opacity-20 transition-opacity duration-500",
+        feature.comingSoon ? "bg-muted" : "bg-primary"
+      )} />
+    </div>
+  )
+
+  return (
+    feature.isReferral ? (
+      <div
+        className={wrapperClass}
+        onClick={onReferralClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            onReferralClick()
+          }
+        }}
+      >
+        {cardBody}
+      </div>
+    ) : (
+      <Link href={feature.href} className={wrapperClass}>
+        {cardBody}
+      </Link>
+    )
   )
 }

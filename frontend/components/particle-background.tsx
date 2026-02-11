@@ -16,7 +16,7 @@ interface Particle {
 export function ParticleBackground() {
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
   const { mode } = useTheme()
-  const animationRef = React.useRef<number>()
+  const animationRef = React.useRef<number | null>(null)
   const particlesRef = React.useRef<Particle[]>([])
   const mouseRef = React.useRef({ x: 0, y: 0 })
 

@@ -3,8 +3,15 @@
 import * as React from "react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
-import { useWallet, type WalletProviderType } from "@/hooks/use-wallet"
+import { useWallet, type WalletProviderType, type BtcWalletProviderType } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
+import { claimFaucet, getFaucetStatus, getTransactionsHistory, type Transaction } from "@/lib/api"
+import { formatNetworkLabel } from "@/lib/network-config"
+import {
+  BTC_WALLET_PROVIDERS,
+  STARKNET_WALLET_PROVIDERS,
+  WALLET_PROVIDERS,
+} from "@/lib/wallet-provider-config"
 import { Button } from "@/components/ui/button"
 import { PrivacyRouterPanel } from "@/components/privacy-router-panel"
 import {
@@ -26,15 +33,23 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   Shield, Wallet, Bell, User, Menu, X, ArrowRightLeft, PieChart, Trophy, Gift, 
   History, Users, Settings, Droplets, ChevronDown, HelpCircle, Zap,
-  Copy, Check, ExternalLink, TrendingUp, Coins, QrCode, Lock,
+  Copy, Check, TrendingUp, Coins, QrCode, Lock,
   Smartphone, ChevronRight, Clock, XCircle, CheckCircle, Loader2, Mail
 } from "lucide-react"
 
-const walletProviders: { id: WalletProviderType; name: string; icon: string }[] = [
-  { id: 'starknet', name: 'Starknet Wallet', icon: '✨' },
-  { id: 'argentx', name: 'Argent X', icon: '🧡' },
-  { id: 'braavos', name: 'Braavos', icon: '🛡️' },
-]
+const STARKNET_FAUCET_URL = "https://starknet-faucet.vercel.app/"
+
+const walletProviders = WALLET_PROVIDERS as { id: WalletProviderType; name: string; icon: string }[]
+const starknetWalletProviders = STARKNET_WALLET_PROVIDERS as {
+  id: WalletProviderType
+  name: string
+  icon: string
+}[]
+const btcWalletProviders = BTC_WALLET_PROVIDERS as {
+  id: BtcWalletProviderType
+  name: string
+  icon: string
+}[]
 
 const faucetTokens = [
   { symbol: "BTC", name: "Bitcoin", amount: "0.001" },
@@ -60,6 +75,22 @@ const topUpProviders = [
   { id: "bank", name: "Bank Transfer", icon: "🏦", available: false },
 ]
 
+type FaucetStatusMap = Record<
+  string,
+  { can_claim: boolean; next_claim_at?: string | null; last_claim_at?: string | null }
+>
+
+type UiTx = {
+  id: string
+  type: string
+  status: "completed" | "pending" | "failed"
+  from?: string
+  to?: string
+  amount?: string
+  value?: string
+  time?: string
+}
+
 export function EnhancedNavigation() {
   const wallet = useWallet()
   const notifications = useNotifications()
@@ -70,15 +101,37 @@ export function EnhancedNavigation() {
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [topUpOpen, setTopUpOpen] = React.useState(false)
   const [privacyOpen, setPrivacyOpen] = React.useState(false)
-  const [claimedFaucet, setClaimedFaucet] = React.useState<string[]>([])
+  const [faucetStatus, setFaucetStatus] = React.useState<FaucetStatusMap>({})
+  const [faucetLoading, setFaucetLoading] = React.useState<Record<string, boolean>>({})
+  const [faucetTx, setFaucetTx] = React.useState<Record<string, string>>({})
   const [copiedAddress, setCopiedAddress] = React.useState(false)
   const [txFilter, setTxFilter] = React.useState("all")
+  const [txHistory, setTxHistory] = React.useState<UiTx[]>([])
+  const [txHistoryLoading, setTxHistoryLoading] = React.useState(false)
+  const [walletConnectPending, setWalletConnectPending] = React.useState(false)
+  const [btcConnectPending, setBtcConnectPending] = React.useState(false)
 
   // --- Safe helpers ---
   const formatCurrency = (value: unknown) => {
     const n = Number(value)
     if (!Number.isFinite(n)) return "0"
     return n.toLocaleString()
+  }
+
+  const formatAsset = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return "—"
+    if (!Number.isFinite(value)) return "—"
+    return value.toLocaleString(undefined, { maximumFractionDigits: 6 })
+  }
+
+  const renderOnchainValue = (
+    value: number | null | undefined,
+    connected: boolean,
+    fallback: string
+  ) => {
+    if (!connected) return fallback
+    if (value === null || value === undefined) return "Fetching..."
+    return formatAsset(value)
   }
 
   const formatTime = (ts: unknown) => {
@@ -92,33 +145,261 @@ export function EnhancedNavigation() {
     }
   }
 
+  const formatRelativeTime = (iso: string) => {
+    const date = new Date(iso)
+    if (Number.isNaN(date.getTime())) return ""
+    const diffMs = Date.now() - date.getTime()
+    const minutes = Math.floor(diffMs / 60000)
+    if (minutes < 60) return `${minutes} min ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours} hours ago`
+    const days = Math.floor(hours / 24)
+    return `${days} days ago`
+  }
+
+  const parseNumber = (value?: string | number | null) => {
+    if (value === null || value === undefined) return 0
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
   const shortenAddress = (addr?: string | null) => {
     if (!addr) return ""
     if (addr.length <= 12) return addr
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`
   }
 
-  // --- Handlers ---
-  const handleWalletConnect = async (provider: WalletProviderType) => {
-    await wallet.connect(provider)
-    setWalletDialogOpen(false)
+  const renderLinkStatus = (addr?: string | null) => {
+    if (!addr) return "Not linked"
+    return shortenAddress(addr)
   }
 
-  const handleClaimFaucet = (symbol: string, amount: string) => {
-    if (claimedFaucet.includes(symbol)) return
-    setClaimedFaucet([...claimedFaucet, symbol])
-    
-    notifications.addNotification({
-      type: 'success',
-      title: 'Faucet Claimed',
-      message: `Successfully claimed ${amount} ${symbol}`,
-      timestamp: new Date()
-    })
+  const connectedTestnets = React.useMemo(() => {
+    const labels: string[] = []
+    if (wallet.starknetAddress) labels.push(formatNetworkLabel("starknet"))
+    if (wallet.evmAddress) labels.push(formatNetworkLabel("evm"))
+    if (wallet.btcAddress) labels.push(formatNetworkLabel("btc"))
+    return labels
+  }, [wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
 
-    if (symbol === "CAREL") {
-      // updateBalance should be robust in the hook, but guard anyway
-      const current = wallet.balance?.CAREL ?? 0
-      wallet.updateBalance?.("CAREL", current + Number.parseFloat(amount))
+  const connectedTestnetSummary =
+    connectedTestnets.length > 0
+      ? `Connected to ${connectedTestnets.join(" + ")}`
+      : "Connected, but no testnet wallet linked yet."
+  const effectivePortfolioBalance = React.useMemo(
+    () => ({
+      BTC:
+        wallet.btcAddress && wallet.onchainBalance?.BTC !== null && wallet.onchainBalance?.BTC !== undefined
+          ? wallet.onchainBalance.BTC
+          : wallet.balance?.BTC ?? 0,
+      ETH:
+        wallet.evmAddress && wallet.onchainBalance?.ETH !== null && wallet.onchainBalance?.ETH !== undefined
+          ? wallet.onchainBalance.ETH
+          : wallet.balance?.ETH ?? 0,
+      STRK:
+        wallet.starknetAddress &&
+        wallet.onchainBalance?.STRK_L2 !== null &&
+        wallet.onchainBalance?.STRK_L2 !== undefined
+          ? wallet.onchainBalance.STRK_L2
+          : wallet.balance?.STRK ?? 0,
+      CAREL: wallet.balance?.CAREL ?? 0,
+    }),
+    [
+      wallet.balance?.BTC,
+      wallet.balance?.CAREL,
+      wallet.balance?.ETH,
+      wallet.balance?.STRK,
+      wallet.btcAddress,
+      wallet.evmAddress,
+      wallet.onchainBalance?.BTC,
+      wallet.onchainBalance?.ETH,
+      wallet.onchainBalance?.STRK_L2,
+      wallet.starknetAddress,
+    ]
+  )
+
+  React.useEffect(() => {
+    if (!wallet.isConnected || wallet.network !== "starknet") {
+      setFaucetStatus({})
+      return
+    }
+    let active = true
+    ;(async () => {
+      try {
+        const response = await getFaucetStatus()
+        if (!active) return
+        const mapped: FaucetStatusMap = {}
+        response.tokens.forEach((token) => {
+          mapped[token.token] = {
+            can_claim: token.can_claim,
+            next_claim_at: token.next_claim_at,
+            last_claim_at: token.last_claim_at,
+          }
+        })
+        setFaucetStatus(mapped)
+      } catch {
+        if (!active) return
+        setFaucetStatus({})
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [wallet.isConnected, wallet.token, wallet.network])
+
+  React.useEffect(() => {
+    if (!txHistoryOpen || !wallet.isConnected) return
+    let active = true
+    setTxHistoryLoading(true)
+    ;(async () => {
+      try {
+        const response = await getTransactionsHistory({ page: 1, limit: 20 })
+        if (!active) return
+        const mapped: UiTx[] = response.items.map((tx: Transaction) => {
+          const amountValue = parseNumber(tx.amount_in || tx.amount_out || 0)
+          const usdValue = parseNumber(tx.usd_value)
+          return {
+            id: tx.tx_hash,
+            type: tx.tx_type,
+            status: tx.processed ? "completed" : "pending",
+            from: tx.token_in || tx.tx_type,
+            to: tx.token_out || "",
+            amount: amountValue ? amountValue.toString() : "—",
+            value: usdValue ? `$${usdValue.toLocaleString()}` : "—",
+            time: formatRelativeTime(tx.timestamp),
+          }
+        })
+        setTxHistory(mapped)
+      } catch {
+        if (!active) return
+        setTxHistory([])
+      } finally {
+        if (active) setTxHistoryLoading(false)
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [txHistoryOpen, wallet.isConnected])
+
+  // --- Handlers ---
+  const handleWalletConnect = async (provider: WalletProviderType) => {
+    if (walletConnectPending) return
+    setWalletConnectPending(true)
+    try {
+      await wallet.connect(provider)
+      setWalletDialogOpen(false)
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Wallet connection failed",
+        message: error instanceof Error ? error.message : "Unable to connect wallet",
+      })
+    } finally {
+      setWalletConnectPending(false)
+    }
+  }
+
+  const handleBtcConnect = async (provider: BtcWalletProviderType) => {
+    if (btcConnectPending) return
+    setBtcConnectPending(true)
+    try {
+      await wallet.connectBtcWallet(provider)
+      notifications.addNotification({
+        type: "success",
+        title: "BTC wallet connected",
+        message: `Connected ${provider.toUpperCase()} wallet.`,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to connect BTC wallet"
+      const missingExtension = message.toLowerCase().includes("extension not detected")
+      notifications.addNotification({
+        type: missingExtension ? "warning" : "error",
+        title: missingExtension ? "BTC wallet optional" : "BTC wallet connection failed",
+        message: missingExtension
+          ? `${message} Untuk trade STRK/ETH, lanjutkan dengan MetaMask + Braavos/ArgentX tanpa wallet BTC.`
+          : message,
+      })
+    } finally {
+      setBtcConnectPending(false)
+    }
+  }
+
+  const handleClaimFaucet = async (symbol: string) => {
+    if (!wallet.isConnected) {
+      notifications.addNotification({
+        type: "error",
+        title: "Wallet not connected",
+        message: "Connect your wallet to claim faucet tokens.",
+      })
+      return
+    }
+    if (wallet.network !== "starknet") {
+      notifications.addNotification({
+        type: "warning",
+        title: "Starknet wallet required",
+        message: "Faucet hanya tersedia untuk wallet Starknet.",
+      })
+      return
+    }
+
+    const strkBalance = wallet.onchainBalance?.STRK_L2 ?? null
+    if (typeof strkBalance === "number" && strkBalance <= 0) {
+      notifications.addNotification({
+        type: "warning",
+        title: "Butuh STRK untuk gas",
+        message: "Saldo STRK kosong. Buka faucet Starknet untuk top up.",
+      })
+      if (typeof window !== "undefined") {
+        window.open(STARKNET_FAUCET_URL, "_blank", "noopener,noreferrer")
+      }
+      return
+    }
+
+    const status = faucetStatus[symbol]
+    if (!status?.can_claim || faucetLoading[symbol]) return
+
+    setFaucetLoading((prev) => ({ ...prev, [symbol]: true }))
+    try {
+      const result = await claimFaucet(symbol)
+      const txHash = result.tx_hash
+      if (txHash) {
+        setFaucetTx((prev) => ({ ...prev, [symbol]: txHash }))
+      }
+      const shortTx =
+        typeof txHash === "string" && txHash.length > 12
+          ? `${txHash.slice(0, 8)}...${txHash.slice(-6)}`
+          : txHash
+      notifications.addNotification({
+        type: "success",
+        title: "Faucet claimed",
+        message: `Claimed ${result.amount} ${result.token}. Tx: ${shortTx || "N/A"}.`,
+      })
+
+      // Update local faucet status with cooldown info
+      const nextClaimAt = result.next_claim_in
+        ? new Date(Date.now() + result.next_claim_in * 1000).toISOString()
+        : undefined
+      setFaucetStatus((prev) => ({
+        ...prev,
+        [symbol]: {
+          ...(prev[symbol] || { can_claim: false }),
+          can_claim: false,
+          next_claim_at: nextClaimAt,
+        },
+      }))
+
+      await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Faucet failed",
+        message: error instanceof Error ? error.message : "Failed to claim faucet.",
+      })
+    } finally {
+      setFaucetLoading((prev) => ({ ...prev, [symbol]: false }))
     }
   }
 
@@ -129,13 +410,6 @@ export function EnhancedNavigation() {
       setTimeout(() => setCopiedAddress(false), 2000)
     }
   }
-
-  const txHistory = [
-    { id: '1', type: 'swap', status: 'completed', from: 'ETH', to: 'CAREL', amount: '1.0', value: '$2,450', time: '2 hours ago' },
-    { id: '2', type: 'bridge', status: 'pending', from: 'BTC', to: 'wBTC', amount: '0.1', value: '$6,500', time: '5 hours ago' },
-    { id: '3', type: 'stake', status: 'completed', from: 'USDT', to: 'sUSDT', amount: '1000', value: '$1,000', time: '1 day ago' },
-    { id: '4', type: 'swap', status: 'failed', from: 'STRK', to: 'ETH', amount: '500', value: '$250', time: '2 days ago' },
-  ]
 
   // Filter transactions
   const filteredTxHistory = txHistory.filter(tx => {
@@ -175,33 +449,74 @@ export function EnhancedNavigation() {
                   <div>
                     <p className="text-sm font-medium text-foreground">Testnet Faucet</p>
                     <p className="text-xs text-muted-foreground">Claim free testnet tokens</p>
+                    {wallet.isConnected && wallet.network !== "starknet" && (
+                      <p className="text-xs text-warning mt-1">EVM connected – faucet Starknet only</p>
+                    )}
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {faucetTokens.map((token) => (
-                  <DropdownMenuItem 
-                    key={token.symbol}
-                    className={cn(
-                      "flex items-center justify-between cursor-pointer py-3",
-                      claimedFaucet.includes(token.symbol) && "opacity-50"
-                    )}
-                    onClick={() => handleClaimFaucet(token.symbol, token.amount)}
-                    disabled={claimedFaucet.includes(token.symbol)}
-                  >
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{token.symbol}</p>
-                      <p className="text-xs text-muted-foreground">{token.name}</p>
-                    </div>
-                    <span className={cn(
-                      "text-xs font-medium px-2 py-1 rounded",
-                      claimedFaucet.includes(token.symbol) 
-                        ? "bg-muted text-muted-foreground" 
-                        : "bg-success/20 text-success"
-                    )}>
-                      {claimedFaucet.includes(token.symbol) ? "Claimed" : `+${token.amount}`}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
+                {faucetTokens.map((token) => {
+                  const walletReady = wallet.isConnected && wallet.network === "starknet"
+                  const status = walletReady ? faucetStatus[token.symbol] : undefined
+                  const canClaim = walletReady && (status?.can_claim ?? false)
+                  const isLoading = faucetLoading[token.symbol]
+                  const isDisabled = !canClaim || isLoading
+                  const label = isLoading
+                    ? "Claiming..."
+                    : !wallet.isConnected
+                    ? "Connect"
+                    : wallet.network !== "starknet"
+                    ? "Starknet only"
+                    : !status
+                    ? "Unavailable"
+                    : canClaim
+                    ? `+${token.amount}`
+                    : "Cooldown"
+
+                  return (
+                    <DropdownMenuItem
+                      key={token.symbol}
+                      className={cn(
+                        "flex items-center justify-between cursor-pointer py-3",
+                        isDisabled && "opacity-50"
+                      )}
+                      onClick={() => handleClaimFaucet(token.symbol)}
+                      disabled={isDisabled}
+                    >
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium text-foreground">{token.symbol}</p>
+                        <p className="text-xs text-muted-foreground">{token.name}</p>
+                        {faucetTx[token.symbol] && (
+                          <a
+                            href={`https://sepolia.starkscan.co/tx/${faucetTx[token.symbol]}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[10px] text-primary hover:underline"
+                          >
+                            View Tx
+                          </a>
+                        )}
+                      </div>
+                      <span className={cn(
+                        "text-xs font-medium px-2 py-1 rounded",
+                        canClaim ? "bg-success/20 text-success" : "bg-muted text-muted-foreground"
+                      )}>
+                        {label}
+                      </span>
+                    </DropdownMenuItem>
+                  )
+                })}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => {
+                    if (typeof window !== "undefined") {
+                      window.open(STARKNET_FAUCET_URL, "_blank", "noopener,noreferrer")
+                    }
+                  }}
+                >
+                  Buka Starknet Faucet
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
 
@@ -218,7 +533,21 @@ export function EnhancedNavigation() {
                 <DropdownMenuItem className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full bg-success" />
-                    <span>Testnet</span>
+                    <span>{formatNetworkLabel("starknet")}</span>
+                  </div>
+                  <Check className="h-4 w-4 text-success" />
+                </DropdownMenuItem>
+                <DropdownMenuItem className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-success" />
+                    <span>{formatNetworkLabel("evm")}</span>
+                  </div>
+                  <Check className="h-4 w-4 text-success" />
+                </DropdownMenuItem>
+                <DropdownMenuItem className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-success" />
+                    <span>{formatNetworkLabel("btc")}</span>
                   </div>
                   <Check className="h-4 w-4 text-success" />
                 </DropdownMenuItem>
@@ -236,12 +565,20 @@ export function EnhancedNavigation() {
             {wallet?.isConnected ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="gap-2 border-primary/50 hover:bg-primary/10 bg-transparent">
+                  <Button
+                    variant="outline"
+                    className="gap-2 border-primary/50 hover:bg-primary/10 bg-transparent"
+                    title={connectedTestnetSummary}
+                  >
                     <Wallet className="h-4 w-4 text-primary" />
                     <span className="font-mono text-xs">{shortenAddress(wallet.address)}</span>
+                    <span className="hidden xl:inline text-[10px] font-medium text-success">Sepolia/Testnet</span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-64 glass-strong border-border">
+                <DropdownMenuContent
+                  align="end"
+                  className="w-80 max-h-[75vh] overflow-y-auto glass-strong border-border"
+                >
                   <div className="p-3 space-y-3">
                     <div>
                       <p className="text-xs text-muted-foreground">Wallet Address</p>
@@ -257,27 +594,204 @@ export function EnhancedNavigation() {
                         </Button>
                       </div>
                     </div>
+                    <div className="rounded-lg border border-success/30 bg-success/10 p-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-success">Network Status</p>
+                      <p className="mt-1 text-xs font-medium text-success">Connected to Sepolia/Testnet</p>
+                      <p className="mt-1 text-xs text-foreground">{connectedTestnetSummary}</p>
+                    </div>
                     <DropdownMenuSeparator />
                     <div>
-                      <p className="text-xs text-muted-foreground">Total Balance</p>
-                      <p className="text-2xl font-bold text-foreground">${formatCurrency(wallet?.totalValueUSD)}</p>
+                      <p className="text-xs text-muted-foreground">Linked Networks</p>
+                      <div className="space-y-1 mt-1 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">Starknet Sepolia</span>
+                          <span className="font-mono text-foreground">{renderLinkStatus(wallet.starknetAddress)}</span>
+                        </div>
+                        {!wallet.starknetAddress && (
+                          <div className="flex flex-wrap gap-1">
+                            {starknetWalletProviders.map((starknetProvider) => (
+                              <Button
+                                key={`linked-${starknetProvider.id}`}
+                                size="sm"
+                                variant="secondary"
+                                className="h-6 px-2 text-[10px]"
+                                disabled={walletConnectPending}
+                                onClick={() => handleWalletConnect(starknetProvider.id)}
+                              >
+                                {starknetProvider.icon} Connect {starknetProvider.name}
+                              </Button>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">EVM (Sepolia)</span>
+                          <span className="font-mono text-foreground">{renderLinkStatus(wallet.evmAddress)}</span>
+                        </div>
+                        {!wallet.evmAddress && (
+                          <div>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="h-6 px-2 text-[10px]"
+                              disabled={walletConnectPending}
+                              onClick={() => handleWalletConnect("metamask")}
+                            >
+                              🦊 Connect MetaMask
+                            </Button>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">Bitcoin Testnet</span>
+                          <span className="font-mono text-foreground">{renderLinkStatus(wallet.btcAddress)}</span>
+                        </div>
+                        {!wallet.btcAddress && (
+                          <div className="flex flex-wrap gap-1">
+                            {btcWalletProviders.map((btc) => (
+                              <Button
+                                key={`linked-${btc.id}`}
+                                size="sm"
+                                variant="secondary"
+                                className="h-6 px-2 text-[10px]"
+                                disabled={btcConnectPending}
+                                onClick={() => handleBtcConnect(btc.id)}
+                              >
+                                {btc.icon} Connect {btc.name}
+                              </Button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <DropdownMenuSeparator />
+                    <div>
+                      <p className="text-xs text-muted-foreground">Total Portfolio (backend)</p>
+                      <p className="text-2xl font-bold text-foreground">${formatCurrency(wallet?.totalValueUSD)}</p>
+                      <p className="text-[10px] text-muted-foreground mt-1">Dari aktivitas backend, bukan saldo on-chain.</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">On-chain Balances (real testnet)</p>
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <div className="p-2 rounded-lg bg-surface/50">
+                          <p className="text-xs text-muted-foreground">STRK L2</p>
+                          <p className="text-sm font-medium">
+                            {renderOnchainValue(
+                              wallet?.onchainBalance?.STRK_L2,
+                              !!wallet?.starknetAddress,
+                              "Not linked"
+                            )}
+                          </p>
+                          {!wallet?.starknetAddress && (
+                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read STRK L2</p>
+                          )}
+                          {!wallet?.starknetAddress && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {starknetWalletProviders.map((starknetProvider) => (
+                                <Button
+                                  key={starknetProvider.id}
+                                  size="sm"
+                                  variant="secondary"
+                                  className="h-6 px-2 text-[10px]"
+                                  disabled={walletConnectPending}
+                                  onClick={() => handleWalletConnect(starknetProvider.id)}
+                                >
+                                  {starknetProvider.icon} {starknetProvider.name}
+                                </Button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="p-2 rounded-lg bg-surface/50">
+                          <p className="text-xs text-muted-foreground">STRK L1</p>
+                          <p className="text-sm font-medium">
+                            {renderOnchainValue(
+                              wallet?.onchainBalance?.STRK_L1,
+                              !!wallet?.evmAddress,
+                              "Not linked"
+                            )}
+                          </p>
+                          {!wallet?.evmAddress && (
+                            <p className="text-[10px] text-muted-foreground">Link EVM wallet to read STRK L1</p>
+                          )}
+                          {wallet?.evmAddress && (
+                            <p className="text-[10px] text-muted-foreground">ERC20 STRK on Ethereum Sepolia</p>
+                          )}
+                        </div>
+                        <div className="p-2 rounded-lg bg-surface/50">
+                          <p className="text-xs text-muted-foreground">ETH Sepolia</p>
+                          <p className="text-sm font-medium">
+                            {renderOnchainValue(
+                              wallet?.onchainBalance?.ETH,
+                              !!wallet?.evmAddress,
+                              "Not linked"
+                            )}
+                          </p>
+                          {!wallet?.evmAddress && (
+                            <p className="text-[10px] text-muted-foreground">Link EVM wallet to read ETH L1</p>
+                          )}
+                          {!wallet?.evmAddress && (
+                            <div className="mt-2">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="h-6 px-2 text-[10px]"
+                                disabled={walletConnectPending}
+                                onClick={() => handleWalletConnect("metamask")}
+                              >
+                                🦊 MetaMask
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="p-2 rounded-lg bg-surface/50">
+                          <p className="text-xs text-muted-foreground">BTC Testnet</p>
+                          <p className="text-sm font-medium">
+                            {renderOnchainValue(
+                              wallet?.onchainBalance?.BTC,
+                              !!wallet?.btcAddress,
+                              "Not linked"
+                            )}
+                          </p>
+                          {!wallet?.btcAddress && (
+                            <p className="text-[10px] text-muted-foreground">Link BTC wallet to read BTC</p>
+                          )}
+                        </div>
+                      </div>
+                      {!wallet?.btcAddress && (
+                        <div className="flex flex-wrap gap-2">
+                          {btcWalletProviders.map((btc) => (
+                            <Button
+                              key={btc.id}
+                              size="sm"
+                              variant="secondary"
+                              className="h-7 px-2 text-xs"
+                              disabled={btcConnectPending}
+                              onClick={() => handleBtcConnect(btc.id)}
+                            >
+                              {btc.icon} {btc.name}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Portfolio (effective)</p>
+                      <div className="grid grid-cols-2 gap-2 mt-2">
                       <div className="p-2 rounded-lg bg-surface/50">
                         <p className="text-xs text-muted-foreground">BTC</p>
-                        <p className="text-sm font-medium">{wallet?.balance?.BTC ?? 0}</p>
+                        <p className="text-sm font-medium">{formatAsset(effectivePortfolioBalance.BTC)}</p>
                       </div>
                       <div className="p-2 rounded-lg bg-surface/50">
                         <p className="text-xs text-muted-foreground">ETH</p>
-                        <p className="text-sm font-medium">{wallet?.balance?.ETH ?? 0}</p>
+                        <p className="text-sm font-medium">{formatAsset(effectivePortfolioBalance.ETH)}</p>
                       </div>
                       <div className="p-2 rounded-lg bg-surface/50">
                         <p className="text-xs text-muted-foreground">STRK</p>
-                        <p className="text-sm font-medium">{wallet?.balance?.STRK ?? 0}</p>
+                        <p className="text-sm font-medium">{formatAsset(effectivePortfolioBalance.STRK)}</p>
                       </div>
                       <div className="p-2 rounded-lg bg-surface/50">
                         <p className="text-xs text-muted-foreground">CAREL</p>
-                        <p className="text-sm font-medium">{wallet?.balance?.CAREL ?? 0}</p>
+                        <p className="text-sm font-medium">{formatAsset(effectivePortfolioBalance.CAREL)}</p>
+                      </div>
                       </div>
                     </div>
                   </div>
@@ -570,8 +1084,9 @@ export function EnhancedNavigation() {
             {walletProviders.map((provider) => (
               <button
                 key={provider.id}
+                disabled={walletConnectPending}
                 onClick={() => handleWalletConnect(provider.id)}
-                className="flex items-center gap-3 p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all"
+                className="flex items-center gap-3 p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <span className="text-2xl">{provider.icon}</span>
                 <span className="font-medium text-foreground">{provider.name}</span>
@@ -601,7 +1116,12 @@ export function EnhancedNavigation() {
             </TabsList>
             
             <TabsContent value={txFilter} className="space-y-2 max-h-96 overflow-y-auto">
-              {filteredTxHistory.length === 0 ? (
+              {txHistoryLoading ? (
+                <div className="text-center py-8">
+                  <Loader2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground animate-spin" />
+                  <p className="text-sm text-muted-foreground">Loading transactions...</p>
+                </div>
+              ) : filteredTxHistory.length === 0 ? (
                 <div className="text-center py-8">
                   <Clock className="h-8 w-8 mx-auto mb-2 text-muted-foreground opacity-50" />
                   <p className="text-sm text-muted-foreground">No transactions found</p>
@@ -621,13 +1141,15 @@ export function EnhancedNavigation() {
                         {tx.status === 'failed' && <XCircle className="h-5 w-5 text-destructive" />}
                       </div>
                       <div>
-                        <p className="text-sm font-medium capitalize">{tx.type} {tx.from} → {tx.to}</p>
-                        <p className="text-xs text-muted-foreground">{tx.time}</p>
+                        <p className="text-sm font-medium capitalize">
+                          {tx.type} {tx.from || "—"} {tx.to ? `→ ${tx.to}` : ""}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{tx.time || "—"}</p>
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-medium">{tx.value}</p>
-                      <p className="text-xs text-muted-foreground">{tx.amount} {tx.from}</p>
+                      <p className="text-sm font-medium">{tx.value || "—"}</p>
+                      <p className="text-xs text-muted-foreground">{tx.amount || "—"} {tx.from || ""}</p>
                     </div>
                   </div>
                 ))

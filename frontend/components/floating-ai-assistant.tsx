@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { Bot, User, Send, Sparkles, Coins, X, Minus, ChevronUp } from "lucide-react"
+import { Bot, User, Send, X, Minus, ChevronUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { executeAiCommand, getAiPendingActions } from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
@@ -32,9 +32,6 @@ export function FloatingAIAssistant() {
   const [messages, setMessages] = React.useState<Message[]>(sampleMessages)
   const [input, setInput] = React.useState("")
   const [selectedTier, setSelectedTier] = React.useState(1)
-  const [showTierPurchase, setShowTierPurchase] = React.useState(false)
-  const [carelBalance, setCarelBalance] = React.useState(245)
-  const [purchasedTiers, setPurchasedTiers] = React.useState<number[]>([1])
   const [isSending, setIsSending] = React.useState(false)
   const [actionId, setActionId] = React.useState("")
   const [pendingActions, setPendingActions] = React.useState<number[]>([])
@@ -122,22 +119,6 @@ export function FloatingAIAssistant() {
     }
   }
 
-  const handlePurchaseTier = (tierId: number) => {
-    const tier = aiTiers.find(t => t.id === tierId)
-    if (!tier || purchasedTiers.includes(tierId)) return
-    
-    if (carelBalance >= tier.cost) {
-      setCarelBalance(prev => prev - tier.cost)
-      setPurchasedTiers(prev => [...prev, tierId])
-      setSelectedTier(tierId)
-      setShowTierPurchase(false)
-      setMessages(prev => [...prev, {
-        role: "assistant",
-        content: `Congratulations! You've unlocked Tier ${tierId}: ${tier.name}. I can now provide ${tier.description.toLowerCase()}.`
-      }])
-    }
-  }
-
   if (!isOpen) {
     return (
       <button
@@ -182,98 +163,23 @@ export function FloatingAIAssistant() {
       </div>
 
       {!isMinimized && (
-        <>
-          {showTierPurchase ? (
-            /* Tier Purchase View */
-            <div className="flex flex-col h-[calc(100%-56px)]">
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                <h3 className="font-medium text-foreground mb-3">Upgrade AI Tier</h3>
-                {aiTiers.map((tier) => {
-                  const isPurchased = purchasedTiers.includes(tier.id)
-                  const canAfford = carelBalance >= tier.cost
-                  
-                  return (
-                    <button
-                      key={tier.id}
-                      onClick={() => !isPurchased && canAfford && handlePurchaseTier(tier.id)}
-                      disabled={isPurchased || !canAfford}
-                      className={cn(
-                        "w-full p-3 rounded-xl text-left transition-all duration-300",
-                        isPurchased
-                          ? "bg-success/10 border border-success/50"
-                          : selectedTier === tier.id
-                          ? "bg-primary/10 border-2 border-primary"
-                          : canAfford
-                          ? "bg-surface/50 border border-border hover:border-primary/50"
-                          : "bg-surface/30 border border-border opacity-50"
-                      )}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className={cn(
-                          "font-medium text-sm",
-                          isPurchased ? "text-success" : "text-foreground"
-                        )}>
-                          Tier {tier.id}: {tier.name}
-                        </span>
-                        {isPurchased ? (
-                          <span className="text-xs text-success flex items-center gap-1">
-                            <Sparkles className="h-3 w-3" /> Owned
-                          </span>
-                        ) : (
-                          <span className={cn(
-                            "text-xs font-medium",
-                            tier.cost === 0 ? "text-success" : canAfford ? "text-secondary" : "text-destructive"
-                          )}>
-                            {tier.costLabel}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">{tier.description}</p>
-                    </button>
-                  )
-                })}
-                
-                <div className="mt-4 p-3 rounded-xl bg-surface/50 border border-border">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Coins className="h-4 w-4 text-primary" />
-                    <span className="text-xs text-muted-foreground">Your Balance</span>
-                  </div>
-                  <p className="text-lg font-bold text-foreground">{carelBalance} CAREL</p>
-                </div>
-              </div>
-              
-              <div className="p-3 border-t border-border">
-                <Button 
-                  onClick={() => setShowTierPurchase(false)}
-                  variant="outline"
-                  className="w-full border-border text-foreground hover:bg-surface bg-transparent"
-                >
-                  Back to Chat
-                </Button>
-              </div>
-            </div>
-          ) : (
-            /* Chat View */
-            <div className="flex flex-col h-[calc(100%-56px)]">
+        <div className="flex flex-col h-[calc(100%-56px)]">
               {/* Tier Selector */}
               <div className="p-2 border-b border-border">
                 <div className="flex gap-1">
                   {aiTiers.map((tier) => {
-                    const isPurchased = purchasedTiers.includes(tier.id)
                     return (
                       <button
                         key={tier.id}
-                        onClick={() => isPurchased ? setSelectedTier(tier.id) : setShowTierPurchase(true)}
+                        onClick={() => setSelectedTier(tier.id)}
                         className={cn(
                           "flex-1 py-1.5 px-2 rounded-lg text-xs font-medium transition-all",
-                          selectedTier === tier.id && isPurchased
+                          selectedTier === tier.id
                             ? "bg-primary/20 text-primary border border-primary/50"
-                            : isPurchased
-                            ? "bg-surface text-muted-foreground hover:text-foreground"
-                            : "bg-surface/50 text-muted-foreground/50 border border-dashed border-border"
+                            : "bg-surface text-muted-foreground hover:text-foreground"
                         )}
                       >
-                        {isPurchased ? tier.name : `${tier.costLabel}`}
+                        {tier.name}
                       </button>
                     )
                   })}
@@ -350,34 +256,32 @@ export function FloatingAIAssistant() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Input */}
-              <div className="p-3 border-t border-border">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                    placeholder="Ask anything..."
-                    className="flex-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none transition-all"
-                  />
-                  <Button 
-                    onClick={handleSend}
-                    size="sm"
-                    disabled={isSending}
-                    className="bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
-                  >
-                    {isSending ? (
-                      <span className="text-xs">...</span>
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-              </div>
+          {/* Input */}
+          <div className="p-3 border-t border-border">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                placeholder="Ask anything..."
+                className="flex-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none transition-all"
+              />
+              <Button 
+                onClick={handleSend}
+                size="sm"
+                disabled={isSending}
+                className="bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
+              >
+                {isSending ? (
+                  <span className="text-xs">...</span>
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+              </Button>
             </div>
-          )}
-        </>
+          </div>
+        </div>
       )}
     </div>
   )

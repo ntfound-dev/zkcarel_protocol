@@ -9,11 +9,12 @@ import {
   Shield, 
   Zap, 
   Globe2, 
-  TrendingUp, 
   ChevronRight,
   Activity,
   Lock
 } from "lucide-react"
+import { getPortfolioAnalytics } from "@/lib/api"
+import { MarketTicker } from "@/components/market-ticker"
 
 // Animated counter hook - starts at 0 on server, animates on client mount
 function useAnimatedCounter(end: number, duration: number = 2000) {
@@ -77,8 +78,33 @@ function AnimatedStat({
 }
 
 export function HeroSection() {
-  const volume24h = useAnimatedCounter(2400000, 2500)
-  const transactions = useAnimatedCounter(12500, 2000)
+  const [volumeValue, setVolumeValue] = React.useState<number | null>(null)
+  const [txCountValue, setTxCountValue] = React.useState<number | null>(null)
+
+  React.useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const analytics = await getPortfolioAnalytics()
+        if (!active) return
+        const volume = Number(analytics.trading.total_volume_usd)
+        const trades = Number(analytics.trading.total_trades)
+        setVolumeValue(Number.isFinite(volume) ? volume : null)
+        setTxCountValue(Number.isFinite(trades) ? trades : null)
+      } catch {
+        if (!active) return
+        setVolumeValue(null)
+        setTxCountValue(null)
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const volume24h = useAnimatedCounter(volumeValue ?? 0, 2500)
+  const transactions = useAnimatedCounter(txCountValue ?? 0, 2000)
   
   return (
     <section className="relative py-8 lg:py-16">
@@ -129,6 +155,10 @@ export function HeroSection() {
         </div>
         
         {/* Swap & Bridge Feature Card */}
+        <div className="max-w-5xl mx-auto mb-8">
+          <MarketTicker />
+        </div>
+
         <div className="max-w-4xl mx-auto mb-12">
           <div className="relative p-6 sm:p-8 rounded-2xl glass-strong border border-primary/30 overflow-hidden">
             {/* Animated Border Glow */}
@@ -154,17 +184,17 @@ export function HeroSection() {
                 {/* Right Side - Stats */}
                 <div className="flex items-center justify-center lg:justify-end gap-6 lg:gap-8">
                   <AnimatedStat 
-                    label="Volume 24H" 
-                    value="$2.4M" 
-                    prefix="$"
+                    label="Your Volume" 
+                    value="—" 
+                    prefix={volumeValue !== null ? "$" : ""}
                     suffix=""
-                    animatedValue={volume24h}
+                    animatedValue={volumeValue !== null ? volume24h : undefined}
                   />
                   <div className="w-px h-12 bg-border hidden sm:block" />
                   <AnimatedStat 
-                    label="Transactions" 
-                    value="12.5K" 
-                    animatedValue={transactions}
+                    label="Your Trades" 
+                    value="—" 
+                    animatedValue={txCountValue !== null ? transactions : undefined}
                   />
                 </div>
               </div>

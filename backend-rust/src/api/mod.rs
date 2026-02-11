@@ -27,6 +27,7 @@ pub mod private_btc_swap;
 pub mod dark_pool;
 pub mod private_payments;
 pub mod anonymous_credentials;
+pub mod wallet;
 
 use axum::http::{header::AUTHORIZATION, HeaderMap};
 use crate::error::{AppError, Result};

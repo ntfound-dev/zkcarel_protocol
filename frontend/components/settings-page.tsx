@@ -13,10 +13,10 @@ import { Moon, Sun, Globe, Eye, EyeOff, Bell, Shield, Wallet, Trash2 } from "luc
 export function SettingsPage() {
   const { mode, toggleMode } = useTheme()
   const wallet = useWallet()
-  const notifications = useNotifications()
+  const appNotifications = useNotifications()
   const [theme, setTheme] = React.useState<"dark" | "light">("dark")
   const [language, setLanguage] = React.useState<"en" | "id">("en")
-  const [notifications, setNotifications] = React.useState({
+  const [notificationPrefs, setNotificationPrefs] = React.useState({
     trades: true,
     price: true,
     rewards: true,
@@ -237,8 +237,8 @@ export function SettingsPage() {
                   <p className="text-sm text-muted-foreground">Get notified about your trades</p>
                 </div>
                 <Switch
-                  checked={notifications.trades}
-                  onCheckedChange={(checked) => setNotifications(prev => ({ ...prev, trades: checked }))}
+                  checked={notificationPrefs.trades}
+                  onCheckedChange={(checked) => setNotificationPrefs(prev => ({ ...prev, trades: checked }))}
                 />
               </div>
 
@@ -248,8 +248,8 @@ export function SettingsPage() {
                   <p className="text-sm text-muted-foreground">Alerts for significant price changes</p>
                 </div>
                 <Switch
-                  checked={notifications.price}
-                  onCheckedChange={(checked) => setNotifications(prev => ({ ...prev, price: checked }))}
+                  checked={notificationPrefs.price}
+                  onCheckedChange={(checked) => setNotificationPrefs(prev => ({ ...prev, price: checked }))}
                 />
               </div>
 
@@ -259,8 +259,8 @@ export function SettingsPage() {
                   <p className="text-sm text-muted-foreground">Updates about rewards and airdrops</p>
                 </div>
                 <Switch
-                  checked={notifications.rewards}
-                  onCheckedChange={(checked) => setNotifications(prev => ({ ...prev, rewards: checked }))}
+                  checked={notificationPrefs.rewards}
+                  onCheckedChange={(checked) => setNotificationPrefs(prev => ({ ...prev, rewards: checked }))}
                 />
               </div>
 
@@ -270,8 +270,8 @@ export function SettingsPage() {
                   <p className="text-sm text-muted-foreground">Weekly updates and news</p>
                 </div>
                 <Switch
-                  checked={notifications.newsletter}
-                  onCheckedChange={(checked) => setNotifications(prev => ({ ...prev, newsletter: checked }))}
+                  checked={notificationPrefs.newsletter}
+                  onCheckedChange={(checked) => setNotificationPrefs(prev => ({ ...prev, newsletter: checked }))}
                 />
               </div>
             </div>
@@ -329,14 +329,14 @@ export function SettingsPage() {
                       onClick={async () => {
                         const ok = await wallet.connectWithSumo(sumoToken, sumoAddress || undefined)
                         if (!ok) {
-                          notifications.addNotification({
+                          appNotifications.addNotification({
                             type: "error",
                             title: "Sumo Login failed",
                             message: "Invalid token or connection error.",
                           })
                           return
                         }
-                        notifications.addNotification({
+                        appNotifications.addNotification({
                           type: "success",
                           title: "Sumo Login connected",
                           message: "Your Sumo Login session is now linked.",

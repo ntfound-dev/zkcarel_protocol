@@ -234,14 +234,10 @@ function NFTCard({
   isMinting?: boolean
   onMint?: () => void
 }) {
-  const usesPercentage = nft.maxUses > 0 ? (nft.uses / nft.maxUses) * 100 : 0
-  const isExpired = isOwned && nft.uses === 0
-
   return (
     <div className={cn(
       "group relative p-4 rounded-2xl glass border transition-all duration-300 overflow-hidden",
-      isOwned && !isExpired ? "border-primary/50" : "border-border",
-      isExpired && "opacity-60"
+      isOwned ? "border-primary/50" : "border-border"
     )}>
       {/* Non-transferable badge */}
       {isOwned && (
@@ -249,16 +245,6 @@ function NFTCard({
           <span className="text-xs px-2 py-1 rounded-full bg-secondary/20 text-secondary border border-secondary/30">
             Non-transferable
           </span>
-        </div>
-      )}
-
-      {/* Expired overlay */}
-      {isExpired && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm z-10">
-          <div className="text-center">
-            <p className="text-lg font-bold text-muted-foreground mb-1">Expired</p>
-            <p className="text-xs text-muted-foreground">All uses consumed</p>
-          </div>
         </div>
       )}
       
@@ -281,27 +267,9 @@ function NFTCard({
         <h3 className="font-bold text-foreground text-sm group-hover:text-primary transition-colors">{nft.name}</h3>
         <p className="text-xs text-muted-foreground mb-2">{nft.tier} Tier</p>
         
-        {/* Uses Counter */}
-        {isOwned && nft.maxUses > 0 && (
-          <div className="mb-3">
-            <div className="flex items-center justify-between text-xs mb-1">
-              <span className="text-muted-foreground">Uses Remaining</span>
-              <span className={cn(
-                "font-medium",
-                nft.uses > 3 ? "text-success" : nft.uses > 0 ? "text-accent" : "text-destructive"
-              )}>
-                {nft.uses} / {nft.maxUses}
-              </span>
-            </div>
-            <div className="h-1.5 rounded-full bg-surface overflow-hidden">
-              <div 
-                className={cn(
-                  "h-full transition-all duration-300",
-                  nft.uses > 3 ? "bg-success" : nft.uses > 0 ? "bg-accent" : "bg-destructive"
-                )}
-                style={{ width: `${usesPercentage}%` }}
-              />
-            </div>
+        {nft.maxUses > 0 && (
+          <div className="mb-3 text-xs text-muted-foreground">
+            Uses per NFT: {nft.maxUses}
           </div>
         )}
         
@@ -325,17 +293,7 @@ function NFTCard({
             {isMinting ? "Minting..." : "Mint with Points"}
           </Button>
         )}
-        {isExpired && (
-          <Button 
-            size="sm" 
-            variant="outline"
-            className="w-full text-xs bg-transparent"
-            onClick={onMint}
-          >
-            Mint Again
-          </Button>
-        )}
-        {isOwned && !isExpired && (
+        {isOwned && (
           <div className="text-center py-2 px-3 rounded-lg bg-success/10 border border-success/20">
             <p className="text-xs font-medium text-success">Active</p>
           </div>
@@ -376,11 +334,15 @@ export function RewardsHub() {
     return achieved.length > 0 ? achieved[achieved.length - 1].name : tiers[0]?.name || "Bronze"
   }, [tiers])
 
-  const activeNftTier = React.useMemo(() => {
-    const owned = ownedNfts.find((nft) => !nft.used)
-    if (!owned) return null
-    return nftTiers.find((tier) => tier.tierId === owned.tier) || null
+  const activeOwnedNft = React.useMemo(() => {
+    const now = Math.floor(Date.now() / 1000)
+    return ownedNfts.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now)) || null
   }, [ownedNfts])
+
+  const activeNftTier = React.useMemo(() => {
+    if (!activeOwnedNft) return null
+    return nftTiers.find((tier) => tier.tierId === activeOwnedNft.tier) || null
+  }, [activeOwnedNft])
 
   const ownedTierIds = React.useMemo(() => new Set(ownedNfts.map((nft) => nft.tier)), [ownedNfts])
 
@@ -397,7 +359,7 @@ export function RewardsHub() {
           setConvertEpoch(String(rewards.current_epoch))
         }
       } catch {
-        // keep fallback
+        // keep existing values
       }
     })()
 
@@ -415,7 +377,7 @@ export function RewardsHub() {
         const estimated = Number(analytics.rewards.estimated_carel)
         setEstimatedCAREL(Number.isFinite(estimated) ? estimated : 0)
       } catch {
-        // keep fallback
+        // keep existing values
       }
     })()
 
@@ -432,7 +394,7 @@ export function RewardsHub() {
         if (!active) return
         setOwnedNfts(nfts)
       } catch {
-        // keep fallback
+        // keep existing values
       }
     })()
 
@@ -688,7 +650,7 @@ export function RewardsHub() {
       </div>
 
       {/* Current NFT Status */}
-      {activeNftTier && (
+      {activeNftTier && activeOwnedNft && (
         <div className="mt-6 p-6 rounded-2xl glass border border-primary/50">
           <div className="flex items-center justify-between">
             <div>
@@ -696,7 +658,7 @@ export function RewardsHub() {
               <p className="text-sm text-muted-foreground">Your current fee discount NFT</p>
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-primary">{activeNftTier.discount}</p>
+              <p className="text-3xl font-bold text-primary">{activeOwnedNft.discount}%</p>
               <p className="text-sm text-muted-foreground">Fee Discount</p>
             </div>
           </div>
@@ -706,16 +668,18 @@ export function RewardsHub() {
               <p className="text-sm font-medium text-foreground">{activeNftTier.tier}</p>
             </div>
             <div className="p-3 rounded-lg bg-surface/50">
-              <p className="text-xs text-muted-foreground">Uses Left</p>
-              <p className="text-sm font-medium text-foreground">{activeNftTier.maxUses} / {activeNftTier.maxUses}</p>
+              <p className="text-xs text-muted-foreground">Expiry</p>
+              <p className="text-sm font-medium text-foreground">
+                {activeOwnedNft.expiry ? new Date(activeOwnedNft.expiry * 1000).toLocaleDateString("id-ID") : "—"}
+              </p>
             </div>
             <div className="p-3 rounded-lg bg-surface/50">
               <p className="text-xs text-muted-foreground">Status</p>
               <p className={cn(
                 "text-sm font-medium",
-                activeNftTier.maxUses > 0 ? "text-success" : "text-destructive"
+                activeOwnedNft.used ? "text-destructive" : "text-success"
               )}>
-                {activeNftTier.maxUses > 0 ? "Active" : "Expired"}
+                {activeOwnedNft.used ? "Expired" : "Active"}
               </p>
             </div>
           </div>

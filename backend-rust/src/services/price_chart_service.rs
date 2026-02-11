@@ -11,6 +11,7 @@ use crate::indexer::starknet_client::StarknetClient;
 use chrono::{DateTime, Timelike, Utc};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -64,10 +65,10 @@ impl PriceChartService {
     }
 
     async fn update_prices(&self) -> Result<()> {
-        let tokens = ["BTC", "ETH", "STRK", "CAREL", "USDT", "USDC"];
+        let tokens = self.config.price_tokens_list();
 
-        for token in tokens {
-            let price = match self.fetch_price_from_oracle(token).await {
+        for token in tokens.iter() {
+            let price = match self.fetch_price(token.as_str()).await {
                 Ok(value) => value,
                 Err(err) => {
                     tracing::warn!("Oracle price fetch failed for {}: {}", token, err);
@@ -95,6 +96,18 @@ impl PriceChartService {
         Ok(())
     }
 
+    async fn fetch_price(&self, token: &str) -> Result<Decimal> {
+        if self.config.coingecko_id_for(token).is_some() {
+            match self.fetch_price_from_coingecko(token).await {
+                Ok(price) => return Ok(price),
+                Err(err) => {
+                    tracing::warn!("CoinGecko fetch failed for {}: {}", token, err);
+                }
+            }
+        }
+        self.fetch_price_from_oracle(token).await
+    }
+
     async fn fetch_price_from_oracle(&self, token: &str) -> Result<Decimal> {
         let asset_id = self.config.oracle_asset_id_for(token)
             .ok_or_else(|| AppError::NotFound(format!("Missing asset_id for {}", token)))?;
@@ -111,7 +124,54 @@ impl PriceChartService {
             .await?;
 
         let price = parse_u256_low(&result)?;
-        Decimal::from_u128(price)
+        let raw = Decimal::from_u128(price)
+            .ok_or_else(|| AppError::Internal("Failed to convert price".into()))?;
+        Ok(raw / Decimal::from(100_000_000u64))
+    }
+
+    async fn fetch_price_from_coingecko(&self, token: &str) -> Result<Decimal> {
+        let coin_id = self
+            .config
+            .coingecko_id_for(token)
+            .ok_or_else(|| AppError::NotFound(format!("Missing CoinGecko id for {}", token)))?;
+
+        let base_url = self.config.coingecko_api_url.trim_end_matches('/');
+        let url = format!("{}/simple/price", base_url);
+        let client = reqwest::Client::new();
+        let mut url = reqwest::Url::parse(&url)
+            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+        url.query_pairs_mut()
+            .append_pair("ids", coin_id.as_str())
+            .append_pair("vs_currencies", "usd");
+        let mut request = client.get(url);
+
+        if let Some(key) = &self.config.coingecko_api_key {
+            if !key.trim().is_empty() {
+                request = request.header("x-cg-demo-api-key", key.trim());
+            }
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+
+        let data: CoinGeckoPriceResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+
+        let usd_price = data
+            .prices
+            .get(coin_id.as_str())
+            .and_then(|entry| entry.usd)
+            .ok_or_else(|| AppError::Internal(format!("Missing CoinGecko price for {}", token)))?;
+
+        if usd_price.is_sign_negative() {
+            return Err(AppError::Internal("Negative price".into()));
+        }
+
+        Decimal::from_f64(usd_price)
             .ok_or_else(|| AppError::Internal("Failed to convert price".into()))
     }
 
@@ -340,6 +400,17 @@ impl PriceChartService {
 
         Ok(out)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct CoinGeckoPriceResponse {
+    #[serde(flatten)]
+    prices: HashMap<String, CoinGeckoUsdPrice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoinGeckoUsdPrice {
+    usd: Option<f64>,
 }
 
 fn parse_u256_low(values: &[String]) -> Result<u128> {

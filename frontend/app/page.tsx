@@ -4,6 +4,7 @@ import * as React from "react"
 import { ThemeProvider } from "@/components/theme-provider"
 import { WalletProvider } from "@/hooks/use-wallet"
 import { NotificationsProvider } from "@/hooks/use-notifications"
+import { GlobalEventHandlers } from "@/components/global-event-handlers"
 import { EnhancedNavigation } from "@/components/enhanced-navigation"
 import { QuickStatsSidebar } from "@/components/quick-stats-sidebar"
 import { HeroSection } from "@/components/hero-section"
@@ -33,6 +34,7 @@ export default function ZkCarelApp() {
     <ThemeProvider defaultTheme="dark">
       <WalletProvider>
         <NotificationsProvider>
+          <GlobalEventHandlers />
           <div className="relative min-h-screen">
             {/* Background Effects */}
             <ParticleBackground />
@@ -52,6 +54,11 @@ export default function ZkCarelApp() {
                 <main className="flex-1 space-y-12">
                   {/* Hero Section with Swap & Bridge */}
                   <HeroSection />
+
+                  {/* Quick Stats (Mobile) */}
+                  <div className="lg:hidden">
+                    <QuickStatsSidebar />
+                  </div>
 
                   {/* Featured Cards */}
                   <FeaturedCards />
@@ -90,11 +97,11 @@ export default function ZkCarelApp() {
                               <div className="hidden sm:flex items-center gap-4 text-sm">
                                 <div className="text-right">
                                   <p className="text-muted-foreground text-xs">Active Orders</p>
-                                  <p className="font-bold text-foreground">3,420</p>
+                                  <p className="font-bold text-foreground">—</p>
                                 </div>
                                 <div className="text-right">
                                   <p className="text-muted-foreground text-xs">Success Rate</p>
-                                  <p className="font-bold text-foreground">94%</p>
+                                  <p className="font-bold text-foreground">—</p>
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 text-primary">
@@ -177,11 +184,11 @@ export default function ZkCarelApp() {
                               <div className="hidden sm:flex items-center gap-4 text-sm">
                                 <div className="text-right">
                                   <p className="text-muted-foreground text-xs">TVL</p>
-                                  <p className="font-bold text-foreground">$8.2M</p>
+                                  <p className="font-bold text-foreground">—</p>
                                 </div>
                                 <div className="text-right">
                                   <p className="text-muted-foreground text-xs">APY</p>
-                                  <p className="font-bold text-success">Up to 12%</p>
+                                  <p className="font-bold text-success">—</p>
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 text-primary">

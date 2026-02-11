@@ -136,6 +136,10 @@ fn build_router(state: api::AppState) -> Router {
             get(api::portfolio::get_portfolio_ohlcv),
         )
         .route(
+            "/api/v1/wallet/onchain-balances",
+            post(api::wallet::get_onchain_balances),
+        )
+        .route(
             "/api/v1/portfolio/analytics",
             get(api::analytics::get_analytics),
         )

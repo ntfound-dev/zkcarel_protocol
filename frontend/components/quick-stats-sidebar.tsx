@@ -67,11 +67,11 @@ function StatCard({ icon: Icon, label, value, subValue, progress, trend, classNa
 }
 
 interface LeaderboardRankProps {
-  rank: number
+  rank: number | null
   change: number
   categories: {
     label: string
-    rank: number
+    rank: number | null
   }[]
 }
 
@@ -85,7 +85,9 @@ function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
         </span>
       </div>
       <div className="flex items-center gap-3 mb-4">
-        <span className="text-3xl font-bold text-foreground">#{rank}</span>
+        <span className="text-3xl font-bold text-foreground">
+          {rank && rank > 0 ? `#${rank}` : "—"}
+        </span>
         <span className={cn(
           "flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-full",
           change > 0 ? "bg-success/20 text-success" : change < 0 ? "bg-destructive/20 text-destructive" : "bg-muted text-muted-foreground"
@@ -103,7 +105,9 @@ function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
         {categories.map((cat) => (
           <div key={cat.label} className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">{cat.label}</span>
-            <span className="font-medium text-foreground">#{cat.rank}</span>
+            <span className="font-medium text-foreground">
+              {cat.rank && cat.rank > 0 ? `#${cat.rank}` : "—"}
+            </span>
           </div>
         ))}
       </div>
@@ -113,16 +117,16 @@ function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
 
 export function QuickStatsSidebar() {
   const wallet = useWallet()
-  const [points, setPoints] = React.useState(1850)
-  const [tierLabel, setTierLabel] = React.useState("Silver")
-  const [tierProgress, setTierProgress] = React.useState(42)
-  const [tierSubValue, setTierSubValue] = React.useState("4,200 / 10,000")
-  const [volumeLabel, setVolumeLabel] = React.useState("$0")
-  const [rankData, setRankData] = React.useState({ rank: 0, change: 0, total: 0 })
-  const [categoryRanks, setCategoryRanks] = React.useState([
-    { label: "Total Points", rank: 56 },
-    { label: "Trading", rank: 24 },
-    { label: "Referral", rank: 89 },
+  const [points, setPoints] = React.useState<number | null>(null)
+  const [tierLabel, setTierLabel] = React.useState("—")
+  const [tierProgress, setTierProgress] = React.useState(0)
+  const [tierSubValue, setTierSubValue] = React.useState("—")
+  const [volumeLabel, setVolumeLabel] = React.useState("—")
+  const [rankData, setRankData] = React.useState<{ rank: number | null; change: number; total: number }>({ rank: null, change: 0, total: 0 })
+  const [categoryRanks, setCategoryRanks] = React.useState<Array<{ label: string; rank: number | null }>>([
+    { label: "Total Points", rank: null },
+    { label: "Trading", rank: null },
+    { label: "Referral", rank: null },
   ])
 
   React.useEffect(() => {
@@ -157,7 +161,11 @@ export function QuickStatsSidebar() {
         setTierProgress(Math.min(Math.max(progress, 0), 100))
         setTierSubValue(`${totalPoints.toLocaleString()} / ${nextThreshold.toLocaleString()}`)
       } catch {
-        // keep fallback values
+        if (!active) return
+        setPoints(null)
+        setTierLabel("—")
+        setTierProgress(0)
+        setTierSubValue("—")
       }
     })()
 
@@ -173,9 +181,10 @@ export function QuickStatsSidebar() {
         const analytics = await getPortfolioAnalytics()
         if (!active) return
         const volume = Number(analytics.trading.total_volume_usd)
-        setVolumeLabel(Number.isFinite(volume) ? `$${volume.toLocaleString()}` : "$0")
+        setVolumeLabel(Number.isFinite(volume) ? `$${volume.toLocaleString()}` : "—")
       } catch {
-        // keep fallback
+        if (!active) return
+        setVolumeLabel("—")
       }
     })()
 
@@ -188,7 +197,15 @@ export function QuickStatsSidebar() {
     let active = true
     ;(async () => {
       try {
-        if (!wallet.address) return
+        if (!wallet.address) {
+          setRankData({ rank: null, change: 0, total: 0 })
+          setCategoryRanks([
+            { label: "Total Points", rank: null },
+            { label: "Trading", rank: null },
+            { label: "Referral", rank: null },
+          ])
+          return
+        }
         const [rankRes, categoriesRes] = await Promise.allSettled([
           getLeaderboardUserRank(wallet.address),
           getLeaderboardUserCategories(wallet.address),
@@ -202,13 +219,19 @@ export function QuickStatsSidebar() {
             categoriesRes.value.categories.map((item) => [item.category, item.rank])
           )
           setCategoryRanks([
-            { label: "Total Points", rank: categoryMap.get("points") ?? 0 },
-            { label: "Trading", rank: categoryMap.get("volume") ?? 0 },
-            { label: "Referral", rank: categoryMap.get("referrals") ?? 0 },
+            { label: "Total Points", rank: categoryMap.get("points") ?? null },
+            { label: "Trading", rank: categoryMap.get("volume") ?? null },
+            { label: "Referral", rank: categoryMap.get("referrals") ?? null },
           ])
         }
       } catch {
-        // keep fallback
+        if (!active) return
+        setRankData({ rank: null, change: 0, total: 0 })
+        setCategoryRanks([
+          { label: "Total Points", rank: null },
+          { label: "Trading", rank: null },
+          { label: "Referral", rank: null },
+        ])
       }
     })()
 
@@ -227,8 +250,8 @@ export function QuickStatsSidebar() {
         <StatCard
           icon={Diamond}
           label="Usable Points"
-          value={points.toLocaleString()}
-          progress={Math.round(tierProgress)}
+          value={points !== null ? points.toLocaleString() : "—"}
+          progress={points !== null ? Math.round(tierProgress) : 0}
         />
 
         <StatCard
@@ -236,7 +259,7 @@ export function QuickStatsSidebar() {
           label="Tier Progress"
           value={tierLabel}
           subValue={tierSubValue}
-          progress={Math.round(tierProgress)}
+          progress={points !== null ? Math.round(tierProgress) : 0}
         />
 
         <StatCard
@@ -246,7 +269,7 @@ export function QuickStatsSidebar() {
         />
 
         <LeaderboardRank
-          rank={rankData.rank || 42}
+          rank={rankData.rank}
           change={rankData.change}
           categories={categoryRanks}
         />

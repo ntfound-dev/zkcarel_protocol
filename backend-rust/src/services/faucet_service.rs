@@ -1,7 +1,6 @@
 use crate::{
     config::Config,
     constants::{
-        token_address_for,
         FAUCET_AMOUNT_BTC,
         FAUCET_AMOUNT_CAREL,
         FAUCET_AMOUNT_ETH,
@@ -11,15 +10,21 @@ use crate::{
     db::Database,
     error::{AppError, Result},
     models::FaucetClaim,
-};
-use ethers::{
-    prelude::*,
-    providers::{Http, Provider},
+    services::onchain::{
+        parse_felt,
+        resolve_backend_account,
+        u256_from_felts,
+        u256_to_felts,
+        OnchainInvoker,
+        OnchainReader,
+    },
 };
 use std::sync::Arc;
 use sqlx::Row;
 use chrono::{DateTime, Utc, Duration};
 use rust_decimal::prelude::ToPrimitive;
+use starknet_core::types::{Call, Felt, FunctionCall};
+use starknet_core::utils::get_selector_from_name;
 
 fn cooldown_hours_from_config(config: &Config) -> i64 {
     config
@@ -41,51 +46,96 @@ fn amount_for_token(token: &str, config: &Config) -> Result<f64> {
 pub struct FaucetService {
     db: Database,
     config: Config,
-    provider: Arc<Provider<Http>>, // Sekarang kita pakai!
-    wallet: Option<LocalWallet>,
+    invoker: Arc<OnchainInvoker>,
+    reader: Arc<OnchainReader>,
+    faucet_address: Felt,
 }
 
 impl FaucetService {
     pub fn new(db: Database, config: Config) -> Result<Self> {
-        let provider = Provider::<Http>::try_from(&config.ethereum_rpc_url)
-            .map_err(|e| AppError::Internal(format!("Failed to connect to RPC: {}", e)))?;
+        let invoker = OnchainInvoker::from_config(&config)?
+            .ok_or_else(|| AppError::Internal("Faucet signer not configured".into()))?;
+        let reader = OnchainReader::from_config(&config)?;
 
-        let wallet = if let Some(key) = &config.faucet_wallet_private_key {
-            Some(
-                key.parse::<LocalWallet>()
-                    .map_err(|e| AppError::Internal(format!("Invalid private key: {}", e)))?,
-            )
-        } else {
-            None
-        };
+        let faucet_account = resolve_backend_account(&config)
+            .ok_or_else(|| AppError::Internal("Faucet account address missing".into()))?;
+        let faucet_address = parse_felt(faucet_account)?;
 
         Ok(Self {
             db,
             config,
-            provider: Arc::new(provider),
-            wallet,
+            invoker: Arc::new(invoker),
+            reader: Arc::new(reader),
+            faucet_address,
         })
     }
 
-    /// Mengecek saldo wallet faucet menggunakan provider RPC
-    pub async fn get_faucet_balance(&self) -> Result<U256> {
-        if let Some(wallet) = &self.wallet {
-            let balance = self.provider
-                .get_balance(wallet.address(), None)
-                .await
-                .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
-            Ok(balance)
-        } else {
-            Err(AppError::Internal("Wallet not configured".into()))
+    fn resolve_token_address(&self, token: &str) -> Result<String> {
+        match token.to_ascii_uppercase().as_str() {
+            "CAREL" => Ok(self.config.carel_token_address.clone()),
+            "STRK" => self
+                .config
+                .token_strk_address
+                .clone()
+                .ok_or_else(|| AppError::BadRequest("STRK token address not configured".into())),
+            "ETH" => self
+                .config
+                .token_eth_address
+                .clone()
+                .ok_or_else(|| AppError::BadRequest("ETH token address not configured".into())),
+            "BTC" => self
+                .config
+                .token_btc_address
+                .clone()
+                .ok_or_else(|| AppError::BadRequest("BTC token address not configured".into())),
+            _ => Err(AppError::InvalidToken),
         }
+    }
+
+    async fn get_token_decimals(&self, token_address: &str) -> Result<u8> {
+        let contract = parse_felt(token_address)?;
+        let selector = get_selector_from_name("decimals")
+            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+        let call = FunctionCall {
+            contract_address: contract,
+            entry_point_selector: selector,
+            calldata: vec![],
+        };
+        let result = self.reader.call(call).await;
+        if let Ok(values) = result {
+            if let Some(value) = values.get(0) {
+                if let Ok(decoded) = u256_from_felts(value, &Felt::from(0_u128)) {
+                    return Ok(decoded as u8);
+                }
+                if let Ok(parsed) = value.to_string().parse::<u8>() {
+                    return Ok(parsed);
+                }
+            }
+        }
+        Ok(18)
+    }
+
+    async fn get_token_balance(&self, token_address: &str) -> Result<u128> {
+        let contract = parse_felt(token_address)?;
+        let selector = get_selector_from_name("balanceOf")
+            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+        let call = FunctionCall {
+            contract_address: contract,
+            entry_point_selector: selector,
+            calldata: vec![self.faucet_address],
+        };
+        let values = self.reader.call(call).await?;
+        let low = values.get(0).ok_or_else(|| AppError::Internal("Balance low missing".into()))?;
+        let high = values.get(1).ok_or_else(|| AppError::Internal("Balance high missing".into()))?;
+        u256_from_felts(low, high)
     }
 
     pub async fn can_claim(&self, user_address: &str, token: &str) -> Result<bool> {
         if !self.config.is_testnet() {
             return Err(AppError::BadRequest("Faucet only on testnet".to_string()));
         }
-        if token_address_for(token).is_none() {
-            return Err(AppError::InvalidToken);
+        if self.resolve_token_address(token).is_err() {
+            return Ok(false);
         }
         let cooldown_hours = cooldown_hours_from_config(&self.config);
         self.db
@@ -138,21 +188,31 @@ impl FaucetService {
             return Err(AppError::BadRequest("Faucet only on testnet".into()));
         }
 
-        let _token_address = token_address_for(token).ok_or(AppError::InvalidToken)?;
-
-        // Pakai provider buat cek saldo sebelum kirim
-        let balance = self.get_faucet_balance().await?;
-        if balance == U256::zero() {
-            return Err(AppError::InsufficientBalance);
+        let token_address = self.resolve_token_address(token)?;
+        let token_address = token_address.trim();
+        if token_address.is_empty() {
+            return Err(AppError::BadRequest("Token address not configured".into()));
         }
+
+        // Cek saldo token faucet sebelum kirim
+        let balance = self.get_token_balance(token_address).await?;
 
         if !self.can_claim(user_address, token).await? {
             return Err(AppError::FaucetCooldown);
         }
 
         let amount = amount_for_token(token, &self.config)?;
+        let decimals = self.get_token_decimals(token_address).await?;
+        let scale = 10f64.powi(decimals as i32);
+        let amount_u128 = (amount * scale).round() as u128;
+        if amount_u128 == 0 {
+            return Err(AppError::BadRequest("Faucet amount too small".into()));
+        }
+        if balance < amount_u128 {
+            return Err(AppError::InsufficientBalance);
+        }
 
-        let tx_hash = self.send_tokens(user_address, token, amount).await?;
+        let tx_hash = self.send_tokens(user_address, token_address, amount_u128).await?;
         self.db.record_faucet_claim(user_address, token, amount, &tx_hash).await?;
 
         let _ = self
@@ -168,9 +228,17 @@ impl FaucetService {
         Ok(tx_hash)
     }
 
-    async fn send_tokens(&self, _to: &str, _token: &str, _amount: f64) -> Result<String> {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        Ok(format!("0x{}", hex::encode(&rand::random::<[u8; 32]>())))
+    async fn send_tokens(&self, to: &str, token_address: &str, amount: u128) -> Result<String> {
+        let to = parse_felt(to)?;
+        let token = parse_felt(token_address)?;
+        let selector = get_selector_from_name("transfer")
+            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+        let (low, high) = u256_to_felts(amount);
+        let calldata = vec![to, low, high];
+
+        let call = Call { to: token, selector, calldata };
+        let tx_hash = self.invoker.invoke(call).await?;
+        Ok(tx_hash.to_string())
     }
 
     pub async fn get_stats(&self) -> Result<FaucetStats> {
@@ -225,6 +293,8 @@ mod tests {
             point_storage_address: "0x3".to_string(),
             price_oracle_address: "0x4".to_string(),
             limit_order_book_address: "0x5".to_string(),
+            staking_carel_address: None,
+            treasury_address: None,
             referral_system_address: None,
             ai_executor_address: "0x6".to_string(),
             bridge_aggregator_address: "0x7".to_string(),
@@ -234,6 +304,10 @@ mod tests {
             dark_pool_address: "0x10".to_string(),
             private_payments_address: "0x11".to_string(),
             anonymous_credentials_address: "0x12".to_string(),
+            token_strk_address: None,
+            token_eth_address: None,
+            token_btc_address: None,
+            token_strk_l1_address: None,
             faucet_wallet_private_key: None,
             faucet_btc_amount: Some(0.02),
             faucet_strk_amount: None,

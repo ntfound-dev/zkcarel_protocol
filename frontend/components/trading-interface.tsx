@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
-import { executeBridge, executeSwap, getBridgeQuote, getPortfolioBalance, getSwapQuote } from "@/lib/api"
+import { useLivePrices } from "@/hooks/use-live-prices"
+import { executeBridge, executeSwap, getBridgeQuote, getOwnedNfts, getPortfolioBalance, getSwapQuote, type NFTItem } from "@/lib/api"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,16 +36,18 @@ type QuoteState = {
   estimatedTime: string
   priceImpact?: string
   provider?: string
+  bridgeSourceAmount?: number
+  bridgeConvertedAmount?: number
 }
 
 const tokenCatalog = [
-  { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 65000, network: "Bitcoin" },
-  { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 2000, network: "Ethereum" },
-  { symbol: "STRK", name: "StarkNet", icon: "◈", price: 1.25, network: "StarkNet" },
-  { symbol: "CAREL", name: "ZkCarel", icon: "◇", price: 0.85, network: "StarkNet" },
-  { symbol: "USDC", name: "USD Coin", icon: "$", price: 1.0, network: "Ethereum" },
-  { symbol: "USDT", name: "Tether", icon: "₮", price: 1.0, network: "Ethereum" },
-  { symbol: "WBTC", name: "Wrapped BTC", icon: "₿", price: 64950, network: "Ethereum" },
+  { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 0, network: "Bitcoin Testnet" },
+  { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 0, network: "Ethereum Sepolia" },
+  { symbol: "STRK", name: "StarkNet", icon: "◈", price: 0, network: "Starknet Sepolia" },
+  { symbol: "CAREL", name: "ZkCarel", icon: "◇", price: 0, network: "Starknet Sepolia" },
+  { symbol: "USDC", name: "USD Coin", icon: "$", price: 0, network: "Ethereum Sepolia" },
+  { symbol: "USDT", name: "Tether", icon: "₮", price: 0, network: "Ethereum Sepolia" },
+  { symbol: "WBTC", name: "Wrapped BTC", icon: "₿", price: 0, network: "Ethereum Sepolia" },
 ]
 
 const slippagePresets = ["0.1", "0.3", "0.5", "1.0"]
@@ -55,6 +58,25 @@ const chainFromNetwork = (network: string) => {
   if (key.includes("ethereum")) return "ethereum"
   if (key.includes("starknet")) return "starknet"
   return key
+}
+
+const convertAmountByUsdPrice = (
+  amount: number,
+  fromPrice: number,
+  toPrice: number
+): number | null => {
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  if (!Number.isFinite(fromPrice) || fromPrice <= 0) return null
+  if (!Number.isFinite(toPrice) || toPrice <= 0) return null
+  return (amount * fromPrice) / toPrice
+}
+
+const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
+  if (!Number.isFinite(value)) return "—"
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFractionDigits,
+  })
 }
 
 interface TokenSelectorProps {
@@ -71,6 +93,7 @@ interface TokenSelectorProps {
 type TokenWithBalance = (typeof tokenCatalog)[number] & { balance: number }
 
 function TokenSelector({ selectedToken, onSelect, tokens, label, amount, onAmountChange, readOnly, hideBalance }: TokenSelectorProps) {
+  const hasPrice = selectedToken.price > 0
   const usdValue = Number.parseFloat(amount || "0") * selectedToken.price
   
   return (
@@ -131,7 +154,9 @@ function TokenSelector({ selectedToken, onSelect, tokens, label, amount, onAmoun
             )}
           />
           <p className="text-sm text-muted-foreground mt-1">
-            ≈ ${usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            ≈ {hasPrice
+              ? `$${usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : "—"}
           </p>
         </div>
       </div>
@@ -173,20 +198,75 @@ function SimpleRouteVisualization({ fromToken, toToken, isCrossChain }: { fromTo
   )
 }
 
+function defaultReceiveAddressForNetwork(
+  networkLabel: string,
+  addresses: {
+    starknet?: string | null
+    evm?: string | null
+    btc?: string | null
+    fallback?: string | null
+  }
+) {
+  const chain = chainFromNetwork(networkLabel)
+  if (chain === "bitcoin") return addresses.btc || ""
+  if (chain === "ethereum") return addresses.evm || addresses.fallback || ""
+  return addresses.starknet || addresses.fallback || ""
+}
+
 export function TradingInterface() {
   const wallet = useWallet()
   const notifications = useNotifications()
-  const [priceMap, setPriceMap] = React.useState<Record<string, number>>({})
+  const [seedPrices, setSeedPrices] = React.useState<Record<string, number>>({})
+  const { prices: livePrices, sources: priceSources, status: priceStatus } = useLivePrices(
+    React.useMemo(() => tokenCatalog.map((token) => token.symbol), []),
+    {
+      seedPrices,
+      fallbackPrices: { CAREL: 1, USDC: 1, USDT: 1 },
+    }
+  )
+
+  const resolveTokenBalance = React.useCallback(
+    (token: { symbol: string; network: string }) => {
+      const symbol = token.symbol.toUpperCase()
+      const chain = chainFromNetwork(token.network)
+      const backendBalance = wallet.balance[symbol] ?? 0
+
+      if (symbol === "ETH" && chain === "ethereum" && wallet.evmAddress) {
+        return wallet.onchainBalance.ETH ?? backendBalance
+      }
+      if (symbol === "STRK" && chain === "starknet" && wallet.starknetAddress) {
+        return wallet.onchainBalance.STRK_L2 ?? backendBalance
+      }
+      if (symbol === "BTC" && chain === "bitcoin" && wallet.btcAddress) {
+        return wallet.onchainBalance.BTC ?? backendBalance
+      }
+      return backendBalance
+    },
+    [
+      wallet.balance,
+      wallet.btcAddress,
+      wallet.evmAddress,
+      wallet.onchainBalance.BTC,
+      wallet.onchainBalance.ETH,
+      wallet.onchainBalance.STRK_L2,
+      wallet.starknetAddress,
+    ]
+  )
+
   const tokens = React.useMemo<TokenWithBalance[]>(() => {
     return tokenCatalog.map((token) => ({
       ...token,
-      balance: wallet.balance[token.symbol] ?? 0,
-      price: priceMap[token.symbol] ?? token.price,
+      balance: resolveTokenBalance(token),
+      price: livePrices[token.symbol] ?? token.price,
     }))
-  }, [wallet.balance, priceMap])
+  }, [resolveTokenBalance, livePrices])
 
-  const [fromToken, setFromToken] = React.useState(tokens[0])
-  const [toToken, setToToken] = React.useState(tokens[1])
+  const [fromToken, setFromToken] = React.useState<TokenWithBalance>(
+    tokens.find((token) => token.symbol === "ETH") || tokens[0]
+  )
+  const [toToken, setToToken] = React.useState<TokenWithBalance>(
+    tokens.find((token) => token.symbol === "STRK") || tokens[1]
+  )
   const [fromAmount, setFromAmount] = React.useState("1.0")
   const [toAmount, setToAmount] = React.useState("")
   const [swapState, setSwapState] = React.useState<"idle" | "confirming" | "processing" | "success" | "error">("idle")
@@ -194,6 +274,7 @@ export function TradingInterface() {
   const [quote, setQuote] = React.useState<QuoteState | null>(null)
   const [isQuoteLoading, setIsQuoteLoading] = React.useState(false)
   const [quoteError, setQuoteError] = React.useState<string | null>(null)
+  const [activeNft, setActiveNft] = React.useState<NFTItem | null>(null)
   
   // Privacy mode - ONLY for hiding balance in this module
   const [balanceHidden, setBalanceHidden] = React.useState(false)
@@ -204,23 +285,50 @@ export function TradingInterface() {
   const [slippage, setSlippage] = React.useState("0.5")
   const [customSlippage, setCustomSlippage] = React.useState("")
   const [receiveAddress, setReceiveAddress] = React.useState("")
+  const [isReceiveAddressManual, setIsReceiveAddressManual] = React.useState(false)
   const [xverseUserId, setXverseUserId] = React.useState("")
+
+  const formatSource = (source?: string) => {
+    switch (source) {
+      case "ws":
+        return { label: "Live", className: "bg-success/20 text-success" }
+      case "coingecko":
+        return { label: "CoinGecko", className: "bg-primary/20 text-primary" }
+      default:
+        return { label: "Fallback", className: "bg-muted text-muted-foreground" }
+    }
+  }
+
+  const fromSource = formatSource(priceSources[fromToken.symbol])
+  const toSource = formatSource(priceSources[toToken.symbol])
   
-  // NFT Discount simulation
-  const hasNFTDiscount = true
-  const nftDiscountUsesRemaining = 5
-  const nftDiscountTotal = 10
   const baseFeePercent = 0.3
-  const discountedFeePercent = hasNFTDiscount ? 0.15 : baseFeePercent
+  const discountPercent = activeNft ? activeNft.discount : 0
+  const discountedFeePercent = baseFeePercent * (1 - Math.min(Math.max(discountPercent, 0), 100) / 100)
+  const hasNftDiscount = Boolean(activeNft)
 
   // Detect cross-chain
   const isCrossChain = fromToken.network !== toToken.network
 
+  const preferredReceiveAddress = React.useMemo(
+    () =>
+      defaultReceiveAddressForNetwork(toToken.network, {
+        starknet: wallet.starknetAddress,
+        evm: wallet.evmAddress,
+        btc: wallet.btcAddress,
+        fallback: wallet.address,
+      }),
+    [toToken.network, wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress]
+  )
+
   React.useEffect(() => {
-    if (wallet.address) {
-      setReceiveAddress(wallet.address)
-    }
-  }, [wallet.address])
+    setIsReceiveAddressManual(false)
+  }, [toToken.network])
+
+  React.useEffect(() => {
+    if (isReceiveAddressManual) return
+    setReceiveAddress(preferredReceiveAddress)
+  }, [preferredReceiveAddress, isReceiveAddressManual])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -239,6 +347,7 @@ export function TradingInterface() {
 
   React.useEffect(() => {
     let active = true
+    if (!wallet.isConnected) return
     ;(async () => {
       try {
         const response = await getPortfolioBalance()
@@ -248,20 +357,51 @@ export function TradingInterface() {
           const price = item.amount > 0 ? item.value_usd / item.amount : item.price
           updated[item.token.toUpperCase()] = price
         })
-        setPriceMap((prev) => ({ ...prev, ...updated }))
+        setSeedPrices(updated)
       } catch {
-        // keep fallback prices
+        // keep existing prices
       }
     })()
 
     return () => {
       active = false
     }
-  }, [])
+  }, [wallet.isConnected])
 
   React.useEffect(() => {
-    const nextFrom = tokens.find((token) => token.symbol === fromToken.symbol) || tokens[0]
-    const nextTo = tokens.find((token) => token.symbol === toToken.symbol) || tokens[1]
+    if (wallet.isConnected) return
+    setSeedPrices({})
+  }, [wallet.isConnected])
+
+  React.useEffect(() => {
+    let active = true
+    if (!wallet.isConnected) {
+      setActiveNft(null)
+      return
+    }
+    ;(async () => {
+      try {
+        const nfts = await getOwnedNfts()
+        if (!active) return
+        const now = Math.floor(Date.now() / 1000)
+        const usable = nfts.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
+        setActiveNft(usable || null)
+      } catch {
+        if (!active) return
+        setActiveNft(null)
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [wallet.isConnected])
+
+  React.useEffect(() => {
+    const fallbackFrom = tokens.find((token) => token.symbol === "ETH") || tokens[0]
+    const fallbackTo = tokens.find((token) => token.symbol === "STRK") || tokens[1] || tokens[0]
+    const nextFrom = tokens.find((token) => token.symbol === fromToken.symbol) || fallbackFrom
+    const nextTo = tokens.find((token) => token.symbol === toToken.symbol) || fallbackTo
     setFromToken(nextFrom)
     setToToken(nextTo)
   }, [tokens])
@@ -289,13 +429,23 @@ export function TradingInterface() {
             amount: fromAmount,
           })
           if (cancelled) return
-          setToAmount(response.estimated_receive)
+          const estimatedReceiveRaw = Number(response.estimated_receive || 0)
+          const bridgeConvertedAmount =
+            fromToken.symbol !== toToken.symbol
+              ? convertAmountByUsdPrice(estimatedReceiveRaw, fromToken.price, toToken.price)
+              : null
+          const displayToAmount = Number.isFinite(bridgeConvertedAmount ?? NaN)
+            ? String(bridgeConvertedAmount)
+            : response.estimated_receive
+          setToAmount(displayToAmount)
           setQuote({
             type: "bridge",
-            toAmount: response.estimated_receive,
+            toAmount: displayToAmount,
             fee: Number(response.fee || 0),
             estimatedTime: response.estimated_time,
             provider: response.bridge_provider,
+            bridgeSourceAmount: estimatedReceiveRaw,
+            bridgeConvertedAmount: bridgeConvertedAmount ?? undefined,
           })
         } else {
           const response = await getSwapQuote({
@@ -318,11 +468,8 @@ export function TradingInterface() {
       } catch (error) {
         if (cancelled) return
         setQuoteError(error instanceof Error ? error.message : "Failed to fetch quote")
-
-        // fallback to local estimate
-        const fromValue = amountValue * fromToken.price
-        const toValue = fromValue / toToken.price
-        setToAmount(toValue.toFixed(6))
+        setToAmount("")
+        setQuote(null)
       } finally {
         if (!cancelled) {
           setIsQuoteLoading(false)
@@ -356,18 +503,35 @@ export function TradingInterface() {
   // Calculate trade details
   const fromValueUSD = Number.parseFloat(fromAmount || "0") * fromToken.price
   const toValueUSD = Number.parseFloat(toAmount || "0") * toToken.price
-  const transactionFee = quote?.fee ?? (fromValueUSD * (discountedFeePercent / 100))
-  const pointsEarned = Math.floor(fromValueUSD * 10) // 10 points per $1 volume
-  const estimatedTime = quote?.estimatedTime ?? (isCrossChain ? "~3-5 min" : "~30 sec")
+  const hasQuote = Boolean(quote)
+  const bridgeTokenMismatch = isCrossChain && fromToken.symbol !== toToken.symbol
+  const feeTokenAmount = hasQuote ? quote?.fee ?? 0 : null
+  const feeUsdAmount =
+    feeTokenAmount === null
+      ? null
+      : quote?.type === "bridge"
+      ? feeTokenAmount * (fromToken.price || 0)
+      : feeTokenAmount
+  const feeDisplayLabel =
+    feeTokenAmount === null
+      ? "—"
+      : quote?.type === "bridge"
+      ? `${formatTokenAmount(feeTokenAmount, 6)} ${fromToken.symbol}${
+          feeUsdAmount !== null && feeUsdAmount > 0 ? ` (~$${feeUsdAmount.toFixed(2)})` : ""
+        }`
+      : `$${(feeUsdAmount ?? 0).toFixed(2)}`
+  const pointsEarned = hasQuote ? Math.floor(fromValueUSD * 10) : null
+  const estimatedTime = hasQuote ? quote?.estimatedTime || "—" : "—"
   
   // Price Impact calculation
   const expectedAmount = fromValueUSD / toToken.price
   const actualAmount = Number.parseFloat(toAmount || "0")
   const priceImpact = quote?.priceImpact
     ? Number.parseFloat(quote.priceImpact.replace("%", ""))
-    : expectedAmount > 0 ? Math.abs((actualAmount - expectedAmount) / expectedAmount * 100) : 0
+    : null
 
   const activeSlippage = customSlippage || slippage
+  const routeLabel = isCrossChain ? (quote?.provider || "Bridge") : "Auto"
 
   const handleExecuteTrade = () => {
     if (!fromAmount || Number.parseFloat(fromAmount) === 0) return
@@ -383,6 +547,16 @@ export function TradingInterface() {
 
     try {
       if (isCrossChain) {
+        const recipient = (receiveAddress || preferredReceiveAddress).trim()
+        const toChain = chainFromNetwork(toToken.network)
+        const xverseHint =
+          toChain === "bitcoin" && !recipient && xverseUserId.trim()
+            ? xverseUserId.trim()
+            : undefined
+        if (!recipient && !xverseHint) {
+          throw new Error(`Recipient ${toChain} address is required.`)
+        }
+
         notifications.addNotification({
           type: "info",
           title: "Bridge pending",
@@ -390,11 +564,11 @@ export function TradingInterface() {
         })
         const response = await executeBridge({
           from_chain: chainFromNetwork(fromToken.network),
-          to_chain: chainFromNetwork(toToken.network),
+          to_chain: toChain,
           token: fromToken.symbol,
           amount: fromAmount,
-          recipient: wallet.address || receiveAddress,
-          xverse_user_id: !receiveAddress && xverseUserId ? xverseUserId : undefined,
+          recipient,
+          xverse_user_id: xverseHint,
         })
         notifications.addNotification({
           type: "success",
@@ -410,6 +584,7 @@ export function TradingInterface() {
           title: "Swap pending",
           message: `Swap ${fromAmount} ${fromToken.symbol} in progress...`,
         })
+        const recipient = (receiveAddress || preferredReceiveAddress).trim() || undefined
         const response = await executeSwap({
           from_token: fromToken.symbol,
           to_token: toToken.symbol,
@@ -417,7 +592,7 @@ export function TradingInterface() {
           min_amount_out: minAmountOut,
           slippage: slippageValue,
           deadline,
-          recipient: wallet.address || undefined,
+          recipient,
           mode: mevProtection ? "private" : "transparent",
         })
         notifications.addNotification({
@@ -427,6 +602,7 @@ export function TradingInterface() {
           txHash: response.tx_hash,
         })
       }
+      await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       setSwapState("success")
     } catch (error) {
       if (isCrossChain && error instanceof Error && error.message.toLowerCase().includes("xverse")) {
@@ -454,8 +630,21 @@ export function TradingInterface() {
       <div className="p-6 rounded-2xl glass-strong border border-border neon-border">
         {/* Header with Privacy Toggle */}
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-foreground">Unified Trade</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold text-foreground">Unified Trade</h2>
+            <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide", fromSource.className)}>
+              {fromSource.label}
+            </span>
+            {fromToken.symbol !== toToken.symbol && (
+              <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide", toSource.className)}>
+                {toSource.label}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted-foreground">
+              WS: {priceStatus.websocket}
+            </span>
             {/* Privacy Mode - Eye Icon to hide/show balance */}
             <button 
               onClick={() => setBalanceHidden(!balanceHidden)}
@@ -482,6 +671,15 @@ export function TradingInterface() {
             onAmountChange={setFromAmount}
             hideBalance={balanceHidden}
           />
+
+          {fromToken.symbol === "BTC" && !wallet.btcAddress && (
+            <div className="px-3 py-2 rounded-lg bg-warning/10 border border-warning/30">
+              <p className="text-xs text-foreground">
+                Source BTC membutuhkan wallet BTC testnet (Xverse/Unisat/Braavos BTC). Untuk cepat test STRK,
+                gunakan pair ETH ↔ STRK.
+              </p>
+            </div>
+          )}
 
           <div className="flex justify-center -my-2 relative z-10">
             <button
@@ -596,6 +794,17 @@ export function TradingInterface() {
                 {toAmount ? `${Number.parseFloat(toAmount).toFixed(4)} ${toToken.symbol}` : "—"}
               </span>
             </div>
+            {quote?.type === "bridge" && bridgeTokenMismatch && (
+              <div className="p-3 rounded-lg bg-warning/10 border border-warning/30">
+                <p className="text-xs text-foreground">
+                  Bridge quote asli:{" "}
+                  <span className="font-medium">
+                    {formatTokenAmount(quote.bridgeSourceAmount ?? 0, 8)} {fromToken.symbol}
+                  </span>
+                  . Angka {toToken.symbol} di atas adalah estimasi konversi harga live.
+                </p>
+              </div>
+            )}
 
             {/* Receive Address */}
             <div>
@@ -603,7 +812,10 @@ export function TradingInterface() {
               <input
                 type="text"
                 value={receiveAddress}
-                onChange={(e) => setReceiveAddress(e.target.value)}
+                onChange={(e) => {
+                  setIsReceiveAddressManual(true)
+                  setReceiveAddress(e.target.value)
+                }}
                 className="w-full py-2 px-3 rounded-lg text-sm bg-surface text-foreground border border-border focus:border-primary outline-none"
               />
               {isCrossChain && (
@@ -628,49 +840,62 @@ export function TradingInterface() {
 
             {/* Transaction Fee Breakdown */}
             <div className="space-y-2 p-3 rounded-lg bg-surface/50">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Base Fee</span>
-                <span className="text-sm text-foreground">{baseFeePercent}%</span>
-              </div>
-              {hasNFTDiscount && (
-                <div className="flex items-center justify-between text-success">
-                  <span className="text-sm flex items-center gap-1">
-                    <Sparkles className="h-3 w-3" />
-                    NFT Discount
-                  </span>
-                  <span className="text-sm">-50%</span>
-                </div>
+              {quote?.type === "bridge" ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Bridge Fee</span>
+                    <span className="text-sm text-foreground">{feeDisplayLabel}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-border pt-2">
+                    <span className="text-sm text-muted-foreground">Provider</span>
+                    <span className="text-sm text-foreground">{routeLabel}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Base Fee</span>
+                    <span className="text-sm text-foreground">{baseFeePercent}%</span>
+                  </div>
+                  {hasNftDiscount && (
+                    <div className="flex items-center justify-between text-success">
+                      <span className="text-sm flex items-center gap-1">
+                        <Sparkles className="h-3 w-3" />
+                        NFT Discount
+                      </span>
+                      <span className="text-sm">-{discountPercent}%</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between border-t border-border pt-2">
+                    <span className="text-sm font-medium text-foreground">Final Fee</span>
+                    <span className="text-sm font-medium text-foreground">
+                      {feeDisplayLabel} ({discountedFeePercent.toFixed(3)}%)
+                    </span>
+                  </div>
+                </>
               )}
-              <div className="flex items-center justify-between border-t border-border pt-2">
-                <span className="text-sm font-medium text-foreground">Final Fee</span>
-                <span className="text-sm font-medium text-foreground">
-                  ${transactionFee.toFixed(2)} ({discountedFeePercent}%)
-                </span>
-              </div>
             </div>
 
-            {/* Points Earned */}
+            {/* Points Estimate */}
             <div className="flex items-center justify-between p-3 rounded-lg bg-accent/10 border border-accent/20">
               <span className="text-sm text-foreground flex items-center gap-2">
                 <Gift className="h-4 w-4 text-accent" />
-                Points Earned
+                Estimated Points
               </span>
-              <span className="text-sm font-bold text-accent">+{pointsEarned}</span>
+              <span className="text-sm font-bold text-accent">{pointsEarned === null ? "—" : `+${pointsEarned}`}</span>
             </div>
           </CollapsibleContent>
         </Collapsible>
 
         {/* NFT Discount Counter */}
-        {hasNFTDiscount && (
+        {hasNftDiscount && (
           <div className="mt-4 p-3 rounded-xl bg-gradient-to-r from-primary/10 to-accent/10 border border-primary/20">
             <div className="flex items-center justify-between">
               <span className="text-sm text-foreground flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-primary" />
                 NFT Discount Active
               </span>
-              <span className="text-xs text-muted-foreground">
-                {nftDiscountUsesRemaining}/{nftDiscountTotal} uses remaining
-              </span>
+              <span className="text-xs text-muted-foreground">{discountPercent}% off fees</span>
             </div>
           </div>
         )}
@@ -685,21 +910,25 @@ export function TradingInterface() {
           </div>
           <div className="p-3 rounded-lg bg-surface/30 text-center">
             <p className="text-xs text-muted-foreground">Fee</p>
-            <p className="text-sm font-medium text-foreground">${transactionFee.toFixed(2)}</p>
+            <p className="text-sm font-medium text-foreground">{feeDisplayLabel}</p>
           </div>
           <div className="p-3 rounded-lg bg-surface/30 text-center">
             <p className="text-xs text-muted-foreground">Impact</p>
             <p className={cn(
               "text-sm font-medium",
-              priceImpact > 1 ? "text-destructive" : "text-success"
+              priceImpact === null
+                ? "text-muted-foreground"
+                : priceImpact > 1
+                ? "text-destructive"
+                : "text-success"
             )}>
-              {priceImpact.toFixed(2)}%
+              {priceImpact === null ? "—" : `${priceImpact.toFixed(2)}%`}
             </p>
           </div>
         </div>
 
         {/* Price Impact Warning */}
-        {priceImpact > 1 && (
+        {priceImpact !== null && priceImpact > 1 && (
           <div className="mt-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
             <div className="flex items-start gap-2">
               <Info className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
@@ -713,7 +942,7 @@ export function TradingInterface() {
         {/* Execute Button */}
         <Button 
           onClick={handleExecuteTrade}
-          disabled={swapState !== "idle" || !fromAmount || Number.parseFloat(fromAmount) === 0}
+          disabled={swapState !== "idle" || !fromAmount || Number.parseFloat(fromAmount) === 0 || !hasQuote}
           className={cn(
             "w-full mt-6 py-6 text-lg font-bold transition-all text-primary-foreground",
             swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
@@ -773,13 +1002,13 @@ export function TradingInterface() {
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">You Receive</span>
                 <span className="font-medium text-foreground">
-                  {Number.parseFloat(toAmount).toFixed(4)} {toToken.symbol}
+                  {toAmount ? `${Number.parseFloat(toAmount).toFixed(4)} ${toToken.symbol}` : "—"}
                 </span>
               </div>
               <div className="border-t border-border pt-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Route</span>
-                  <span className="text-sm text-foreground">{isCrossChain ? "Bridge" : "Swap"} via {isCrossChain ? "StarkGate" : "AVNU"}</span>
+                  <span className="text-sm text-foreground">{isCrossChain ? "Bridge" : "Swap"} via {routeLabel}</span>
                 </div>
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-sm text-muted-foreground">Slippage</span>
@@ -791,7 +1020,7 @@ export function TradingInterface() {
                 </div>
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-sm text-muted-foreground">Fee</span>
-                  <span className="text-sm text-foreground">${transactionFee.toFixed(2)}</span>
+                  <span className="text-sm text-foreground">{feeDisplayLabel}</span>
                 </div>
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-sm text-muted-foreground">Est. Time</span>
@@ -800,10 +1029,10 @@ export function TradingInterface() {
               </div>
             </div>
 
-            {/* Points */}
+            {/* Points Estimate */}
             <div className="p-3 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-between">
-              <span className="text-sm text-foreground">Points Earned</span>
-              <span className="font-bold text-accent">+{pointsEarned}</span>
+              <span className="text-sm text-foreground">Estimated Points</span>
+              <span className="font-bold text-accent">{pointsEarned === null ? "—" : `+${pointsEarned}`}</span>
             </div>
 
             {/* Receive Address */}

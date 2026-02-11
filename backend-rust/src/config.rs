@@ -26,6 +26,8 @@ pub struct Config {
     pub point_storage_address: String,
     pub price_oracle_address: String,
     pub limit_order_book_address: String,
+    pub staking_carel_address: Option<String>,
+    pub treasury_address: Option<String>,
     pub referral_system_address: Option<String>,
     pub ai_executor_address: String,
     pub bridge_aggregator_address: String,
@@ -35,6 +37,11 @@ pub struct Config {
     pub dark_pool_address: String,
     pub private_payments_address: String,
     pub anonymous_credentials_address: String,
+    // Token Addresses
+    pub token_strk_address: Option<String>,
+    pub token_eth_address: Option<String>,
+    pub token_btc_address: Option<String>,
+    pub token_strk_l1_address: Option<String>,
     
     // Faucet
     pub faucet_wallet_private_key: Option<String>,
@@ -80,6 +87,10 @@ pub struct Config {
     pub cors_allowed_origins: String,
     pub oracle_asset_ids: String,
     pub bridge_provider_ids: String,
+    pub price_tokens: String,
+    pub coingecko_api_url: String,
+    pub coingecko_api_key: Option<String>,
+    pub coingecko_ids: String,
 }
 
 impl Config {
@@ -109,6 +120,8 @@ impl Config {
             point_storage_address: env::var("POINT_STORAGE_ADDRESS")?,
             price_oracle_address: env::var("PRICE_ORACLE_ADDRESS")?,
             limit_order_book_address: env::var("LIMIT_ORDER_BOOK_ADDRESS")?,
+            staking_carel_address: env::var("STAKING_CAREL_ADDRESS").ok(),
+            treasury_address: env::var("TREASURY_ADDRESS").ok(),
             referral_system_address: env::var("REFERRAL_SYSTEM_ADDRESS").ok(),
             ai_executor_address: env::var("AI_EXECUTOR_ADDRESS")?,
             bridge_aggregator_address: env::var("BRIDGE_AGGREGATOR_ADDRESS")?,
@@ -118,6 +131,11 @@ impl Config {
             dark_pool_address: env::var("DARK_POOL_ADDRESS")?,
             private_payments_address: env::var("PRIVATE_PAYMENTS_ADDRESS")?,
             anonymous_credentials_address: env::var("ANONYMOUS_CREDENTIALS_ADDRESS")?,
+
+            token_strk_address: env::var("TOKEN_STRK_ADDRESS").ok(),
+            token_eth_address: env::var("TOKEN_ETH_ADDRESS").ok(),
+            token_btc_address: env::var("TOKEN_BTC_ADDRESS").ok(),
+            token_strk_l1_address: env::var("TOKEN_STRK_L1_ADDRESS").ok(),
             
             faucet_wallet_private_key: env::var("FAUCET_WALLET_PRIVATE_KEY").ok(),
             faucet_btc_amount: env::var("FAUCET_BTC_AMOUNT").ok().and_then(|s| s.parse().ok()),
@@ -164,6 +182,12 @@ impl Config {
                 .unwrap_or_else(|_| "*".to_string()),
             oracle_asset_ids: env::var("ORACLE_ASSET_IDS").unwrap_or_else(|_| "".to_string()),
             bridge_provider_ids: env::var("BRIDGE_PROVIDER_IDS").unwrap_or_else(|_| "".to_string()),
+            price_tokens: env::var("PRICE_TOKENS")
+                .unwrap_or_else(|_| "BTC,ETH,STRK,CAREL,USDT,USDC".to_string()),
+            coingecko_api_url: env::var("COINGECKO_API_URL")
+                .unwrap_or_else(|_| "https://api.coingecko.com/api/v3".to_string()),
+            coingecko_api_key: env::var("COINGECKO_API_KEY").ok(),
+            coingecko_ids: env::var("COINGECKO_IDS").unwrap_or_else(|_| "".to_string()),
         })
     }
     
@@ -184,40 +208,50 @@ impl Config {
             anyhow::bail!("JWT_SECRET is empty");
         }
 
-        if self.carel_token_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.carel_token_address) {
             tracing::warn!("Using placeholder CAREL token address");
         }
-        if self.snapshot_distributor_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.snapshot_distributor_address) {
             tracing::warn!("Using placeholder snapshot distributor address");
         }
-        if self.point_storage_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.point_storage_address) {
             tracing::warn!("Using placeholder point storage address");
         }
-        if self.price_oracle_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.price_oracle_address) {
             tracing::warn!("Using placeholder price oracle address");
         }
-        if self.limit_order_book_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.limit_order_book_address) {
             tracing::warn!("Using placeholder limit order book address");
         }
-        if self.ai_executor_address.starts_with("0x0000") {
+        if let Some(addr) = &self.staking_carel_address {
+            if is_placeholder_address(addr) {
+                tracing::warn!("Using placeholder staking carel address");
+            }
+        }
+        if let Some(addr) = &self.treasury_address {
+            if is_placeholder_address(addr) {
+                tracing::warn!("Using placeholder treasury address");
+            }
+        }
+        if is_placeholder_address(&self.ai_executor_address) {
             tracing::warn!("Using placeholder AI executor address");
         }
-        if self.bridge_aggregator_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.bridge_aggregator_address) {
             tracing::warn!("Using placeholder bridge aggregator address");
         }
-        if self.zk_privacy_router_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.zk_privacy_router_address) {
             tracing::warn!("Using placeholder ZK privacy router address");
         }
-        if self.private_btc_swap_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.private_btc_swap_address) {
             tracing::warn!("Using placeholder private BTC swap address");
         }
-        if self.dark_pool_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.dark_pool_address) {
             tracing::warn!("Using placeholder dark pool address");
         }
-        if self.private_payments_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.private_payments_address) {
             tracing::warn!("Using placeholder private payments address");
         }
-        if self.anonymous_credentials_address.starts_with("0x0000") {
+        if is_placeholder_address(&self.anonymous_credentials_address) {
             tracing::warn!("Using placeholder anonymous credentials address");
         }
 
@@ -252,6 +286,10 @@ impl Config {
         let _ = &self.starknet_chain_id;
         let _ = &self.oracle_asset_ids;
         let _ = &self.bridge_provider_ids;
+        let _ = &self.price_tokens;
+        let _ = &self.coingecko_api_url;
+        let _ = &self.coingecko_api_key;
+        let _ = &self.coingecko_ids;
 
         Ok(())
     }
@@ -273,6 +311,28 @@ impl Config {
     pub fn bridge_provider_id_for(&self, provider: &str) -> Option<String> {
         parse_kv_map(&self.bridge_provider_ids, provider)
     }
+
+    pub fn price_tokens_list(&self) -> Vec<String> {
+        let raw = self.price_tokens.trim();
+        if raw.is_empty() {
+            return vec![
+                "BTC".to_string(),
+                "ETH".to_string(),
+                "STRK".to_string(),
+                "CAREL".to_string(),
+                "USDT".to_string(),
+                "USDC".to_string(),
+            ];
+        }
+        raw.split(',')
+            .map(|token| token.trim().to_ascii_uppercase())
+            .filter(|token| !token.is_empty())
+            .collect()
+    }
+
+    pub fn coingecko_id_for(&self, symbol: &str) -> Option<String> {
+        parse_kv_map(&self.coingecko_ids, symbol)
+    }
 }
 
 fn parse_kv_map(raw: &str, key: &str) -> Option<String> {
@@ -291,4 +351,22 @@ fn parse_kv_map(raw: &str, key: &str) -> Option<String> {
             }
         })
         .next()
+}
+
+fn is_placeholder_address(address: &str) -> bool {
+    let trimmed = address.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed == "0x..." {
+        return true;
+    }
+    if !trimmed.starts_with("0x") {
+        return false;
+    }
+    let hex = trimmed.trim_start_matches("0x");
+    if hex.is_empty() {
+        return true;
+    }
+    hex.chars().all(|c| c == '0')
 }

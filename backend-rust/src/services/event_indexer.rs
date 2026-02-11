@@ -1,14 +1,6 @@
 use crate::{
     config::Config,
     constants::{
-        CONTRACT_BRIDGE_AGGREGATOR,
-        CONTRACT_LIMIT_ORDER,
-        CONTRACT_MERKLE_DISTRIBUTOR,
-        CONTRACT_NFT_DISCOUNT,
-        CONTRACT_POINT_STORAGE,
-        CONTRACT_STAKING_BTC,
-        CONTRACT_STAKING_CAREL,
-        CONTRACT_SWAP_AGGREGATOR,
         INDEXER_INTERVAL_SECS,
     },
     db::Database,
@@ -38,20 +30,29 @@ impl EventIndexer {
         }
     }
 
+    fn contract_targets(&self) -> Vec<String> {
+        let mut targets = Vec::new();
+        push_valid_address(&mut targets, &self.config.bridge_aggregator_address);
+        push_valid_address(&mut targets, &self.config.snapshot_distributor_address);
+        if let Some(addr) = self.config.staking_carel_address.as_deref() {
+            push_valid_address(&mut targets, addr);
+        }
+        if let Some(addr) = self.config.referral_system_address.as_deref() {
+            push_valid_address(&mut targets, addr);
+        }
+        push_valid_address(&mut targets, &self.config.limit_order_book_address);
+        targets
+    }
+
     /// Start the event indexer loop
     pub async fn start(self: Arc<Self>) {
         tokio::spawn(async move {
-            let contract_targets = [
-                CONTRACT_SWAP_AGGREGATOR,
-                CONTRACT_BRIDGE_AGGREGATOR,
-                CONTRACT_STAKING_CAREL,
-                CONTRACT_STAKING_BTC,
-                CONTRACT_POINT_STORAGE,
-                CONTRACT_MERKLE_DISTRIBUTOR,
-                CONTRACT_NFT_DISCOUNT,
-                CONTRACT_LIMIT_ORDER,
-            ];
-            tracing::info!("Indexing contracts: {:?}", contract_targets);
+            let contract_targets = self.contract_targets();
+            if contract_targets.is_empty() {
+                tracing::warn!("No valid contract targets configured for event indexer");
+            } else {
+                tracing::info!("Indexing contracts: {:?}", contract_targets);
+            }
 
             let mut ticker = interval(Duration::from_secs(INDEXER_INTERVAL_SECS));
 
@@ -67,13 +68,6 @@ impl EventIndexer {
 
     /// Scan for new events from last block to current
     async fn scan_events(&self) -> Result<()> {
-        if std::env::var("INDEXER_DIAGNOSTICS").is_ok() {
-            let _ = self
-                .client
-                .call_contract(CONTRACT_SWAP_AGGREGATOR, "version", vec![])
-                .await;
-        }
-
         let last_block = *self.last_block.read().await;
         let current_block = self.get_current_block().await?;
 
@@ -132,21 +126,15 @@ impl EventIndexer {
             return Ok(out);
         }
 
-        let targets = [
-            CONTRACT_SWAP_AGGREGATOR,
-            CONTRACT_BRIDGE_AGGREGATOR,
-            CONTRACT_STAKING_CAREL,
-            CONTRACT_STAKING_BTC,
-            CONTRACT_POINT_STORAGE,
-            CONTRACT_MERKLE_DISTRIBUTOR,
-            CONTRACT_NFT_DISCOUNT,
-            CONTRACT_LIMIT_ORDER,
-        ];
+        let targets = self.contract_targets();
+        if targets.is_empty() {
+            return Ok(out);
+        }
 
         for contract in targets {
             let events = self
                 .client
-                .get_events(contract, _block_number, _block_number)
+                .get_events(contract.as_str(), _block_number, _block_number)
                 .await?;
 
             for ev in events {
@@ -339,6 +327,14 @@ fn normalize_event_data(parser: &EventParser, data: &mut serde_json::Value) {
     if let Some(amount_hex) = data.get("amount_in").and_then(|v| v.as_str()) {
         let _ = parser.hex_to_decimal(amount_hex);
     }
+}
+
+fn push_valid_address(targets: &mut Vec<String>, address: &str) {
+    let trimmed = address.trim();
+    if trimmed.is_empty() || trimmed.starts_with("0x0000") {
+        return;
+    }
+    targets.push(trimmed.to_string());
 }
 
 #[cfg(test)]

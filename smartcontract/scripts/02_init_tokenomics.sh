@@ -2,12 +2,30 @@
 set -euo pipefail
 
 # Initialize tokenomics (default vesting + create schedules)
-# Requires: starkli configured and VESTING_MANAGER_ADDRESS + beneficiary addresses set.
+# Requires: sncast configured and VESTING_MANAGER_ADDRESS + beneficiary addresses set.
 
-if [ -f .env ]; then
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="$ROOT/.env"
+cd "$ROOT"
+
+if [ -f "$ENV_FILE" ]; then
   set -a
-  source .env
+  source "$ENV_FILE"
   set +a
+fi
+
+NET=${NET:-}
+if [ -z "$NET" ]; then
+  if [ "${NETWORK:-}" = "starknet-sepolia" ]; then
+    NET=sepolia
+  else
+    NET=${NETWORK:-sepolia}
+  fi
+fi
+
+if ! command -v sncast >/dev/null 2>&1; then
+  echo "sncast not found in PATH" >&2
+  exit 1
 fi
 
 : "${VESTING_MANAGER_ADDRESS:?Missing VESTING_MANAGER_ADDRESS}"
@@ -26,21 +44,27 @@ VESTING_66=$((66 * MONTH_SECONDS))
 CLIFF_6=$((6 * MONTH_SECONDS))
 RELEASE_IMMEDIATE=${RELEASE_IMMEDIATE:-1}
 
+invoke() {
+  local fn="$1"
+  shift
+  sncast invoke --network "$NET" --contract-address "$VESTING_MANAGER_ADDRESS" --function "$fn" --calldata "$@"
+}
+
 # VestingCategory enum indices:
 # 0 Investor, 1 Tim, 2 Marketing, 3 Listing, 4 EarlyAccess, 5 Ecosystem, 6 Treasury
 
 echo "Setting default vesting config..."
 
-starkli invoke "$VESTING_MANAGER_ADDRESS" set_default_vesting_config 0 0 "$VESTING_36"
-starkli invoke "$VESTING_MANAGER_ADDRESS" set_default_vesting_config 1 "$CLIFF_6" "$VESTING_36"
-starkli invoke "$VESTING_MANAGER_ADDRESS" set_default_vesting_config 2 0 "$VESTING_24"
-starkli invoke "$VESTING_MANAGER_ADDRESS" set_default_vesting_config 3 0 0
-starkli invoke "$VESTING_MANAGER_ADDRESS" set_default_vesting_config 4 0 0
-starkli invoke "$VESTING_MANAGER_ADDRESS" set_default_vesting_config 5 0 "$VESTING_66"
-starkli invoke "$VESTING_MANAGER_ADDRESS" set_default_vesting_config 6 0 0
+invoke set_default_vesting_config 0 0 "$VESTING_36"
+invoke set_default_vesting_config 1 "$CLIFF_6" "$VESTING_36"
+invoke set_default_vesting_config 2 0 "$VESTING_24"
+invoke set_default_vesting_config 3 0 0
+invoke set_default_vesting_config 4 0 0
+invoke set_default_vesting_config 5 0 "$VESTING_66"
+invoke set_default_vesting_config 6 0 0
 
 echo "Setting up tokenomics schedules..."
-starkli invoke "$VESTING_MANAGER_ADDRESS" setup_tokenomics \
+invoke setup_tokenomics \
   "$INVESTOR_ADDRESS" \
   "$EARLY_ACCESS_ADDRESS" \
   "$TEAM_ADDRESS" \

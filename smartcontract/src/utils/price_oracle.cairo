@@ -28,7 +28,17 @@ pub trait IPragmaOracle<TContractState> {
     /// @dev Read-only oracle query used for price resolution.
     /// @param data_type Pragma data type selector.
     /// @return response Aggregated price data.
-    fn get_data_median(self: @TContractState, data_type: felt252) -> PragmaPricesResponse;
+    fn get_data_median(self: @TContractState, data_type: DataType) -> PragmaPricesResponse;
+}
+
+#[derive(Copy, Drop, Serde)]
+pub enum DataType {
+    /// Spot price data (e.g., BTC/USD).
+    SpotEntry: felt252,
+    /// Futures data (e.g., BTC/USD expiry).
+    FutureEntry: (felt252, u64),
+    /// Generic data feeds.
+    GenericEntry: felt252,
 }
 
 #[derive(Drop, Serde)]
@@ -37,7 +47,7 @@ pub struct PragmaPricesResponse {
     pub decimals: u32,
     pub last_updated_timestamp: u64,
     pub num_sources_aggregated: u32,
-    pub maybe_errors: felt252,
+    pub expiration_timestamp: Option<u64>,
 }
 
 /// @title Price Oracle Interface
@@ -106,12 +116,19 @@ pub mod PriceOracle {
     use starknet::{get_caller_address, get_block_timestamp};
     // Rule: Always add all storage imports using wildcard
     use starknet::storage::*;
-    use core::num::traits::Zero;
     use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy::action_types::ACTION_ORACLE;
     
-    // Removed PragmaPricesResponse from super import to resolve unused import warning
-    use super::{IPriceOracle, IPragmaOracleDispatcher, IPragmaOracleDispatcherTrait, CachedPrice, PriceSource};
+    use super::{
+        IPriceOracle,
+        IPragmaOracleDispatcher,
+        IPragmaOracleDispatcherTrait,
+        CachedPrice,
+        DataType,
+        PragmaPricesResponse,
+        PriceSource,
+    };
+    use core::num::traits::Zero;
 
     #[storage]
     pub struct Storage {
@@ -125,6 +142,33 @@ pub mod PriceOracle {
         pub owner: ContractAddress,
         pub paused: bool,
         pub privacy_router: ContractAddress,
+    }
+
+    const STANDARD_PRICE_DECIMALS: u32 = 8;
+
+    fn normalize_price(price: u128, decimals: u32) -> u256 {
+        let mut result: u256 = price.into();
+        if decimals == STANDARD_PRICE_DECIMALS {
+            return result;
+        }
+        if decimals < STANDARD_PRICE_DECIMALS {
+            let mut i: u32 = 0;
+            let mut mul: u256 = 1;
+            let diff = STANDARD_PRICE_DECIMALS - decimals;
+            while i < diff {
+                mul *= 10;
+                i += 1;
+            };
+            return result * mul;
+        }
+        let mut j: u32 = 0;
+        let mut div: u256 = 1;
+        let diff = decimals - STANDARD_PRICE_DECIMALS;
+        while j < diff {
+            div *= 10;
+            j += 1;
+        };
+        result / div
     }
 
     /// @notice Initializes the price oracle.
@@ -164,14 +208,17 @@ pub mod PriceOracle {
                 return cached.price;
             }
 
-            let pragma_dispatcher = IPragmaOracleDispatcher { 
-                contract_address: self.pragma_oracle_address.read() 
-            };
-            
-            let pragma_data = pragma_dispatcher.get_data_median(asset_id);
-            
-            if pragma_data.price > 0 && (now - pragma_data.last_updated_timestamp < self.max_price_age_seconds.read()) {
-                return pragma_data.price.into();
+            if asset_id != 0 {
+                let pragma_dispatcher = IPragmaOracleDispatcher { 
+                    contract_address: self.pragma_oracle_address.read() 
+                };
+                
+                let pragma_data: PragmaPricesResponse =
+                    pragma_dispatcher.get_data_median(DataType::SpotEntry(asset_id));
+                
+                if pragma_data.price > 0 && (now - pragma_data.last_updated_timestamp < self.max_price_age_seconds.read()) {
+                    return normalize_price(pragma_data.price, pragma_data.decimals);
+                }
             }
 
             if now - cached.timestamp < self.max_price_age_seconds.read() && cached.price > 0 {

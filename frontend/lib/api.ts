@@ -1,3 +1,6 @@
+import { ApiError } from "@/lib/errors"
+import { emitEvent } from "@/lib/events"
+
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080").replace(/\/$/, "")
 export const WS_BASE_URL = (process.env.NEXT_PUBLIC_BACKEND_WS_URL || API_BASE_URL).replace(/^http/, "ws")
 
@@ -5,6 +8,8 @@ export interface ApiResponse<T> {
   success: boolean
   data: T
 }
+
+export type NumericLike = number | string
 
 export interface ConnectWalletResponse {
   token: string
@@ -46,28 +51,28 @@ export interface BalanceResponse {
 
 export interface AnalyticsResponse {
   portfolio: {
-    total_value_usd: string
-    pnl_24h: string
-    pnl_7d: string
-    pnl_30d: string
-    pnl_all_time: string
+    total_value_usd: NumericLike
+    pnl_24h: NumericLike
+    pnl_7d: NumericLike
+    pnl_30d: NumericLike
+    pnl_all_time: NumericLike
     allocation: Array<{
       asset: string
       percentage: number
-      value_usd: string
+      value_usd: NumericLike
     }>
   }
   trading: {
     total_trades: number
-    total_volume_usd: string
-    avg_trade_size: string
+    total_volume_usd: NumericLike
+    avg_trade_size: NumericLike
     win_rate: number
-    best_trade: string
-    worst_trade: string
+    best_trade: NumericLike
+    worst_trade: NumericLike
   }
   rewards: {
-    total_points: string
-    estimated_carel: string
+    total_points: NumericLike
+    estimated_carel: NumericLike
     rank: number
     percentile: number
   }
@@ -173,9 +178,9 @@ export interface LimitOrderItem {
   owner: string
   from_token: string
   to_token: string
-  amount: string
-  filled: string
-  price: string
+  amount: NumericLike
+  filled: NumericLike
+  price: NumericLike
   expiry: string
   recipient: string | null
   status: number
@@ -318,44 +323,132 @@ export interface SocialVerifyResponse {
   message: string
 }
 
+export interface FaucetTokenStatus {
+  token: string
+  can_claim: boolean
+  next_claim_at?: string | null
+  last_claim_at?: string | null
+}
+
+export interface FaucetStatusResponse {
+  tokens: FaucetTokenStatus[]
+}
+
+export interface FaucetClaimResponse {
+  token: string
+  amount: number
+  tx_hash: string
+  next_claim_in: number
+}
+
+export interface OnchainBalancesResponse {
+  strk_l2?: number | null
+  strk_l1?: number | null
+  eth?: number | null
+  btc?: number | null
+}
+
 function joinUrl(path: string) {
   if (path.startsWith("http")) return path
   return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers || {})
+type ApiFetchOptions = RequestInit & {
+  timeoutMs?: number
+  context?: string
+  suppressErrorNotification?: boolean
+}
+
+const DEFAULT_TIMEOUT_MS = 15000
+
+async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, context, suppressErrorNotification, ...requestInit } = init
+  const headers = new Headers(requestInit?.headers || {})
   headers.set("Content-Type", "application/json")
+  headers.set("Accept", "application/json")
   if (typeof window !== "undefined" && !headers.has("Authorization")) {
     const token = window.localStorage.getItem("auth_token")
     if (token) {
       headers.set("Authorization", `Bearer ${token}`)
     }
   }
-  const response = await fetch(joinUrl(path), {
-    cache: "no-store",
-    headers,
-    ...init,
-  })
+  const hasAuthorizationHeader = headers.has("Authorization")
 
-  const text = await response.text()
-  let json: any = null
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
   try {
-    json = text ? JSON.parse(text) : null
-  } catch {
-    json = null
-  }
+    const response = await fetch(joinUrl(path), {
+      cache: "no-store",
+      headers,
+      ...requestInit,
+      signal: controller.signal,
+    })
 
-  if (!response.ok) {
-    const message = json?.error?.message || json?.message || "Request failed"
-    throw new Error(message)
-  }
+    const text = await response.text()
+    let json: any = null
+    try {
+      json = text ? JSON.parse(text) : null
+    } catch {
+      json = null
+    }
 
-  if (json && typeof json === "object" && "data" in json) {
-    return json.data as T
-  }
+    if (!response.ok) {
+      const message = json?.error?.message || json?.message || "Request failed"
+      const isMissingAuthHeader =
+        response.status === 401 &&
+        (!hasAuthorizationHeader || /missing authorization header/i.test(message))
+      const error = new ApiError(message, {
+        status: response.status,
+        code: json?.error?.code || json?.code,
+        details: json,
+        path,
+        method: requestInit?.method || "GET",
+      })
+      if (!suppressErrorNotification && !isMissingAuthHeader) {
+        emitEvent("api:error", {
+          error,
+          context: context || path,
+          path,
+          method: requestInit?.method || "GET",
+        })
+      }
+      throw error
+    }
 
-  return json as T
+    if (json && typeof json === "object" && "data" in json) {
+      return json.data as T
+    }
+
+    return json as T
+  } catch (err: any) {
+    if (err instanceof ApiError) throw err
+    const isTimeout = err?.name === "AbortError"
+    const isNetworkError = !isTimeout
+    const error = new ApiError(
+      isTimeout ? "Request timeout" : err?.message || "Network error",
+      {
+        code: isTimeout ? "TIMEOUT" : "NETWORK_ERROR",
+        path,
+        method: requestInit?.method || "GET",
+        details: err,
+      }
+    )
+    if (!suppressErrorNotification) {
+      const errorContext = isNetworkError
+        ? "Backend unavailable (check NEXT_PUBLIC_BACKEND_URL and backend server)"
+        : context || path
+      emitEvent("api:error", {
+        error,
+        context: errorContext,
+        path,
+        method: requestInit?.method || "GET",
+      })
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function getHealth() {
@@ -479,6 +572,8 @@ export async function getSwapQuote(payload: {
   return apiFetch<SwapQuoteResponse>("/api/v1/swap/quote", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "Swap quote",
+    suppressErrorNotification: true,
   })
 }
 
@@ -495,6 +590,8 @@ export async function executeSwap(payload: {
   return apiFetch<ExecuteSwapResponse>("/api/v1/swap/execute", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "Swap execute",
+    suppressErrorNotification: true,
   })
 }
 
@@ -507,6 +604,8 @@ export async function getBridgeQuote(payload: {
   return apiFetch<BridgeQuoteResponse>("/api/v1/bridge/quote", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "Bridge quote",
+    suppressErrorNotification: true,
   })
 }
 
@@ -521,6 +620,8 @@ export async function executeBridge(payload: {
   return apiFetch<ExecuteBridgeResponse>("/api/v1/bridge/execute", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "Bridge execute",
+    suppressErrorNotification: true,
   })
 }
 
@@ -541,11 +642,17 @@ export async function createLimitOrder(payload: {
   return apiFetch<LimitOrderResponse>("/api/v1/limit-order/create", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "Create limit order",
+    suppressErrorNotification: true,
   })
 }
 
 export async function cancelLimitOrder(orderId: string) {
-  return apiFetch<string>(`/api/v1/limit-order/${orderId}`, { method: "DELETE" })
+  return apiFetch<string>(`/api/v1/limit-order/${orderId}`, {
+    method: "DELETE",
+    context: "Cancel limit order",
+    suppressErrorNotification: true,
+  })
 }
 
 export async function getStakePools() {
@@ -562,6 +669,8 @@ export async function stakeDeposit(payload: { pool_id: string; amount: string })
     {
       method: "POST",
       body: JSON.stringify(payload),
+      context: "Stake deposit",
+      suppressErrorNotification: true,
     }
   )
 }
@@ -572,6 +681,8 @@ export async function stakeWithdraw(payload: { position_id: string; amount: stri
     {
       method: "POST",
       body: JSON.stringify(payload),
+      context: "Stake withdraw",
+      suppressErrorNotification: true,
     }
   )
 }
@@ -584,6 +695,8 @@ export async function mintNft(payload: { tier: number }) {
   return apiFetch<NFTItem>("/api/v1/nft/mint", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "Mint NFT",
+    suppressErrorNotification: true,
   })
 }
 
@@ -592,6 +705,8 @@ export async function claimRewards() {
     "/api/v1/rewards/claim",
     {
       method: "POST",
+      context: "Claim rewards",
+      suppressErrorNotification: true,
     }
   )
 }
@@ -602,6 +717,8 @@ export async function convertRewards(payload: { points?: number; epoch?: number;
     {
       method: "POST",
       body: JSON.stringify(payload),
+      context: "Convert rewards",
+      suppressErrorNotification: true,
     }
   )
 }
@@ -609,7 +726,7 @@ export async function convertRewards(payload: { points?: number; epoch?: number;
 export async function getTokenOHLCV(params: { token: string; interval: string; limit?: number }) {
   const search = new URLSearchParams({ interval: params.interval })
   if (params.limit) search.set("limit", String(params.limit))
-  return apiFetch<{ token: string; interval: string; data: Array<{ timestamp: string; open: string; high: string; low: string; close: string; volume: string }> }>(
+  return apiFetch<{ token: string; interval: string; data: Array<{ timestamp: string; open: NumericLike; high: NumericLike; low: NumericLike; close: NumericLike; volume: NumericLike }> }>(
     `/api/v1/chart/${params.token}/ohlcv?${search.toString()}`
   )
 }
@@ -625,6 +742,8 @@ export async function verifySocialTask(payload: { task_type: string; proof: stri
   return apiFetch<SocialVerifyResponse>("/api/v1/social/verify", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "Verify social task",
+    suppressErrorNotification: true,
   })
 }
 
@@ -632,6 +751,8 @@ export async function executeAiCommand(payload: { command: string; context?: str
   return apiFetch<AIResponse>("/api/v1/ai/execute", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "AI command",
+    suppressErrorNotification: true,
   })
 }
 
@@ -644,5 +765,33 @@ export async function submitPrivacyAction(payload: PrivacyActionPayload) {
   return apiFetch<PrivacySubmitResponse>("/api/v1/privacy/submit", {
     method: "POST",
     body: JSON.stringify(payload),
+    context: "Privacy submit",
+    suppressErrorNotification: true,
+  })
+}
+
+export async function getFaucetStatus() {
+  return apiFetch<FaucetStatusResponse>("/api/v1/faucet/status")
+}
+
+export async function claimFaucet(token: string) {
+  return apiFetch<FaucetClaimResponse>("/api/v1/faucet/claim", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+    context: "Claim faucet",
+    suppressErrorNotification: true,
+  })
+}
+
+export async function getOnchainBalances(payload: {
+  starknet_address?: string | null
+  evm_address?: string | null
+  btc_address?: string | null
+}) {
+  return apiFetch<OnchainBalancesResponse>("/api/v1/wallet/onchain-balances", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Onchain balances",
+    suppressErrorNotification: true,
   })
 }

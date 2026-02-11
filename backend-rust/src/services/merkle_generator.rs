@@ -112,6 +112,14 @@ impl MerkleGenerator {
 
     /// Generate merkle tree for epoch rewards
     pub async fn generate_for_epoch(&self, epoch: i64) -> Result<MerkleTree> {
+        self.generate_for_epoch_with_distribution(epoch, monthly_ecosystem_pool()).await
+    }
+
+    pub async fn generate_for_epoch_with_distribution(
+        &self,
+        epoch: i64,
+        total_distribution: Decimal,
+    ) -> Result<MerkleTree> {
         if self.config.is_testnet() {
             tracing::debug!("Generating merkle tree in testnet mode");
         }
@@ -143,17 +151,17 @@ impl MerkleGenerator {
             ));
         }
 
-        let monthly_pool = monthly_ecosystem_pool();
-
         // Create leaves: poseidon(user, amount_wei, epoch)
         let mut leaves: Vec<Felt> = Vec::new();
         for row in &rows {
             let address: String = row.get("user_address");
             let points: rust_decimal::Decimal = row.get("total_points");
-            
-            let share = points / total_points_dec;
-            let amount_carel = share * monthly_pool;
-            let amount_wei = carel_to_wei(amount_carel);
+
+            let amount_wei = self.calculate_reward_amount_wei_with_distribution(
+                points,
+                total_points_dec,
+                total_distribution,
+            );
 
             let leaf = self.create_leaf(&address, amount_wei, epoch)?;
             leaves.push(leaf);
@@ -173,11 +181,24 @@ impl MerkleGenerator {
     }
 
     pub fn calculate_reward_amount_wei(&self, user_points: Decimal, total_points: Decimal) -> u128 {
+        self.calculate_reward_amount_wei_with_distribution(
+            user_points,
+            total_points,
+            monthly_ecosystem_pool(),
+        )
+    }
+
+    pub fn calculate_reward_amount_wei_with_distribution(
+        &self,
+        user_points: Decimal,
+        total_points: Decimal,
+        total_distribution: Decimal,
+    ) -> u128 {
         if total_points == Decimal::ZERO {
             return 0;
         }
         let share = user_points / total_points;
-        let amount_carel = share * monthly_ecosystem_pool();
+        let amount_carel = share * total_distribution;
         carel_to_wei(amount_carel)
     }
 
