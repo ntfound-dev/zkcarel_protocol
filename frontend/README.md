@@ -26,6 +26,17 @@ NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL=https://rpc.sepolia.org
 NEXT_PUBLIC_ETHERSCAN_SEPOLIA_URL=https://sepolia.etherscan.io
 NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL=https://sepolia.starkscan.co
 NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL=https://mempool.space/testnet
+NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS=0x...
+NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS=0x...
+NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS=0x8453FC6Cd1bCfE8D4dFC069C400B433054d47bDc
+NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS=0x0000000000000000000000000000000000455448
+NEXT_PUBLIC_TOKEN_CAREL_ADDRESS=0x...
+NEXT_PUBLIC_TOKEN_STRK_ADDRESS=0x...
+NEXT_PUBLIC_TOKEN_ETH_ADDRESS=0x...
+NEXT_PUBLIC_TOKEN_BTC_ADDRESS=0x...
+NEXT_PUBLIC_TOKEN_WBTC_ADDRESS=0x...
+NEXT_PUBLIC_TOKEN_USDC_ADDRESS=0x...
+NEXT_PUBLIC_TOKEN_USDT_ADDRESS=0x...
 ```
 Catatan:
 - Jika `NEXT_PUBLIC_BACKEND_WS_URL` tidak diisi, WebSocket memakai `NEXT_PUBLIC_BACKEND_URL` dan otomatis mengganti `http` -> `ws`.
@@ -35,6 +46,10 @@ Catatan:
 - `NEXT_PUBLIC_STRK_L1_TOKEN_ADDRESS` opsional, dipakai untuk baca saldo `STRK L1 (ERC20)` di Ethereum Sepolia lewat wallet EVM.
 - `NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL` dipakai saat wallet EVM perlu auto-switch / add network ke Sepolia.
 - `NEXT_PUBLIC_ETHERSCAN_SEPOLIA_URL`, `NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL`, `NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL` dipakai untuk link explorer testnet.
+- `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` dipakai untuk submit transaksi swap langsung dari wallet Starknet.
+- `NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS` dipakai untuk submit transaksi bridge langsung dari wallet Starknet.
+- `NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS` dan `NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS` dipakai untuk bridge langsung ETH Sepolia -> Starknet via StarkGate (MetaMask sign tx ke kontrak StarkGate).
+- `NEXT_PUBLIC_TOKEN_*_ADDRESS` dipakai sebagai mapping token saat membangun calldata on-chain.
 
 ## Build Production
 ```bash
@@ -77,7 +92,7 @@ public/           # Static assets
 - Session wallet juga disimpan (`wallet_address`, `wallet_provider`) agar reconnect otomatis saat reload.
 - WebSocket notifications menggunakan query `?token=`.
 - Wallet: frontend memakai injected Starknet wallet (Argent X/Braavos). Jika tidak ada, pengguna perlu connect wallet untuk mengakses fitur on-chain.
-- Wallet SDK: memakai `@starknet-io/get-starknet` untuk modal Starknet + dukungan MetaMask (EVM) via `window.ethereum`.
+- Wallet SDK: memakai `@starknet-io/get-starknet` untuk Starknet, MetaMask (EVM) via `window.ethereum`, dan `sats-connect` untuk koneksi native Xverse (BTC testnet).
 - Network enforcement: wallet di-validate ke `Starknet Sepolia`, `Ethereum Sepolia (11155111)`, dan `Bitcoin native testnet` (alamat testnet).
 - AI Tier 2/3 membutuhkan `action_id` on-chain (frontend meminta input).
 - Privacy Router tersedia lewat menu (More → Privacy Router) untuk submit proof V2/V1.

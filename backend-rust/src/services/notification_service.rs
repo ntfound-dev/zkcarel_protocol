@@ -29,7 +29,13 @@ impl NotificationService {
     ) -> Result<()> {
         let _ = NotificationType::all();
         self.db
-            .create_notification(user_address, &notif_type.to_string(), &title, &message)
+            .create_notification(
+                user_address,
+                &notif_type.to_string(),
+                &title,
+                &message,
+                data.clone(),
+            )
             .await?;
 
         let notification = Notification {

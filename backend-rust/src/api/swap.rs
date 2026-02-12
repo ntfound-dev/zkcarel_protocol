@@ -11,7 +11,18 @@ use crate::{
     // 1. IMPORT MODUL HASH AGAR TERPAKAI
     crypto::hash,
 };
+use crate::services::onchain::{OnchainInvoker, parse_felt};
+use starknet_core::types::{Call, Felt};
+use starknet_core::utils::get_selector_from_name;
 use super::{AppState, require_user};
+
+#[derive(Debug, Deserialize)]
+pub struct PrivacyVerificationPayload {
+    pub nullifier: Option<String>,
+    pub commitment: Option<String>,
+    pub proof: Option<Vec<String>>,
+    pub public_inputs: Option<Vec<String>>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ExecuteSwapRequest {
@@ -22,6 +33,9 @@ pub struct ExecuteSwapRequest {
     pub slippage: f64,
     pub deadline: i64,
     pub recipient: Option<String>,
+    pub onchain_tx_hash: Option<String>,
+    pub hide_balance: Option<bool>,
+    pub privacy: Option<PrivacyVerificationPayload>,
     pub mode: String, // "private" or "transparent"
 }
 
@@ -44,11 +58,38 @@ fn base_fee(amount_in: f64) -> f64 {
 }
 
 fn mev_fee_for_mode(mode: &str, amount_in: f64) -> f64 {
-    if mode == "private" { amount_in * 0.0015 } else { 0.0 }
+    if mode == "private" { amount_in * 0.01 } else { 0.0 }
 }
 
 fn total_fee(amount_in: f64, mode: &str) -> f64 {
     base_fee(amount_in) + mev_fee_for_mode(mode, amount_in)
+}
+
+fn is_private_trade(mode: &str, hide_balance: bool) -> bool {
+    let _ = hide_balance;
+    mode.eq_ignore_ascii_case("private")
+}
+
+fn fallback_price_for(token: &str) -> f64 {
+    match token.to_ascii_uppercase().as_str() {
+        "BTC" | "WBTC" => 65_000.0,
+        "ETH" => 1_900.0,
+        "STRK" => 0.05,
+        "USDT" | "USDC" => 1.0,
+        "CAREL" => 1.0,
+        _ => 0.0,
+    }
+}
+
+async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
+    let symbol = token.to_ascii_uppercase();
+    let price: Option<f64> = sqlx::query_scalar(
+        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+    )
+    .bind(&symbol)
+    .fetch_optional(state.db.pool())
+    .await?;
+    Ok(price.unwrap_or_else(|| fallback_price_for(&symbol)))
 }
 
 fn estimated_time_for_dex(dex: &str) -> &'static str {
@@ -57,6 +98,90 @@ fn estimated_time_for_dex(dex: &str) -> &'static str {
         DEX_HAIKO => "~3 min",
         _ => "~2-3 min",
     }
+}
+
+fn normalize_onchain_tx_hash(tx_hash: Option<&str>) -> Result<Option<String>> {
+    let Some(raw) = tx_hash.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None)
+    };
+    if !raw.starts_with("0x") {
+        return Err(AppError::BadRequest("onchain_tx_hash must start with 0x".to_string()))
+    }
+    if raw.len() > 66 {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash exceeds maximum length (66)".to_string(),
+        ))
+    }
+    if !raw[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash must be hex-encoded".to_string(),
+        ))
+    }
+    Ok(Some(raw.to_ascii_lowercase()))
+}
+
+fn resolve_privacy_inputs(
+    seed: &str,
+    payload: Option<&PrivacyVerificationPayload>,
+) -> (String, String, Vec<String>, Vec<String>) {
+    let nullifier = payload
+        .and_then(|item| item.nullifier.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| seed.to_string());
+    let commitment = payload
+        .and_then(|item| item.commitment.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| hash::hash_string(&format!("commitment:{seed}")));
+    let proof = payload
+        .and_then(|item| item.proof.clone())
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| vec![seed.to_string()]);
+    let public_inputs = payload
+        .and_then(|item| item.public_inputs.clone())
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| vec![commitment.clone()]);
+    (nullifier, commitment, proof, public_inputs)
+}
+
+async fn verify_private_trade_with_garaga(
+    state: &AppState,
+    seed: &str,
+    payload: Option<&PrivacyVerificationPayload>,
+) -> Result<String> {
+    let router = state.config.zk_privacy_router_address.trim();
+    if router.is_empty() || router.starts_with("0x0000") {
+        return Err(AppError::BadRequest(
+            "ZK privacy router (Garaga) is not configured".to_string(),
+        ));
+    }
+    let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
+        return Err(AppError::BadRequest(
+            "On-chain invoker is not configured for Garaga verification".to_string(),
+        ));
+    };
+
+    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(seed, payload);
+
+    let to = parse_felt(router)?;
+    let selector = get_selector_from_name("submit_private_action")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let mut calldata = vec![parse_felt(&nullifier)?, parse_felt(&commitment)?];
+    calldata.push(Felt::from(proof.len() as u64));
+    for item in proof {
+        calldata.push(parse_felt(&item)?);
+    }
+    calldata.push(Felt::from(public_inputs.len() as u64));
+    for item in public_inputs {
+        calldata.push(parse_felt(&item)?);
+    }
+
+    let tx_hash = invoker.invoke(Call { to, selector, calldata }).await?;
+    Ok(tx_hash.to_string())
 }
 
 /// POST /api/v1/swap/quote
@@ -169,9 +294,21 @@ pub async fn execute_swap(
         return Err(AppError::SlippageTooHigh);
     }
 
-    // 4. GENERATE TX HASH MENGGUNAKAN HASHER (Membungkam warning di hash.rs)
+    let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let is_user_signed_onchain = onchain_tx_hash.is_some();
+    let should_hide = is_private_trade(&req.mode, req.hide_balance.unwrap_or(false));
+
+    // 4. Use wallet-submitted onchain tx hash when available; otherwise fallback.
     let tx_data = format!("{}{}{}{}{}", user_address, req.from_token, req.to_token, req.amount, now);
-    let tx_hash = hash::hash_string(&tx_data);
+    let tx_hash = onchain_tx_hash.unwrap_or_else(|| hash::hash_string(&tx_data));
+
+    let mut privacy_verification_tx: Option<String> = None;
+    if should_hide {
+        let privacy_tx = verify_private_trade_with_garaga(&state, &tx_hash, req.privacy.as_ref())
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Garaga privacy verification failed: {}", e)))?;
+        privacy_verification_tx = Some(privacy_tx);
+    }
 
     let gas_optimizer = GasOptimizer::new(state.config.clone());
     let estimated_cost = gas_optimizer.estimate_cost("swap").await.unwrap_or_default();
@@ -198,6 +335,9 @@ pub async fn execute_swap(
     };
 
     state.db.save_transaction(&tx).await?;
+    if should_hide {
+        state.db.mark_transaction_private(&tx_hash).await?;
+    }
 
     if let Ok(batch) = gas_optimizer.optimize_batch(vec![tx_hash.clone()]).await {
         tracing::debug!("Optimized gas batch size: {}", batch.len());
@@ -218,6 +358,7 @@ pub async fn execute_swap(
             ),
             Some(serde_json::json!({
                 "tx_hash": tx_hash.clone(),
+                "privacy_tx_hash": privacy_verification_tx,
                 "from_token": req.from_token.clone(),
                 "to_token": req.to_token.clone(),
                 "amount_in": amount_in,
@@ -238,7 +379,11 @@ pub async fn execute_swap(
 
     Ok(Json(ApiResponse::success(ExecuteSwapResponse {
         tx_hash,
-        status: "success".to_string(),
+        status: if is_user_signed_onchain {
+            "submitted_onchain".to_string()
+        } else {
+            "success".to_string()
+        },
         from_amount: req.amount,
         to_amount: expected_out.to_string(),
         actual_rate: (expected_out / amount_in).to_string(),
@@ -259,7 +404,7 @@ mod tests {
     #[test]
     fn mev_fee_for_mode_only_private() {
         // Memastikan fee MEV hanya untuk mode private
-        assert!((mev_fee_for_mode("private", 100.0) - 0.15).abs() < 1e-9);
+        assert!((mev_fee_for_mode("private", 100.0) - 1.0).abs() < 1e-9);
         assert!((mev_fee_for_mode("transparent", 100.0) - 0.0).abs() < 1e-9);
     }
 

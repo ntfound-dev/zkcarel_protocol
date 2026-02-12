@@ -1,0 +1,18 @@
+{
+  "name": "ZkCarel",
+  "short_name": "ZkCarel",
+  "description": "Privacy-First Crypto Trading",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#070318",
+  "theme_color": "#9D00FF",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

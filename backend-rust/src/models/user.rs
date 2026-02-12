@@ -17,6 +17,16 @@ pub struct User {
     pub total_volume_usd: Decimal,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct LinkedWalletAddress {
+    pub user_address: String,
+    pub chain: String,
+    pub wallet_address: String,
+    pub provider: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 // ==================== POINTS ====================
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct UserPoints {

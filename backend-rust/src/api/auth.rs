@@ -20,6 +20,7 @@ pub struct ConnectWalletRequest {
     pub signature: String,
     pub message: String,
     pub chain_id: u64,
+    pub wallet_type: Option<String>, // starknet/evm/bitcoin
     pub sumo_login_token: Option<String>,
 }
 
@@ -72,16 +73,33 @@ pub async fn connect_wallet(
         verify_signature(&req.address, &req.message, &req.signature, req.chain_id)?;
     }
 
+    let canonical_user_address = req.address.clone();
+
     // 2. Create or get user
-    state.db.create_user(&req.address).await?;
-    let user = state.db.get_user(&req.address).await?
+    state.db.create_user(&canonical_user_address).await?;
+    let user = state.db.get_user(&canonical_user_address).await?
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
+    // Link wallet address to canonical user for multi-address account.
+    if let Some(chain) = detect_wallet_chain(req.chain_id, req.wallet_type.as_deref()) {
+        let address = req.address.trim();
+        if !address.is_empty() && !is_zero_placeholder_address(address) {
+            state
+                .db
+                .upsert_wallet_address(&canonical_user_address, chain, address, None)
+                .await?;
+        }
+    }
+
     // 3. Update last active
-    state.db.update_last_active(&req.address).await?;
+    state.db.update_last_active(&canonical_user_address).await?;
 
     // 4. Generate JWT token
-    let token = generate_jwt_token(&req.address, &state.config.jwt_secret, state.config.jwt_expiry_hours)?;
+    let token = generate_jwt_token(
+        &canonical_user_address,
+        &state.config.jwt_secret,
+        state.config.jwt_expiry_hours,
+    )?;
 
     // 5. Calculate expiry
     let expires_in = state.config.jwt_expiry_hours * 3600;
@@ -173,6 +191,30 @@ pub async fn extract_user_from_token(token: &str, secret: &str) -> Result<String
     ).map_err(|_| AppError::AuthError("Invalid or expired token".to_string()))?;
 
     Ok(token_data.claims.sub)
+}
+
+fn detect_wallet_chain(chain_id: u64, wallet_type: Option<&str>) -> Option<&'static str> {
+    if let Some(kind) = wallet_type.map(|v| v.trim().to_ascii_lowercase()) {
+        match kind.as_str() {
+            "starknet" | "strk" => return Some("starknet"),
+            "evm" | "ethereum" | "eth" => return Some("evm"),
+            "bitcoin" | "btc" => return Some("bitcoin"),
+            _ => {}
+        }
+    }
+
+    match chain_id {
+        2 => Some("starknet"),
+        1 => Some("evm"),
+        _ => None,
+    }
+}
+
+fn is_zero_placeholder_address(address: &str) -> bool {
+    let normalized = address.trim().to_ascii_lowercase();
+    normalized == "0x0"
+        || normalized == "0x0000000000000000000000000000000000000000"
+        || normalized == "0x0000000000000000000000000000000000000000000000000000000000000000"
 }
 
 #[cfg(test)]

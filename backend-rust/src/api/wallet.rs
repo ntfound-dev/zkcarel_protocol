@@ -25,6 +25,27 @@ pub struct OnchainBalanceRequest {
     pub btc_address: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LinkWalletAddressRequest {
+    pub chain: String,
+    pub address: String,
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LinkWalletAddressResponse {
+    pub user_address: String,
+    pub chain: String,
+    pub address: String,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct LinkedWalletsResponse {
+    pub starknet_address: Option<String>,
+    pub evm_address: Option<String>,
+    pub btc_address: Option<String>,
+}
+
 #[derive(Debug, Serialize, Default)]
 pub struct OnchainBalanceResponse {
     pub strk_l2: Option<f64>,
@@ -39,32 +60,105 @@ pub async fn get_onchain_balances(
     headers: HeaderMap,
     Json(req): Json<OnchainBalanceRequest>,
 ) -> Result<Json<ApiResponse<OnchainBalanceResponse>>> {
-    let _ = require_user(&headers, &state).await?;
+    let user_address = require_user(&headers, &state).await?;
+    let linked_wallets = state.db.list_wallet_addresses(&user_address).await.unwrap_or_default();
+
+    let starknet_address = req.starknet_address.or_else(|| {
+        linked_wallets
+            .iter()
+            .find(|item| item.chain == "starknet")
+            .map(|item| item.wallet_address.clone())
+    });
+    let evm_address = req.evm_address.or_else(|| {
+        linked_wallets
+            .iter()
+            .find(|item| item.chain == "evm")
+            .map(|item| item.wallet_address.clone())
+    });
+    let btc_address = req.btc_address.or_else(|| {
+        linked_wallets
+            .iter()
+            .find(|item| item.chain == "bitcoin")
+            .map(|item| item.wallet_address.clone())
+    });
 
     let mut response = OnchainBalanceResponse::default();
 
-    if let (Some(addr), Some(token)) = (
-        req.starknet_address.as_ref(),
-        state.config.token_strk_address.as_ref(),
-    ) {
+    if let (Some(addr), Some(token)) = (starknet_address.as_ref(), state.config.token_strk_address.as_ref()) {
         response.strk_l2 = fetch_starknet_erc20_balance(&state.config, addr, token).await?;
     }
 
-    if let Some(evm_addr) = req.evm_address.as_ref() {
+    if let Some(evm_addr) = evm_address.as_ref() {
         response.eth = fetch_evm_native_balance(&state.config, evm_addr).await?;
         if let Some(token) = state.config.token_strk_l1_address.as_ref() {
             response.strk_l1 = fetch_evm_erc20_balance(&state.config, evm_addr, token).await?;
         }
     }
 
-    if let Some(btc_addr) = req.btc_address.as_ref() {
+    if let Some(btc_addr) = btc_address.as_ref() {
         response.btc = fetch_btc_balance(&state.config, btc_addr).await?;
     }
 
     Ok(Json(ApiResponse::success(response)))
 }
 
-async fn fetch_starknet_erc20_balance(
+/// POST /api/v1/wallet/link
+pub async fn link_wallet_address(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<LinkWalletAddressRequest>,
+) -> Result<Json<ApiResponse<LinkWalletAddressResponse>>> {
+    let user_address = require_user(&headers, &state).await?;
+    let chain = normalize_wallet_chain(&req.chain)
+        .ok_or_else(|| AppError::BadRequest("Unsupported wallet chain".to_string()))?;
+    let wallet_address = req.address.trim();
+    if wallet_address.is_empty() {
+        return Err(AppError::BadRequest("Wallet address is required".to_string()));
+    }
+
+    state
+        .db
+        .upsert_wallet_address(&user_address, chain, wallet_address, req.provider.as_deref())
+        .await?;
+
+    Ok(Json(ApiResponse::success(LinkWalletAddressResponse {
+        user_address,
+        chain: chain.to_string(),
+        address: wallet_address.to_string(),
+    })))
+}
+
+/// GET /api/v1/wallet/linked
+pub async fn get_linked_wallets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<LinkedWalletsResponse>>> {
+    let user_address = require_user(&headers, &state).await?;
+    let linked_wallets = state.db.list_wallet_addresses(&user_address).await?;
+
+    let mut response = LinkedWalletsResponse::default();
+    for linked in linked_wallets {
+        match linked.chain.as_str() {
+            "starknet" => response.starknet_address = Some(linked.wallet_address),
+            "evm" => response.evm_address = Some(linked.wallet_address),
+            "bitcoin" => response.btc_address = Some(linked.wallet_address),
+            _ => {}
+        }
+    }
+
+    Ok(Json(ApiResponse::success(response)))
+}
+
+fn normalize_wallet_chain(chain: &str) -> Option<&'static str> {
+    match chain.trim().to_ascii_lowercase().as_str() {
+        "starknet" | "strk" => Some("starknet"),
+        "evm" | "ethereum" | "eth" => Some("evm"),
+        "bitcoin" | "btc" => Some("bitcoin"),
+        _ => None,
+    }
+}
+
+pub(crate) async fn fetch_starknet_erc20_balance(
     config: &Config,
     owner: &str,
     token: &str,
@@ -90,7 +184,7 @@ async fn fetch_starknet_erc20_balance(
     Ok(Some(scale_u128(raw, decimals)))
 }
 
-async fn fetch_starknet_decimals(config: &Config, token: &str) -> Result<u8> {
+pub(crate) async fn fetch_starknet_decimals(config: &Config, token: &str) -> Result<u8> {
     let reader = OnchainReader::from_config(config)?;
     let token_felt = parse_felt(token)?;
     let selector = get_selector_from_name("decimals")
@@ -112,7 +206,7 @@ async fn fetch_starknet_decimals(config: &Config, token: &str) -> Result<u8> {
     Ok(parsed)
 }
 
-async fn fetch_evm_native_balance(config: &Config, address: &str) -> Result<Option<f64>> {
+pub(crate) async fn fetch_evm_native_balance(config: &Config, address: &str) -> Result<Option<f64>> {
     if address.trim().is_empty() {
         return Ok(None);
     }
@@ -128,7 +222,7 @@ async fn fetch_evm_native_balance(config: &Config, address: &str) -> Result<Opti
     Ok(Some(scale_u256(balance, 18)))
 }
 
-async fn fetch_evm_erc20_balance(
+pub(crate) async fn fetch_evm_erc20_balance(
     config: &Config,
     address: &str,
     token: &str,
@@ -153,7 +247,7 @@ async fn fetch_evm_erc20_balance(
     Ok(Some(scale_u256(balance, decimals)))
 }
 
-async fn fetch_btc_balance(config: &Config, address: &str) -> Result<Option<f64>> {
+pub(crate) async fn fetch_btc_balance(config: &Config, address: &str) -> Result<Option<f64>> {
     if address.trim().is_empty() {
         return Ok(None);
     }

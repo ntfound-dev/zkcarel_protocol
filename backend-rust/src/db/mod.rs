@@ -72,6 +72,10 @@ mod tests {
             cors_allowed_origins: "*".to_string(),
             oracle_asset_ids: "".to_string(),
             bridge_provider_ids: "".to_string(),
+            price_tokens: "BTC,ETH,STRK,CAREL,USDT,USDC".to_string(),
+            coingecko_api_url: "https://api.coingecko.com/api/v3".to_string(),
+            coingecko_api_key: None,
+            coingecko_ids: "".to_string(),
         }
     }
 
@@ -109,6 +113,8 @@ impl Database {
 // ==================== USER QUERIES ====================
 impl Database {
     pub async fn create_user(&self, address: &str) -> Result<()> {
+        ensure_varchar_max("users.address", address, 66)?;
+
         sqlx::query(
             "INSERT INTO users (address) VALUES ($1)
              ON CONFLICT DO NOTHING",
@@ -145,6 +151,55 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    pub async fn upsert_wallet_address(
+        &self,
+        user_address: &str,
+        chain: &str,
+        wallet_address: &str,
+        provider: Option<&str>,
+    ) -> Result<()> {
+        ensure_varchar_max("user_wallet_addresses.user_address", user_address, 66)?;
+        ensure_varchar_max("user_wallet_addresses.chain", chain, 16)?;
+        ensure_varchar_max("user_wallet_addresses.wallet_address", wallet_address, 128)?;
+        if let Some(provider) = provider {
+            ensure_varchar_max("user_wallet_addresses.provider", provider, 32)?;
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO user_wallet_addresses (user_address, chain, wallet_address, provider)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_address, chain) DO UPDATE
+            SET wallet_address = EXCLUDED.wallet_address,
+                provider = EXCLUDED.provider,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(user_address)
+        .bind(chain)
+        .bind(wallet_address)
+        .bind(provider)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn list_wallet_addresses(&self, user_address: &str) -> Result<Vec<LinkedWalletAddress>> {
+        ensure_varchar_max("user_wallet_addresses.user_address", user_address, 66)?;
+        let rows = sqlx::query_as::<_, LinkedWalletAddress>(
+            "SELECT user_address, chain, wallet_address, provider, created_at, updated_at
+             FROM user_wallet_addresses
+             WHERE user_address = $1
+             ORDER BY created_at ASC",
+        )
+        .bind(user_address)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
 }
 
 // ==================== POINTS QUERIES ====================
@@ -264,6 +319,16 @@ impl Database {
 // ==================== TRANSACTION QUERIES ====================
 impl Database {
     pub async fn save_transaction(&self, tx: &Transaction) -> Result<()> {
+        ensure_varchar_max("transactions.tx_hash", &tx.tx_hash, 66)?;
+        ensure_varchar_max("transactions.user_address", &tx.user_address, 66)?;
+        ensure_varchar_max("transactions.tx_type", &tx.tx_type, 20)?;
+        if let Some(token_in) = tx.token_in.as_deref() {
+            ensure_varchar_max("transactions.token_in", token_in, 66)?;
+        }
+        if let Some(token_out) = tx.token_out.as_deref() {
+            ensure_varchar_max("transactions.token_out", token_out, 66)?;
+        }
+
         sqlx::query(
             r#"
             INSERT INTO transactions
@@ -300,6 +365,31 @@ impl Database {
         .await?;
         Ok(tx)
     }
+
+    pub async fn mark_transaction_private(&self, tx_hash: &str) -> Result<()> {
+        ensure_varchar_max("transactions.tx_hash", tx_hash, 66)?;
+        sqlx::query(
+            "UPDATE transactions
+             SET is_private = true
+             WHERE tx_hash = $1",
+        )
+        .bind(tx_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+fn ensure_varchar_max(field: &str, value: &str, max_len: usize) -> Result<()> {
+    if value.chars().count() > max_len {
+        return Err(AppError::BadRequest(format!(
+            "{} too long ({} > {})",
+            field,
+            value.chars().count(),
+            max_len
+        )));
+    }
+    Ok(())
 }
 
 // ==================== FAUCET QUERIES ====================
@@ -362,17 +452,19 @@ impl Database {
         notif_type: &str,
         title: &str,
         message: &str,
+        data: Option<serde_json::Value>,
     ) -> Result<i64> {
         // runtime query + ambil id dari PgRow
         let row = sqlx::query(
-            "INSERT INTO notifications (user_address, notif_type, title, message)
-             VALUES ($1,$2,$3,$4)
+            "INSERT INTO notifications (user_address, type, title, message, data)
+             VALUES ($1,$2,$3,$4,$5)
              RETURNING id",
         )
         .bind(user)
         .bind(notif_type)
         .bind(title)
         .bind(message)
+        .bind(data)
         .fetch_one(&self.pool)
         .await?;
 

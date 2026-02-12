@@ -3,10 +3,23 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { useTheme } from "@/components/theme-provider"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
 import { useLivePrices } from "@/hooks/use-live-prices"
 import { executeBridge, executeSwap, getBridgeQuote, getOwnedNfts, getPortfolioBalance, getSwapQuote, type NFTItem } from "@/lib/api"
+import {
+  bigintWeiToUnitNumber,
+  decimalToU256Parts,
+  estimateEvmNetworkFeeWei,
+  estimateStarkgateDepositFeeWei,
+  invokeStarknetCallFromWallet,
+  parseEstimatedMinutes,
+  providerIdToFeltHex,
+  sendEvmStarkgateEthDepositFromWallet,
+  toHexFelt,
+  unitNumberToScaledBigInt,
+} from "@/lib/onchain-trade"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +46,10 @@ type QuoteState = {
   type: "swap" | "bridge"
   toAmount: string
   fee: number
+  feeUnit?: "token" | "usd"
+  protocolFee?: number
+  networkFee?: number
+  mevFee?: number
   estimatedTime: string
   priceImpact?: string
   provider?: string
@@ -51,6 +68,45 @@ const tokenCatalog = [
 ]
 
 const slippagePresets = ["0.1", "0.3", "0.5", "1.0"]
+const MEV_FEE_RATE = 0.01
+
+const STARKNET_SWAP_CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS ||
+  process.env.NEXT_PUBLIC_CAREL_PROTOCOL_ADDRESS ||
+  ""
+const STARKNET_BRIDGE_AGGREGATOR_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS ||
+  ""
+const STARKGATE_ETH_BRIDGE_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS ||
+  "0x8453FC6Cd1bCfE8D4dFC069C400B433054d47bDc"
+const STARKGATE_ETH_TOKEN_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS ||
+  "0x0000000000000000000000000000000000455448"
+
+const STARKNET_TOKEN_ADDRESS: Record<string, string> = {
+  CAREL:
+    process.env.NEXT_PUBLIC_TOKEN_CAREL_ADDRESS ||
+    "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545",
+  BTC: process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS || "0x2",
+  WBTC: process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS || process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS || "0x2",
+  ETH: process.env.NEXT_PUBLIC_TOKEN_ETH_ADDRESS || "0x3",
+  STRK:
+    process.env.NEXT_PUBLIC_TOKEN_STRK_ADDRESS ||
+    "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+  USDT: process.env.NEXT_PUBLIC_TOKEN_USDT_ADDRESS || "0x5",
+  USDC: process.env.NEXT_PUBLIC_TOKEN_USDC_ADDRESS || "0x6",
+}
+
+const TOKEN_DECIMALS: Record<string, number> = {
+  BTC: 8,
+  WBTC: 8,
+  USDT: 6,
+  USDC: 6,
+  ETH: 18,
+  STRK: 18,
+  CAREL: 18,
+}
 
 const chainFromNetwork = (network: string) => {
   const key = network.toLowerCase()
@@ -69,6 +125,16 @@ const convertAmountByUsdPrice = (
   if (!Number.isFinite(fromPrice) || fromPrice <= 0) return null
   if (!Number.isFinite(toPrice) || toPrice <= 0) return null
   return (amount * fromPrice) / toPrice
+}
+
+const resolveTokenAddress = (symbol: string): string => {
+  const key = symbol.toUpperCase()
+  return STARKNET_TOKEN_ADDRESS[key] || ""
+}
+
+const resolveTokenDecimals = (symbol: string): number => {
+  const key = symbol.toUpperCase()
+  return TOKEN_DECIMALS[key] ?? 18
 }
 
 const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
@@ -214,6 +280,7 @@ function defaultReceiveAddressForNetwork(
 }
 
 export function TradingInterface() {
+  const { mode } = useTheme()
   const wallet = useWallet()
   const notifications = useNotifications()
   const [seedPrices, setSeedPrices] = React.useState<Record<string, number>>({})
@@ -281,7 +348,8 @@ export function TradingInterface() {
   
   // Settings state
   const [settingsOpen, setSettingsOpen] = React.useState(false)
-  const [mevProtection, setMevProtection] = React.useState(true)
+  const [mevProtectionEnabled, setMevProtectionEnabled] = React.useState(false)
+  const mevProtection = mode === "private" && mevProtectionEnabled
   const [slippage, setSlippage] = React.useState("0.5")
   const [customSlippage, setCustomSlippage] = React.useState("")
   const [receiveAddress, setReceiveAddress] = React.useState("")
@@ -302,9 +370,7 @@ export function TradingInterface() {
   const fromSource = formatSource(priceSources[fromToken.symbol])
   const toSource = formatSource(priceSources[toToken.symbol])
   
-  const baseFeePercent = 0.3
   const discountPercent = activeNft ? activeNft.discount : 0
-  const discountedFeePercent = baseFeePercent * (1 - Math.min(Math.max(discountPercent, 0), 100) / 100)
   const hasNftDiscount = Boolean(activeNft)
 
   // Detect cross-chain
@@ -422,31 +488,77 @@ export function TradingInterface() {
 
       try {
         if (isCrossChain) {
+          const fromChain = chainFromNetwork(fromToken.network)
+          const toChain = chainFromNetwork(toToken.network)
+          if (fromChain === "starknet" && toChain === "ethereum") {
+            setQuote(null)
+            setToAmount("")
+            setQuoteError(
+              "Arah STRK/Starknet -> ETH Sepolia belum didukung end-to-end. Gunakan ETH Sepolia -> Starknet Sepolia."
+            )
+            return
+          }
           const response = await getBridgeQuote({
-            from_chain: chainFromNetwork(fromToken.network),
-            to_chain: chainFromNetwork(toToken.network),
+            from_chain: fromChain,
+            to_chain: toChain,
             token: fromToken.symbol,
             amount: fromAmount,
           })
           if (cancelled) return
+          let protocolFee = Number(response.fee || 0)
+          let networkFee = 0
+          if (fromChain === "ethereum" && toChain === "starknet" && fromToken.symbol.toUpperCase() === "ETH") {
+            const [estimatedFeeWei, estimatedNetworkFeeWei] = await Promise.all([
+              estimateStarkgateDepositFeeWei(STARKGATE_ETH_BRIDGE_ADDRESS),
+              estimateEvmNetworkFeeWei(BigInt(210000)),
+            ])
+            if (!cancelled && estimatedFeeWei !== null) {
+              protocolFee = bigintWeiToUnitNumber(estimatedFeeWei, 18)
+            }
+            if (!cancelled && estimatedNetworkFeeWei !== null) {
+              networkFee = bigintWeiToUnitNumber(estimatedNetworkFeeWei, 18)
+            }
+          }
+          const mevFee = mevProtection ? amountValue * MEV_FEE_RATE : 0
+          const bridgeFee = protocolFee + networkFee + mevFee
           const estimatedReceiveRaw = Number(response.estimated_receive || 0)
+          const bridgeToSwapAmount = estimatedReceiveRaw * (1 - 0.003)
+          const slippageFactor = 1 - Number(customSlippage || slippage) / 100
           const bridgeConvertedAmount =
             fromToken.symbol !== toToken.symbol
-              ? convertAmountByUsdPrice(estimatedReceiveRaw, fromToken.price, toToken.price)
+              ? convertAmountByUsdPrice(
+                  bridgeToSwapAmount * (Number.isFinite(slippageFactor) && slippageFactor > 0 ? slippageFactor : 1),
+                  fromToken.price,
+                  toToken.price
+                )
               : null
-          const displayToAmount = Number.isFinite(bridgeConvertedAmount ?? NaN)
-            ? String(bridgeConvertedAmount)
-            : response.estimated_receive
+          const displayToAmount =
+            fromToken.symbol !== toToken.symbol
+              ? Number.isFinite(bridgeConvertedAmount ?? NaN)
+                ? String(bridgeConvertedAmount)
+                : ""
+              : response.estimated_receive
+          const estimatedTimeLabel =
+            fromToken.symbol !== toToken.symbol
+              ? `${response.estimated_time} + ~2-3 min swap`
+              : response.estimated_time
           setToAmount(displayToAmount)
           setQuote({
             type: "bridge",
             toAmount: displayToAmount,
-            fee: Number(response.fee || 0),
-            estimatedTime: response.estimated_time,
+            fee: bridgeFee,
+            feeUnit: "token",
+            protocolFee,
+            networkFee,
+            mevFee,
+            estimatedTime: estimatedTimeLabel,
             provider: response.bridge_provider,
             bridgeSourceAmount: estimatedReceiveRaw,
             bridgeConvertedAmount: bridgeConvertedAmount ?? undefined,
           })
+          if (fromToken.symbol !== toToken.symbol && !displayToAmount) {
+            setQuoteError("Estimasi cross-token belum tersedia (harga live token tujuan belum masuk).")
+          }
         } else {
           const response = await getSwapQuote({
             from_token: fromToken.symbol,
@@ -456,11 +568,16 @@ export function TradingInterface() {
             mode: mevProtection ? "private" : "transparent",
           })
           if (cancelled) return
+          const protocolFee = Number(response.fee || 0)
+          const mevFee = mevProtection ? amountValue * MEV_FEE_RATE : 0
           setToAmount(response.to_amount)
           setQuote({
             type: "swap",
             toAmount: response.to_amount,
-            fee: Number(response.fee || 0),
+            fee: protocolFee + mevFee,
+            feeUnit: "usd",
+            protocolFee,
+            mevFee,
             estimatedTime: response.estimated_time,
             priceImpact: response.price_impact,
           })
@@ -502,36 +619,172 @@ export function TradingInterface() {
 
   // Calculate trade details
   const fromValueUSD = Number.parseFloat(fromAmount || "0") * fromToken.price
-  const toValueUSD = Number.parseFloat(toAmount || "0") * toToken.price
   const hasQuote = Boolean(quote)
   const bridgeTokenMismatch = isCrossChain && fromToken.symbol !== toToken.symbol
-  const feeTokenAmount = hasQuote ? quote?.fee ?? 0 : null
+  const feeAmount = hasQuote ? quote?.fee ?? 0 : null
+  const feeUnit = quote?.feeUnit || (quote?.type === "bridge" ? "token" : "usd")
   const feeUsdAmount =
-    feeTokenAmount === null
+    feeAmount === null
       ? null
-      : quote?.type === "bridge"
-      ? feeTokenAmount * (fromToken.price || 0)
-      : feeTokenAmount
+      : feeUnit === "token"
+      ? feeAmount * (fromToken.price || 0)
+      : feeAmount
   const feeDisplayLabel =
-    feeTokenAmount === null
+    feeAmount === null
       ? "—"
-      : quote?.type === "bridge"
-      ? `${formatTokenAmount(feeTokenAmount, 6)} ${fromToken.symbol}${
+      : feeUnit === "token"
+      ? `${formatTokenAmount(feeAmount, 6)} ${fromToken.symbol}${
           feeUsdAmount !== null && feeUsdAmount > 0 ? ` (~$${feeUsdAmount.toFixed(2)})` : ""
         }`
-      : `$${(feeUsdAmount ?? 0).toFixed(2)}`
+      : `$${(feeAmount ?? 0).toFixed(2)}`
+  const protocolFeeDisplay =
+    quote?.protocolFee === undefined
+      ? "—"
+      : feeUnit === "token"
+      ? `${formatTokenAmount(quote.protocolFee, 6)} ${fromToken.symbol}`
+      : `$${quote.protocolFee.toFixed(2)}`
+  const networkFeeDisplay =
+    quote?.networkFee === undefined || quote.networkFee <= 0
+      ? "—"
+      : `${formatTokenAmount(quote.networkFee, 6)} ${fromToken.symbol}`
+  const mevFeeDisplay =
+    quote?.mevFee === undefined || quote.mevFee <= 0
+      ? "—"
+      : feeUnit === "token"
+      ? `${formatTokenAmount(quote.mevFee, 6)} ${fromToken.symbol}`
+      : `$${quote.mevFee.toFixed(2)}`
+  const mevFeePercent = mevProtection ? "1.0" : "0.0"
   const pointsEarned = hasQuote ? Math.floor(fromValueUSD * 10) : null
   const estimatedTime = hasQuote ? quote?.estimatedTime || "—" : "—"
   
   // Price Impact calculation
-  const expectedAmount = fromValueUSD / toToken.price
-  const actualAmount = Number.parseFloat(toAmount || "0")
   const priceImpact = quote?.priceImpact
     ? Number.parseFloat(quote.priceImpact.replace("%", ""))
     : null
 
   const activeSlippage = customSlippage || slippage
   const routeLabel = isCrossChain ? (quote?.provider || "Bridge") : "Auto"
+
+  const starknetProviderHint = React.useMemo<"starknet" | "argentx" | "braavos">(() => {
+    if (wallet.provider === "argentx" || wallet.provider === "braavos") {
+      return wallet.provider
+    }
+    return "starknet"
+  }, [wallet.provider])
+
+  const submitOnchainSwapTx = React.useCallback(async () => {
+    const fromChain = chainFromNetwork(fromToken.network)
+    const toChain = chainFromNetwork(toToken.network)
+    if (fromChain !== "starknet" || toChain !== "starknet") {
+      throw new Error(
+        "On-chain user-sign untuk swap saat ini difokuskan ke pair Starknet. Gunakan pair Starknet ↔ Starknet atau mode bridge."
+      )
+    }
+    if (!STARKNET_SWAP_CONTRACT_ADDRESS) {
+      throw new Error(
+        "NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS belum diisi. Set alamat kontrak swap Starknet di frontend/.env.local."
+      )
+    }
+    const fromTokenAddress = resolveTokenAddress(fromToken.symbol)
+    const toTokenAddress = resolveTokenAddress(toToken.symbol)
+    if (!fromTokenAddress || !toTokenAddress) {
+      throw new Error("Token address Starknet belum dikonfigurasi untuk pair ini.")
+    }
+
+    const [amountLow, amountHigh] = decimalToU256Parts(fromAmount, resolveTokenDecimals(fromToken.symbol))
+    return invokeStarknetCallFromWallet(
+      {
+        contractAddress: STARKNET_SWAP_CONTRACT_ADDRESS,
+        entrypoint: "swap",
+        calldata: [amountLow, amountHigh, fromTokenAddress, toTokenAddress],
+      },
+      starknetProviderHint
+    )
+  }, [fromAmount, fromToken.network, fromToken.symbol, starknetProviderHint, toToken.network, toToken.symbol])
+
+  const submitOnchainBridgeTx = React.useCallback(async () => {
+    const fromChain = chainFromNetwork(fromToken.network)
+    const toChain = chainFromNetwork(toToken.network)
+    const recipient = (receiveAddress || preferredReceiveAddress).trim()
+    if (fromChain === "ethereum") {
+      if (fromToken.symbol.toUpperCase() !== "ETH") {
+        throw new Error(
+          "Bridge Ethereum -> Starknet via StarkGate saat ini hanya mendukung ETH native."
+        )
+      }
+      if (toChain !== "starknet") {
+        throw new Error("Bridge source Ethereum saat ini hanya didukung untuk tujuan Starknet.")
+      }
+      if (!recipient) {
+        throw new Error("Starknet recipient address is required for StarkGate bridge.")
+      }
+      const quotedProtocolFeeWei =
+        quote?.type === "bridge" && typeof quote.protocolFee === "number" && quote.protocolFee > 0
+          ? unitNumberToScaledBigInt(quote.protocolFee, 18)
+          : null
+      const estimatedFeeWei =
+        quotedProtocolFeeWei ?? (await estimateStarkgateDepositFeeWei(STARKGATE_ETH_BRIDGE_ADDRESS))
+      return sendEvmStarkgateEthDepositFromWallet({
+        bridgeAddress: STARKGATE_ETH_BRIDGE_ADDRESS,
+        tokenAddress: STARKGATE_ETH_TOKEN_ADDRESS,
+        amountEth: fromAmount,
+        l2Recipient: recipient,
+        feeWei: estimatedFeeWei,
+      })
+    }
+
+    if (fromChain !== "starknet") {
+      throw new Error("On-chain bridge currently supports Ethereum/Starknet source only.")
+    }
+    if (toChain === "ethereum") {
+      throw new Error(
+        "STRK/Starknet -> ETH Sepolia withdrawal belum didukung end-to-end di UI ini. Saat ini bridge on-chain stabil hanya ETH Sepolia -> Starknet Sepolia."
+      )
+    }
+
+    if (!STARKNET_BRIDGE_AGGREGATOR_ADDRESS) {
+      throw new Error(
+        "NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS belum diisi. Set alamat bridge aggregator Starknet di frontend/.env.local."
+      )
+    }
+    const activeBridgeQuote =
+      quote?.type === "bridge"
+        ? quote
+        : await getBridgeQuote({
+            from_chain: chainFromNetwork(fromToken.network),
+            to_chain: chainFromNetwork(toToken.network),
+            token: fromToken.symbol,
+            amount: fromAmount,
+          })
+
+    const providerId = providerIdToFeltHex(
+      (activeBridgeQuote as any).provider || (activeBridgeQuote as any).bridge_provider || ""
+    )
+    const [costLow, costHigh] = decimalToU256Parts(
+      String((activeBridgeQuote as any).fee ?? 0),
+      resolveTokenDecimals(fromToken.symbol)
+    )
+    const [amountLow, amountHigh] = decimalToU256Parts(fromAmount, resolveTokenDecimals(fromToken.symbol))
+    const estimatedTime = parseEstimatedMinutes((activeBridgeQuote as any).estimatedTime || (activeBridgeQuote as any).estimated_time)
+
+    return invokeStarknetCallFromWallet(
+      {
+        contractAddress: STARKNET_BRIDGE_AGGREGATOR_ADDRESS,
+        entrypoint: "execute_bridge",
+        calldata: [providerId, costLow, costHigh, toHexFelt(estimatedTime), amountLow, amountHigh],
+      },
+      starknetProviderHint
+    )
+  }, [
+    fromAmount,
+    fromToken.network,
+    fromToken.symbol,
+    preferredReceiveAddress,
+    quote,
+    receiveAddress,
+    starknetProviderHint,
+    toToken.network,
+  ])
 
   const handleExecuteTrade = () => {
     if (!fromAmount || Number.parseFloat(fromAmount) === 0) return
@@ -541,13 +794,13 @@ export function TradingInterface() {
   const confirmTrade = async () => {
     setPreviewOpen(false)
     setSwapState("confirming")
-    
-    await new Promise(r => setTimeout(r, 600))
     setSwapState("processing")
+    let tradeFinalized = true
 
     try {
       if (isCrossChain) {
         const recipient = (receiveAddress || preferredReceiveAddress).trim()
+        const sourceChain = chainFromNetwork(fromToken.network)
         const toChain = chainFromNetwork(toToken.network)
         const xverseHint =
           toChain === "bitcoin" && !recipient && xverseUserId.trim()
@@ -559,21 +812,43 @@ export function TradingInterface() {
 
         notifications.addNotification({
           type: "info",
+          title: "Wallet signature required",
+          message:
+            sourceChain === "ethereum"
+              ? "Confirm bridge transaction in MetaMask (StarkGate)."
+              : "Confirm bridge transaction in your Starknet wallet.",
+        })
+        const onchainTxHash = await submitOnchainBridgeTx()
+        const txNetwork = sourceChain === "ethereum" ? "evm" : "starknet"
+
+        notifications.addNotification({
+          type: "info",
           title: "Bridge pending",
-          message: `Bridge ${fromAmount} ${fromToken.symbol} in progress...`,
+          message: `Bridge ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+          txHash: onchainTxHash,
+          txNetwork,
         })
         const response = await executeBridge({
-          from_chain: chainFromNetwork(fromToken.network),
+          from_chain: sourceChain,
           to_chain: toChain,
           token: fromToken.symbol,
           amount: fromAmount,
           recipient,
           xverse_user_id: xverseHint,
+          onchain_tx_hash: onchainTxHash,
+          mode: mevProtection ? "private" : "transparent",
         })
+        const normalizedStatus = (response.status || "").toLowerCase()
+        const isBridgeFinalized = normalizedStatus === "completed" || normalizedStatus === "success"
+        tradeFinalized = isBridgeFinalized
         notifications.addNotification({
-          type: "success",
-          title: "Bridge initiated",
-          message: `Bridge ${fromAmount} ${fromToken.symbol} to ${toToken.symbol} (${response.bridge_id})`,
+          type: isBridgeFinalized ? "success" : "info",
+          title: isBridgeFinalized ? "Bridge completed" : "Bridge submitted",
+          message: isBridgeFinalized
+            ? `Bridge ${fromAmount} ${fromToken.symbol} ke ${toToken.symbol} selesai. Tx: ${onchainTxHash}`
+            : `Bridge ${fromAmount} ${fromToken.symbol} masih proses settlement ke Starknet (~5-20 menit). Tx: ${onchainTxHash}`,
+          txHash: onchainTxHash,
+          txNetwork,
         })
       } else {
         const slippageValue = Number(activeSlippage || "0.5")
@@ -581,8 +856,17 @@ export function TradingInterface() {
         const deadline = Math.floor(Date.now() / 1000) + 60 * 20
         notifications.addNotification({
           type: "info",
+          title: "Wallet signature required",
+          message: "Confirm swap transaction in your Starknet wallet.",
+        })
+        const onchainTxHash = await submitOnchainSwapTx()
+
+        notifications.addNotification({
+          type: "info",
           title: "Swap pending",
-          message: `Swap ${fromAmount} ${fromToken.symbol} in progress...`,
+          message: `Swap ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+          txHash: onchainTxHash,
+          txNetwork: "starknet",
         })
         const recipient = (receiveAddress || preferredReceiveAddress).trim() || undefined
         const response = await executeSwap({
@@ -593,17 +877,21 @@ export function TradingInterface() {
           slippage: slippageValue,
           deadline,
           recipient,
+          onchain_tx_hash: onchainTxHash,
           mode: mevProtection ? "private" : "transparent",
         })
         notifications.addNotification({
           type: "success",
           title: "Swap completed",
           message: `Swap ${fromAmount} ${fromToken.symbol} → ${response.to_amount} ${toToken.symbol}`,
-          txHash: response.tx_hash,
+          txHash: onchainTxHash,
+          txNetwork: "starknet",
         })
       }
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
-      setSwapState("success")
+      if (tradeFinalized) {
+        setSwapState("success")
+      }
     } catch (error) {
       if (isCrossChain && error instanceof Error && error.message.toLowerCase().includes("xverse")) {
         notifications.addNotification({
@@ -675,7 +963,7 @@ export function TradingInterface() {
           {fromToken.symbol === "BTC" && !wallet.btcAddress && (
             <div className="px-3 py-2 rounded-lg bg-warning/10 border border-warning/30">
               <p className="text-xs text-foreground">
-                Source BTC membutuhkan wallet BTC testnet (Xverse/Unisat/Braavos BTC). Untuk cepat test STRK,
+                Source BTC membutuhkan wallet BTC testnet (Xverse). Untuk cepat test STRK,
                 gunakan pair ETH ↔ STRK.
               </p>
             </div>
@@ -743,9 +1031,11 @@ export function TradingInterface() {
                 <span className="text-sm text-foreground">MEV Protection</span>
               </div>
               <button 
-                onClick={() => setMevProtection(!mevProtection)}
+                onClick={() => setMevProtectionEnabled((prev) => !prev)}
+                disabled={mode !== "private"}
                 className={cn(
                   "w-11 h-6 rounded-full transition-colors relative",
+                  mode !== "private" && "opacity-50 cursor-not-allowed",
                   mevProtection ? "bg-primary" : "bg-muted"
                 )}
               >
@@ -755,6 +1045,11 @@ export function TradingInterface() {
                 )} />
               </button>
             </div>
+            {mode !== "private" && (
+              <p className="text-xs text-muted-foreground">
+                Aktif hanya di Private Mode. Saat mode biasa, selalu Disabled.
+              </p>
+            )}
 
             {/* Slippage Tolerance */}
             <div>
@@ -801,7 +1096,7 @@ export function TradingInterface() {
                   <span className="font-medium">
                     {formatTokenAmount(quote.bridgeSourceAmount ?? 0, 8)} {fromToken.symbol}
                   </span>
-                  . Angka {toToken.symbol} di atas adalah estimasi konversi harga live.
+                  . Angka {toToken.symbol} di atas adalah estimasi konversi live (sudah termasuk asumsi swap fee + slippage).
                 </p>
               </div>
             )}
@@ -843,10 +1138,22 @@ export function TradingInterface() {
               {quote?.type === "bridge" ? (
                 <>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Bridge Fee</span>
-                    <span className="text-sm text-foreground">{feeDisplayLabel}</span>
+                    <span className="text-sm text-muted-foreground">StarkGate Fee</span>
+                    <span className="text-sm text-foreground">{protocolFeeDisplay}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Network Gas (est.)</span>
+                    <span className="text-sm text-foreground">{networkFeeDisplay}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">MEV Fee ({mevFeePercent}%)</span>
+                    <span className="text-sm text-foreground">{mevFeeDisplay}</span>
                   </div>
                   <div className="flex items-center justify-between border-t border-border pt-2">
+                    <span className="text-sm font-medium text-foreground">Total Fee</span>
+                    <span className="text-sm font-medium text-foreground">{feeDisplayLabel}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Provider</span>
                     <span className="text-sm text-foreground">{routeLabel}</span>
                   </div>
@@ -854,8 +1161,12 @@ export function TradingInterface() {
               ) : (
                 <>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Base Fee</span>
-                    <span className="text-sm text-foreground">{baseFeePercent}%</span>
+                    <span className="text-sm text-muted-foreground">Protocol Fee</span>
+                    <span className="text-sm text-foreground">{protocolFeeDisplay}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">MEV Fee ({mevFeePercent}%)</span>
+                    <span className="text-sm text-foreground">{mevFeeDisplay}</span>
                   </div>
                   {hasNftDiscount && (
                     <div className="flex items-center justify-between text-success">
@@ -867,9 +1178,9 @@ export function TradingInterface() {
                     </div>
                   )}
                   <div className="flex items-center justify-between border-t border-border pt-2">
-                    <span className="text-sm font-medium text-foreground">Final Fee</span>
+                    <span className="text-sm font-medium text-foreground">Total Fee</span>
                     <span className="text-sm font-medium text-foreground">
-                      {feeDisplayLabel} ({discountedFeePercent.toFixed(3)}%)
+                      {feeDisplayLabel}
                     </span>
                   </div>
                 </>

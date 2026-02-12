@@ -6,13 +6,18 @@ import { cn } from "@/lib/utils"
 import { useWallet, type WalletProviderType, type BtcWalletProviderType } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
 import { claimFaucet, getFaucetStatus, getTransactionsHistory, type Transaction } from "@/lib/api"
-import { formatNetworkLabel } from "@/lib/network-config"
+import {
+  ETHERSCAN_SEPOLIA_BASE_URL,
+  STARKSCAN_SEPOLIA_BASE_URL,
+  formatNetworkLabel,
+} from "@/lib/network-config"
 import {
   BTC_WALLET_PROVIDERS,
   STARKNET_WALLET_PROVIDERS,
   WALLET_PROVIDERS,
 } from "@/lib/wallet-provider-config"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { PrivacyRouterPanel } from "@/components/privacy-router-panel"
 import {
   DropdownMenu,
@@ -89,6 +94,8 @@ type UiTx = {
   amount?: string
   value?: string
   time?: string
+  txHash?: string
+  txNetwork?: "starknet" | "evm"
 }
 
 export function EnhancedNavigation() {
@@ -110,6 +117,9 @@ export function EnhancedNavigation() {
   const [txHistoryLoading, setTxHistoryLoading] = React.useState(false)
   const [walletConnectPending, setWalletConnectPending] = React.useState(false)
   const [btcConnectPending, setBtcConnectPending] = React.useState(false)
+  const [manualBtcAddress, setManualBtcAddress] = React.useState("")
+  const [btcManualLinkPending, setBtcManualLinkPending] = React.useState(false)
+  const seenBtcOptionalNoticeRef = React.useRef<Set<string>>(new Set())
 
   // --- Safe helpers ---
   const formatCurrency = (value: unknown) => {
@@ -174,6 +184,20 @@ export function EnhancedNavigation() {
     return shortenAddress(addr)
   }
 
+  const txExplorerLinks = (txHash?: string, txNetwork?: "starknet" | "evm") => {
+    if (!txHash) return []
+    if (txNetwork === "evm") {
+      return [{ label: "Etherscan", url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` }]
+    }
+    if (txNetwork === "starknet") {
+      return [{ label: "Starkscan", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` }]
+    }
+    return [
+      { label: "Starkscan", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` },
+      { label: "Etherscan", url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` },
+    ]
+  }
+
   const connectedTestnets = React.useMemo(() => {
     const labels: string[] = []
     if (wallet.starknetAddress) labels.push(formatNetworkLabel("starknet"))
@@ -186,6 +210,18 @@ export function EnhancedNavigation() {
     connectedTestnets.length > 0
       ? `Connected to ${connectedTestnets.join(" + ")}`
       : "Connected, but no testnet wallet linked yet."
+  const primaryConnectedTestnet = React.useMemo(() => {
+    if (wallet.starknetAddress) return formatNetworkLabel("starknet")
+    if (wallet.evmAddress) return formatNetworkLabel("evm")
+    if (wallet.btcAddress) return formatNetworkLabel("btc")
+    return "Testnet"
+  }, [wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
+  const networkStatusHeadline = React.useMemo(() => {
+    if (primaryConnectedTestnet === "Testnet") {
+      return "Connected, no testnet wallet linked yet."
+    }
+    return `Connected to ${primaryConnectedTestnet}`
+  }, [primaryConnectedTestnet])
   const effectivePortfolioBalance = React.useMemo(
     () => ({
       BTC:
@@ -201,6 +237,10 @@ export function EnhancedNavigation() {
         wallet.onchainBalance?.STRK_L2 !== null &&
         wallet.onchainBalance?.STRK_L2 !== undefined
           ? wallet.onchainBalance.STRK_L2
+          : wallet.evmAddress &&
+            wallet.onchainBalance?.STRK_L1 !== null &&
+            wallet.onchainBalance?.STRK_L1 !== undefined
+          ? wallet.onchainBalance.STRK_L1
           : wallet.balance?.STRK ?? 0,
       CAREL: wallet.balance?.CAREL ?? 0,
     }),
@@ -213,10 +253,19 @@ export function EnhancedNavigation() {
       wallet.evmAddress,
       wallet.onchainBalance?.BTC,
       wallet.onchainBalance?.ETH,
+      wallet.onchainBalance?.STRK_L1,
       wallet.onchainBalance?.STRK_L2,
       wallet.starknetAddress,
     ]
   )
+
+  const shouldEmitBtcOptionalNotice = React.useCallback((message: string) => {
+    if (seenBtcOptionalNoticeRef.current.has(message)) {
+      return false
+    }
+    seenBtcOptionalNoticeRef.current.add(message)
+    return true
+  }, [])
 
   React.useEffect(() => {
     if (!wallet.isConnected || wallet.network !== "starknet") {
@@ -268,6 +317,11 @@ export function EnhancedNavigation() {
             amount: amountValue ? amountValue.toString() : "—",
             value: usdValue ? `$${usdValue.toLocaleString()}` : "—",
             time: formatRelativeTime(tx.timestamp),
+            txHash: tx.tx_hash,
+            txNetwork:
+              tx.tx_type === "bridge" && String(tx.token_in || "").toUpperCase() === "ETH"
+                ? "evm"
+                : "starknet",
           }
         })
         setTxHistory(mapped)
@@ -315,15 +369,46 @@ export function EnhancedNavigation() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to connect BTC wallet"
       const missingExtension = message.toLowerCase().includes("extension not detected")
-      notifications.addNotification({
-        type: missingExtension ? "warning" : "error",
-        title: missingExtension ? "BTC wallet optional" : "BTC wallet connection failed",
-        message: missingExtension
-          ? `${message} Untuk trade STRK/ETH, lanjutkan dengan MetaMask + Braavos/ArgentX tanpa wallet BTC.`
-          : message,
-      })
+      if (missingExtension) {
+        const optionalMessage = `${message} Untuk trade STRK/ETH, lanjutkan dengan MetaMask + Braavos/ArgentX tanpa wallet BTC, atau link alamat BTC testnet manual di panel wallet.`
+        if (shouldEmitBtcOptionalNotice(optionalMessage)) {
+          notifications.addNotification({
+            type: "warning",
+            title: "BTC wallet optional",
+            message: optionalMessage,
+          })
+        }
+      } else {
+        notifications.addNotification({
+          type: "error",
+          title: "BTC wallet connection failed",
+          message,
+        })
+      }
     } finally {
       setBtcConnectPending(false)
+    }
+  }
+
+  const handleManualBtcLink = async () => {
+    if (btcManualLinkPending) return
+    setBtcManualLinkPending(true)
+    try {
+      await wallet.linkBtcAddress(manualBtcAddress)
+      notifications.addNotification({
+        type: "success",
+        title: "BTC address linked",
+        message: "Bitcoin testnet address linked successfully.",
+      })
+      setManualBtcAddress("")
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Failed to link BTC address",
+        message: error instanceof Error ? error.message : "Unable to link BTC address",
+      })
+    } finally {
+      setBtcManualLinkPending(false)
     }
   }
 
@@ -572,7 +657,9 @@ export function EnhancedNavigation() {
                   >
                     <Wallet className="h-4 w-4 text-primary" />
                     <span className="font-mono text-xs">{shortenAddress(wallet.address)}</span>
-                    <span className="hidden xl:inline text-[10px] font-medium text-success">Sepolia/Testnet</span>
+                    <span className="hidden xl:inline text-[10px] font-medium text-success">
+                      {primaryConnectedTestnet}
+                    </span>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -596,7 +683,7 @@ export function EnhancedNavigation() {
                     </div>
                     <div className="rounded-lg border border-success/30 bg-success/10 p-2">
                       <p className="text-[10px] font-semibold uppercase tracking-wide text-success">Network Status</p>
-                      <p className="mt-1 text-xs font-medium text-success">Connected to Sepolia/Testnet</p>
+                      <p className="mt-1 text-xs font-medium text-success">{networkStatusHeadline}</p>
                       <p className="mt-1 text-xs text-foreground">{connectedTestnetSummary}</p>
                     </div>
                     <DropdownMenuSeparator />
@@ -624,7 +711,7 @@ export function EnhancedNavigation() {
                           </div>
                         )}
                         <div className="flex items-center justify-between">
-                          <span className="text-muted-foreground">EVM (Sepolia)</span>
+                          <span className="text-muted-foreground">ETH Sepolia</span>
                           <span className="font-mono text-foreground">{renderLinkStatus(wallet.evmAddress)}</span>
                         </div>
                         {!wallet.evmAddress && (
@@ -660,6 +747,30 @@ export function EnhancedNavigation() {
                             ))}
                           </div>
                         )}
+                        {!wallet.btcAddress && (
+                          <div className="mt-2 rounded-md border border-border/60 bg-surface/40 p-2">
+                            <p className="text-[10px] text-muted-foreground">
+                              Tidak ada extension BTC? Link alamat Bitcoin testnet manual.
+                            </p>
+                            <div className="mt-1 flex items-center gap-1">
+                              <Input
+                                value={manualBtcAddress}
+                                onChange={(event) => setManualBtcAddress(event.target.value)}
+                                placeholder="tb1..."
+                                className="h-7 text-[10px] font-mono"
+                              />
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="h-7 px-2 text-[10px]"
+                                disabled={btcManualLinkPending || !manualBtcAddress.trim()}
+                                onClick={handleManualBtcLink}
+                              >
+                                {btcManualLinkPending ? "Linking..." : "Link"}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                     <DropdownMenuSeparator />
@@ -672,7 +783,7 @@ export function EnhancedNavigation() {
                       <p className="text-xs text-muted-foreground">On-chain Balances (real testnet)</p>
                       <div className="grid grid-cols-2 gap-2 mt-2">
                         <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">STRK L2</p>
+                          <p className="text-xs text-muted-foreground">STRK Starknet Sepolia</p>
                           <p className="text-sm font-medium">
                             {renderOnchainValue(
                               wallet?.onchainBalance?.STRK_L2,
@@ -681,7 +792,12 @@ export function EnhancedNavigation() {
                             )}
                           </p>
                           {!wallet?.starknetAddress && (
-                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read STRK L2</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              Link Starknet wallet to read STRK (Starknet Sepolia)
+                            </p>
+                          )}
+                          {wallet?.starknetAddress && (
+                            <p className="text-[10px] text-muted-foreground">Native STRK on Starknet Sepolia</p>
                           )}
                           {!wallet?.starknetAddress && (
                             <div className="mt-2 flex flex-wrap gap-1">
@@ -698,22 +814,6 @@ export function EnhancedNavigation() {
                                 </Button>
                               ))}
                             </div>
-                          )}
-                        </div>
-                        <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">STRK L1</p>
-                          <p className="text-sm font-medium">
-                            {renderOnchainValue(
-                              wallet?.onchainBalance?.STRK_L1,
-                              !!wallet?.evmAddress,
-                              "Not linked"
-                            )}
-                          </p>
-                          {!wallet?.evmAddress && (
-                            <p className="text-[10px] text-muted-foreground">Link EVM wallet to read STRK L1</p>
-                          )}
-                          {wallet?.evmAddress && (
-                            <p className="text-[10px] text-muted-foreground">ERC20 STRK on Ethereum Sepolia</p>
                           )}
                         </div>
                         <div className="p-2 rounded-lg bg-surface/50">
@@ -867,6 +967,27 @@ export function EnhancedNavigation() {
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-foreground">{notif.title}</p>
                             <p className="text-xs text-muted-foreground mt-1">{notif.message}</p>
+                            {notif.txHash && (
+                              <p className="text-xs text-primary mt-1 font-mono">
+                                Tx: {shortenAddress(notif.txHash)}
+                              </p>
+                            )}
+                            {notif.txExplorerUrls && notif.txExplorerUrls.length > 0 && (
+                              <div className="mt-1 flex flex-wrap gap-2">
+                                {notif.txExplorerUrls.map((link) => (
+                                  <a
+                                    key={`${notif.id}-${link.url}`}
+                                    href={link.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="text-[11px] text-primary hover:underline"
+                                  >
+                                    {link.label}
+                                  </a>
+                                ))}
+                              </div>
+                            )}
                             <p className="text-xs text-muted-foreground mt-1">
                               {formatTime(notif.timestamp)}
                             </p>
@@ -1145,6 +1266,24 @@ export function EnhancedNavigation() {
                           {tx.type} {tx.from || "—"} {tx.to ? `→ ${tx.to}` : ""}
                         </p>
                         <p className="text-xs text-muted-foreground">{tx.time || "—"}</p>
+                        {tx.txHash && (
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] font-mono text-primary">
+                              {shortenAddress(tx.txHash)}
+                            </span>
+                            {txExplorerLinks(tx.txHash, tx.txNetwork).map((link) => (
+                              <a
+                                key={`${tx.id}-${link.url}`}
+                                href={link.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[10px] text-primary hover:underline"
+                              >
+                                {link.label}
+                              </a>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div className="text-right">

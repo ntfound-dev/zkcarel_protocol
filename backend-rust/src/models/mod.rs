@@ -4,6 +4,7 @@ pub mod user;
 // Re-export commonly used types from user.rs so other modules can use `crate::models::X`
 pub use user::{
     User,
+    LinkedWalletAddress,
     UserPoints,
     Transaction,
     FaucetClaim,

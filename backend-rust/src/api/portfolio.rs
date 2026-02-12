@@ -9,7 +9,13 @@ use crate::{
     models::{ApiResponse, PriceTick},
 };
 
-use super::{AppState, require_user};
+use super::{
+    wallet::{
+        fetch_btc_balance, fetch_evm_erc20_balance, fetch_evm_native_balance,
+        fetch_starknet_erc20_balance,
+    },
+    AppState, require_user,
+};
 
 #[derive(Debug, Serialize)]
 pub struct BalanceResponse {
@@ -166,11 +172,11 @@ async fn fetch_token_holdings(state: &AppState, user_address: &str) -> Result<Ve
         FROM (
             SELECT UPPER(token_out) as token, COALESCE(CAST(amount_out AS FLOAT), 0) as amount
             FROM transactions
-            WHERE user_address = $1 AND token_out IS NOT NULL
+            WHERE user_address = $1 AND token_out IS NOT NULL AND COALESCE(is_private, false) = false
             UNION ALL
             SELECT UPPER(token_in) as token, -COALESCE(CAST(amount_in AS FLOAT), 0) as amount
             FROM transactions
-            WHERE user_address = $1 AND token_in IS NOT NULL
+            WHERE user_address = $1 AND token_in IS NOT NULL AND COALESCE(is_private, false) = false
         ) t
         GROUP BY token
         "#,
@@ -182,19 +188,92 @@ async fn fetch_token_holdings(state: &AppState, user_address: &str) -> Result<Ve
     Ok(rows)
 }
 
+fn override_holding(holdings: &mut HashMap<String, f64>, token: &str, amount: f64) {
+    if !amount.is_finite() {
+        return;
+    }
+    if amount <= 0.0 {
+        holdings.remove(token);
+        return;
+    }
+    holdings.insert(token.to_string(), amount);
+}
+
+async fn merge_onchain_holdings(
+    state: &AppState,
+    user_address: &str,
+    holdings: &mut HashMap<String, f64>,
+) -> Result<()> {
+    let linked = state.db.list_wallet_addresses(user_address).await.unwrap_or_default();
+    let starknet_address = linked
+        .iter()
+        .find(|item| item.chain == "starknet")
+        .map(|item| item.wallet_address.clone());
+    let evm_address = linked
+        .iter()
+        .find(|item| item.chain == "evm")
+        .map(|item| item.wallet_address.clone());
+    let btc_address = linked
+        .iter()
+        .find(|item| item.chain == "bitcoin")
+        .map(|item| item.wallet_address.clone());
+
+    let mut strk_total = 0.0;
+    let mut has_strk = false;
+
+    if let (Some(addr), Some(token)) = (starknet_address.as_deref(), state.config.token_strk_address.as_deref()) {
+        if let Some(balance) = fetch_starknet_erc20_balance(&state.config, addr, token).await? {
+            strk_total += balance;
+            has_strk = true;
+        }
+    }
+
+    if let Some(addr) = evm_address.as_deref() {
+        if let Some(balance) = fetch_evm_native_balance(&state.config, addr).await? {
+            override_holding(holdings, "ETH", balance);
+        }
+        if let Some(token) = state.config.token_strk_l1_address.as_deref() {
+            if let Some(balance) = fetch_evm_erc20_balance(&state.config, addr, token).await? {
+                strk_total += balance;
+                has_strk = true;
+            }
+        }
+    }
+
+    if has_strk {
+        override_holding(holdings, "STRK", strk_total);
+    }
+
+    if let Some(addr) = btc_address.as_deref() {
+        if let Some(balance) = fetch_btc_balance(&state.config, addr).await? {
+            override_holding(holdings, "BTC", balance);
+        }
+    }
+
+    Ok(())
+}
+
 async fn build_balances(state: &AppState, user_address: &str) -> Result<Vec<TokenBalance>> {
     let rows = fetch_token_holdings(state, user_address).await?;
+    let mut holding_map = HashMap::new();
+    for row in rows {
+        if row.amount > 0.0 {
+            holding_map.insert(row.token, row.amount);
+        }
+    }
+    merge_onchain_holdings(state, user_address, &mut holding_map).await?;
+
     let mut balances = Vec::new();
 
-    for row in rows {
-        if row.amount <= 0.0 {
+    for (token, amount) in holding_map {
+        if amount <= 0.0 {
             continue;
         }
-        let (price, change) = latest_price_with_change(state, row.token.as_str()).await?;
-        let value_usd = row.amount * price;
+        let (price, change) = latest_price_with_change(state, token.as_str()).await?;
+        let value_usd = amount * price;
         balances.push(TokenBalance {
-            token: row.token,
-            amount: row.amount,
+            token,
+            amount,
             value_usd,
             price,
             change_24h: change,

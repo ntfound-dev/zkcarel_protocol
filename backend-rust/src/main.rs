@@ -8,6 +8,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
+mod bridge_worker;
 mod config;
 mod constants;
 mod crypto;
@@ -76,6 +77,20 @@ async fn main() -> anyhow::Result<()> {
         config.clone(),
     ));
 
+    // Optional BTC -> Starknet bridge watcher.
+    let enable_bridge_watcher = std::env::var("ENABLE_BTC_BRIDGE_WATCHER")
+        .map(|v| {
+            let normalized = v.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+        })
+        .unwrap_or(false);
+    if enable_bridge_watcher {
+        tracing::info!("Starting BTC bridge watcher...");
+        tokio::spawn(async {
+            bridge_worker::start_bridge_watcher().await;
+        });
+    }
+
     // Start server
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
         .parse()
@@ -139,6 +154,8 @@ fn build_router(state: api::AppState) -> Router {
             "/api/v1/wallet/onchain-balances",
             post(api::wallet::get_onchain_balances),
         )
+        .route("/api/v1/wallet/link", post(api::wallet::link_wallet_address))
+        .route("/api/v1/wallet/linked", get(api::wallet::get_linked_wallets))
         .route(
             "/api/v1/portfolio/analytics",
             get(api::analytics::get_analytics),

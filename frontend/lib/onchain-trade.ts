@@ -1,0 +1,792 @@
+"use client"
+
+import {
+  EVM_SEPOLIA_CHAIN_ID,
+  EVM_SEPOLIA_CHAIN_ID_HEX,
+  isStarknetSepolia,
+  normalizeStarknetChainValue,
+} from "@/lib/network-config"
+import {
+  EVM_SEPOLIA_CHAIN_PARAMS,
+  STARKNET_API_VERSIONS,
+  STARKNET_PROVIDER_ID_ALIASES,
+  STARKNET_SWITCH_CHAIN_PAYLOADS,
+  type WalletProviderType,
+} from "@/lib/wallet-provider-config"
+
+type StarknetWalletHint = Extract<WalletProviderType, "starknet" | "argentx" | "braavos">
+
+type InjectedStarknet = {
+  id?: string
+  name?: string
+  chainId?: string
+  selectedAddress?: string
+  request?: (payload: { type?: string; method?: string; params?: unknown }) => Promise<unknown>
+  enable?: (opts?: { showModal?: boolean }) => Promise<unknown>
+  account?: {
+    address?: string
+    execute?: (calls: unknown) => Promise<unknown>
+    getChainId?: () => Promise<unknown> | unknown
+  }
+  provider?: {
+    getChainId?: () => Promise<unknown> | unknown
+  }
+}
+
+type InjectedEvm = {
+  isMetaMask?: boolean
+  request: (payload: { method: string; params?: unknown[] }) => Promise<unknown>
+  providers?: InjectedEvm[]
+}
+
+export type StarknetInvokeCall = {
+  contractAddress: string
+  entrypoint: string
+  calldata: Array<string | number | bigint>
+}
+
+const BIGINT_ZERO = BigInt(0)
+const BIGINT_ONE = BigInt(1)
+const TWO_POW_128 = powBigInt(2, 128)
+const MAX_U128 = TWO_POW_128 - BIGINT_ONE
+
+export async function invokeStarknetCallFromWallet(
+  call: StarknetInvokeCall,
+  providerHint: StarknetWalletHint = "starknet"
+): Promise<string> {
+  const injected = getInjectedStarknet(providerHint)
+  if (!injected) {
+    throw new Error("No Starknet wallet detected. Install Braavos or ArgentX.")
+  }
+
+  await ensureStarknetAccounts(injected)
+  const chainId = await ensureStarknetSepolia(injected)
+  if (!isStarknetSepolia(chainId)) {
+    const normalized = normalizeStarknetChainValue(chainId || "")
+    throw new Error(
+      `Please switch wallet network to Starknet Sepolia before signing transaction. Current network: ${
+        normalized || "unknown"
+      }.`
+    )
+  }
+
+  const normalizedCalldata = call.calldata.map((item) => toHexFelt(item))
+  const account = injected.account as InjectedStarknet["account"] | undefined
+  if (account?.execute) {
+    const attempts = [
+      [{ contractAddress: call.contractAddress, entrypoint: call.entrypoint, calldata: normalizedCalldata }],
+      [{ contract_address: call.contractAddress, entry_point: call.entrypoint, calldata: normalizedCalldata }],
+    ]
+    for (const payload of attempts) {
+      try {
+        const result = await account.execute(payload)
+        const txHash = extractTxHash(result)
+        if (txHash) return txHash
+      } catch {
+        // fallback to next payload shape
+      }
+    }
+  }
+
+  if (!injected.request) {
+    throw new Error("Injected Starknet wallet does not support transaction request.")
+  }
+
+  const invokeCalls = [
+    {
+      contract_address: call.contractAddress,
+      entry_point: call.entrypoint,
+      calldata: normalizedCalldata,
+    },
+    {
+      contractAddress: call.contractAddress,
+      entrypoint: call.entrypoint,
+      calldata: normalizedCalldata,
+    },
+  ]
+
+  const requestPayloads: Array<{ type: string; params: unknown }> = [
+    { type: "wallet_addInvokeTransaction", params: { calls: [invokeCalls[0]] } },
+    { type: "wallet_addInvokeTransaction", params: [{ calls: [invokeCalls[0]] }] },
+    { type: "starknet_addInvokeTransaction", params: [{ calls: [invokeCalls[0]] }] },
+    { type: "starknet_addInvokeTransaction", params: { calls: [invokeCalls[0]] } },
+    { type: "wallet_addInvokeTransaction", params: { calls: [invokeCalls[1]] } },
+  ]
+
+  for (const payload of requestPayloads) {
+    try {
+      const result = await requestStarknet(injected, payload)
+      const txHash = extractTxHash(result)
+      if (txHash) return txHash
+    } catch {
+      // continue
+    }
+  }
+
+  throw new Error("Failed to submit Starknet transaction from wallet.")
+}
+
+export async function sendEvmNativeTransferFromWallet(
+  to: string,
+  amountEth: string
+): Promise<string> {
+  const recipient = to.trim()
+  if (!recipient) {
+    throw new Error("EVM bridge receiver address is empty.")
+  }
+  const evm = getInjectedEvmMetaMask()
+  if (!evm) {
+    throw new Error("MetaMask not detected. Install MetaMask for Ethereum bridge signature.")
+  }
+
+  const from = await requestEvmAccount(evm)
+  await ensureEvmSepolia(evm)
+  const valueWei = parseDecimalToScaledBigInt(amountEth, 18)
+  if (valueWei <= BIGINT_ZERO) {
+    throw new Error("Bridge amount must be positive.")
+  }
+
+  const txHash = await evm.request({
+    method: "eth_sendTransaction",
+    params: [
+      {
+        from,
+        to: recipient,
+        value: toHexFelt(valueWei),
+      },
+    ],
+  })
+
+  const normalized = extractTxHash(txHash)
+  if (!normalized) {
+    throw new Error("Failed to get tx hash from MetaMask transaction.")
+  }
+  return normalized
+}
+
+export async function sendEvmStarkgateEthDepositFromWallet(params: {
+  bridgeAddress: string
+  tokenAddress: string
+  amountEth: string
+  l2Recipient: string
+  feeWei?: bigint | null
+}): Promise<string> {
+  const bridgeAddress = normalizeEvmAddress(params.bridgeAddress)
+  const tokenAddress = normalizeEvmAddress(params.tokenAddress)
+  if (!bridgeAddress) {
+    throw new Error("StarkGate bridge address is invalid.")
+  }
+  if (!tokenAddress) {
+    throw new Error("StarkGate token address is invalid.")
+  }
+
+  const l2RecipientRaw = params.l2Recipient.trim()
+  if (!l2RecipientRaw.startsWith("0x") && !/^\d+$/.test(l2RecipientRaw)) {
+    throw new Error("L2 recipient must be a Starknet address (felt hex).")
+  }
+
+  const amountWei = parseDecimalToScaledBigInt(params.amountEth, 18)
+  if (amountWei <= BIGINT_ZERO) {
+    throw new Error("Bridge amount must be positive.")
+  }
+
+  const evm = getInjectedEvmMetaMask()
+  if (!evm) {
+    throw new Error("MetaMask not detected. Install MetaMask for Ethereum bridge.")
+  }
+  const from = await requestEvmAccount(evm)
+  await ensureEvmSepolia(evm)
+
+  const recipientU256 = parseUint256(l2RecipientRaw)
+  const feeWei =
+    params.feeWei ??
+    (await estimateStarkgateDepositFeeWei(bridgeAddress)) ??
+    BigInt("50000000000000") // 0.00005 ETH fallback
+  const valueWei = amountWei + feeWei
+
+  const dataV2 = encodeStarkgateDepositV2(tokenAddress, amountWei, recipientU256)
+  try {
+    const txHash = await evm.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from,
+          to: bridgeAddress,
+          value: toHexFelt(valueWei),
+          data: dataV2,
+        },
+      ],
+    })
+    const normalized = extractTxHash(txHash)
+    if (normalized) return normalized
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "")
+    const shouldFallback =
+      /execution reverted|method not found|selector|function/i.test(message)
+    if (!shouldFallback) throw error
+  }
+
+  const dataLegacy = encodeStarkgateDepositLegacy(amountWei, recipientU256)
+  const txHash = await evm.request({
+    method: "eth_sendTransaction",
+    params: [
+      {
+        from,
+        to: bridgeAddress,
+        value: toHexFelt(valueWei),
+        data: dataLegacy,
+      },
+    ],
+  })
+  const normalized = extractTxHash(txHash)
+  if (!normalized) {
+    throw new Error("Failed to get tx hash from StarkGate deposit transaction.")
+  }
+  return normalized
+}
+
+export async function estimateStarkgateDepositFeeWei(
+  bridgeAddress: string
+): Promise<bigint | null> {
+  const normalizedBridge = normalizeEvmAddress(bridgeAddress)
+  if (!normalizedBridge) return null
+  const data = "0xaf8bc15e" // estimateDepositFeeWei()
+
+  const rpcUrl = process.env.NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL || ""
+  if (rpcUrl) {
+    try {
+      const response = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: Date.now(),
+          method: "eth_call",
+          params: [{ to: normalizedBridge, data }, "latest"],
+        }),
+      })
+      const payload = (await response.json()) as { result?: string }
+      if (payload?.result && payload.result.startsWith("0x")) {
+        return BigInt(payload.result)
+      }
+    } catch {
+      // fallback to injected provider
+    }
+  }
+
+  const evm = getInjectedEvmMetaMask()
+  if (!evm) return null
+  try {
+    const result = await evm.request({
+      method: "eth_call",
+      params: [{ to: normalizedBridge, data }, "latest"],
+    })
+    if (typeof result === "string" && result.startsWith("0x")) {
+      return BigInt(result)
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+export async function estimateEvmNetworkFeeWei(
+  gasLimit: bigint = BigInt(210000)
+): Promise<bigint | null> {
+  if (gasLimit <= BIGINT_ZERO) return null
+
+  const rpcUrl = process.env.NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL || ""
+  if (rpcUrl) {
+    try {
+      const response = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: Date.now(),
+          method: "eth_gasPrice",
+          params: [],
+        }),
+      })
+      const payload = (await response.json()) as { result?: string }
+      if (payload?.result && payload.result.startsWith("0x")) {
+        const gasPriceWei = BigInt(payload.result)
+        return gasPriceWei * gasLimit
+      }
+    } catch {
+      // fallback to injected provider
+    }
+  }
+
+  const evm = getInjectedEvmMetaMask()
+  if (!evm) return null
+  try {
+    const result = await evm.request({
+      method: "eth_gasPrice",
+      params: [],
+    })
+    if (typeof result === "string" && result.startsWith("0x")) {
+      const gasPriceWei = BigInt(result)
+      return gasPriceWei * gasLimit
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+export function bigintWeiToUnitNumber(value: bigint, decimals: number): number {
+  if (decimals <= 0) return Number(value)
+  const divisor = powBigInt(10, decimals)
+  const whole = Number(value / divisor)
+  const fraction = Number(value % divisor) / Number(divisor)
+  return whole + fraction
+}
+
+export function unitNumberToScaledBigInt(value: number, decimals: number): bigint {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("Invalid unit amount.")
+  }
+  const normalized = value.toLocaleString("en-US", {
+    useGrouping: false,
+    maximumFractionDigits: Math.max(0, decimals),
+  })
+  return parseDecimalToScaledBigInt(normalized, decimals)
+}
+
+export function decimalToU256Parts(value: string, decimals: number): [string, string] {
+  const scaled = parseDecimalToScaledBigInt(value, decimals)
+  if (scaled < BIGINT_ZERO) {
+    throw new Error("Amount must be positive.")
+  }
+  const low = scaled & MAX_U128
+  const high = scaled >> BigInt(128)
+  return [toHexFelt(low), toHexFelt(high)]
+}
+
+export function parseEstimatedMinutes(label?: string): number {
+  if (!label) return 15
+  const match = label.match(/\d+/)
+  if (!match) return 15
+  const parsed = Number.parseInt(match[0], 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return 15
+  return parsed
+}
+
+export function toHexFelt(value: string | number | bigint): string {
+  if (typeof value === "bigint") {
+    return `0x${value.toString(16)}`
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error("Invalid felt number.")
+    }
+    return `0x${BigInt(Math.trunc(value)).toString(16)}`
+  }
+
+  const raw = value.trim()
+  if (!raw) return "0x0"
+  if (raw.startsWith("0x") || raw.startsWith("0X")) {
+    return `0x${raw.slice(2).toLowerCase()}`
+  }
+  if (/^\d+$/.test(raw)) {
+    return `0x${BigInt(raw).toString(16)}`
+  }
+  return stringToFelt(raw)
+}
+
+export function providerIdToFeltHex(provider?: string): string {
+  const normalized = (provider || "").trim().toLowerCase()
+  const known: Record<string, string> = {
+    layerswap: "0x4c535750",
+    atomiq: "0x41544d51",
+    garden: "0x47415244",
+    starkgate: "0x53544754",
+  }
+  const knownValue = known[normalized]
+  if (knownValue) return knownValue
+  return stringToFelt(provider || "unknown")
+}
+
+function parseDecimalToScaledBigInt(value: string, decimals: number): bigint {
+  const raw = value.trim()
+  if (!raw) return BIGINT_ZERO
+  if (!/^\d+(\.\d+)?$/.test(raw)) {
+    throw new Error(`Invalid decimal value: ${value}`)
+  }
+  const [wholePart, fracPartRaw = ""] = raw.split(".")
+  const fracPart = fracPartRaw.slice(0, decimals).padEnd(decimals, "0")
+  const whole = BigInt(wholePart)
+  const frac = fracPart ? BigInt(fracPart) : BIGINT_ZERO
+  return whole * powBigInt(10, decimals) + frac
+}
+
+function parseUint256(value: string): bigint {
+  const raw = value.trim()
+  if (!raw) return BIGINT_ZERO
+  if (raw.startsWith("0x") || raw.startsWith("0X")) {
+    return BigInt(raw)
+  }
+  if (/^\d+$/.test(raw)) {
+    return BigInt(raw)
+  }
+  throw new Error("Invalid uint256 value.")
+}
+
+function normalizeEvmAddress(address: string): string | null {
+  const raw = address.trim()
+  if (!raw) return null
+  const normalized = raw.startsWith("0x") ? raw : `0x${raw}`
+  if (!/^0x[0-9a-fA-F]{40}$/.test(normalized)) return null
+  return normalized
+}
+
+function encodeStarkgateDepositV2(
+  tokenAddress: string,
+  amountWei: bigint,
+  l2Recipient: bigint
+): string {
+  const selector = "0x0efe6a8b" // deposit(address,uint256,uint256)
+  const encoded = [
+    encodeAbiAddress(tokenAddress),
+    encodeAbiUint256(amountWei),
+    encodeAbiUint256(l2Recipient),
+  ].join("")
+  return `${selector}${encoded}`
+}
+
+function encodeStarkgateDepositLegacy(amountWei: bigint, l2Recipient: bigint): string {
+  const selector = "0xe2bbb158" // deposit(uint256,uint256)
+  const encoded = [encodeAbiUint256(amountWei), encodeAbiUint256(l2Recipient)].join("")
+  return `${selector}${encoded}`
+}
+
+function encodeAbiUint256(value: bigint): string {
+  if (value < BIGINT_ZERO) {
+    throw new Error("uint256 cannot be negative.")
+  }
+  let hex = value.toString(16)
+  if (hex.length > 64) {
+    throw new Error("uint256 overflow.")
+  }
+  hex = hex.padStart(64, "0")
+  return hex
+}
+
+function encodeAbiAddress(address: string): string {
+  const normalized = normalizeEvmAddress(address)
+  if (!normalized) {
+    throw new Error("Invalid EVM address for ABI encoding.")
+  }
+  return normalized.slice(2).toLowerCase().padStart(64, "0")
+}
+
+function getInjectedEvmMetaMask(): InjectedEvm | null {
+  if (typeof window === "undefined") return null
+  const anyWindow = window as any
+  const ethereum = anyWindow.ethereum as InjectedEvm | undefined
+  if (!ethereum) return null
+  const providers = ethereum.providers?.length ? ethereum.providers : []
+  if (providers.length) {
+    const metaMask = providers.find((provider) => provider?.isMetaMask)
+    if (metaMask) return metaMask
+  }
+  if (ethereum.isMetaMask) return ethereum
+  return null
+}
+
+async function requestEvmAccount(evm: InjectedEvm): Promise<string> {
+  const accounts = await evm.request({ method: "eth_requestAccounts" })
+  const first = Array.isArray(accounts) ? accounts[0] : null
+  if (typeof first !== "string" || !first.trim()) {
+    throw new Error("No EVM account returned. Unlock MetaMask and retry.")
+  }
+  return first
+}
+
+async function ensureEvmSepolia(evm: InjectedEvm): Promise<void> {
+  const chainId = await readEvmChainId(evm)
+  if (chainId === EVM_SEPOLIA_CHAIN_ID) return
+
+  try {
+    await evm.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: EVM_SEPOLIA_CHAIN_ID_HEX }],
+    })
+  } catch (error) {
+    const code = (error as { code?: number } | undefined)?.code
+    if (code !== 4902) {
+      throw error
+    }
+    await evm.request({
+      method: "wallet_addEthereumChain",
+      params: [EVM_SEPOLIA_CHAIN_PARAMS as unknown as Record<string, unknown>],
+    })
+  }
+
+  const finalChainId = await readEvmChainId(evm)
+  if (finalChainId !== EVM_SEPOLIA_CHAIN_ID) {
+    throw new Error("Please switch MetaMask network to Ethereum Sepolia.")
+  }
+}
+
+async function readEvmChainId(evm: InjectedEvm): Promise<number> {
+  const raw = await evm.request({ method: "eth_chainId" })
+  if (typeof raw === "string") {
+    if (raw.startsWith("0x") || raw.startsWith("0X")) {
+      return Number.parseInt(raw, 16)
+    }
+    return Number.parseInt(raw, 10)
+  }
+  if (typeof raw === "number") return raw
+  return NaN
+}
+
+function getInjectedStarknet(providerHint: StarknetWalletHint): InjectedStarknet | null {
+  if (typeof window === "undefined") return null
+  const anyWindow = window as any
+  const defaultProvider = pickInjectedStarknet(anyWindow.starknet)
+  const argent = pickInjectedStarknet(
+    anyWindow.starknet_argentX,
+    anyWindow.argentX?.starknet,
+    anyWindow.argent?.starknet,
+    anyWindow.argentX
+  )
+  const braavos = pickInjectedStarknet(
+    anyWindow.starknet_braavos,
+    anyWindow.braavos?.starknet,
+    anyWindow.braavosWallet?.starknet
+  )
+
+  if (providerHint === "argentx") return argent || pickProviderByAlias(defaultProvider, "argentx")
+  if (providerHint === "braavos") return braavos || pickProviderByAlias(defaultProvider, "braavos")
+  return defaultProvider || argent || braavos
+}
+
+function pickProviderByAlias(
+  provider: InjectedStarknet | null,
+  kind: "argentx" | "braavos"
+): InjectedStarknet | null {
+  if (!provider) return null
+  const aliases = STARKNET_PROVIDER_ID_ALIASES[kind]
+  const id = normalizeAlias(provider.id)
+  const name = normalizeAlias(provider.name)
+  const matches = aliases.some((alias) => {
+    const needle = normalizeAlias(alias)
+    return id.includes(needle) || name.includes(needle)
+  })
+  return matches ? provider : null
+}
+
+function normalizeAlias(value?: string): string {
+  return (value || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+}
+
+function isUsableInjected(candidate: unknown): candidate is InjectedStarknet {
+  if (!candidate || typeof candidate !== "object") return false
+  const injected = candidate as InjectedStarknet
+  return (
+    typeof injected.request === "function" ||
+    typeof injected.enable === "function" ||
+    typeof injected.account?.execute === "function"
+  )
+}
+
+function pickInjectedStarknet(...candidates: unknown[]): InjectedStarknet | null {
+  for (const candidate of candidates) {
+    if (isUsableInjected(candidate)) return candidate
+  }
+  return null
+}
+
+async function ensureStarknetAccounts(injected: InjectedStarknet): Promise<void> {
+  if (injected.selectedAddress || injected.account?.address) return
+  if (injected.request) {
+    const attempts: Array<{ type: string; params?: unknown }> = [{ type: "wallet_requestAccounts" }]
+    STARKNET_API_VERSIONS.forEach((version) => {
+      attempts.push({ type: "wallet_requestAccounts", params: { api_version: version } })
+      attempts.push({
+        type: "wallet_requestAccounts",
+        params: { api_version: version, silent_mode: false },
+      })
+    })
+    attempts.push({ type: "wallet_requestAccounts", params: { silent_mode: false } })
+    for (const payload of attempts) {
+      try {
+        await requestStarknet(injected, payload)
+        if (injected.selectedAddress || injected.account?.address) return
+      } catch {
+        // continue
+      }
+    }
+  }
+  if (injected.enable) {
+    try {
+      await injected.enable({ showModal: true })
+    } catch {
+      // no-op
+    }
+  }
+}
+
+async function ensureStarknetSepolia(injected: InjectedStarknet): Promise<string | undefined> {
+  let chainId = await readStarknetChainId(injected)
+  if (isStarknetSepolia(chainId)) return chainId
+  if (!injected.request) return chainId
+  for (const payload of STARKNET_SWITCH_CHAIN_PAYLOADS) {
+    try {
+      await requestStarknet(injected, payload)
+      chainId = await readStarknetChainId(injected)
+      if (isStarknetSepolia(chainId)) return chainId
+    } catch {
+      // continue
+    }
+  }
+  return chainId
+}
+
+async function readStarknetChainId(injected: InjectedStarknet): Promise<string | undefined> {
+  if (typeof injected.chainId === "string" && injected.chainId.trim()) {
+    return injected.chainId
+  }
+  const attempts: Array<{ type: string; params?: unknown }> = [
+    { type: "wallet_getChainId" },
+    { type: "wallet_requestChainId" },
+    { type: "starknet_chainId" },
+  ]
+  STARKNET_API_VERSIONS.forEach((version) => {
+    attempts.push({ type: "wallet_getChainId", params: { api_version: version } })
+    attempts.push({ type: "wallet_requestChainId", params: { api_version: version } })
+  })
+  if (injected.request) {
+    for (const payload of attempts) {
+      try {
+        const result = await requestStarknet(injected, payload)
+        const parsed = parseChainId(result)
+        if (parsed) {
+          injected.chainId = parsed
+          return parsed
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+
+  const fromAccount = await readChainIdGetter(injected.account?.getChainId)
+  if (fromAccount) return fromAccount
+  const fromProvider = await readChainIdGetter(injected.provider?.getChainId)
+  if (fromProvider) return fromProvider
+  return undefined
+}
+
+async function readChainIdGetter(
+  getter?: (() => Promise<unknown> | unknown) | undefined
+): Promise<string | undefined> {
+  if (!getter) return undefined
+  try {
+    const value = await getter()
+    return parseChainId(value) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function parseChainId(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim()
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `0x${Math.trunc(value).toString(16)}`
+  }
+  if (typeof value === "bigint") {
+    return `0x${value.toString(16)}`
+  }
+  if (Array.isArray(value) && value.length > 0) {
+    return parseChainId(value[0])
+  }
+  if (typeof value === "object" && value) {
+    return (
+      parseChainId((value as { chainId?: unknown }).chainId) ||
+      parseChainId((value as { result?: unknown }).result) ||
+      parseChainId((value as { data?: unknown }).data)
+    )
+  }
+  return null
+}
+
+async function requestStarknet(
+  injected: InjectedStarknet,
+  payload: { type: string; params?: unknown }
+): Promise<unknown> {
+  if (!injected.request) throw new Error("Starknet request() unavailable.")
+  const variants: Array<{ type?: string; method?: string; params?: unknown }> = [
+    { type: payload.type, params: payload.params },
+    { method: payload.type, params: payload.params },
+  ]
+  if (payload.params !== undefined && !Array.isArray(payload.params)) {
+    variants.push({ type: payload.type, params: [payload.params] })
+    variants.push({ method: payload.type, params: [payload.params] })
+  }
+
+  let lastError: unknown = null
+  for (const variant of variants) {
+    try {
+      return await injected.request(variant)
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError || new Error("Starknet wallet request failed.")
+}
+
+function extractTxHash(value: unknown): string | null {
+  if (typeof value === "string") {
+    return isHexHash(value) ? value.toLowerCase() : null
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hash = extractTxHash(item)
+      if (hash) return hash
+    }
+    return null
+  }
+  if (typeof value === "object" && value) {
+    const candidates = [
+      (value as any).transaction_hash,
+      (value as any).transactionHash,
+      (value as any).tx_hash,
+      (value as any).hash,
+      (value as any).result,
+    ]
+    for (const candidate of candidates) {
+      const hash = extractTxHash(candidate)
+      if (hash) return hash
+    }
+  }
+  return null
+}
+
+function isHexHash(value: string): boolean {
+  const v = value.trim()
+  if (!v.startsWith("0x")) return false
+  if (v.length > 66) return false
+  return /^[0-9a-fA-F]+$/.test(v.slice(2))
+}
+
+function stringToFelt(value: string): string {
+  if (!value) return "0x0"
+  const bytes = new TextEncoder().encode(value)
+  let hex = ""
+  for (const byte of bytes) {
+    hex += byte.toString(16).padStart(2, "0")
+  }
+  return `0x${hex || "0"}`
+}
+
+function powBigInt(base: number, exponent: number): bigint {
+  let result = BIGINT_ONE
+  const baseBigInt = BigInt(base)
+  for (let i = 0; i < exponent; i += 1) {
+    result *= baseBigInt
+  }
+  return result
+}

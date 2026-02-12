@@ -1,7 +1,13 @@
 "use client"
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react"
-import { connectWallet, getOnchainBalances, getPortfolioBalance } from "@/lib/api"
+import {
+  connectWallet,
+  getLinkedWallets,
+  getOnchainBalances,
+  getPortfolioBalance,
+  linkWalletAddress,
+} from "@/lib/api"
 import { emitEvent } from "@/lib/events"
 import {
   EVM_SEPOLIA_CHAIN_ID,
@@ -44,6 +50,7 @@ interface WalletState {
 interface WalletContextType extends WalletState {
   connect: (provider: WalletProviderType) => Promise<void>
   connectBtcWallet: (provider: BtcWalletProviderType) => Promise<void>
+  linkBtcAddress: (address: string) => Promise<void>
   connectWithSumo: (sumoToken: string, address?: string) => Promise<boolean>
   refreshPortfolio: () => Promise<void>
   refreshOnchainBalances: () => Promise<void>
@@ -82,6 +89,9 @@ const STORAGE_KEYS = {
   sumoToken: "sumo_login_token",
   sumoAddress: "sumo_login_address",
 }
+
+const XVERSE_PROVIDER_ID = "XverseProviders.BitcoinProvider"
+const XVERSE_CONNECT_MESSAGE = "ZkCarel wants to connect your Bitcoin testnet wallet."
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<WalletState>({
@@ -243,6 +253,69 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [refreshPortfolio])
 
   useEffect(() => {
+    if (!wallet.isConnected || !wallet.token) return
+    let active = true
+    ;(async () => {
+      try {
+        const linked = await getLinkedWallets()
+        if (!active) return
+        setWallet((prev) => ({
+          ...prev,
+          starknetAddress: prev.starknetAddress || linked.starknet_address || null,
+          evmAddress: prev.evmAddress || linked.evm_address || null,
+          btcAddress: prev.btcAddress || linked.btc_address || null,
+        }))
+      } catch {
+        // keep local addresses if backend linked wallet fetch fails
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [wallet.isConnected, wallet.token])
+
+  useEffect(() => {
+    if (!wallet.isConnected || !wallet.token) return
+    const tasks: Promise<unknown>[] = []
+    if (wallet.starknetAddress) {
+      tasks.push(
+        linkWalletAddress({
+          chain: "starknet",
+          address: wallet.starknetAddress,
+          provider: "starknet",
+        })
+      )
+    }
+    if (wallet.evmAddress) {
+      tasks.push(
+        linkWalletAddress({
+          chain: "evm",
+          address: wallet.evmAddress,
+          provider: "metamask",
+        })
+      )
+    }
+    if (wallet.btcAddress) {
+      tasks.push(
+        linkWalletAddress({
+          chain: "bitcoin",
+          address: wallet.btcAddress,
+          provider: wallet.btcProvider || "xverse",
+        })
+      )
+    }
+    if (!tasks.length) return
+    void Promise.allSettled(tasks)
+  }, [
+    wallet.isConnected,
+    wallet.token,
+    wallet.starknetAddress,
+    wallet.evmAddress,
+    wallet.btcAddress,
+    wallet.btcProvider,
+  ])
+
+  useEffect(() => {
     if (!wallet.starknetAddress && !wallet.evmAddress && !wallet.btcAddress) return
 
     void refreshOnchainBalances()
@@ -358,18 +431,54 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw new Error("Wallet signature was not produced.")
     }
 
+    if (wallet.isConnected && wallet.token && wallet.address) {
+      const chain = network === "evm" ? "evm" : "starknet"
+      try {
+        await linkWalletAddress({
+          chain,
+          address,
+          provider,
+        })
+      } catch (error) {
+        console.warn("Wallet link failed:", error)
+      }
+
+      if (typeof window !== "undefined") {
+        if (network === "starknet") {
+          window.localStorage.setItem(STORAGE_KEYS.starknetAddress, address)
+        }
+        if (network === "evm") {
+          window.localStorage.setItem(STORAGE_KEYS.evmAddress, address)
+        }
+      }
+
+      setWallet((prev) => ({
+        ...prev,
+        provider: prev.provider || provider,
+        network,
+        starknetAddress: network === "starknet" ? address : prev.starknetAddress,
+        evmAddress: network === "evm" ? address : prev.evmAddress,
+      }))
+
+      emitEvent("wallet:connected", { address: wallet.address, provider })
+      return
+    }
+
     let token = ""
+    let userAddress = address
     try {
       const auth = await connectWallet({
         address,
         signature,
         message,
         chain_id: chainId,
+        wallet_type: network === "evm" ? "evm" : "starknet",
       })
       token = auth.token
+      userAddress = auth.user.address || address
       if (typeof window !== "undefined") {
         window.localStorage.setItem(STORAGE_KEYS.token, auth.token)
-        window.localStorage.setItem(STORAGE_KEYS.address, address)
+        window.localStorage.setItem(STORAGE_KEYS.address, userAddress)
         window.localStorage.setItem(STORAGE_KEYS.provider, provider)
         window.localStorage.setItem(STORAGE_KEYS.network, network)
         if (network === "starknet") {
@@ -422,7 +531,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     setWallet((prev) => ({
       isConnected: true,
-      address,
+      address: userAddress,
       provider,
       balance: balances,
       onchainBalance: {
@@ -439,8 +548,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       token,
       totalValueUSD,
     }))
-    emitEvent("wallet:connected", { address, provider })
-  }, [])
+    emitEvent("wallet:connected", { address: userAddress, provider })
+  }, [wallet.address, wallet.isConnected, wallet.token])
 
   const connectWithSumo = useCallback(async (sumoToken: string, address?: string) => {
     const userAddress = address || "0x0000000000000000000000000000000000000000"
@@ -481,10 +590,38 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const connectBtcWallet = useCallback(async (provider: BtcWalletProviderType) => {
+    if (provider === "xverse") {
+      const { address: btcAddress, balance: btcBalance } = await connectBtcWalletViaXverse()
+      setWallet((prev) => ({
+        ...prev,
+        btcAddress,
+        btcProvider: provider,
+        balance: {
+          ...prev.balance,
+          BTC: typeof btcBalance === "number" ? btcBalance : prev.balance.BTC,
+        },
+        onchainBalance: {
+          ...prev.onchainBalance,
+          BTC: typeof btcBalance === "number" ? btcBalance : prev.onchainBalance.BTC,
+        },
+      }))
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(STORAGE_KEYS.btcAddress, btcAddress)
+      }
+      if (wallet.token) {
+        try {
+          await linkWalletAddress({ chain: "bitcoin", address: btcAddress, provider })
+        } catch {
+          // keep local linked BTC even if backend link fails
+        }
+      }
+      return
+    }
+
     const injected = getInjectedBtc(provider)
     if (!injected) {
       throw new Error(
-        "BTC wallet extension not detected. Install Braavos BTC, Xverse, or Unisat (optional jika hanya pakai ETH/STRK)."
+        "BTC wallet extension not detected. Install Xverse wallet (optional jika hanya pakai ETH/STRK)."
       )
     }
 
@@ -515,7 +652,58 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(STORAGE_KEYS.btcAddress, btcAddress)
     }
-  }, [])
+    if (wallet.token) {
+      try {
+        await linkWalletAddress({ chain: "bitcoin", address: btcAddress, provider })
+      } catch {
+        // keep local linked BTC even if backend link fails
+      }
+    }
+  }, [wallet.token])
+
+  const linkBtcAddress = useCallback(async (address: string) => {
+    const btcAddress = address.trim()
+    if (!btcAddress) {
+      throw new Error("BTC address is required.")
+    }
+    const btcNetwork = detectBtcAddressNetwork(btcAddress)
+    if (btcNetwork !== "testnet") {
+      throw new Error("BTC address must be on Bitcoin testnet (native).")
+    }
+
+    let btcBalance: number | null = null
+    const injected =
+      getInjectedBtc("braavos_btc") ||
+      getInjectedBtc("xverse") ||
+      getInjectedBtc("unisat")
+    if (injected) {
+      btcBalance = await fetchBtcBalance(injected, btcAddress)
+    }
+
+    setWallet((prev) => ({
+      ...prev,
+      btcAddress,
+      balance: {
+        ...prev.balance,
+        BTC: typeof btcBalance === "number" ? btcBalance : prev.balance.BTC,
+      },
+      onchainBalance: {
+        ...prev.onchainBalance,
+        BTC: typeof btcBalance === "number" ? btcBalance : prev.onchainBalance.BTC,
+      },
+    }))
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_KEYS.btcAddress, btcAddress)
+    }
+    if (wallet.token) {
+      try {
+        await linkWalletAddress({ chain: "bitcoin", address: btcAddress, provider: "manual" })
+      } catch {
+        // keep local linked BTC even if backend link fails
+      }
+    }
+  }, [wallet.token])
 
   const disconnect = useCallback(() => {
     if (typeof window !== "undefined") {
@@ -562,6 +750,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         ...wallet,
         connect,
         connectBtcWallet,
+        linkBtcAddress,
         connectWithSumo,
         refreshPortfolio,
         refreshOnchainBalances,
@@ -583,7 +772,7 @@ type InjectedStarknet = {
   enable?: (opts?: { showModal?: boolean }) => Promise<void>
   selectedAddress?: string
   chainId?: string
-  request?: (payload: { type: string; params?: unknown }) => Promise<unknown>
+  request?: (payload: { type?: string; method?: string; params?: unknown }) => Promise<unknown>
   on?: (...args: any[]) => void
   off?: (...args: any[]) => void
   account?: {
@@ -630,11 +819,29 @@ function getInjectedStarknet(provider?: WalletProviderType): InjectedStarknet | 
     anyWindow.braavos?.starknet ||
     anyWindow.braavosWallet?.starknet ||
     anyWindow.braavosStarknet
+  const fallbackDefault = pickInjectedStarknet(starknetDefault)
+
   if (provider === "argentx") {
-    return pickInjectedStarknet(starknetArgent, starknetDefault)
+    const direct = pickInjectedStarknet(starknetArgent)
+    if (direct) return direct
+    if (
+      fallbackDefault &&
+      hasStarknetProviderAlias(fallbackDefault, STARKNET_PROVIDER_ID_ALIASES.argentx)
+    ) {
+      return fallbackDefault
+    }
+    return null
   }
   if (provider === "braavos") {
-    return pickInjectedStarknet(starknetBraavos, starknetDefault)
+    const direct = pickInjectedStarknet(starknetBraavos)
+    if (direct) return direct
+    if (
+      fallbackDefault &&
+      hasStarknetProviderAlias(fallbackDefault, STARKNET_PROVIDER_ID_ALIASES.braavos)
+    ) {
+      return fallbackDefault
+    }
+    return null
   }
   return pickInjectedStarknet(starknetDefault, starknetArgent, starknetBraavos)
 }
@@ -690,7 +897,6 @@ function getInjectedEvm(provider: WalletProviderType): InjectedEvm | null {
       if (match) return match
     }
     if (ethereum && isMetaMask(ethereum)) return ethereum
-    if (ethereum) return ethereum
     return null
   }
 
@@ -772,7 +978,7 @@ async function connectStarknetWallet(provider: WalletProviderType): Promise<Inje
         modalMode: "alwaysAsk",
         include,
       })
-      if (connected?.request) {
+      if (isUsableStarknetInjected(connected)) {
         return connected
       }
     }
@@ -874,7 +1080,7 @@ async function signStarknetMessage(
 
   if (injected.request) {
     try {
-      const signature = await injected.request({
+      const signature = await requestStarknet(injected, {
         type: "wallet_signTypedData",
         params: typedData as unknown,
       })
@@ -910,7 +1116,7 @@ async function requestAccounts(injected: InjectedStarknet): Promise<string[] | n
     attempts.push({ type: "wallet_requestAccounts", params: { silent_mode: false } })
     for (const payload of attempts) {
       try {
-        const result = await injected.request(payload)
+        const result = await requestStarknet(injected, payload)
         if (Array.isArray(result)) {
           return result as string[]
         }
@@ -1044,7 +1250,7 @@ async function ensureStarknetSepolia(injected: InjectedStarknet): Promise<string
 
   for (const payload of STARKNET_SWITCH_CHAIN_PAYLOADS) {
     try {
-      await injected.request(payload)
+      await requestStarknet(injected, payload)
       chainId = await readStarknetChainId(injected)
       if (isStarknetSepolia(chainId)) return chainId
     } catch {
@@ -1076,7 +1282,7 @@ async function readStarknetChainId(injected: InjectedStarknet): Promise<string |
   if (injected.request) {
     for (const payload of attempts) {
       try {
-        const result = await injected.request(payload)
+        const result = await requestStarknet(injected, payload)
         const parsed = parseStarknetChainIdResult(result)
         if (parsed) {
           injected.chainId = parsed
@@ -1101,6 +1307,42 @@ async function readStarknetChainId(injected: InjectedStarknet): Promise<string |
   }
 
   return injected.chainId
+}
+
+async function requestStarknet(
+  injected: InjectedStarknet,
+  payload: { type: string; params?: unknown }
+): Promise<unknown> {
+  if (!injected.request) {
+    throw new Error("Injected Starknet wallet does not support request().")
+  }
+  const variants = buildStarknetRequestVariants(payload)
+  let lastError: unknown = null
+  for (const variant of variants) {
+    try {
+      return await injected.request(variant)
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError || new Error("Starknet wallet request failed.")
+}
+
+function buildStarknetRequestVariants(payload: {
+  type: string
+  params?: unknown
+}): Array<{ type?: string; method?: string; params?: unknown }> {
+  const variants: Array<{ type?: string; method?: string; params?: unknown }> = [
+    { type: payload.type, params: payload.params },
+    { method: payload.type, params: payload.params },
+  ]
+
+  if (payload.params !== undefined && !Array.isArray(payload.params)) {
+    variants.push({ type: payload.type, params: [payload.params] })
+    variants.push({ method: payload.type, params: [payload.params] })
+  }
+
+  return variants
 }
 
 function parseStarknetChainIdResult(result: unknown): string | null {
@@ -1301,6 +1543,164 @@ async function requestBtcAccounts(injected: InjectedBtc): Promise<string[] | nul
     }
   }
   return null
+}
+
+type SatsConnectResultLike<T> =
+  | {
+      status: "success"
+      result: T
+    }
+  | {
+      status: "error"
+      error?: { message?: string }
+    }
+
+function unwrapSatsConnectResult<T>(response: unknown, fallbackMessage: string): T {
+  const parsed = response as SatsConnectResultLike<unknown> | null
+  if (parsed?.status === "success") {
+    return parsed.result as T
+  }
+  const message = parsed?.status === "error" ? parsed.error?.message?.trim() : ""
+  throw new Error(message || fallbackMessage)
+}
+
+function normalizeXverseConnectError(error: unknown): Error {
+  if (error instanceof Error) {
+    const message = error.message.trim()
+    if (/provider.*not found|not installed|extension/i.test(message)) {
+      return new Error(
+        "BTC wallet extension not detected. Install Xverse wallet (optional jika hanya pakai ETH/STRK)."
+      )
+    }
+    if (/reject|cancel/i.test(message)) {
+      return new Error("Request rejected in Xverse wallet.")
+    }
+    return new Error(message || "Failed to connect Xverse wallet.")
+  }
+  if (typeof error === "string" && error.trim()) {
+    return new Error(error.trim())
+  }
+  return new Error("Failed to connect Xverse wallet.")
+}
+
+function extractBtcAddressFromSatsConnectAddresses(payload: unknown): string | null {
+  if (!Array.isArray(payload)) return null
+  const records = payload as Array<{
+    address?: string
+    purpose?: string
+  }>
+  const payment = records.find((record) => {
+    const purpose = (record.purpose || "").toLowerCase()
+    return purpose === "payment"
+  })
+  const fallback = payment || records[0]
+  if (!fallback?.address) return null
+  return normalizeBtcAddress(fallback.address)
+}
+
+function isXverseTestnetNetwork(name: unknown): boolean {
+  if (typeof name !== "string") return false
+  const normalized = name.toLowerCase()
+  return (
+    normalized.includes("testnet") ||
+    normalized.includes("testnet4") ||
+    normalized.includes("signet") ||
+    normalized.includes("regtest")
+  )
+}
+
+async function connectBtcWalletViaXverse(): Promise<{ address: string; balance: number | null }> {
+  try {
+    const sats = await import("sats-connect")
+    const providerId = sats.DefaultAdaptersInfo?.xverse?.id || XVERSE_PROVIDER_ID
+    if (!sats.isProviderInstalled(providerId)) {
+      throw new Error(
+        "BTC wallet extension not detected. Install Xverse wallet (optional jika hanya pakai ETH/STRK)."
+      )
+    }
+    const request = sats.request as (
+      method: string,
+      params: unknown,
+      providerId?: string
+    ) => Promise<SatsConnectResultLike<unknown>>
+
+    const connectResponse = await request(
+      "wallet_connect",
+      {
+        addresses: [sats.AddressPurpose.Payment, sats.AddressPurpose.Ordinals],
+        network: sats.BitcoinNetworkType.Testnet,
+        message: XVERSE_CONNECT_MESSAGE,
+      },
+      providerId
+    )
+    const connectResult = unwrapSatsConnectResult<{
+      addresses?: unknown
+    }>(connectResponse, "Failed to connect Xverse wallet.")
+
+    let btcAddress = extractBtcAddressFromSatsConnectAddresses(connectResult.addresses)
+
+    if (!btcAddress) {
+      const accountResponse = await request("wallet_getAccount", null, providerId)
+      const accountResult = unwrapSatsConnectResult<{
+        addresses?: unknown
+      }>(accountResponse, "Failed to fetch account from Xverse wallet.")
+      btcAddress = extractBtcAddressFromSatsConnectAddresses(accountResult.addresses)
+    }
+
+    if (!btcAddress) {
+      const legacyResponse = await request(
+        "getAccounts",
+        { purposes: [sats.AddressPurpose.Payment], message: XVERSE_CONNECT_MESSAGE },
+        providerId
+      )
+      const legacyResult = unwrapSatsConnectResult<unknown>(
+        legacyResponse,
+        "Failed to fetch payment account from Xverse wallet."
+      )
+      btcAddress = extractBtcAddressFromSatsConnectAddresses(legacyResult)
+    }
+
+    if (!btcAddress) {
+      throw new Error("Xverse did not return a BTC payment address.")
+    }
+
+    try {
+      const networkResponse = await request("wallet_getNetwork", null, providerId)
+      const networkResult = unwrapSatsConnectResult<{
+        bitcoin?: { name?: string }
+      }>(networkResponse, "Failed to read Xverse network.")
+      const networkName = networkResult.bitcoin?.name
+      if (networkName && !isXverseTestnetNetwork(networkName)) {
+        throw new Error(
+          `Please switch Xverse network to Bitcoin Testnet before connecting. Current network: ${networkName}.`
+        )
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("Please switch Xverse network to Bitcoin Testnet")
+      ) {
+        throw error
+      }
+      const inferredNetwork = detectBtcAddressNetwork(btcAddress)
+      if (inferredNetwork !== "testnet") {
+        throw new Error("BTC wallet must be on Bitcoin testnet (native).")
+      }
+    }
+
+    let btcBalance: number | null = null
+    try {
+      const balanceResponse = await request("getBalance", null, providerId)
+      const balanceResult = unwrapSatsConnectResult<unknown>(balanceResponse, "Failed to read BTC balance.")
+      btcBalance = normalizeBtcBalance(balanceResult)
+    } catch {
+      btcBalance = null
+    }
+
+    return { address: btcAddress, balance: btcBalance }
+  } catch (error) {
+    throw normalizeXverseConnectError(error)
+  }
 }
 
 function normalizeBtcAccounts(result: unknown): string[] {

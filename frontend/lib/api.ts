@@ -348,6 +348,12 @@ export interface OnchainBalancesResponse {
   btc?: number | null
 }
 
+export interface LinkedWalletsResponse {
+  starknet_address?: string | null
+  evm_address?: string | null
+  btc_address?: string | null
+}
+
 function joinUrl(path: string) {
   if (path.startsWith("http")) return path
   return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`
@@ -460,6 +466,7 @@ export async function connectWallet(payload: {
   signature: string
   message: string
   chain_id: number
+  wallet_type?: string
   sumo_login_token?: string
 }) {
   return apiFetch<ConnectWalletResponse>("/api/v1/auth/connect", {
@@ -585,6 +592,8 @@ export async function executeSwap(payload: {
   slippage: number
   deadline: number
   recipient?: string
+  onchain_tx_hash?: string
+  hide_balance?: boolean
   mode: string
 }) {
   return apiFetch<ExecuteSwapResponse>("/api/v1/swap/execute", {
@@ -616,6 +625,9 @@ export async function executeBridge(payload: {
   amount: string
   recipient: string
   xverse_user_id?: string
+  onchain_tx_hash?: string
+  mode?: string
+  hide_balance?: boolean
 }) {
   return apiFetch<ExecuteBridgeResponse>("/api/v1/bridge/execute", {
     method: "POST",
@@ -792,6 +804,26 @@ export async function getOnchainBalances(payload: {
     method: "POST",
     body: JSON.stringify(payload),
     context: "Onchain balances",
+    suppressErrorNotification: true,
+  })
+}
+
+export async function linkWalletAddress(payload: {
+  chain: "starknet" | "evm" | "bitcoin"
+  address: string
+  provider?: string
+}) {
+  return apiFetch<{ user_address: string; chain: string; address: string }>("/api/v1/wallet/link", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Link wallet address",
+    suppressErrorNotification: true,
+  })
+}
+
+export async function getLinkedWallets() {
+  return apiFetch<LinkedWalletsResponse>("/api/v1/wallet/linked", {
+    context: "Get linked wallets",
     suppressErrorNotification: true,
   })
 }

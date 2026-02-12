@@ -42,7 +42,9 @@ impl TransactionHistoryService {
     ) -> Result<PaginatedResponse<Transaction>> {
         let offset = (page - 1) * limit;
 
-        let mut query = String::from("SELECT * FROM transactions WHERE user_address = $1");
+        let mut query = String::from(
+            "SELECT * FROM transactions WHERE user_address = $1 AND COALESCE(is_private, false) = false",
+        );
         let mut param_count = 2;
 
         if tx_type.is_some() {
@@ -90,7 +92,9 @@ impl TransactionHistoryService {
         from_date: Option<DateTime<Utc>>,
         to_date: Option<DateTime<Utc>>,
     ) -> Result<i64> {
-        let mut query = String::from("SELECT COUNT(*) as count FROM transactions WHERE user_address = $1");
+        let mut query = String::from(
+            "SELECT COUNT(*) as count FROM transactions WHERE user_address = $1 AND COALESCE(is_private, false) = false",
+        );
         let mut param_count = 2;
 
         if tx_type.is_some() {
@@ -105,10 +109,18 @@ impl TransactionHistoryService {
             query.push_str(&format!(" AND timestamp <= ${}", param_count));
         }
 
-        let result = sqlx::query(&query)
-            .bind(user_address)
-            .fetch_one(self.db.pool())
-            .await?;
+        let mut query_builder = sqlx::query(&query);
+        query_builder = query_builder.bind(user_address);
+        if let Some(ref t) = tx_type {
+            query_builder = query_builder.bind(t);
+        }
+        if let Some(ref fd) = from_date {
+            query_builder = query_builder.bind(fd);
+        }
+        if let Some(ref td) = to_date {
+            query_builder = query_builder.bind(td);
+        }
+        let result = query_builder.fetch_one(self.db.pool()).await?;
 
         // Sekarang try_get akan berfungsi karena sqlx::Row sudah di-import
         Ok(result.try_get("count")?)
@@ -123,7 +135,9 @@ impl TransactionHistoryService {
 
     pub async fn get_recent_transactions(&self, user_address: &str) -> Result<Vec<Transaction>> {
         let transactions = sqlx::query_as::<_, Transaction>(
-            "SELECT * FROM transactions WHERE user_address = $1 ORDER BY timestamp DESC LIMIT 10"
+            "SELECT * FROM transactions
+             WHERE user_address = $1 AND COALESCE(is_private, false) = false
+             ORDER BY timestamp DESC LIMIT 10"
         )
         .bind(user_address)
         .fetch_all(self.db.pool())
@@ -142,7 +156,7 @@ impl TransactionHistoryService {
                 SUM(fee_paid) as total_fees_paid,
                 SUM(points_earned) as total_points_earned
              FROM transactions
-             WHERE user_address = $1"
+             WHERE user_address = $1 AND COALESCE(is_private, false) = false"
         )
         .bind(user_address)
         .fetch_one(self.db.pool())

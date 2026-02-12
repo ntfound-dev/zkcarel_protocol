@@ -7,9 +7,17 @@ import {
   markNotificationsRead,
   type BackendNotification,
 } from "@/lib/api"
+import { ETHERSCAN_SEPOLIA_BASE_URL, STARKSCAN_SEPOLIA_BASE_URL } from "@/lib/network-config"
 import { useWallet } from "@/hooks/use-wallet"
 import { emitEvent } from "@/lib/events"
 import { useWebSocket } from "@/hooks/use-websocket"
+
+type TxNetwork = "starknet" | "evm"
+
+export interface TxExplorerLink {
+  label: string
+  url: string
+}
 
 export interface Notification {
   id: number
@@ -19,6 +27,8 @@ export interface Notification {
   timestamp: Date
   read: boolean
   txHash?: string
+  txNetwork?: TxNetwork
+  txExplorerUrls?: TxExplorerLink[]
 }
 
 interface NotificationsContextType {
@@ -41,7 +51,47 @@ function mapNotifType(kind?: string | null): Notification["type"] {
   return "info"
 }
 
+function normalizeTxNetwork(raw: unknown): TxNetwork | undefined {
+  if (typeof raw !== "string") return undefined
+  const normalized = raw.trim().toLowerCase()
+  if (normalized === "starknet" || normalized === "sn") return "starknet"
+  if (normalized === "evm" || normalized === "ethereum" || normalized === "eth") return "evm"
+  return undefined
+}
+
+function buildTxExplorerUrls(txHash?: string, txNetwork?: TxNetwork): TxExplorerLink[] | undefined {
+  if (!txHash) return undefined
+  if (txNetwork === "starknet") {
+    return [
+      {
+        label: "Open Starkscan",
+        url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
+      },
+    ]
+  }
+  if (txNetwork === "evm") {
+    return [
+      {
+        label: "Open Etherscan",
+        url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
+      },
+    ]
+  }
+  return [
+    {
+      label: "Open Starkscan",
+      url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
+    },
+    {
+      label: "Open Etherscan",
+      url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
+    },
+  ]
+}
+
 function mapBackendNotification(notification: BackendNotification): Notification {
+  const txHash = typeof notification.data?.tx_hash === "string" ? notification.data?.tx_hash : undefined
+  const txNetwork = normalizeTxNetwork(notification.data?.tx_network ?? notification.data?.tx_chain)
   return {
     id: notification.id,
     type: mapNotifType(notification.notif_type),
@@ -49,7 +99,9 @@ function mapBackendNotification(notification: BackendNotification): Notification
     message: notification.message,
     timestamp: new Date(notification.created_at),
     read: notification.read,
-    txHash: typeof notification.data?.tx_hash === "string" ? notification.data?.tx_hash : undefined,
+    txHash,
+    txNetwork,
+    txExplorerUrls: buildTxExplorerUrls(txHash, txNetwork),
   }
 }
 
@@ -115,11 +167,16 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
   const addNotification = useCallback(
     (notification: Omit<Notification, "id" | "timestamp" | "read">) => {
+      const txExplorerUrls =
+        notification.txExplorerUrls && notification.txExplorerUrls.length > 0
+          ? notification.txExplorerUrls
+          : buildTxExplorerUrls(notification.txHash, notification.txNetwork)
       const newNotification: Notification = {
         ...notification,
         id: Math.floor(Math.random() * 1000000),
         timestamp: new Date(),
         read: false,
+        txExplorerUrls,
       }
       setNotifications((prev) => [newNotification, ...prev])
     },

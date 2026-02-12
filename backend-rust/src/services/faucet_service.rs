@@ -222,6 +222,7 @@ impl FaucetService {
                 "faucet.claim",
                 "Faucet claimed",
                 &format!("Claimed {} {}", amount, token),
+                Some(serde_json::json!({ "tx_hash": tx_hash })),
             )
             .await;
 
@@ -339,6 +340,10 @@ mod tests {
             cors_allowed_origins: "*".to_string(),
             oracle_asset_ids: "".to_string(),
             bridge_provider_ids: "".to_string(),
+            price_tokens: "BTC,ETH,STRK,CAREL,USDT,USDC".to_string(),
+            coingecko_api_url: "https://api.coingecko.com/api/v3".to_string(),
+            coingecko_api_key: None,
+            coingecko_ids: "".to_string(),
         }
     }
 

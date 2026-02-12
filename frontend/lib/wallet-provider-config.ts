@@ -13,7 +13,7 @@ export const WALLET_PROVIDERS: { id: WalletProviderType; name: string; icon: str
   { id: "starknet", name: "Starknet (Auto)", icon: "✨" },
   { id: "argentx", name: "Argent X", icon: "🧡" },
   { id: "braavos", name: "Braavos", icon: "🟠" },
-  { id: "metamask", name: "MetaMask (EVM Sepolia)", icon: "🦊" },
+  { id: "metamask", name: "MetaMask (ETH Sepolia)", icon: "🦊" },
 ]
 
 export const STARKNET_WALLET_PROVIDERS: { id: WalletProviderType; name: string; icon: string }[] =
@@ -23,9 +23,7 @@ export const STARKNET_WALLET_PROVIDERS: { id: WalletProviderType; name: string; 
   ]
 
 export const BTC_WALLET_PROVIDERS: { id: BtcWalletProviderType; name: string; icon: string }[] = [
-  { id: "braavos_btc", name: "Braavos BTC", icon: "🟠" },
   { id: "xverse", name: "Xverse (BTC)", icon: "🟧" },
-  { id: "unisat", name: "Unisat (BTC)", icon: "🟡" },
 ]
 
 export const STARKNET_PROVIDER_ID_ALIASES: Record<"argentx" | "braavos", string[]> = {
