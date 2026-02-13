@@ -1,30 +1,23 @@
 use crate::{
     config::Config,
     constants::{
-        FAUCET_AMOUNT_BTC,
-        FAUCET_AMOUNT_CAREL,
-        FAUCET_AMOUNT_ETH,
-        FAUCET_AMOUNT_STRK,
+        FAUCET_AMOUNT_BTC, FAUCET_AMOUNT_CAREL, FAUCET_AMOUNT_ETH, FAUCET_AMOUNT_STRK,
         FAUCET_COOLDOWN_HOURS,
     },
     db::Database,
     error::{AppError, Result},
     models::FaucetClaim,
     services::onchain::{
-        parse_felt,
-        resolve_backend_account,
-        u256_from_felts,
-        u256_to_felts,
-        OnchainInvoker,
+        parse_felt, resolve_backend_account, u256_from_felts, u256_to_felts, OnchainInvoker,
         OnchainReader,
     },
 };
-use std::sync::Arc;
-use sqlx::Row;
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
+use sqlx::Row;
 use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
+use std::sync::Arc;
 
 fn cooldown_hours_from_config(config: &Config) -> i64 {
     config
@@ -125,8 +118,12 @@ impl FaucetService {
             calldata: vec![self.faucet_address],
         };
         let values = self.reader.call(call).await?;
-        let low = values.get(0).ok_or_else(|| AppError::Internal("Balance low missing".into()))?;
-        let high = values.get(1).ok_or_else(|| AppError::Internal("Balance high missing".into()))?;
+        let low = values
+            .get(0)
+            .ok_or_else(|| AppError::Internal("Balance low missing".into()))?;
+        let high = values
+            .get(1)
+            .ok_or_else(|| AppError::Internal("Balance high missing".into()))?;
         u256_from_felts(low, high)
     }
 
@@ -143,7 +140,11 @@ impl FaucetService {
             .await
     }
 
-    pub async fn get_next_claim_time(&self, user_address: &str, token: &str) -> Result<Option<DateTime<Utc>>> {
+    pub async fn get_next_claim_time(
+        &self,
+        user_address: &str,
+        token: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
         let last_claim = sqlx::query(
             "SELECT claimed_at FROM faucet_claims WHERE user_address = $1 AND token = $2 ORDER BY claimed_at DESC LIMIT 1"
         )
@@ -162,12 +163,16 @@ impl FaucetService {
         }
     }
 
-    pub async fn get_last_claim(&self, user_address: &str, token: &str) -> Result<Option<FaucetClaim>> {
+    pub async fn get_last_claim(
+        &self,
+        user_address: &str,
+        token: &str,
+    ) -> Result<Option<FaucetClaim>> {
         let row = sqlx::query(
             "SELECT user_address, token, amount, tx_hash, claimed_at
              FROM faucet_claims
              WHERE user_address = $1 AND token = $2
-             ORDER BY claimed_at DESC LIMIT 1"
+             ORDER BY claimed_at DESC LIMIT 1",
         )
         .bind(user_address)
         .bind(token)
@@ -177,7 +182,10 @@ impl FaucetService {
         Ok(row.map(|r| FaucetClaim {
             user_address: r.get("user_address"),
             token: r.get("token"),
-            amount: r.get::<rust_decimal::Decimal, _>("amount").to_f64().unwrap_or(0.0),
+            amount: r
+                .get::<rust_decimal::Decimal, _>("amount")
+                .to_f64()
+                .unwrap_or(0.0),
             tx_hash: r.get("tx_hash"),
             claimed_at: r.get("claimed_at"),
         }))
@@ -212,8 +220,12 @@ impl FaucetService {
             return Err(AppError::InsufficientBalance);
         }
 
-        let tx_hash = self.send_tokens(user_address, token_address, amount_u128).await?;
-        self.db.record_faucet_claim(user_address, token, amount, &tx_hash).await?;
+        let tx_hash = self
+            .send_tokens(user_address, token_address, amount_u128)
+            .await?;
+        self.db
+            .record_faucet_claim(user_address, token, amount, &tx_hash)
+            .await?;
 
         let _ = self
             .db
@@ -237,7 +249,11 @@ impl FaucetService {
         let (low, high) = u256_to_felts(amount);
         let calldata = vec![to, low, high];
 
-        let call = Call { to: token, selector, calldata };
+        let call = Call {
+            to: token,
+            selector,
+            calldata,
+        };
         let tx_hash = self.invoker.invoke(call).await?;
         Ok(tx_hash.to_string())
     }
@@ -250,7 +266,7 @@ impl FaucetService {
                 COALESCE(SUM(CASE WHEN token = 'BTC' THEN amount ELSE 0 END), 0) as total_btc,
                 COALESCE(SUM(CASE WHEN token = 'STRK' THEN amount ELSE 0 END), 0) as total_strk,
                 COALESCE(SUM(CASE WHEN token = 'CAREL' THEN amount ELSE 0 END), 0) as total_carel
-             FROM faucet_claims"
+             FROM faucet_claims",
         )
         .fetch_one(self.db.pool())
         .await?;
@@ -295,9 +311,11 @@ mod tests {
             price_oracle_address: "0x4".to_string(),
             limit_order_book_address: "0x5".to_string(),
             staking_carel_address: None,
+            discount_soulbound_address: None,
             treasury_address: None,
             referral_system_address: None,
             ai_executor_address: "0x6".to_string(),
+            ai_signature_verifier_address: None,
             bridge_aggregator_address: "0x7".to_string(),
             zk_privacy_router_address: "0x8".to_string(),
             privacy_router_address: None,

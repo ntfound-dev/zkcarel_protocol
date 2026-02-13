@@ -25,9 +25,11 @@ impl XverseClient {
             return Ok(None);
         }
 
-        let mut req = self
-            .client
-            .get(format!("{}/address/{}", self.base_url.trim_end_matches('/'), user_id));
+        let mut req = self.client.get(format!(
+            "{}/address/{}",
+            self.base_url.trim_end_matches('/'),
+            user_id
+        ));
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
         }
@@ -38,7 +40,10 @@ impl XverseClient {
         }
 
         let payload: serde_json::Value = resp.json().await?;
-        let address = payload.get("address").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let address = payload
+            .get("address")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         Ok(address)
     }
 }

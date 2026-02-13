@@ -1,8 +1,8 @@
+use axum::http::HeaderValue;
 use axum::{
     routing::{get, post},
     Router,
 };
-use axum::http::HeaderValue;
 use std::net::SocketAddr;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     // 2. Masukkan pool ke AppState
     let app_state = api::AppState {
         db: db.clone(),
-        redis: redis_pool, 
+        redis: redis_pool,
         config: config.clone(),
     };
 
@@ -114,6 +114,11 @@ fn build_router(state: api::AppState) -> Router {
         // Authentication
         .route("/api/v1/auth/connect", post(api::auth::connect_wallet))
         .route("/api/v1/auth/refresh", post(api::auth::refresh_token))
+        .route("/api/v1/profile/me", get(api::profile::get_profile))
+        .route(
+            "/api/v1/profile/display-name",
+            axum::routing::put(api::profile::set_display_name),
+        )
         // Swap & Bridge
         .route("/api/v1/swap/quote", post(api::swap::get_quote))
         .route("/api/v1/swap/execute", post(api::swap::execute_swap))
@@ -154,8 +159,14 @@ fn build_router(state: api::AppState) -> Router {
             "/api/v1/wallet/onchain-balances",
             post(api::wallet::get_onchain_balances),
         )
-        .route("/api/v1/wallet/link", post(api::wallet::link_wallet_address))
-        .route("/api/v1/wallet/linked", get(api::wallet::get_linked_wallets))
+        .route(
+            "/api/v1/wallet/link",
+            post(api::wallet::link_wallet_address),
+        )
+        .route(
+            "/api/v1/wallet/linked",
+            get(api::wallet::get_linked_wallets),
+        )
         .route(
             "/api/v1/portfolio/analytics",
             get(api::analytics::get_analytics),
@@ -198,7 +209,10 @@ fn build_router(state: api::AppState) -> Router {
         // Social Tasks
         .route("/api/v1/social/verify", post(api::social::verify_task))
         // Privacy
-        .route("/api/v1/privacy/submit", post(api::privacy::submit_private_action))
+        .route(
+            "/api/v1/privacy/submit",
+            post(api::privacy::submit_private_action),
+        )
         // Private BTC swap
         .route(
             "/api/v1/private-btc-swap/initiate",
@@ -213,7 +227,10 @@ fn build_router(state: api::AppState) -> Router {
             get(api::private_btc_swap::is_nullifier_used),
         )
         // Dark pool
-        .route("/api/v1/dark-pool/order", post(api::dark_pool::submit_order))
+        .route(
+            "/api/v1/dark-pool/order",
+            post(api::dark_pool::submit_order),
+        )
         .route("/api/v1/dark-pool/match", post(api::dark_pool::match_order))
         .route(
             "/api/v1/dark-pool/nullifier/{nullifier}",
@@ -246,7 +263,10 @@ fn build_router(state: api::AppState) -> Router {
         .route("/api/v1/faucet/status", get(api::faucet::get_status))
         .route("/api/v1/faucet/stats", get(api::faucet::get_faucet_stats))
         // Deposit (Fiat On-Ramp)
-        .route("/api/v1/deposit/bank-transfer", post(api::deposit::bank_transfer))
+        .route(
+            "/api/v1/deposit/bank-transfer",
+            post(api::deposit::bank_transfer),
+        )
         .route("/api/v1/deposit/qris", post(api::deposit::qris))
         .route("/api/v1/deposit/card", post(api::deposit::card_payment))
         .route("/api/v1/deposit/status/{id}", get(api::deposit::get_status)) // PERBAIKAN: :id -> {id}
@@ -260,14 +280,17 @@ fn build_router(state: api::AppState) -> Router {
             "/api/v1/notifications/preferences",
             axum::routing::put(api::notifications::update_preferences),
         )
-       .route("/api/v1/notifications/stats", get(api::notifications::get_stats))
+        .route(
+            "/api/v1/notifications/stats",
+            get(api::notifications::get_stats),
+        )
         // Transactions
         .route(
             "/api/v1/transactions/history",
             get(api::transactions::get_history),
         )
         .route(
-            "/api/v1/transactions/{tx_hash}", 
+            "/api/v1/transactions/{tx_hash}",
             get(api::transactions::get_details),
         )
         .route(
@@ -294,6 +317,10 @@ fn build_router(state: api::AppState) -> Router {
         )
         .route("/api/v1/webhooks/logs", get(api::webhooks::get_logs))
         // AI Assistant
+        .route(
+            "/api/v1/ai/prepare-action",
+            post(api::ai::prepare_action_signature),
+        )
         .route("/api/v1/ai/execute", post(api::ai::execute_command))
         .route("/api/v1/ai/pending", get(api::ai::get_pending_actions))
         // WebSocket endpoints

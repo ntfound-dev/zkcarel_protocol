@@ -51,6 +51,21 @@ impl OnchainInvoker {
             .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))?;
         Ok(result.transaction_hash)
     }
+
+    pub async fn invoke_many(&self, calls: Vec<Call>) -> Result<Felt> {
+        if calls.is_empty() {
+            return Err(crate::error::AppError::BadRequest(
+                "No on-chain calls to execute".to_string(),
+            ));
+        }
+        let result = self
+            .account
+            .execute_v3(calls)
+            .send()
+            .await
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))?;
+        Ok(result.transaction_hash)
+    }
 }
 
 impl OnchainReader {
@@ -90,7 +105,9 @@ pub fn parse_chain_id(chain_id: &str) -> Result<Felt> {
 pub fn parse_felt(value: &str) -> Result<Felt> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(crate::error::AppError::Internal("Empty field element".to_string()));
+        return Err(crate::error::AppError::Internal(
+            "Empty field element".to_string(),
+        ));
     }
     if trimmed.starts_with("0x") {
         return Felt::from_hex(trimmed)
@@ -115,7 +132,9 @@ pub fn u256_from_felts(low: &Felt, high: &Felt) -> Result<u128> {
     let low = felt_to_u128(low)?;
     let high = felt_to_u128(high)?;
     if high != 0 {
-        return Err(crate::error::AppError::Internal("u256 value too large".to_string()));
+        return Err(crate::error::AppError::Internal(
+            "u256 value too large".to_string(),
+        ));
     }
     Ok(low)
 }

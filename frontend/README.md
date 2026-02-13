@@ -3,7 +3,7 @@
 Frontend web app untuk ZkCarel (Next.js App Router). Terhubung ke backend via REST + WebSocket dan menampilkan swap, bridge, limit order, staking, portfolio, leaderboard, rewards, dan referral.
 
 ## Prasyarat
-- Node.js >= 18 (disarankan 20)
+- Node.js >= 20.9.0
 - npm
 
 ## Setup Lokal
@@ -94,6 +94,7 @@ public/           # Static assets
 - Wallet: frontend memakai injected Starknet wallet (Argent X/Braavos). Jika tidak ada, pengguna perlu connect wallet untuk mengakses fitur on-chain.
 - Wallet SDK: memakai `@starknet-io/get-starknet` untuk Starknet, MetaMask (EVM) via `window.ethereum`, dan `sats-connect` untuk koneksi native Xverse (BTC testnet).
 - Network enforcement: wallet di-validate ke `Starknet Sepolia`, `Ethereum Sepolia (11155111)`, dan `Bitcoin native testnet` (alamat testnet).
-- AI Tier 2/3 membutuhkan `action_id` on-chain (frontend meminta input).
+- AI Tier 2/3 membutuhkan `action_id` on-chain. Frontend bisa membuat `action_id` via wallet kalau `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` diisi.
+- Jika `signature_verification` pada AI executor aktif, backend harus mengisi `AI_SIGNATURE_VERIFIER_ADDRESS` agar endpoint prepare signature berjalan.
 - Privacy Router tersedia lewat menu (More → Privacy Router) untuk submit proof V2/V1.
 - Beberapa field angka dari backend dapat berupa `number` atau `string` (contoh: analytics/limit order/OHLCV). UI harus memperlakukan sebagai nilai numerik.

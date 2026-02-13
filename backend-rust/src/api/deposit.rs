@@ -1,7 +1,11 @@
-use axum::{extract::{State, Path}, http::HeaderMap, Json};
-use serde::Deserialize;
+use super::{require_user, AppState};
 use crate::{error::Result, models::ApiResponse, services::DepositService};
-use super::{AppState, require_user};
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    Json,
+};
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct BankTransferRequest {
@@ -27,10 +31,12 @@ pub async fn bank_transfer(
     Json(req): Json<BankTransferRequest>,
 ) -> Result<Json<ApiResponse<crate::services::deposit_service::DepositInfo>>> {
     let user_address = require_user(&headers, &state).await?;
-    
+
     let service = DepositService::new(state.db, state.config);
-    let deposit = service.create_bank_transfer(&user_address, req.amount, &req.currency).await?;
-    
+    let deposit = service
+        .create_bank_transfer(&user_address, req.amount, &req.currency)
+        .await?;
+
     Ok(Json(ApiResponse::success(deposit)))
 }
 
@@ -41,10 +47,10 @@ pub async fn qris(
     Json(req): Json<QRISRequest>,
 ) -> Result<Json<ApiResponse<crate::services::deposit_service::DepositInfo>>> {
     let user_address = require_user(&headers, &state).await?;
-    
+
     let service = DepositService::new(state.db, state.config);
     let deposit = service.create_qris(&user_address, req.amount).await?;
-    
+
     Ok(Json(ApiResponse::success(deposit)))
 }
 
@@ -55,10 +61,12 @@ pub async fn card_payment(
     Json(req): Json<CardPaymentRequest>,
 ) -> Result<Json<ApiResponse<crate::services::deposit_service::DepositInfo>>> {
     let user_address = require_user(&headers, &state).await?;
-    
+
     let service = DepositService::new(state.db, state.config);
-    let deposit = service.create_card_payment(&user_address, req.amount, &req.currency).await?;
-    
+    let deposit = service
+        .create_card_payment(&user_address, req.amount, &req.currency)
+        .await?;
+
     Ok(Json(ApiResponse::success(deposit)))
 }
 
@@ -69,7 +77,7 @@ pub async fn get_status(
 ) -> Result<Json<ApiResponse<crate::services::deposit_service::DepositInfo>>> {
     let service = DepositService::new(state.db, state.config);
     let status = service.get_status(&deposit_id).await?;
-    
+
     Ok(Json(ApiResponse::success(status)))
 }
 

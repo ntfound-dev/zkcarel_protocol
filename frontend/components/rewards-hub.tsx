@@ -4,8 +4,10 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Gift, Diamond, Trophy, Sparkles, ArrowRight, Check, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useWallet } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
 import { claimRewards, convertRewards, getOwnedNfts, getPortfolioAnalytics, getRewardsPoints, mintNft, verifySocialTask, type NFTItem } from "@/lib/api"
+import { invokeStarknetCallFromWallet } from "@/lib/onchain-trade"
 
 const tierDefinitions = [
   { 
@@ -144,6 +146,10 @@ const socialTasks = [
 type TierInfo = typeof tierDefinitions[number] & { achieved: boolean }
 
 const MONTHLY_POOL_CAREL = (1_000_000_000 * 0.4) / 36
+const STARKNET_DISCOUNT_SOULBOUND_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS ||
+  process.env.NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS ||
+  ""
 
 function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tiers: TierInfo[] }) {
   const currentTierIndex = Math.max(
@@ -304,6 +310,7 @@ function NFTCard({
 }
 
 export function RewardsHub() {
+  const wallet = useWallet()
   const notifications = useNotifications()
   const [usablePoints, setUsablePoints] = React.useState(0)
   const [everPoints, setEverPoints] = React.useState(0)
@@ -321,6 +328,12 @@ export function RewardsHub() {
     () => MONTHLY_POOL_CAREL.toLocaleString(undefined, { maximumFractionDigits: 2 }),
     []
   )
+  const starknetProviderHint = React.useMemo<"starknet" | "argentx" | "braavos">(() => {
+    if (wallet.provider === "argentx" || wallet.provider === "braavos") {
+      return wallet.provider
+    }
+    return "starknet"
+  }, [wallet.provider])
 
   const tiers = React.useMemo<TierInfo[]>(() => {
     return tierDefinitions.map((tier) => ({
@@ -405,6 +418,14 @@ export function RewardsHub() {
 
   const handleMintNFT = async (nft: typeof nftTiers[number]) => {
     if (nft.tierId === 0) return
+    if (!wallet.isConnected) {
+      notifications.addNotification({
+        type: "error",
+        title: "Wallet belum terkoneksi",
+        message: "Connect Starknet wallet dulu sebelum mint NFT.",
+      })
+      return
+    }
     if (usablePoints < nft.cost) {
       notifications.addNotification({
         type: "error",
@@ -416,13 +437,33 @@ export function RewardsHub() {
 
     try {
       setIsMintingTier(nft.tierId)
-      const minted = await mintNft({ tier: nft.tierId })
+      if (!STARKNET_DISCOUNT_SOULBOUND_ADDRESS) {
+        throw new Error(
+          "NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS belum diisi. Set alamat kontrak NFT discount di frontend/.env.local."
+        )
+      }
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: "Confirm mint NFT transaction in your Starknet wallet.",
+      })
+      const onchainTxHash = await invokeStarknetCallFromWallet(
+        {
+          contractAddress: STARKNET_DISCOUNT_SOULBOUND_ADDRESS,
+          entrypoint: "mint_nft",
+          calldata: [nft.tierId],
+        },
+        starknetProviderHint
+      )
+      const minted = await mintNft({ tier: nft.tierId, onchain_tx_hash: onchainTxHash })
       setOwnedNfts((prev) => [minted, ...prev])
       setUsablePoints((prev) => Math.max(0, prev - nft.cost))
       notifications.addNotification({
         type: "success",
         title: "NFT minted",
         message: `NFT tier ${nft.tier} berhasil dibuat.`,
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
       })
     } catch (error) {
       notifications.addNotification({

@@ -1,4 +1,8 @@
-use crate::{db::Database, error::{AppError, Result}, models::{Transaction, PaginatedResponse}};
+use crate::{
+    db::Database,
+    error::{AppError, Result},
+    models::{PaginatedResponse, Transaction},
+};
 use chrono::{DateTime, Utc};
 use sqlx::Row; // PENTING: Import ini untuk memperbaiki error try_get
 
@@ -61,21 +65,33 @@ impl TransactionHistoryService {
         }
 
         query.push_str(" ORDER BY timestamp DESC");
-        query.push_str(&format!(" LIMIT ${} OFFSET ${}", param_count, param_count + 1));
+        query.push_str(&format!(
+            " LIMIT ${} OFFSET ${}",
+            param_count,
+            param_count + 1
+        ));
 
         // Gunakan sqlx::query_as (Runtime) bukan macro query_as!
         let mut query_builder = sqlx::query_as::<_, Transaction>(&query);
         query_builder = query_builder.bind(user_address);
 
-        if let Some(ref t) = tx_type { query_builder = query_builder.bind(t); }
-        if let Some(ref fd) = from_date { query_builder = query_builder.bind(fd); }
-        if let Some(ref td) = to_date { query_builder = query_builder.bind(td); }
+        if let Some(ref t) = tx_type {
+            query_builder = query_builder.bind(t);
+        }
+        if let Some(ref fd) = from_date {
+            query_builder = query_builder.bind(fd);
+        }
+        if let Some(ref td) = to_date {
+            query_builder = query_builder.bind(td);
+        }
 
         query_builder = query_builder.bind(limit as i64);
         query_builder = query_builder.bind(offset as i64);
 
         let transactions = query_builder.fetch_all(self.db.pool()).await?;
-        let total = self.get_total_count(user_address, tx_type, from_date, to_date).await?;
+        let total = self
+            .get_total_count(user_address, tx_type, from_date, to_date)
+            .await?;
 
         Ok(PaginatedResponse {
             items: transactions,
@@ -137,7 +153,7 @@ impl TransactionHistoryService {
         let transactions = sqlx::query_as::<_, Transaction>(
             "SELECT * FROM transactions
              WHERE user_address = $1 AND COALESCE(is_private, false) = false
-             ORDER BY timestamp DESC LIMIT 10"
+             ORDER BY timestamp DESC LIMIT 10",
         )
         .bind(user_address)
         .fetch_all(self.db.pool())
@@ -156,7 +172,7 @@ impl TransactionHistoryService {
                 SUM(fee_paid) as total_fees_paid,
                 SUM(points_earned) as total_points_earned
              FROM transactions
-             WHERE user_address = $1 AND COALESCE(is_private, false) = false"
+             WHERE user_address = $1 AND COALESCE(is_private, false) = false",
         )
         .bind(user_address)
         .fetch_one(self.db.pool())
@@ -167,9 +183,15 @@ impl TransactionHistoryService {
             total_swaps: row.get::<Option<i64>, _>("total_swaps").unwrap_or(0),
             total_bridges: row.get::<Option<i64>, _>("total_bridges").unwrap_or(0),
             total_stakes: row.get::<Option<i64>, _>("total_stakes").unwrap_or(0),
-            total_volume_usd: row.get::<Option<rust_decimal::Decimal>, _>("total_volume_usd").unwrap_or_default(),
-            total_fees_paid: row.get::<Option<rust_decimal::Decimal>, _>("total_fees_paid").unwrap_or_default(),
-            total_points_earned: row.get::<Option<rust_decimal::Decimal>, _>("total_points_earned").unwrap_or_default(),
+            total_volume_usd: row
+                .get::<Option<rust_decimal::Decimal>, _>("total_volume_usd")
+                .unwrap_or_default(),
+            total_fees_paid: row
+                .get::<Option<rust_decimal::Decimal>, _>("total_fees_paid")
+                .unwrap_or_default(),
+            total_points_earned: row
+                .get::<Option<rust_decimal::Decimal>, _>("total_points_earned")
+                .unwrap_or_default(),
         })
     }
 

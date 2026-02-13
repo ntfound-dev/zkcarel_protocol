@@ -1,8 +1,9 @@
 use axum::{extract::State, http::HeaderMap, Json};
-use serde::{Deserialize, Serialize};
 use chrono::TimeZone;
-use std::collections::HashMap;
 use rust_decimal::prelude::ToPrimitive;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::{
     error::Result,
@@ -10,11 +11,12 @@ use crate::{
 };
 
 use super::{
+    require_user,
     wallet::{
         fetch_btc_balance, fetch_evm_erc20_balance, fetch_evm_native_balance,
         fetch_starknet_erc20_balance,
     },
-    AppState, require_user,
+    AppState,
 };
 
 #[derive(Debug, Serialize)]
@@ -84,6 +86,8 @@ struct TokenSeries {
     last_close: Option<f64>,
     fallback_price: f64,
 }
+
+const ONCHAIN_BALANCE_TIMEOUT_SECS: u64 = 4;
 
 fn total_value_usd(balances: &[TokenBalance]) -> f64 {
     balances.iter().map(|b| b.value_usd).sum()
@@ -159,13 +163,23 @@ async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64,
     .fetch_all(state.db.pool())
     .await?;
 
-    let latest = rows.get(0).copied().unwrap_or_else(|| fallback_price_for(token));
+    let latest = rows
+        .get(0)
+        .copied()
+        .unwrap_or_else(|| fallback_price_for(token));
     let prev = rows.get(1).copied().unwrap_or(latest);
-    let change = if prev > 0.0 { ((latest - prev) / prev) * 100.0 } else { 0.0 };
+    let change = if prev > 0.0 {
+        ((latest - prev) / prev) * 100.0
+    } else {
+        0.0
+    };
     Ok((latest, change))
 }
 
-async fn fetch_token_holdings(state: &AppState, user_address: &str) -> Result<Vec<RawTokenBalance>> {
+async fn fetch_token_holdings(
+    state: &AppState,
+    user_address: &str,
+) -> Result<Vec<RawTokenBalance>> {
     let rows = sqlx::query_as::<_, RawTokenBalance>(
         r#"
         SELECT token, SUM(amount) as amount
@@ -199,12 +213,37 @@ fn override_holding(holdings: &mut HashMap<String, f64>, token: &str, amount: f6
     holdings.insert(token.to_string(), amount);
 }
 
+async fn fetch_optional_balance_with_timeout<F>(label: &str, fut: F) -> Option<f64>
+where
+    F: std::future::Future<Output = Result<Option<f64>>>,
+{
+    match tokio::time::timeout(Duration::from_secs(ONCHAIN_BALANCE_TIMEOUT_SECS), fut).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            tracing::warn!("Portfolio {} fetch failed: {}", label, err);
+            None
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Portfolio {} fetch timed out after {}s",
+                label,
+                ONCHAIN_BALANCE_TIMEOUT_SECS
+            );
+            None
+        }
+    }
+}
+
 async fn merge_onchain_holdings(
     state: &AppState,
     user_address: &str,
     holdings: &mut HashMap<String, f64>,
 ) -> Result<()> {
-    let linked = state.db.list_wallet_addresses(user_address).await.unwrap_or_default();
+    let linked = state
+        .db
+        .list_wallet_addresses(user_address)
+        .await
+        .unwrap_or_default();
     let starknet_address = linked
         .iter()
         .find(|item| item.chain == "starknet")
@@ -218,36 +257,75 @@ async fn merge_onchain_holdings(
         .find(|item| item.chain == "bitcoin")
         .map(|item| item.wallet_address.clone());
 
-    let mut strk_total = 0.0;
-    let mut has_strk = false;
-
-    if let (Some(addr), Some(token)) = (starknet_address.as_deref(), state.config.token_strk_address.as_deref()) {
-        if let Some(balance) = fetch_starknet_erc20_balance(&state.config, addr, token).await? {
-            strk_total += balance;
-            has_strk = true;
-        }
-    }
-
-    if let Some(addr) = evm_address.as_deref() {
-        if let Some(balance) = fetch_evm_native_balance(&state.config, addr).await? {
-            override_holding(holdings, "ETH", balance);
-        }
-        if let Some(token) = state.config.token_strk_l1_address.as_deref() {
-            if let Some(balance) = fetch_evm_erc20_balance(&state.config, addr, token).await? {
-                strk_total += balance;
-                has_strk = true;
+    let starknet_strk_fut = async {
+        match (
+            starknet_address.as_deref(),
+            state.config.token_strk_address.as_deref(),
+        ) {
+            (Some(addr), Some(token)) => {
+                fetch_optional_balance_with_timeout(
+                    "starknet STRK",
+                    fetch_starknet_erc20_balance(&state.config, addr, token),
+                )
+                .await
             }
+            _ => None,
         }
+    };
+    let evm_eth_fut = async {
+        match evm_address.as_deref() {
+            Some(addr) => {
+                fetch_optional_balance_with_timeout(
+                    "evm ETH",
+                    fetch_evm_native_balance(&state.config, addr),
+                )
+                .await
+            }
+            None => None,
+        }
+    };
+    let evm_strk_fut = async {
+        match (
+            evm_address.as_deref(),
+            state.config.token_strk_l1_address.as_deref(),
+        ) {
+            (Some(addr), Some(token)) => {
+                fetch_optional_balance_with_timeout(
+                    "evm STRK",
+                    fetch_evm_erc20_balance(&state.config, addr, token),
+                )
+                .await
+            }
+            _ => None,
+        }
+    };
+    let btc_fut = async {
+        match btc_address.as_deref() {
+            Some(addr) => {
+                fetch_optional_balance_with_timeout(
+                    "bitcoin BTC",
+                    fetch_btc_balance(&state.config, addr),
+                )
+                .await
+            }
+            None => None,
+        }
+    };
+
+    let (starknet_strk, evm_eth, evm_strk, btc_balance) =
+        tokio::join!(starknet_strk_fut, evm_eth_fut, evm_strk_fut, btc_fut);
+
+    if let Some(balance) = evm_eth {
+        override_holding(holdings, "ETH", balance);
     }
 
-    if has_strk {
+    let strk_total = starknet_strk.unwrap_or(0.0) + evm_strk.unwrap_or(0.0);
+    if strk_total > 0.0 {
         override_holding(holdings, "STRK", strk_total);
     }
 
-    if let Some(addr) = btc_address.as_deref() {
-        if let Some(balance) = fetch_btc_balance(&state.config, addr).await? {
-            override_holding(holdings, "BTC", balance);
-        }
+    if let Some(balance) = btc_balance {
+        override_holding(holdings, "BTC", balance);
     }
 
     Ok(())
@@ -297,8 +375,14 @@ async fn build_portfolio_ohlcv(
     let interval_secs = interval_seconds(interval);
     let now_ts = align_timestamp(chrono::Utc::now().timestamp(), interval_secs);
     let start_ts = now_ts - interval_secs * (limit - 1);
-    let from = chrono::Utc.timestamp_opt(start_ts, 0).single().unwrap_or_else(|| chrono::Utc::now());
-    let to = chrono::Utc.timestamp_opt(now_ts, 0).single().unwrap_or_else(|| chrono::Utc::now());
+    let from = chrono::Utc
+        .timestamp_opt(start_ts, 0)
+        .single()
+        .unwrap_or_else(|| chrono::Utc::now());
+    let to = chrono::Utc
+        .timestamp_opt(now_ts, 0)
+        .single()
+        .unwrap_or_else(|| chrono::Utc::now());
 
     let mut series = Vec::new();
     for holding in holdings {
@@ -398,7 +482,11 @@ pub async fn get_history(
 
     let (pnl, pnl_percentage) = if let (Some(first), Some(last)) = (ohlcv.first(), ohlcv.last()) {
         let diff = last.close - first.close;
-        let pct = if first.close > 0.0 { (diff / first.close) * 100.0 } else { 0.0 };
+        let pct = if first.close > 0.0 {
+            (diff / first.close) * 100.0
+        } else {
+            0.0
+        };
         (diff, pct)
     } else {
         (0.0, 0.0)
@@ -424,7 +512,10 @@ pub async fn get_portfolio_ohlcv(
     let limit = clamp_ohlcv_limit(query.limit);
     let data = build_portfolio_ohlcv(&state, &user_address, &interval, limit).await?;
 
-    Ok(Json(ApiResponse::success(PortfolioOHLCVResponse { interval, data })))
+    Ok(Json(ApiResponse::success(PortfolioOHLCVResponse {
+        interval,
+        data,
+    })))
 }
 
 #[cfg(test)]
@@ -435,8 +526,20 @@ mod tests {
     fn total_value_usd_sums_balances() {
         // Memastikan total nilai dihitung dari seluruh saldo
         let balances = vec![
-            TokenBalance { token: "A".to_string(), amount: 1.0, value_usd: 10.0, price: 10.0, change_24h: 0.0 },
-            TokenBalance { token: "B".to_string(), amount: 2.0, value_usd: 15.5, price: 7.75, change_24h: 0.0 },
+            TokenBalance {
+                token: "A".to_string(),
+                amount: 1.0,
+                value_usd: 10.0,
+                price: 10.0,
+                change_24h: 0.0,
+            },
+            TokenBalance {
+                token: "B".to_string(),
+                amount: 2.0,
+                value_usd: 15.5,
+                price: 7.75,
+                change_24h: 0.0,
+            },
         ];
         assert!((total_value_usd(&balances) - 25.5).abs() < f64::EPSILON);
     }

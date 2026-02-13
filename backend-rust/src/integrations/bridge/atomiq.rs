@@ -12,7 +12,13 @@ impl AtomiqClient {
         Self { api_key, api_url }
     }
 
-    pub async fn get_quote(&self, from_chain: &str, to_chain: &str, token: &str, amount: f64) -> Result<AtomiqQuote> {
+    pub async fn get_quote(
+        &self,
+        from_chain: &str,
+        to_chain: &str,
+        token: &str,
+        amount: f64,
+    ) -> Result<AtomiqQuote> {
         if self.api_url.trim().is_empty() {
             return Ok(AtomiqQuote::simulated(from_chain, to_chain, token, amount));
         }
@@ -120,7 +126,14 @@ impl AtomiqQuote {
     fn simulated_id(recipient: &str) -> String {
         let id_bytes: [u8; 16] = rand::random();
         let id_hex = hex::encode(id_bytes);
-        let suffix: String = recipient.chars().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect();
+        let suffix: String = recipient
+            .chars()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         format!("AT_{}_{}", id_hex, suffix)
     }
 }

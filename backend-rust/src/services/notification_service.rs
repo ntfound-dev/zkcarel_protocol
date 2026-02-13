@@ -1,8 +1,13 @@
-use crate::{config::Config, db::Database, error::Result, models::{Notification, NotificationPreferences}};
+use crate::{
+    config::Config,
+    db::Database,
+    error::Result,
+    models::{Notification, NotificationPreferences},
+};
+use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
-use sqlx::Row; // Pastikan digunakan di get_unread_count
+use tokio::sync::{broadcast, RwLock}; // Pastikan digunakan di get_unread_count
 
 pub struct NotificationService {
     db: Database,
@@ -49,14 +54,24 @@ impl NotificationService {
             created_at: chrono::Utc::now(),
         };
 
-        self.send_to_websocket(user_address, notification.clone()).await;
-        self.send_via_other_channels(user_address, &notification).await?;
+        self.send_to_websocket(user_address, notification.clone())
+            .await;
+        self.send_via_other_channels(user_address, &notification)
+            .await?;
 
-        tracing::info!("Notification sent to {}: {} - {}", user_address, title, message);
+        tracing::info!(
+            "Notification sent to {}: {} - {}",
+            user_address,
+            title,
+            message
+        );
         Ok(())
     }
 
-    pub async fn register_connection(&self, user_address: String) -> broadcast::Receiver<Notification> {
+    pub async fn register_connection(
+        &self,
+        user_address: String,
+    ) -> broadcast::Receiver<Notification> {
         let mut connections = self.connections.write().await;
         if let Some(sender) = connections.get(&user_address) {
             sender.subscribe()
@@ -79,22 +94,35 @@ impl NotificationService {
         }
     }
 
-    async fn send_via_other_channels(&self, user_address: &str, notification: &Notification) -> Result<()> {
+    async fn send_via_other_channels(
+        &self,
+        user_address: &str,
+        notification: &Notification,
+    ) -> Result<()> {
         if self.config.is_testnet() {
-            tracing::debug!("Testnet mode: skip external notifications for {}", user_address);
+            tracing::debug!(
+                "Testnet mode: skip external notifications for {}",
+                user_address
+            );
             return Ok(());
         }
         let prefs = self.get_user_preferences(user_address).await?;
-        if prefs.email_enabled { self.send_email(user_address, notification).await?; }
-        if prefs.push_enabled { self.send_push(user_address, notification).await?; }
-        if prefs.telegram_enabled { self.send_telegram(user_address, notification).await?; }
+        if prefs.email_enabled {
+            self.send_email(user_address, notification).await?;
+        }
+        if prefs.push_enabled {
+            self.send_push(user_address, notification).await?;
+        }
+        if prefs.telegram_enabled {
+            self.send_telegram(user_address, notification).await?;
+        }
         Ok(())
     }
 
     async fn get_user_preferences(&self, user_address: &str) -> Result<NotificationPreferences> {
         let prefs = sqlx::query_as::<_, NotificationPreferences>(
             "SELECT email_enabled, push_enabled, telegram_enabled, discord_enabled
-             FROM notification_preferences WHERE user_address = $1"
+             FROM notification_preferences WHERE user_address = $1",
         )
         .bind(user_address)
         .fetch_optional(self.db.pool())
@@ -103,21 +131,38 @@ impl NotificationService {
     }
 
     async fn send_email(&self, user_address: &str, notification: &Notification) -> Result<()> {
-        tracing::debug!("Email notification to {}: {}", user_address, notification.title);
+        tracing::debug!(
+            "Email notification to {}: {}",
+            user_address,
+            notification.title
+        );
         Ok(())
     }
 
     async fn send_push(&self, user_address: &str, notification: &Notification) -> Result<()> {
-        tracing::debug!("Push notification to {}: {}", user_address, notification.title);
+        tracing::debug!(
+            "Push notification to {}: {}",
+            user_address,
+            notification.title
+        );
         Ok(())
     }
 
     async fn send_telegram(&self, user_address: &str, notification: &Notification) -> Result<()> {
-        tracing::debug!("Telegram notification to {}: {}", user_address, notification.title);
+        tracing::debug!(
+            "Telegram notification to {}: {}",
+            user_address,
+            notification.title
+        );
         Ok(())
     }
 
-    pub async fn get_user_notifications(&self, user_address: &str, page: i32, limit: i32) -> Result<Vec<Notification>> {
+    pub async fn get_user_notifications(
+        &self,
+        user_address: &str,
+        page: i32,
+        limit: i32,
+    ) -> Result<Vec<Notification>> {
         let offset = (page - 1) * limit;
         self.db
             .get_user_notifications(user_address, limit as i64, offset as i64)
@@ -125,23 +170,29 @@ impl NotificationService {
     }
 
     pub async fn mark_as_read(&self, notification_id: i64, user_address: &str) -> Result<()> {
-        self.db.mark_notification_read(notification_id, user_address).await
+        self.db
+            .mark_notification_read(notification_id, user_address)
+            .await
     }
 
     pub async fn mark_all_as_read(&self, user_address: &str) -> Result<()> {
-        sqlx::query("UPDATE notifications SET read = true WHERE user_address = $1 AND read = false")
-            .bind(user_address)
-            .execute(self.db.pool())
-            .await?;
+        sqlx::query(
+            "UPDATE notifications SET read = true WHERE user_address = $1 AND read = false",
+        )
+        .bind(user_address)
+        .execute(self.db.pool())
+        .await?;
         Ok(())
     }
 
     // PERBAIKAN: Urutan yang benar adalah pub async fn
     pub async fn get_unread_count(&self, user_address: &str) -> Result<i64> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM notifications WHERE user_address = $1 AND read = false")
-            .bind(user_address)
-            .fetch_one(self.db.pool())
-            .await?;
+        let row = sqlx::query(
+            "SELECT COUNT(*) as count FROM notifications WHERE user_address = $1 AND read = false",
+        )
+        .bind(user_address)
+        .fetch_one(self.db.pool())
+        .await?;
 
         // Menggunakan sqlx::Row di sini
         Ok(row.get::<i64, _>("count"))
@@ -150,7 +201,16 @@ impl NotificationService {
 
 #[derive(Debug, Clone)]
 pub enum NotificationType {
-    SwapCompleted, SwapFailed, OrderFilled, OrderExpired, PointsAwarded, StakeRewards, NFTExpired, RewardClaimable, PriceAlert, System,
+    SwapCompleted,
+    SwapFailed,
+    OrderFilled,
+    OrderExpired,
+    PointsAwarded,
+    StakeRewards,
+    NFTExpired,
+    RewardClaimable,
+    PriceAlert,
+    System,
 }
 
 impl ToString for NotificationType {
@@ -195,8 +255,14 @@ mod tests {
     #[test]
     fn notification_type_to_string_maps() {
         // Memastikan mapping enum ke string berjalan benar
-        assert_eq!(NotificationType::SwapCompleted.to_string(), "swap.completed");
-        assert_eq!(NotificationType::PointsAwarded.to_string(), "points.awarded");
+        assert_eq!(
+            NotificationType::SwapCompleted.to_string(),
+            "swap.completed"
+        );
+        assert_eq!(
+            NotificationType::PointsAwarded.to_string(),
+            "points.awarded"
+        );
         assert_eq!(NotificationType::System.to_string(), "system");
     }
 
@@ -207,4 +273,3 @@ mod tests {
         assert!(all.len() >= 5);
     }
 }
-

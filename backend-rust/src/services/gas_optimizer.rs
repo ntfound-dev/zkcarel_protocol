@@ -1,4 +1,8 @@
-use crate::{config::Config, constants::{GAS_PRICE_FAST, GAS_PRICE_INSTANT, GAS_PRICE_SLOW, GAS_PRICE_STANDARD}, error::Result};
+use crate::{
+    config::Config,
+    constants::{GAS_PRICE_FAST, GAS_PRICE_INSTANT, GAS_PRICE_SLOW, GAS_PRICE_STANDARD},
+    error::Result,
+};
 
 fn base_gas_for(tx_type: &str) -> u64 {
     match tx_type {
@@ -78,7 +82,12 @@ mod tests {
     #[test]
     fn apply_testnet_discount_halves_values() {
         // Memastikan diskon testnet memotong harga gas jadi setengah
-        let gas = GasPrice { slow: 2.0, standard: 4.0, fast: 6.0, instant: 8.0 };
+        let gas = GasPrice {
+            slow: 2.0,
+            standard: 4.0,
+            fast: 6.0,
+            instant: 8.0,
+        };
         let discounted = apply_testnet_discount(gas, true);
         assert!((discounted.standard - 2.0).abs() < f64::EPSILON);
     }

@@ -1,4 +1,4 @@
-use super::{starknet_client::StarknetClient, event_parser::EventParser};
+use super::{event_parser::EventParser, starknet_client::StarknetClient};
 use crate::{db::Database, error::Result};
 
 /// Block Processor - Processes blocks and extracts events
@@ -26,21 +26,26 @@ impl BlockProcessor {
 
         for tx in &block.transactions {
             // Get transaction receipt to get events
-            if let Ok(receipt) = self.client.get_transaction_receipt(&tx.transaction_hash).await {
+            if let Ok(receipt) = self
+                .client
+                .get_transaction_receipt(&tx.transaction_hash)
+                .await
+            {
                 for event in &receipt.events {
                     if let Some(parsed) = self.parser.parse_event(event) {
-                        self.handle_event(
-                            &tx.transaction_hash,
-                            block_number,
-                            parsed,
-                        ).await?;
+                        self.handle_event(&tx.transaction_hash, block_number, parsed)
+                            .await?;
                         events_processed += 1;
                     }
                 }
             }
         }
 
-        tracing::info!("Processed block {} with {} events", block_number, events_processed);
+        tracing::info!(
+            "Processed block {} with {} events",
+            block_number,
+            events_processed
+        );
         Ok(events_processed)
     }
 
@@ -53,9 +58,15 @@ impl BlockProcessor {
     ) -> Result<()> {
         match event.event_type.as_str() {
             "Swap" => self.handle_swap(tx_hash, block_number, event.data).await?,
-            "Bridge" => self.handle_bridge(tx_hash, block_number, event.data).await?,
+            "Bridge" => {
+                self.handle_bridge(tx_hash, block_number, event.data)
+                    .await?
+            }
             "Stake" => self.handle_stake(tx_hash, block_number, event.data).await?,
-            "Unstake" => self.handle_unstake(tx_hash, block_number, event.data).await?,
+            "Unstake" => {
+                self.handle_unstake(tx_hash, block_number, event.data)
+                    .await?
+            }
             "LimitOrderFilled" => self.handle_order_filled(tx_hash, event.data).await?,
             _ => {}
         }
@@ -63,7 +74,12 @@ impl BlockProcessor {
         Ok(())
     }
 
-    async fn handle_swap(&self, tx_hash: &str, block_number: u64, data: serde_json::Value) -> Result<()> {
+    async fn handle_swap(
+        &self,
+        tx_hash: &str,
+        block_number: u64,
+        data: serde_json::Value,
+    ) -> Result<()> {
         let user = data.get("user").and_then(|v| v.as_str()).unwrap_or("");
 
         let tx = build_swap_transaction(tx_hash, block_number, user, &data);
@@ -72,27 +88,42 @@ impl BlockProcessor {
         Ok(())
     }
 
-    async fn handle_bridge(&self, tx_hash: &str, block_number: u64, data: serde_json::Value) -> Result<()> {
+    async fn handle_bridge(
+        &self,
+        tx_hash: &str,
+        block_number: u64,
+        data: serde_json::Value,
+    ) -> Result<()> {
         let user = data.get("user").and_then(|v| v.as_str()).unwrap_or("");
-        
+
         let tx = build_simple_transaction(tx_hash, block_number, user, "bridge");
 
         self.db.save_transaction(&tx).await?;
         Ok(())
     }
 
-    async fn handle_stake(&self, tx_hash: &str, block_number: u64, data: serde_json::Value) -> Result<()> {
+    async fn handle_stake(
+        &self,
+        tx_hash: &str,
+        block_number: u64,
+        data: serde_json::Value,
+    ) -> Result<()> {
         let user = data.get("user").and_then(|v| v.as_str()).unwrap_or("");
-        
+
         let tx = build_simple_transaction(tx_hash, block_number, user, "stake");
 
         self.db.save_transaction(&tx).await?;
         Ok(())
     }
 
-    async fn handle_unstake(&self, tx_hash: &str, block_number: u64, data: serde_json::Value) -> Result<()> {
+    async fn handle_unstake(
+        &self,
+        tx_hash: &str,
+        block_number: u64,
+        data: serde_json::Value,
+    ) -> Result<()> {
         let user = data.get("user").and_then(|v| v.as_str()).unwrap_or("");
-        
+
         let tx = build_simple_transaction(tx_hash, block_number, user, "unstake");
 
         self.db.save_transaction(&tx).await?;
@@ -101,7 +132,7 @@ impl BlockProcessor {
 
     async fn handle_order_filled(&self, _tx_hash: &str, data: serde_json::Value) -> Result<()> {
         let order_id = data.get("order_id").and_then(|v| v.as_str()).unwrap_or("");
-        
+
         self.db.update_order_status(order_id, 2).await?;
         Ok(())
     }
@@ -141,8 +172,14 @@ fn build_swap_transaction(
         block_number: block_number as i64,
         user_address: user.to_string(),
         tx_type: "swap".to_string(),
-        token_in: data.get("token_in").and_then(|v| v.as_str()).map(String::from),
-        token_out: data.get("token_out").and_then(|v| v.as_str()).map(String::from),
+        token_in: data
+            .get("token_in")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        token_out: data
+            .get("token_out")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         amount_in: None,
         amount_out: None,
         usd_value: None,

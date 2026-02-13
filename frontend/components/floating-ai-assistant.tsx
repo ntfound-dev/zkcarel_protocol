@@ -4,8 +4,10 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Bot, User, Send, X, Minus, ChevronUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { executeAiCommand, getAiPendingActions } from "@/lib/api"
+import { executeAiCommand, getAiPendingActions, prepareAiAction } from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
+import { useWallet } from "@/hooks/use-wallet"
+import { invokeStarknetCallFromWallet, toHexFelt } from "@/lib/onchain-trade"
 
 const aiTiers = [
   { id: 1, name: "Basic", cost: 0, costLabel: "Free", description: "General assistance" },
@@ -20,6 +22,52 @@ const sampleMessages = [
   },
 ]
 
+const quickPrompts = [
+  "cek saldo saya",
+  "point saya berapa",
+  "swap 25 STRK to CAREL",
+]
+
+const STARKNET_AI_EXECUTOR_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS ||
+  process.env.NEXT_PUBLIC_AI_EXECUTOR_ADDRESS ||
+  ""
+
+const AI_ACTION_TYPE_SWAP = 0
+const AI_ACTION_TYPE_MULTI_STEP = 5
+
+function encodeShortByteArray(value: string): Array<string | number> {
+  const normalized = value.trim()
+  const byteLen = new TextEncoder().encode(normalized).length
+  if (byteLen === 0) return [0, 0, 0]
+  if (byteLen > 31) {
+    throw new Error("AI action payload terlalu panjang. Maksimal 31 bytes.")
+  }
+  return [0, toHexFelt(normalized), byteLen]
+}
+
+function actionTypeForTier(tier: number): number {
+  return tier >= 3 ? AI_ACTION_TYPE_MULTI_STEP : AI_ACTION_TYPE_SWAP
+}
+
+function isInvalidUserSignatureError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "")
+  return /invalid user signature/i.test(message)
+}
+
+function resolveStarknetProviderHint(provider: string | null): "starknet" | "argentx" | "braavos" {
+  if (provider === "argentx" || provider === "braavos") return provider
+  return "starknet"
+}
+
+function findNewPendingAction(after: number[], before: number[]): number | null {
+  const beforeSet = new Set(before)
+  for (const id of after) {
+    if (!beforeSet.has(id)) return id
+  }
+  return after.length > 0 ? after[after.length - 1] : null
+}
+
 interface Message {
   role: "user" | "assistant"
   content: string
@@ -27,6 +75,7 @@ interface Message {
 
 export function FloatingAIAssistant() {
   const notifications = useNotifications()
+  const wallet = useWallet()
   const [isOpen, setIsOpen] = React.useState(false)
   const [isMinimized, setIsMinimized] = React.useState(false)
   const [messages, setMessages] = React.useState<Message[]>(sampleMessages)
@@ -36,7 +85,11 @@ export function FloatingAIAssistant() {
   const [actionId, setActionId] = React.useState("")
   const [pendingActions, setPendingActions] = React.useState<number[]>([])
   const [isLoadingActions, setIsLoadingActions] = React.useState(false)
+  const [isCreatingAction, setIsCreatingAction] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
+  const requiresActionId = selectedTier >= 2
+  const parsedActionId = Number(actionId)
+  const hasValidActionId = !requiresActionId || (Number.isFinite(parsedActionId) && parsedActionId > 0)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -48,26 +101,24 @@ export function FloatingAIAssistant() {
 
   const handleSend = async () => {
     const command = input.trim()
-    if (!command) return
-
-    setMessages((prev) => [...prev, { role: "user", content: command }])
-    setInput("")
-    setIsSending(true)
+    if (!command || isSending) return
 
     let actionIdValue: number | undefined = undefined
     if (selectedTier >= 2) {
-      const parsed = Number(actionId)
-      if (!Number.isFinite(parsed) || parsed <= 0) {
+      if (!hasValidActionId) {
         notifications.addNotification({
           type: "error",
           title: "AI Tier requires action_id",
           message: "Masukkan action_id on-chain untuk Tier 2/3.",
         })
-        setIsSending(false)
         return
       }
-      actionIdValue = Math.floor(parsed)
+      actionIdValue = Math.floor(parsedActionId)
     }
+
+    setMessages((prev) => [...prev, { role: "user", content: command }])
+    setInput("")
+    setIsSending(true)
 
     try {
       const response = await executeAiCommand({
@@ -116,6 +167,138 @@ export function FloatingAIAssistant() {
       })
     } finally {
       setIsLoadingActions(false)
+    }
+  }
+
+  const createOnchainActionId = async () => {
+    if (!requiresActionId) return
+    if (isCreatingAction) return
+    if (!STARKNET_AI_EXECUTOR_ADDRESS) {
+      notifications.addNotification({
+        type: "error",
+        title: "AI executor belum diisi",
+        message:
+          "Set NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS di frontend/.env.local lalu restart frontend.",
+      })
+      return
+    }
+
+    setIsCreatingAction(true)
+    let pendingBefore: number[] = []
+    try {
+      const before = await getAiPendingActions(0, 50)
+      pendingBefore = before.pending || []
+    } catch {
+      pendingBefore = []
+    }
+
+    try {
+      const payload = `tier:${selectedTier}`
+      const actionType = actionTypeForTier(selectedTier)
+      const providerHint = resolveStarknetProviderHint(wallet.provider)
+
+      const prepareResponse = await prepareAiAction({
+        level: selectedTier,
+        context: payload,
+        window_seconds: 45,
+      })
+      notifications.addNotification({
+        type: "info",
+        title: "AI signature window prepared",
+        message: `Window ${prepareResponse.from_timestamp}-${prepareResponse.to_timestamp} prepared.`,
+        txHash: prepareResponse.tx_hash,
+        txNetwork: "starknet",
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+
+      const submitOnchainAction = async () =>
+        invokeStarknetCallFromWallet(
+          {
+            contractAddress: STARKNET_AI_EXECUTOR_ADDRESS,
+            entrypoint: "submit_action",
+            calldata: [actionType, ...encodeShortByteArray(payload), 0],
+          },
+          providerHint
+        )
+
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: "Confirm submit_action transaction in your Starknet wallet.",
+      })
+      let onchainTxHash: string
+      try {
+        onchainTxHash = await submitOnchainAction()
+      } catch (firstError) {
+        if (!isInvalidUserSignatureError(firstError)) {
+          throw firstError
+        }
+        // Retry once by refreshing the validity window.
+        const retryPrepared = await prepareAiAction({
+          level: selectedTier,
+          context: payload,
+          window_seconds: 45,
+        })
+        notifications.addNotification({
+          type: "info",
+          title: "Retrying with refreshed window",
+          message: "Signature window diperbarui. Konfirmasi transaksi sekali lagi.",
+          txHash: retryPrepared.tx_hash,
+          txNetwork: "starknet",
+        })
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        onchainTxHash = await submitOnchainAction()
+      }
+
+      notifications.addNotification({
+        type: "info",
+        title: "AI action submitted",
+        message: "Menunggu action_id muncul di pending list...",
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
+      })
+
+      let latestPending: number[] = pendingBefore
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        try {
+          const after = await getAiPendingActions(0, 50)
+          latestPending = after.pending || []
+          const discovered = findNewPendingAction(latestPending, pendingBefore)
+          if (discovered) {
+            setPendingActions(latestPending)
+            setActionId(String(discovered))
+            notifications.addNotification({
+              type: "success",
+              title: "action_id siap",
+              message: `action_id ${discovered} sudah siap untuk Tier ${selectedTier}.`,
+              txHash: onchainTxHash,
+              txNetwork: "starknet",
+            })
+            return
+          }
+        } catch {
+          // continue polling
+        }
+      }
+
+      setPendingActions(latestPending)
+      notifications.addNotification({
+        type: "info",
+        title: "action_id belum terbaca",
+        message: "Klik Fetch pending action_id, lalu pilih ID terbaru.",
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
+      })
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Gagal submit action on-chain",
+        message: error instanceof Error ? error.message : "Transaksi submit_action gagal",
+      })
+    } finally {
+      setIsCreatingAction(false)
     }
   }
 
@@ -198,13 +381,22 @@ export function FloatingAIAssistant() {
                       min={1}
                     />
                     <div className="flex items-center justify-between mt-2">
-                      <button
-                        onClick={fetchPendingActions}
-                        disabled={isLoadingActions}
-                        className="text-[11px] text-primary hover:underline disabled:opacity-50"
-                      >
-                        {isLoadingActions ? "Loading..." : "Fetch pending action_id"}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={fetchPendingActions}
+                          disabled={isLoadingActions || isCreatingAction}
+                          className="text-[11px] text-primary hover:underline disabled:opacity-50"
+                        >
+                          {isLoadingActions ? "Loading..." : "Fetch pending action_id"}
+                        </button>
+                        <button
+                          onClick={createOnchainActionId}
+                          disabled={isCreatingAction || isLoadingActions}
+                          className="text-[11px] text-primary hover:underline disabled:opacity-50"
+                        >
+                          {isCreatingAction ? "Submitting..." : "Create on-chain action_id"}
+                        </button>
+                      </div>
                       {pendingActions.length > 0 && (
                         <span className="text-[10px] text-muted-foreground">
                           {pendingActions.length} pending
@@ -230,6 +422,18 @@ export function FloatingAIAssistant() {
               
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {quickPrompts.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => setInput(prompt)}
+                      className="px-2 py-1 rounded-full text-[10px] bg-surface border border-border text-muted-foreground hover:text-foreground"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
                 {messages.map((message, index) => {
                   const isUser = message.role === "user"
                   return (
@@ -265,12 +469,13 @@ export function FloatingAIAssistant() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
                 placeholder="Ask anything..."
+                disabled={isSending}
                 className="flex-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none transition-all"
               />
               <Button 
                 onClick={handleSend}
                 size="sm"
-                disabled={isSending}
+                disabled={isSending || !input.trim() || !hasValidActionId}
                 className="bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
               >
                 {isSending ? (
@@ -280,6 +485,11 @@ export function FloatingAIAssistant() {
                 )}
               </Button>
             </div>
+            {requiresActionId && !hasValidActionId && (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Tier 2/3 perlu action_id on-chain yang valid.
+              </p>
+            )}
           </div>
         </div>
       )}

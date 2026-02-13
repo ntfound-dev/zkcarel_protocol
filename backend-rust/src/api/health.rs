@@ -1,6 +1,6 @@
+use super::AppState;
 use axum::{extract::State, Json};
 use serde::Serialize;
-use super::AppState;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -14,8 +14,16 @@ fn build_health_response(db_ok: bool, redis_ok: bool) -> HealthResponse {
     HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        database: if db_ok { "connected".to_string() } else { "disconnected".to_string() },
-        redis: if redis_ok { "connected".to_string() } else { "disconnected".to_string() },
+        database: if db_ok {
+            "connected".to_string()
+        } else {
+            "disconnected".to_string()
+        },
+        redis: if redis_ok {
+            "connected".to_string()
+        } else {
+            "disconnected".to_string()
+        },
     }
 }
 

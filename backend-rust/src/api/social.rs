@@ -1,21 +1,18 @@
-use axum::{extract::State, http::HeaderMap, Json};
-use serde::{Deserialize, Serialize};
+use super::{require_user, AppState};
 use crate::{
     constants::{
-        POINTS_DISCORD_JOIN,
-        POINTS_TELEGRAM_JOIN,
-        POINTS_TWITTER_FOLLOW,
-        POINTS_TWITTER_RETWEET,
+        POINTS_DISCORD_JOIN, POINTS_TELEGRAM_JOIN, POINTS_TWITTER_FOLLOW, POINTS_TWITTER_RETWEET,
     },
     error::{AppError, Result},
     models::ApiResponse,
     services::SocialVerifier,
 };
-use super::{AppState, require_user};
+use axum::{extract::State, http::HeaderMap, Json};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 pub struct VerifyTaskRequest {
-    pub task_type: String, 
+    pub task_type: String,
     pub proof: String,
 }
 
@@ -44,17 +41,37 @@ pub async fn verify_task(
 ) -> Result<Json<ApiResponse<VerifyTaskResponse>>> {
     // Gunakan 'proof' di sini agar tidak dianggap dead code
     // Sekaligus membantu debugging untuk melihat apa yang dikirim user
-    tracing::info!("Verifying task: {} with proof: {}", req.task_type, req.proof);
+    tracing::info!(
+        "Verifying task: {} with proof: {}",
+        req.task_type,
+        req.proof
+    );
 
     let verifier = SocialVerifier::new(state.db.clone(), state.config.clone());
     let user_address = require_user(&headers, &state).await?;
 
     let task_type = req.task_type.as_str();
     let verified = match task_type {
-        "twitter_follow" => verifier.verify_twitter(&user_address, task_type, &req.proof).await?,
-        "twitter_retweet" => verifier.verify_twitter(&user_address, task_type, &req.proof).await?,
-        "telegram_join" => verifier.verify_telegram(&user_address, task_type, &req.proof).await?,
-        "discord_join" => verifier.verify_discord(&user_address, task_type, &req.proof).await?,
+        "twitter_follow" => {
+            verifier
+                .verify_twitter(&user_address, task_type, &req.proof)
+                .await?
+        }
+        "twitter_retweet" => {
+            verifier
+                .verify_twitter(&user_address, task_type, &req.proof)
+                .await?
+        }
+        "telegram_join" => {
+            verifier
+                .verify_telegram(&user_address, task_type, &req.proof)
+                .await?
+        }
+        "discord_join" => {
+            verifier
+                .verify_discord(&user_address, task_type, &req.proof)
+                .await?
+        }
         _ => return Err(AppError::BadRequest("Invalid task type".into())),
     };
 
@@ -63,7 +80,7 @@ pub async fn verify_task(
     if verified && points > 0.0 {
         verifier.award_points(&user_address, points).await?;
     }
-    
+
     let response = VerifyTaskResponse {
         verified,
         points_earned: if verified { points } else { 0.0 },
@@ -73,7 +90,7 @@ pub async fn verify_task(
             format!("Task {} verification failed", req.task_type)
         },
     };
-    
+
     Ok(Json(ApiResponse::success(response)))
 }
 

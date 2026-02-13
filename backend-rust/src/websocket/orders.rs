@@ -1,9 +1,12 @@
 use axum::{
-    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State, Query},
-    http::{HeaderMap, header::AUTHORIZATION},
-    response::{Response, IntoResponse},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query, State,
+    },
+    http::{header::AUTHORIZATION, HeaderMap},
+    response::{IntoResponse, Response},
 };
-use futures_util::{StreamExt, SinkExt};
+use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 
 use crate::{
@@ -18,7 +21,9 @@ pub(crate) struct WsAuthQuery {
 
 fn token_from_headers(headers: &HeaderMap) -> Option<String> {
     let header_value = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    header_value.strip_prefix("Bearer ").map(|token| token.to_string())
+    header_value
+        .strip_prefix("Bearer ")
+        .map(|token| token.to_string())
 }
 
 #[derive(Debug, Serialize)]
@@ -35,7 +40,8 @@ fn connected_payload() -> String {
     serde_json::json!({
         "type": "connected",
         "message": "Connected to order updates stream"
-    }).to_string()
+    })
+    .to_string()
 }
 
 fn status_label(status: i16) -> &'static str {
@@ -92,7 +98,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_address: String)
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
             // Get user's active orders
-            let orders = match state_clone.db.get_active_orders_for_owner(&owner_address).await {
+            let orders = match state_clone
+                .db
+                .get_active_orders_for_owner(&owner_address)
+                .await
+            {
                 Ok(orders) => orders,
                 Err(_) => continue,
             };
@@ -108,7 +118,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_address: String)
                 };
 
                 let json = serde_json::to_string(&update).unwrap_or_default();
-                
+
                 // Perbaikan: Tambahkan .into() di sini juga
                 if sender.send(Message::Text(json.into())).await.is_err() {
                     return;

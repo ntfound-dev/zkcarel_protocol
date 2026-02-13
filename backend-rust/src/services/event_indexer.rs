@@ -1,11 +1,11 @@
 use crate::{
     config::Config,
-    constants::{
-        INDEXER_INTERVAL_SECS,
-    },
+    constants::INDEXER_INTERVAL_SECS,
     db::Database,
     error::Result,
-    indexer::{block_processor::BlockProcessor, event_parser::EventParser, starknet_client::StarknetClient},
+    indexer::{
+        block_processor::BlockProcessor, event_parser::EventParser, starknet_client::StarknetClient,
+    },
 };
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
@@ -75,11 +75,7 @@ impl EventIndexer {
             return Ok(());
         }
 
-        tracing::info!(
-            "Scanning blocks {} to {}",
-            last_block + 1,
-            current_block
-        );
+        tracing::info!("Scanning blocks {} to {}", last_block + 1, current_block);
 
         for block in (last_block + 1)..=current_block {
             if std::env::var("USE_BLOCK_PROCESSOR").is_ok() {
@@ -173,7 +169,11 @@ impl EventIndexer {
 
     async fn handle_swap_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
         // Parse swap event data
-        let user = event.data.get("user").and_then(|v| v.as_str()).unwrap_or("");
+        let user = event
+            .data
+            .get("user")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let amount_usd: f64 = event
             .data
             .get("amount_usd")
@@ -186,8 +186,16 @@ impl EventIndexer {
             block_number: block_number as i64,
             user_address: user.to_string(),
             tx_type: "swap".to_string(),
-            token_in: event.data.get("token_in").and_then(|v| v.as_str()).map(String::from),
-            token_out: event.data.get("token_out").and_then(|v| v.as_str()).map(String::from),
+            token_in: event
+                .data
+                .get("token_in")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            token_out: event
+                .data
+                .get("token_out")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             amount_in: None,
             amount_out: None,
             usd_value: Some(rust_decimal::Decimal::from_f64_retain(amount_usd).unwrap()),
@@ -209,8 +217,12 @@ impl EventIndexer {
     }
 
     async fn handle_bridge_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
-        let user = event.data.get("user").and_then(|v| v.as_str()).unwrap_or("");
-        
+        let user = event
+            .data
+            .get("user")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
         let tx = crate::models::Transaction {
             tx_hash: event.tx_hash,
             block_number: block_number as i64,
@@ -232,8 +244,12 @@ impl EventIndexer {
     }
 
     async fn handle_stake_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
-        let user = event.data.get("user").and_then(|v| v.as_str()).unwrap_or("");
-        
+        let user = event
+            .data
+            .get("user")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
         let tx = crate::models::Transaction {
             tx_hash: event.tx_hash,
             block_number: block_number as i64,
@@ -255,8 +271,12 @@ impl EventIndexer {
     }
 
     async fn handle_unstake_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
-        let user = event.data.get("user").and_then(|v| v.as_str()).unwrap_or("");
-        
+        let user = event
+            .data
+            .get("user")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
         let tx = crate::models::Transaction {
             tx_hash: event.tx_hash,
             block_number: block_number as i64,
@@ -278,8 +298,12 @@ impl EventIndexer {
     }
 
     async fn handle_claim_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
-        let user = event.data.get("user").and_then(|v| v.as_str()).unwrap_or("");
-        
+        let user = event
+            .data
+            .get("user")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
         let tx = crate::models::Transaction {
             tx_hash: event.tx_hash,
             block_number: block_number as i64,
@@ -301,11 +325,15 @@ impl EventIndexer {
     }
 
     async fn handle_order_filled(&self, event: BlockchainEvent, _block_number: u64) -> Result<()> {
-        let order_id = event.data.get("order_id").and_then(|v| v.as_str()).unwrap_or("");
-        
+        let order_id = event
+            .data
+            .get("order_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
         // Update limit order status
         self.db.update_order_status(order_id, 2).await?;
-        
+
         tracing::info!("Limit order filled: {}", order_id);
         Ok(())
     }

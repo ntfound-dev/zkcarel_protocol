@@ -1,20 +1,20 @@
-use axum::{extract::State, http::HeaderMap, Json};
-use serde::{Deserialize, Serialize};
+use super::{require_starknet_user, AppState};
+use crate::services::onchain::{parse_felt, OnchainInvoker};
 use crate::{
-    constants::{token_address_for, DEX_EKUBO, DEX_HAIKO, POINTS_PER_USD_SWAP},
-    error::{AppError, Result},
-    models::{ApiResponse, SwapQuoteRequest, SwapQuoteResponse},
-    services::LiquidityAggregator,
-    services::gas_optimizer::GasOptimizer,
-    services::NotificationService,
-    services::notification_service::NotificationType,
+    constants::{token_address_for, DEX_EKUBO, DEX_HAIKO},
     // 1. IMPORT MODUL HASH AGAR TERPAKAI
     crypto::hash,
+    error::{AppError, Result},
+    models::{ApiResponse, SwapQuoteRequest, SwapQuoteResponse},
+    services::gas_optimizer::GasOptimizer,
+    services::notification_service::NotificationType,
+    services::LiquidityAggregator,
+    services::NotificationService,
 };
-use crate::services::onchain::{OnchainInvoker, parse_felt};
+use axum::{extract::State, http::HeaderMap, Json};
+use serde::{Deserialize, Serialize};
 use starknet_core::types::{Call, Felt};
 use starknet_core::utils::get_selector_from_name;
-use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyVerificationPayload {
@@ -58,16 +58,30 @@ fn base_fee(amount_in: f64) -> f64 {
 }
 
 fn mev_fee_for_mode(mode: &str, amount_in: f64) -> f64 {
-    if mode == "private" { amount_in * 0.01 } else { 0.0 }
+    if mode == "private" {
+        amount_in * 0.01
+    } else {
+        0.0
+    }
 }
 
 fn total_fee(amount_in: f64, mode: &str) -> f64 {
     base_fee(amount_in) + mev_fee_for_mode(mode, amount_in)
 }
 
+fn normalize_usd_volume(usd_in: f64, usd_out: f64) -> f64 {
+    let in_valid = usd_in.is_finite() && usd_in > 0.0;
+    let out_valid = usd_out.is_finite() && usd_out > 0.0;
+    match (in_valid, out_valid) {
+        (true, true) => (usd_in + usd_out) / 2.0,
+        (true, false) => usd_in,
+        (false, true) => usd_out,
+        (false, false) => 0.0,
+    }
+}
+
 fn is_private_trade(mode: &str, hide_balance: bool) -> bool {
-    let _ = hide_balance;
-    mode.eq_ignore_ascii_case("private")
+    hide_balance || mode.eq_ignore_ascii_case("private")
 }
 
 fn fallback_price_for(token: &str) -> f64 {
@@ -102,20 +116,22 @@ fn estimated_time_for_dex(dex: &str) -> &'static str {
 
 fn normalize_onchain_tx_hash(tx_hash: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = tx_hash.map(str::trim).filter(|v| !v.is_empty()) else {
-        return Ok(None)
+        return Ok(None);
     };
     if !raw.starts_with("0x") {
-        return Err(AppError::BadRequest("onchain_tx_hash must start with 0x".to_string()))
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash must start with 0x".to_string(),
+        ));
     }
     if raw.len() > 66 {
         return Err(AppError::BadRequest(
             "onchain_tx_hash exceeds maximum length (66)".to_string(),
-        ))
+        ));
     }
     if !raw[2..].chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(AppError::BadRequest(
             "onchain_tx_hash must be hex-encoded".to_string(),
-        ))
+        ));
     }
     Ok(Some(raw.to_ascii_lowercase()))
 }
@@ -180,7 +196,13 @@ async fn verify_private_trade_with_garaga(
         calldata.push(parse_felt(&item)?);
     }
 
-    let tx_hash = invoker.invoke(Call { to, selector, calldata }).await?;
+    let tx_hash = invoker
+        .invoke(Call {
+            to,
+            selector,
+            calldata,
+        })
+        .await?;
     Ok(tx_hash.to_string())
 }
 
@@ -189,7 +211,9 @@ pub async fn get_quote(
     State(state): State<AppState>,
     Json(req): Json<SwapQuoteRequest>,
 ) -> Result<Json<ApiResponse<SwapQuoteResponse>>> {
-    let amount_in: f64 = req.amount.parse()
+    let amount_in: f64 = req
+        .amount
+        .parse()
         .map_err(|_| AppError::BadRequest("Invalid amount".to_string()))?;
 
     tracing::debug!(
@@ -205,14 +229,15 @@ pub async fn get_quote(
     }
 
     let gas_optimizer = GasOptimizer::new(state.config.clone());
-    let estimated_cost = gas_optimizer.estimate_cost("swap").await.unwrap_or_default();
+    let estimated_cost = gas_optimizer
+        .estimate_cost("swap")
+        .await
+        .unwrap_or_default();
 
     let aggregator = LiquidityAggregator::new(state.config.clone());
-    let best_route = aggregator.get_best_quote(
-        &req.from_token,
-        &req.to_token,
-        amount_in,
-    ).await?;
+    let best_route = aggregator
+        .get_best_quote(&req.from_token, &req.to_token, amount_in)
+        .await?;
 
     if let Ok(split_routes) = aggregator
         .get_split_quote(&req.from_token, &req.to_token, amount_in)
@@ -257,15 +282,19 @@ pub async fn execute_swap(
     // 1. VALIDASI DEADLINE
     let now = chrono::Utc::now().timestamp();
     if !is_deadline_valid(req.deadline, now) {
-        return Err(AppError::BadRequest("Transaction deadline expired".to_string()));
+        return Err(AppError::BadRequest(
+            "Transaction deadline expired".to_string(),
+        ));
     }
 
-    let user_address = require_user(&headers, &state).await?;
+    let user_address = require_starknet_user(&headers, &state).await?;
 
     // 2. LOGIKA RECIPIENT
     let final_recipient = req.recipient.as_deref().unwrap_or(&user_address);
 
-    let amount_in: f64 = req.amount.parse()
+    let amount_in: f64 = req
+        .amount
+        .parse()
         .map_err(|_| AppError::BadRequest("Invalid amount".to_string()))?;
 
     if token_address_for(&req.from_token).is_none() || token_address_for(&req.to_token).is_none() {
@@ -273,15 +302,15 @@ pub async fn execute_swap(
     }
 
     let aggregator = LiquidityAggregator::new(state.config.clone());
-    let best_route = aggregator.get_best_quote(
-        &req.from_token,
-        &req.to_token,
-        amount_in,
-    ).await?;
+    let best_route = aggregator
+        .get_best_quote(&req.from_token, &req.to_token, amount_in)
+        .await?;
 
     // 3. VALIDASI SLIPPAGE
     let expected_out = best_route.amount_out;
-    let min_out: f64 = req.min_amount_out.parse()
+    let min_out: f64 = req
+        .min_amount_out
+        .parse()
         .map_err(|_| AppError::BadRequest("Invalid min amount".to_string()))?;
 
     if expected_out < min_out {
@@ -295,25 +324,38 @@ pub async fn execute_swap(
     }
 
     let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-    let is_user_signed_onchain = onchain_tx_hash.is_some();
+    let onchain_tx_hash = onchain_tx_hash.ok_or_else(|| {
+        AppError::BadRequest(
+            "Swap requires onchain_tx_hash. Frontend must submit user-signed Starknet tx."
+                .to_string(),
+        )
+    })?;
+    let is_user_signed_onchain = true;
     let should_hide = is_private_trade(&req.mode, req.hide_balance.unwrap_or(false));
 
     // 4. Use wallet-submitted onchain tx hash when available; otherwise fallback.
-    let tx_data = format!("{}{}{}{}{}", user_address, req.from_token, req.to_token, req.amount, now);
-    let tx_hash = onchain_tx_hash.unwrap_or_else(|| hash::hash_string(&tx_data));
+    let tx_hash = onchain_tx_hash;
 
     let mut privacy_verification_tx: Option<String> = None;
     if should_hide {
         let privacy_tx = verify_private_trade_with_garaga(&state, &tx_hash, req.privacy.as_ref())
             .await
-            .map_err(|e| AppError::BadRequest(format!("Garaga privacy verification failed: {}", e)))?;
+            .map_err(|e| {
+                AppError::BadRequest(format!("Garaga privacy verification failed: {}", e))
+            })?;
         privacy_verification_tx = Some(privacy_tx);
     }
 
     let gas_optimizer = GasOptimizer::new(state.config.clone());
-    let estimated_cost = gas_optimizer.estimate_cost("swap").await.unwrap_or_default();
+    let estimated_cost = gas_optimizer
+        .estimate_cost("swap")
+        .await
+        .unwrap_or_default();
 
     let total_fee = total_fee(amount_in, &req.mode);
+    let from_price = latest_price_usd(&state, &req.from_token).await?;
+    let to_price = latest_price_usd(&state, &req.to_token).await?;
+    let volume_usd = normalize_usd_volume(amount_in * from_price, expected_out * to_price);
 
     // Simpan ke database
     let tx = crate::models::Transaction {
@@ -325,11 +367,9 @@ pub async fn execute_swap(
         token_out: Some(req.to_token.clone()),
         amount_in: Some(rust_decimal::Decimal::from_f64_retain(amount_in).unwrap()),
         amount_out: Some(rust_decimal::Decimal::from_f64_retain(expected_out).unwrap()),
-        usd_value: Some(rust_decimal::Decimal::from_f64_retain(amount_in).unwrap()),
+        usd_value: Some(rust_decimal::Decimal::from_f64_retain(volume_usd).unwrap_or_default()),
         fee_paid: Some(rust_decimal::Decimal::from_f64_retain(total_fee).unwrap()),
-        points_earned: Some(
-            rust_decimal::Decimal::from_f64_retain(amount_in * POINTS_PER_USD_SWAP).unwrap()
-        ),
+        points_earned: Some(rust_decimal::Decimal::ZERO),
         timestamp: chrono::Utc::now(),
         processed: false,
     };
@@ -351,10 +391,7 @@ pub async fn execute_swap(
             "Swap completed".to_string(),
             format!(
                 "Swapped {} {} to {} {}",
-                amount_in,
-                &req.from_token,
-                expected_out,
-                &req.to_token
+                amount_in, &req.from_token, expected_out, &req.to_token
             ),
             Some(serde_json::json!({
                 "tx_hash": tx_hash.clone(),
@@ -374,7 +411,12 @@ pub async fn execute_swap(
 
     tracing::info!(
         "Swap success for {}: {} {} -> {} {}. Recipient: {}",
-        user_address, amount_in, req.from_token, expected_out, req.to_token, final_recipient
+        user_address,
+        amount_in,
+        req.from_token,
+        expected_out,
+        req.to_token,
+        final_recipient
     );
 
     Ok(Json(ApiResponse::success(ExecuteSwapResponse {

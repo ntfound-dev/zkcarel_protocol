@@ -10,49 +10,49 @@ use thiserror::Error;
 pub enum AppError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
-    
+
     #[error("Redis error: {0}")]
     Redis(#[from] redis::RedisError),
-    
+
     #[error("Blockchain RPC error: {0}")]
     BlockchainRPC(String),
-    
+
     #[error("Authentication failed: {0}")]
     AuthError(String),
-    
+
     #[error("Invalid signature")]
     InvalidSignature,
-    
+
     #[error("Insufficient balance")]
     InsufficientBalance,
-    
+
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
-    
+
     #[error("Not found: {0}")]
     NotFound(String),
-    
+
     #[error("Bad request: {0}")]
     BadRequest(String),
-    
+
     #[error("Faucet cooldown active")]
     FaucetCooldown,
-    
+
     #[error("Invalid token")]
     InvalidToken,
-    
+
     #[error("Order not found")]
     OrderNotFound,
-    
+
     #[error("Insufficient liquidity")]
     InsufficientLiquidity,
-    
+
     #[error("Price slippage too high")]
     SlippageTooHigh,
-    
+
     #[error("External API error: {0}")]
     ExternalAPI(String),
-    
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -84,11 +84,7 @@ impl IntoResponse for AppError {
                 "CACHE_ERROR",
                 e.to_string(),
             ),
-            AppError::AuthError(ref msg) => (
-                StatusCode::UNAUTHORIZED,
-                "AUTH_ERROR",
-                msg.clone(),
-            ),
+            AppError::AuthError(ref msg) => (StatusCode::UNAUTHORIZED, "AUTH_ERROR", msg.clone()),
             AppError::InvalidSignature => (
                 StatusCode::UNAUTHORIZED,
                 "INVALID_SIGNATURE",
@@ -99,21 +95,13 @@ impl IntoResponse for AppError {
                 "INVALID_TOKEN",
                 "Token is not supported".to_string(),
             ),
-            AppError::NotFound(ref msg) => (
-                StatusCode::NOT_FOUND,
-                "NOT_FOUND",
-                msg.clone(),
-            ),
+            AppError::NotFound(ref msg) => (StatusCode::NOT_FOUND, "NOT_FOUND", msg.clone()),
             AppError::OrderNotFound => (
                 StatusCode::NOT_FOUND,
                 "ORDER_NOT_FOUND",
                 "Order not found".to_string(),
             ),
-            AppError::BadRequest(ref msg) => (
-                StatusCode::BAD_REQUEST,
-                "BAD_REQUEST",
-                msg.clone(),
-            ),
+            AppError::BadRequest(ref msg) => (StatusCode::BAD_REQUEST, "BAD_REQUEST", msg.clone()),
             AppError::RateLimitExceeded => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "RATE_LIMIT_EXCEEDED",
@@ -139,11 +127,9 @@ impl IntoResponse for AppError {
                 "SLIPPAGE_TOO_HIGH",
                 "Price impact exceeds slippage tolerance".to_string(),
             ),
-            AppError::ExternalAPI(ref msg) => (
-                StatusCode::BAD_GATEWAY,
-                "EXTERNAL_API_ERROR",
-                msg.clone(),
-            ),
+            AppError::ExternalAPI(ref msg) => {
+                (StatusCode::BAD_GATEWAY, "EXTERNAL_API_ERROR", msg.clone())
+            }
             _ => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",

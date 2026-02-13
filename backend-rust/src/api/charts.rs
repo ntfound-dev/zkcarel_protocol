@@ -1,9 +1,9 @@
 use axum::{
-    extract::{Path, State, Query},
+    extract::{Path, Query, State},
     Json,
 };
-use serde::{Deserialize, Serialize};
 use rust_decimal::prelude::ToPrimitive;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     error::Result,
@@ -33,7 +33,10 @@ pub struct IndicatorPoint {
     pub value: f64,
 }
 
-fn parse_rfc3339_or(value: Option<&str>, default: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+fn parse_rfc3339_or(
+    value: Option<&str>,
+    default: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
     value
         .and_then(|d| chrono::DateTime::parse_from_rfc3339(d).ok())
         .map(|d| d.with_timezone(&chrono::Utc))
@@ -68,9 +71,7 @@ pub async fn get_ohlcv(
             .get_latest_candles(&token, &query.interval, limit)
             .await?
     } else {
-        service
-            .get_ohlcv(&token, &query.interval, from, to)
-            .await?
+        service.get_ohlcv(&token, &query.interval, from, to).await?
     };
 
     Ok(Json(ApiResponse::success(OHLCVResponse {
@@ -90,7 +91,10 @@ pub async fn get_indicators(
     let mut indicators = vec![];
 
     for (name, key) in [("SMA", "SMA"), ("EMA", "EMA"), ("RSI", "RSI")] {
-        if let Ok(data) = service.calculate_indicators(&token, &query.interval, key).await {
+        if let Ok(data) = service
+            .calculate_indicators(&token, &query.interval, key)
+            .await
+        {
             indicators.push(IndicatorsResponse {
                 indicator: name.to_string(),
                 data: map_indicator_points(data),

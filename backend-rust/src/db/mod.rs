@@ -1,5 +1,9 @@
+use crate::{
+    config::Config,
+    error::{AppError, Result},
+    models::*,
+};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
-use crate::{config::Config, error::{AppError, Result}, models::*};
 
 #[derive(Clone)]
 pub struct Database {
@@ -27,9 +31,11 @@ mod tests {
             price_oracle_address: "0x0000000000000000000000000000000000000004".to_string(),
             limit_order_book_address: "0x0000000000000000000000000000000000000005".to_string(),
             staking_carel_address: None,
+            discount_soulbound_address: None,
             treasury_address: None,
             referral_system_address: None,
             ai_executor_address: "0x0000000000000000000000000000000000000006".to_string(),
+            ai_signature_verifier_address: None,
             bridge_aggregator_address: "0x0000000000000000000000000000000000000007".to_string(),
             zk_privacy_router_address: "0x0000000000000000000000000000000000000008".to_string(),
             privacy_router_address: None,
@@ -99,9 +105,7 @@ impl Database {
 
     pub async fn run_migrations(&self) -> anyhow::Result<()> {
         // migrations harus berada di crate root: ./migrations
-        sqlx::migrate!("./migrations")
-            .run(&self.pool)
-            .await?;
+        sqlx::migrate!("./migrations").run(&self.pool).await?;
         Ok(())
     }
 
@@ -126,12 +130,10 @@ impl Database {
     }
 
     pub async fn get_user(&self, address: &str) -> Result<Option<User>> {
-        let row = sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE address = $1",
-        )
-        .bind(address)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row = sqlx::query_as::<_, User>("SELECT * FROM users WHERE address = $1")
+            .bind(address)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row)
     }
 
@@ -142,14 +144,118 @@ impl Database {
             .ok_or_else(|| AppError::NotFound("User not found".to_string()))
     }
 
-    pub async fn update_last_active(&self, address: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE users SET last_active = NOW() WHERE address = $1",
+    pub async fn find_user_by_sumo_subject(&self, sumo_subject: &str) -> Result<Option<String>> {
+        ensure_varchar_max("users.sumo_subject", sumo_subject, 255)?;
+        let row: Option<String> =
+            sqlx::query_scalar("SELECT address FROM users WHERE sumo_subject = $1 LIMIT 1")
+                .bind(sumo_subject)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row)
+    }
+
+    pub async fn bind_sumo_subject_once(&self, address: &str, sumo_subject: &str) -> Result<()> {
+        ensure_varchar_max("users.address", address, 66)?;
+        ensure_varchar_max("users.sumo_subject", sumo_subject, 255)?;
+
+        let result = sqlx::query(
+            "UPDATE users
+             SET sumo_subject = $1
+             WHERE address = $2
+               AND (sumo_subject IS NULL OR sumo_subject = $1)",
         )
+        .bind(sumo_subject)
         .bind(address)
         .execute(&self.pool)
         .await?;
+
+        if result.rows_affected() > 0 {
+            return Ok(());
+        }
+
+        let current: Option<String> =
+            sqlx::query_scalar("SELECT sumo_subject FROM users WHERE address = $1")
+                .bind(address)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        if current.as_deref() == Some(sumo_subject) {
+            return Ok(());
+        }
+
+        Err(AppError::BadRequest(
+            "This account is already bound to another Sumo identity".to_string(),
+        ))
+    }
+
+    pub async fn update_last_active(&self, address: &str) -> Result<()> {
+        sqlx::query("UPDATE users SET last_active = NOW() WHERE address = $1")
+            .bind(address)
+            .execute(&self.pool)
+            .await?;
         Ok(())
+    }
+
+    pub async fn set_display_name(&self, address: &str, display_name: &str) -> Result<User> {
+        ensure_varchar_max("users.address", address, 66)?;
+        ensure_varchar_max("users.display_name", display_name, 50)?;
+
+        let user = sqlx::query_as::<_, User>(
+            "UPDATE users
+             SET display_name = $1
+             WHERE address = $2
+             RETURNING *",
+        )
+        .bind(display_name)
+        .bind(address)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+
+        Ok(user)
+    }
+
+    pub async fn find_user_by_referral_code(
+        &self,
+        referral_suffix: &str,
+    ) -> Result<Option<String>> {
+        ensure_varchar_max("referral_suffix", referral_suffix, 8)?;
+        let suffix = referral_suffix.trim().to_ascii_uppercase();
+        let address = sqlx::query_scalar::<_, String>(
+            "SELECT address
+             FROM users
+             WHERE UPPER(SUBSTRING(address FROM 3 FOR 8)) = $1
+             ORDER BY created_at ASC
+             LIMIT 1",
+        )
+        .bind(suffix)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(address)
+    }
+
+    pub async fn bind_referrer_once(
+        &self,
+        user_address: &str,
+        referrer_address: &str,
+    ) -> Result<bool> {
+        ensure_varchar_max("users.address", user_address, 66)?;
+        ensure_varchar_max("users.referrer", referrer_address, 66)?;
+
+        let result = sqlx::query(
+            "UPDATE users u
+             SET referrer = $1
+             WHERE u.address = $2
+               AND u.referrer IS NULL
+               AND u.address <> $1
+               AND EXISTS (SELECT 1 FROM users r WHERE r.address = $1)",
+        )
+        .bind(referrer_address)
+        .bind(user_address)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn upsert_wallet_address(
@@ -186,7 +292,44 @@ impl Database {
         Ok(())
     }
 
-    pub async fn list_wallet_addresses(&self, user_address: &str) -> Result<Vec<LinkedWalletAddress>> {
+    pub async fn find_user_by_wallet_address(
+        &self,
+        wallet_address: &str,
+        chain: Option<&str>,
+    ) -> Result<Option<String>> {
+        ensure_varchar_max("user_wallet_addresses.wallet_address", wallet_address, 128)?;
+        if let Some(chain) = chain {
+            ensure_varchar_max("user_wallet_addresses.chain", chain, 16)?;
+            let row: Option<String> = sqlx::query_scalar(
+                "SELECT user_address
+                 FROM user_wallet_addresses
+                 WHERE LOWER(wallet_address) = LOWER($1) AND chain = $2
+                 LIMIT 1",
+            )
+            .bind(wallet_address)
+            .bind(chain)
+            .fetch_optional(&self.pool)
+            .await?;
+            return Ok(row);
+        }
+
+        let row: Option<String> = sqlx::query_scalar(
+            "SELECT user_address
+             FROM user_wallet_addresses
+             WHERE LOWER(wallet_address) = LOWER($1)
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )
+        .bind(wallet_address)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn list_wallet_addresses(
+        &self,
+        user_address: &str,
+    ) -> Result<Vec<LinkedWalletAddress>> {
         ensure_varchar_max("user_wallet_addresses.user_address", user_address, 66)?;
         let rows = sqlx::query_as::<_, LinkedWalletAddress>(
             "SELECT user_address, chain, wallet_address, provider, created_at, updated_at
@@ -199,16 +342,11 @@ impl Database {
         .await?;
         Ok(rows)
     }
-
 }
 
 // ==================== POINTS QUERIES ====================
 impl Database {
-    pub async fn get_user_points(
-        &self,
-        address: &str,
-        epoch: i64,
-    ) -> Result<Option<UserPoints>> {
+    pub async fn get_user_points(&self, address: &str, epoch: i64) -> Result<Option<UserPoints>> {
         let points = sqlx::query_as::<_, UserPoints>(
             "SELECT * FROM points WHERE user_address = $1 AND epoch = $2",
         )
@@ -304,7 +442,7 @@ impl Database {
             SET referral_points = points.referral_points + EXCLUDED.referral_points,
                 total_points = points.total_points + EXCLUDED.total_points,
                 updated_at = NOW()
-            "#
+            "#,
         )
         .bind(address)
         .bind(epoch)
@@ -357,12 +495,10 @@ impl Database {
     }
 
     pub async fn get_transaction(&self, tx_hash: &str) -> Result<Option<Transaction>> {
-        let tx = sqlx::query_as::<_, Transaction>(
-            "SELECT * FROM transactions WHERE tx_hash = $1",
-        )
-        .bind(tx_hash)
-        .fetch_optional(&self.pool)
-        .await?;
+        let tx = sqlx::query_as::<_, Transaction>("SELECT * FROM transactions WHERE tx_hash = $1")
+            .bind(tx_hash)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(tx)
     }
 
@@ -495,13 +631,11 @@ impl Database {
     }
 
     pub async fn mark_notification_read(&self, id: i64, user: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE notifications SET read = true WHERE id = $1 AND user_address = $2",
-        )
-        .bind(id)
-        .bind(user)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE notifications SET read = true WHERE id = $1 AND user_address = $2")
+            .bind(id)
+            .bind(user)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }
@@ -604,12 +738,11 @@ impl Database {
     }
 
     pub async fn get_limit_order(&self, order_id: &str) -> Result<Option<LimitOrder>> {
-        let order = sqlx::query_as::<_, LimitOrder>(
-            "SELECT * FROM limit_orders WHERE order_id = $1",
-        )
-        .bind(order_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let order =
+            sqlx::query_as::<_, LimitOrder>("SELECT * FROM limit_orders WHERE order_id = $1")
+                .bind(order_id)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(order)
     }
 
@@ -632,11 +765,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn fill_order(
-        &self,
-        order_id: &str,
-        amount: rust_decimal::Decimal,
-    ) -> Result<()> {
+    pub async fn fill_order(&self, order_id: &str, amount: rust_decimal::Decimal) -> Result<()> {
         sqlx::query(
             r#"
             UPDATE limit_orders

@@ -11,7 +11,11 @@ fn rpc_request(method: &str, params: serde_json::Value) -> serde_json::Value {
     })
 }
 
-fn call_contract_params(contract_address: &str, entry_point_selector: &str, calldata: Vec<String>) -> serde_json::Value {
+fn call_contract_params(
+    contract_address: &str,
+    entry_point_selector: &str,
+    calldata: Vec<String>,
+) -> serde_json::Value {
     serde_json::json!({
         "contract_address": contract_address,
         "entry_point_selector": entry_point_selector,
@@ -89,7 +93,10 @@ impl StarknetClient {
 
     /// Get transaction receipt
     pub async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<TransactionReceipt> {
-        let request = rpc_request("starknet_getTransactionReceipt", serde_json::json!([tx_hash]));
+        let request = rpc_request(
+            "starknet_getTransactionReceipt",
+            serde_json::json!([tx_hash]),
+        );
 
         let response = self
             .client
@@ -220,7 +227,10 @@ mod tests {
     fn rpc_request_sets_method_and_id() {
         // Memastikan payload RPC berisi method dan id default
         let req = rpc_request("starknet_blockNumber", serde_json::json!([]));
-        assert_eq!(req.get("method").and_then(|v| v.as_str()), Some("starknet_blockNumber"));
+        assert_eq!(
+            req.get("method").and_then(|v| v.as_str()),
+            Some("starknet_blockNumber")
+        );
         assert_eq!(req.get("id").and_then(|v| v.as_i64()), Some(1));
     }
 
@@ -228,7 +238,13 @@ mod tests {
     fn call_contract_params_contains_fields() {
         // Memastikan parameter call_contract terbentuk lengkap
         let params = call_contract_params("0xabc", "balance", vec!["1".to_string()]);
-        assert_eq!(params.get("contract_address").and_then(|v| v.as_str()), Some("0xabc"));
-        assert_eq!(params.get("entry_point_selector").and_then(|v| v.as_str()), Some("balance"));
+        assert_eq!(
+            params.get("contract_address").and_then(|v| v.as_str()),
+            Some("0xabc")
+        );
+        assert_eq!(
+            params.get("entry_point_selector").and_then(|v| v.as_str()),
+            Some("balance")
+        );
     }
 }

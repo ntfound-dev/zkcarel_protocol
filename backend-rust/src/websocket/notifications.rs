@@ -1,10 +1,13 @@
 use axum::{
-    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State, Query},
-    http::{HeaderMap, header::AUTHORIZATION},
-    response::{Response, IntoResponse},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query, State,
+    },
+    http::{header::AUTHORIZATION, HeaderMap},
+    response::{IntoResponse, Response},
 };
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use futures_util::{StreamExt, SinkExt};
 use tokio::time::{interval, timeout, Duration};
 
 use crate::{
@@ -20,14 +23,17 @@ pub(crate) struct WsAuthQuery {
 
 fn token_from_headers(headers: &HeaderMap) -> Option<String> {
     let header_value = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    header_value.strip_prefix("Bearer ").map(|token| token.to_string())
+    header_value
+        .strip_prefix("Bearer ")
+        .map(|token| token.to_string())
 }
 
 fn connected_payload() -> String {
     serde_json::json!({
         "type": "connected",
         "message": "Connected to notification stream"
-    }).to_string()
+    })
+    .to_string()
 }
 
 /// WebSocket handler for real-time notifications
@@ -62,12 +68,12 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_address: String)
     let (mut sender, mut receiver) = socket.split();
 
     // Subscribe to notifications
-    let notification_service = crate::services::NotificationService::new(
-        state.db.clone(),
-        state.config.clone(),
-    );
+    let notification_service =
+        crate::services::NotificationService::new(state.db.clone(), state.config.clone());
 
-    let mut rx = notification_service.register_connection(user_address.to_string()).await;
+    let mut rx = notification_service
+        .register_connection(user_address.to_string())
+        .await;
 
     // FIX: Tambahkan .into() untuk mengubah String menjadi Utf8Bytes
     let _ = sender.send(Message::Text(connected_payload().into())).await;
@@ -101,7 +107,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_address: String)
     // Handle incoming messages (ping/pong)
     let mut recv_task = tokio::spawn(async move {
         loop {
-            let next_msg = timeout(Duration::from_secs(WS_CLIENT_TIMEOUT_SECS), receiver.next()).await;
+            let next_msg =
+                timeout(Duration::from_secs(WS_CLIENT_TIMEOUT_SECS), receiver.next()).await;
             let msg = match next_msg {
                 Ok(Some(Ok(msg))) => msg,
                 Ok(Some(Err(_))) | Ok(None) => break,
@@ -137,7 +144,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_address: String)
     }
 
     // Cleanup
-    notification_service.unregister_connection(&user_address).await;
+    notification_service
+        .unregister_connection(&user_address)
+        .await;
     tracing::info!("WebSocket connection closed for user: {}", user_address);
 }
 

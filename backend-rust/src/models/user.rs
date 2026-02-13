@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 
 // ==================== USER ====================
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -174,6 +174,8 @@ pub struct CreateLimitOrderRequest {
     pub price: String,
     pub expiry: String, // "1d", "7d", "30d"
     pub recipient: Option<String>,
+    pub client_order_id: Option<String>,
+    pub onchain_tx_hash: Option<String>,
 }
 
 // ==================== PRICE ====================

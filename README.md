@@ -131,6 +131,7 @@ Opsional:
 - `STAKING_CAREL_ADDRESS`
 - `TREASURY_ADDRESS`
 - `REFERRAL_SYSTEM_ADDRESS`
+- `AI_SIGNATURE_VERIFIER_ADDRESS` (wajib jika AI executor signature verification aktif)
 - `BRIDGE_PROVIDER_IDS`
 - `ORACLE_ASSET_IDS` (format `TOKEN:0x...` untuk `TOKEN/USD`)
 
@@ -172,6 +173,7 @@ POINT_STORAGE_ADDRESS=0x0501e74ab48e605ef81348a087d21c95ea5d43694ee1a60d6ca1e918
 PRICE_ORACLE_ADDRESS=0x06d3bed050b11afad71022e9ea4d5401366b9c01ef8387df22de6155e6c6977a
 LIMIT_ORDER_BOOK_ADDRESS=0x0734bbb72aeffc57b4123298237d9ca3081095d8f8a75e8e68a1b0eb02306191
 STAKING_CAREL_ADDRESS=0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb
+DISCOUNT_SOULBOUND_ADDRESS=0x...
 TREASURY_ADDRESS=0x0351e9882d322ab41239eb925f22d3a598290bda6a3a2e7ce560dcff8a119c7d
 REFERRAL_SYSTEM_ADDRESS=0x040bfc6214d3204c53898c730285d79d6e7cd2cd987e3ecde048b330ed3a2d06
 AI_EXECUTOR_ADDRESS=0x03adfb85bf6b60eed5c21de8303659a14ab62f6162d6d4ba18100b4d7d53b8fe
@@ -187,6 +189,7 @@ PRIVACY_ROUTER_ADDRESS=0x0133e0c11f4df0a77d6a3b46e301f402c6fa6817e9a8d79c2dc0cd4
 PRAGMA_ORACLE_ADDRESS=0x36031daa264c24520b11d93af622c848b2499b66b41d611bac95e13cfca131a
 CHAINLINK_ORACLE_ADDRESS=0x0
 ORACLE_ASSET_IDS=BTC:18669995996566340,ETH:19514442401534788,STRK:6004514686061859652,USDT:6148333044652921668,USDC:6148332971638477636,CAREL:0
+BRIDGE_PROVIDER_IDS=LayerSwap:0x4c535750,Atomiq:0x41544d51,Garden:0x47415244,StarkGate:0x53544754
 ```
 
 **Smartcontract .env (Wajib vs Opsional)**
@@ -220,6 +223,7 @@ Opsional (boleh kosong jika fitur tidak dipakai):
 - Auth: `POST /api/v1/auth/connect`
 - Swap: `POST /api/v1/swap/quote`, `POST /api/v1/swap/execute`
 - Bridge: `POST /api/v1/bridge/quote`, `POST /api/v1/bridge/execute`
+- AI: `POST /api/v1/ai/prepare-action`, `POST /api/v1/ai/execute`, `GET /api/v1/ai/pending`
 - Privacy: `POST /api/v1/privacy/submit`
 - Private BTC Swap: `POST /api/v1/private-btc-swap/initiate`, `POST /api/v1/private-btc-swap/finalize`
 - Dark Pool: `POST /api/v1/dark-pool/order`, `POST /api/v1/dark-pool/match`

@@ -1,20 +1,14 @@
 use axum::{extract::State, http::HeaderMap, Json};
-use serde::Serialize; 
+use serde::Serialize;
 
 use crate::{
-    constants::{
-        FAUCET_AMOUNT_BTC,
-        FAUCET_AMOUNT_CAREL,
-        FAUCET_AMOUNT_ETH,
-        FAUCET_AMOUNT_STRK,
-    },
+    constants::{FAUCET_AMOUNT_BTC, FAUCET_AMOUNT_CAREL, FAUCET_AMOUNT_ETH, FAUCET_AMOUNT_STRK},
     error::Result,
     models::{ApiResponse, FaucetClaimRequest, FaucetClaimResponse},
-    services::faucet_service::{FaucetService, FaucetStats}, 
+    services::faucet_service::{FaucetService, FaucetStats},
 };
 
-
-use super::{AppState, require_user};
+use super::{require_user, AppState};
 
 fn compute_next_claim_in(
     next_claim: Option<chrono::DateTime<chrono::Utc>>,
@@ -23,7 +17,11 @@ fn compute_next_claim_in(
     match next_claim {
         Some(next) => {
             let diff = (next - now).num_seconds();
-            if diff > 0 { diff } else { 0 }
+            if diff > 0 {
+                diff
+            } else {
+                0
+            }
         }
         None => 0,
     }
@@ -57,7 +55,9 @@ pub async fn claim_tokens(
     // Eksekusi klaim (sekarang sudah mengecek saldo via provider)
     let tx_hash = faucet.claim_tokens(&user_address, &req.token).await?;
 
-    let next_claim = faucet.get_next_claim_time(&user_address, &req.token).await?;
+    let next_claim = faucet
+        .get_next_claim_time(&user_address, &req.token)
+        .await?;
     let next_claim_in = compute_next_claim_in(next_claim, chrono::Utc::now());
 
     let amount = faucet_amount_from_options(
@@ -113,7 +113,7 @@ pub async fn get_faucet_stats(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<FaucetStats>>> {
     let faucet = FaucetService::new(state.db.clone(), state.config.clone())?;
-    
+
     // Memanggil method get_stats() yang sebelumnya dianggap dead_code
     let stats = faucet.get_stats().await?;
 

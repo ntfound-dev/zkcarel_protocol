@@ -1,8 +1,11 @@
 use axum::{
-    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
     response::Response,
 };
-use futures_util::{StreamExt, SinkExt};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -13,7 +16,8 @@ fn connected_payload() -> String {
     serde_json::json!({
         "type": "connected",
         "message": "Connected to price stream"
-    }).to_string()
+    })
+    .to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,10 +38,7 @@ struct PriceUpdate {
 }
 
 /// WebSocket handler for real-time price updates
-pub async fn handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> Response {
+pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
@@ -58,13 +59,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
             let tokens = subscribed_clone.read().await.clone();
-            
+
             for token in tokens {
-                let (price, change_24h) = match latest_price_with_change(&state_clone, &token).await {
+                let (price, change_24h) = match latest_price_with_change(&state_clone, &token).await
+                {
                     Ok(result) => result,
                     Err(_) => (fallback_price_for(&token), 0.0),
                 };
-                
+
                 let update = PriceUpdate {
                     msg_type: "price_update".to_string(),
                     token: token.clone(),
@@ -74,7 +76,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 };
 
                 let json = serde_json::to_string(&update).unwrap_or_default();
-                
+
                 // FIX: Tambahkan .into() pada update harga
                 if sender.send(Message::Text(json.into())).await.is_err() {
                     return;
@@ -129,7 +131,10 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
-async fn latest_price_with_change(state: &AppState, token: &str) -> crate::error::Result<(f64, f64)> {
+async fn latest_price_with_change(
+    state: &AppState,
+    token: &str,
+) -> crate::error::Result<(f64, f64)> {
     let rows: Vec<f64> = sqlx::query_scalar(
         "SELECT close::FLOAT FROM price_history WHERE token = $1 AND interval = $2 ORDER BY timestamp DESC LIMIT 2",
     )
@@ -148,9 +153,16 @@ async fn latest_price_with_change(state: &AppState, token: &str) -> crate::error
         .await?;
     }
 
-    let latest = prices.get(0).copied().unwrap_or_else(|| fallback_price_for(token));
+    let latest = prices
+        .get(0)
+        .copied()
+        .unwrap_or_else(|| fallback_price_for(token));
     let prev = prices.get(1).copied().unwrap_or(latest);
-    let change = if prev > 0.0 { ((latest - prev) / prev) * 100.0 } else { 0.0 };
+    let change = if prev > 0.0 {
+        ((latest - prev) / prev) * 100.0
+    } else {
+        0.0
+    };
 
     Ok((latest, change))
 }

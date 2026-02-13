@@ -1,8 +1,8 @@
 use crate::{config::Config, db::Database, error::Result};
-use starknet_crypto::{Felt, poseidon_hash_many};
-use sqlx::Row;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
+use sqlx::Row;
+use starknet_crypto::{poseidon_hash_many, Felt};
 
 const ONE_CAREL_WEI: i128 = 1_000_000_000_000_000_000;
 const TOTAL_SUPPLY_CAREL: i64 = 1_000_000_000;
@@ -30,7 +30,8 @@ fn felt_from_address(address: &str) -> Result<Felt> {
     } else {
         format!("0x{addr}")
     };
-    Ok(Felt::from_hex(&normalized).map_err(|e| crate::error::AppError::Internal(format!("Invalid address: {}", e)))?)
+    Ok(Felt::from_hex(&normalized)
+        .map_err(|e| crate::error::AppError::Internal(format!("Invalid address: {}", e)))?)
 }
 
 fn create_leaf_hash(address: &str, amount_wei: u128, epoch: i64) -> Result<Felt> {
@@ -38,7 +39,12 @@ fn create_leaf_hash(address: &str, amount_wei: u128, epoch: i64) -> Result<Felt>
     let amount_low = Felt::from(amount_wei);
     let amount_high = Felt::from(0_u128);
     let epoch_felt = Felt::from(epoch as u128);
-    Ok(poseidon_hash_many(&[user, amount_low, amount_high, epoch_felt]))
+    Ok(poseidon_hash_many(&[
+        user,
+        amount_low,
+        amount_high,
+        epoch_felt,
+    ]))
 }
 
 fn hash_pair_sorted(left: Felt, right: Felt) -> Felt {
@@ -112,7 +118,8 @@ impl MerkleGenerator {
 
     /// Generate merkle tree for epoch rewards
     pub async fn generate_for_epoch(&self, epoch: i64) -> Result<MerkleTree> {
-        self.generate_for_epoch_with_distribution(epoch, monthly_ecosystem_pool()).await
+        self.generate_for_epoch_with_distribution(epoch, monthly_ecosystem_pool())
+            .await
     }
 
     pub async fn generate_for_epoch_with_distribution(
@@ -127,7 +134,7 @@ impl MerkleGenerator {
         let rows = sqlx::query(
             "SELECT user_address, total_points FROM points
              WHERE epoch = $1 AND finalized = true AND total_points > 0
-             ORDER BY user_address ASC"
+             ORDER BY user_address ASC",
         )
         .bind(epoch)
         .fetch_all(self.db.pool())
@@ -221,13 +228,9 @@ impl MerkleGenerator {
     ) -> Result<Vec<Felt>> {
         let leaf = self.create_leaf(user_address, amount_wei, epoch)?;
 
-        let leaf_index = tree
-            .leaves
-            .iter()
-            .position(|l| l == &leaf)
-            .ok_or_else(|| {
-                crate::error::AppError::NotFound("User not found in tree".to_string())
-            })?;
+        let leaf_index = tree.leaves.iter().position(|l| l == &leaf).ok_or_else(|| {
+            crate::error::AppError::NotFound("User not found in tree".to_string())
+        })?;
 
         let mut proof: Vec<Felt> = Vec::new();
         let mut index = leaf_index;
@@ -256,7 +259,7 @@ impl MerkleGenerator {
         sqlx::query(
             "INSERT INTO merkle_roots (epoch, root, created_at)
              VALUES ($1, $2, NOW())
-             ON CONFLICT (epoch) DO UPDATE SET root = $2"
+             ON CONFLICT (epoch) DO UPDATE SET root = $2",
         )
         .bind(epoch)
         .bind(&root_hex)

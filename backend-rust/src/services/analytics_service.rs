@@ -14,7 +14,11 @@ fn period_to_duration(period: &str) -> Option<Duration> {
 }
 
 fn pnl_multiplier(is_testnet: bool) -> f64 {
-    if is_testnet { 0.5 } else { 1.0 }
+    if is_testnet {
+        0.5
+    } else {
+        1.0
+    }
 }
 
 fn fallback_price_for(token: &str) -> f64 {
@@ -123,7 +127,11 @@ impl AnalyticsService {
         }
 
         for (token, amount, value_usd) in values {
-            let percentage = if total_value > 0.0 { (value_usd / total_value) * 100.0 } else { 0.0 };
+            let percentage = if total_value > 0.0 {
+                (value_usd / total_value) * 100.0
+            } else {
+                0.0
+            };
             allocations.push(AssetAllocation {
                 asset: token,
                 value_usd,

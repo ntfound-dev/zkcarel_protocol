@@ -1,5 +1,5 @@
-use crate::error::{AppError, Result};
 use crate::crypto::hash;
+use crate::error::{AppError, Result};
 
 /// Struct untuk menangani verifikasi tanda tangan digital (ECDSA)
 pub struct SignatureVerifier;
@@ -9,17 +9,15 @@ impl SignatureVerifier {
     /// address: Alamat wallet publik (0x...)
     /// message: Pesan asli yang ditandatangani
     /// signature: Hasil tanda tangan dalam format hex
-    pub fn verify_signature(
-        address: &str,
-        message: &str,
-        signature: &str,
-    ) -> Result<bool> {
+    pub fn verify_signature(address: &str, message: &str, signature: &str) -> Result<bool> {
         // MENGGUNAKAN hash utilitas agar tidak dead code di hash.rs
         let _msg_hash = hash::hash_string(message);
 
         // Validasi input dasar
         if address.is_empty() || signature.is_empty() {
-            return Err(AppError::BadRequest("Address or signature cannot be empty".into()));
+            return Err(AppError::BadRequest(
+                "Address or signature cannot be empty".into(),
+            ));
         }
 
         // TODO: Implementasi recovery kunci publik asli menggunakan krate 'k256' atau 'ethers'
@@ -29,7 +27,7 @@ impl SignatureVerifier {
         }
 
         tracing::info!("Verifying signature for address: {}", address);
-        
+
         // Mock return true jika format benar
         Ok(true)
     }

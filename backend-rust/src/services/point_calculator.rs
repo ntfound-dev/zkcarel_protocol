@@ -1,27 +1,25 @@
+use crate::services::onchain::{
+    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
+};
 use crate::{
     config::Config,
     constants::{
-        EPOCH_DURATION_SECONDS,
-        MULTIPLIER_TIER_1,
-        MULTIPLIER_TIER_2,
-        MULTIPLIER_TIER_3,
-        MULTIPLIER_TIER_4,
-        POINTS_PER_USD_BRIDGE,
-        POINTS_PER_USD_STAKE_DAILY,
-        POINTS_PER_USD_SWAP,
-        POINT_CALCULATOR_INTERVAL_SECS,
+        EPOCH_DURATION_SECONDS, MULTIPLIER_TIER_1, MULTIPLIER_TIER_2, MULTIPLIER_TIER_3,
+        MULTIPLIER_TIER_4, POINTS_MIN_STAKE_CAREL, POINTS_MIN_USD_BRIDGE_BTC,
+        POINTS_MIN_USD_BRIDGE_ETH, POINTS_MIN_USD_LIMIT_ORDER, POINTS_MIN_USD_SWAP,
+        POINTS_PER_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_ETH, POINTS_PER_USD_LIMIT_ORDER,
+        POINTS_PER_USD_STAKE, POINTS_PER_USD_SWAP, POINT_CALCULATOR_INTERVAL_SECS,
     },
     db::Database,
     error::Result,
 };
-use std::sync::Arc;
-use tokio::time::{interval, Duration};
-use sqlx::Row;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
-use starknet_core::types::{Call, Felt};
+use sqlx::Row;
+use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
-use crate::services::onchain::{OnchainInvoker, parse_felt};
+use std::sync::Arc;
+use tokio::time::{interval, Duration};
 
 /// Point Calculator - Calculates trading points with anti-wash trading detection
 pub struct PointCalculator {
@@ -36,7 +34,11 @@ const REFERRAL_BONUS_BPS: i64 = 1000; // 10%
 impl PointCalculator {
     pub fn new(db: Database, config: Config) -> Self {
         let onchain = OnchainInvoker::from_config(&config).ok().flatten();
-        Self { db, config, onchain }
+        Self {
+            db,
+            config,
+            onchain,
+        }
     }
 
     /// Start point calculation loop
@@ -61,7 +63,7 @@ impl PointCalculator {
         }
         // Ganti ke runtime query_as
         let transactions = sqlx::query_as::<_, crate::models::Transaction>(
-            "SELECT * FROM transactions WHERE processed = false ORDER BY timestamp ASC LIMIT 100"
+            "SELECT * FROM transactions WHERE processed = false ORDER BY timestamp ASC LIMIT 100",
         )
         .fetch_all(self.db.pool())
         .await?;
@@ -78,7 +80,7 @@ impl PointCalculator {
         // Check for wash trading
         if self.is_wash_trading(&tx.user_address, &tx.tx_hash).await? {
             tracing::warn!("Wash trading detected for user: {}", tx.user_address);
-            
+
             sqlx::query("UPDATE transactions SET processed = true WHERE tx_hash = $1")
                 .bind(&tx.tx_hash)
                 .execute(self.db.pool())
@@ -90,7 +92,7 @@ impl PointCalculator {
 
         let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
         let prev_total: Decimal = sqlx::query_scalar(
-            "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2"
+            "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2",
         )
         .bind(&tx.user_address)
         .bind(current_epoch)
@@ -100,50 +102,57 @@ impl PointCalculator {
 
         let points = match tx.tx_type.as_str() {
             "swap" => self.calculate_swap_points(tx).await?,
-            "limit_order" => self.calculate_swap_points(tx).await?,
+            "limit_order" => self.calculate_limit_order_points(tx).await?,
             "bridge" => self.calculate_bridge_points(tx).await?,
             "stake" => self.calculate_stake_points(tx).await?,
             _ => 0.0,
         };
 
         let points_decimal = rust_decimal::Decimal::from_f64_retain(points).unwrap_or_default();
-        
+
         match tx.tx_type.as_str() {
-            "swap" => {
-                self.db.create_or_update_points(
-                    &tx.user_address,
-                    current_epoch,
-                    points_decimal,
-                    rust_decimal::Decimal::ZERO,
-                    rust_decimal::Decimal::ZERO,
-                ).await?;
+            "swap" | "limit_order" => {
+                self.db
+                    .create_or_update_points(
+                        &tx.user_address,
+                        current_epoch,
+                        points_decimal,
+                        rust_decimal::Decimal::ZERO,
+                        rust_decimal::Decimal::ZERO,
+                    )
+                    .await?;
             }
             "bridge" => {
-                self.db.create_or_update_points(
-                    &tx.user_address,
-                    current_epoch,
-                    rust_decimal::Decimal::ZERO,
-                    points_decimal,
-                    rust_decimal::Decimal::ZERO,
-                ).await?;
+                self.db
+                    .create_or_update_points(
+                        &tx.user_address,
+                        current_epoch,
+                        rust_decimal::Decimal::ZERO,
+                        points_decimal,
+                        rust_decimal::Decimal::ZERO,
+                    )
+                    .await?;
             }
             "stake" => {
-                self.db.create_or_update_points(
-                    &tx.user_address,
-                    current_epoch,
-                    rust_decimal::Decimal::ZERO,
-                    rust_decimal::Decimal::ZERO,
-                    points_decimal,
-                ).await?;
+                self.db
+                    .create_or_update_points(
+                        &tx.user_address,
+                        current_epoch,
+                        rust_decimal::Decimal::ZERO,
+                        rust_decimal::Decimal::ZERO,
+                        points_decimal,
+                    )
+                    .await?;
             }
             _ => {}
         }
 
         // Apply multipliers after point updates
-        self.apply_multipliers(&tx.user_address, current_epoch).await?;
+        self.apply_multipliers(&tx.user_address, current_epoch)
+            .await?;
 
         let new_total: Decimal = sqlx::query_scalar(
-            "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2"
+            "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2",
         )
         .bind(&tx.user_address)
         .bind(current_epoch)
@@ -153,11 +162,13 @@ impl PointCalculator {
         self.apply_referral_bonus(&tx.user_address, current_epoch, prev_total, new_total)
             .await?;
 
-        sqlx::query("UPDATE transactions SET points_earned = $1, processed = true WHERE tx_hash = $2")
-            .bind(points_decimal)
-            .bind(&tx.tx_hash)
-            .execute(self.db.pool())
-            .await?;
+        sqlx::query(
+            "UPDATE transactions SET points_earned = $1, processed = true WHERE tx_hash = $2",
+        )
+        .bind(points_decimal)
+        .bind(&tx.tx_hash)
+        .execute(self.db.pool())
+        .await?;
 
         tracing::info!(
             "Points calculated: user={}, type={}, points={}",
@@ -170,15 +181,115 @@ impl PointCalculator {
     }
 
     async fn calculate_swap_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * POINTS_PER_USD_SWAP)
+        let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        if usd_value < POINTS_MIN_USD_SWAP {
+            return Ok(0.0);
+        }
+        self.apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_SWAP)
+            .await
+    }
+
+    async fn calculate_limit_order_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
+        let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        if usd_value < POINTS_MIN_USD_LIMIT_ORDER {
+            return Ok(0.0);
+        }
+        self.apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_LIMIT_ORDER)
+            .await
     }
 
     async fn calculate_bridge_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * POINTS_PER_USD_BRIDGE)
+        let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        let is_btc_bridge = is_btc_bridge(tx);
+        let (min_threshold, per_usd_rate) = if is_btc_bridge {
+            (POINTS_MIN_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_BTC)
+        } else {
+            (POINTS_MIN_USD_BRIDGE_ETH, POINTS_PER_USD_BRIDGE_ETH)
+        };
+        if usd_value < min_threshold {
+            return Ok(0.0);
+        }
+        self.apply_nft_discount_bonus(&tx.user_address, usd_value * per_usd_rate)
+            .await
     }
 
     async fn calculate_stake_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        Ok(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0) * POINTS_PER_USD_STAKE_DAILY)
+        let amount = tx.amount_in.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        if amount < POINTS_MIN_STAKE_CAREL {
+            return Ok(0.0);
+        }
+        let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        if usd_value <= 0.0 {
+            return Ok(0.0);
+        }
+        self.apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_STAKE)
+            .await
+    }
+
+    async fn apply_nft_discount_bonus(&self, user_address: &str, base_points: f64) -> Result<f64> {
+        if base_points <= 0.0 {
+            return Ok(0.0);
+        }
+        let discount = self.active_nft_discount_rate(user_address).await?;
+        let boosted = base_points * nft_factor_for_discount(discount);
+        Ok(boosted)
+    }
+
+    async fn current_staked_carel_amount(&self, user_address: &str) -> Result<f64> {
+        let amount: Option<f64> = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(SUM(
+                CASE
+                    WHEN tx_type = 'stake' THEN COALESCE(amount_in, 0)
+                    WHEN tx_type = 'unstake' THEN -COALESCE(amount_in, 0)
+                    ELSE 0
+                END
+            ), 0)::FLOAT
+            FROM transactions
+            WHERE user_address = $1
+              AND token_in = 'CAREL'
+            "#,
+        )
+        .bind(user_address)
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        Ok(amount.unwrap_or(0.0).max(0.0))
+    }
+
+    async fn active_nft_discount_rate(&self, user_address: &str) -> Result<f64> {
+        let Some(contract) = self.config.discount_soulbound_address.as_deref() else {
+            return Ok(0.0);
+        };
+        if contract.trim().is_empty() || contract.starts_with("0x0000") {
+            return Ok(0.0);
+        }
+        let reader = match OnchainReader::from_config(&self.config) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to initialize on-chain reader for NFT discount: {}",
+                    err
+                );
+                return Ok(0.0);
+            }
+        };
+        let call = FunctionCall {
+            contract_address: parse_felt(contract)?,
+            entry_point_selector: get_selector_from_name("has_active_discount")
+                .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?,
+            calldata: vec![parse_felt(user_address)?],
+        };
+        let result = reader.call(call).await?;
+        if result.len() < 3 {
+            return Ok(0.0);
+        }
+        let active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
+        if !active {
+            return Ok(0.0);
+        }
+        let discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
+        Ok(discount.max(0.0))
     }
 
     async fn is_wash_trading(&self, user_address: &str, current_tx: &str) -> Result<bool> {
@@ -187,7 +298,7 @@ impl PointCalculator {
              WHERE user_address = $1 
              AND timestamp > NOW() - INTERVAL '5 minutes'
              AND tx_hash != $2
-             AND tx_type = 'swap'"
+             AND tx_type = 'swap'",
         )
         .bind(user_address)
         .bind(current_tx)
@@ -202,7 +313,7 @@ impl PointCalculator {
 
         sqlx::query(
             "UPDATE points SET wash_trading_flagged = true
-             WHERE user_address = $1 AND epoch = $2"
+             WHERE user_address = $1 AND epoch = $2",
         )
         .bind(user_address)
         .bind(current_epoch)
@@ -213,31 +324,22 @@ impl PointCalculator {
     }
 
     pub async fn apply_multipliers(&self, user_address: &str, epoch: i64) -> Result<()> {
-        let stake_points: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-            "SELECT COALESCE(stake_points, 0) FROM points WHERE user_address = $1 AND epoch = $2"
-        )
-        .bind(user_address)
-        .bind(epoch)
-        .fetch_optional(self.db.pool())
-        .await?;
-
-        let stake_points_f64 = stake_points
-            .unwrap_or(rust_decimal::Decimal::ZERO)
-            .to_f64()
-            .unwrap_or(0.0);
-
-        let multiplier = staking_multiplier_for(stake_points_f64);
-        let nft_boost = false;
+        let stake_amount = self.current_staked_carel_amount(user_address).await?;
+        let multiplier = staking_multiplier_for(stake_amount);
+        let nft_discount = self.active_nft_discount_rate(user_address).await?;
+        let nft_boost = nft_discount > 0.0;
+        let nft_factor = nft_factor_for_discount(nft_discount);
 
         sqlx::query(
             "UPDATE points 
              SET staking_multiplier = $1,
                  nft_boost = $2,
-                 total_points = (swap_points + bridge_points + stake_points + referral_points + social_points) * $1
-             WHERE user_address = $3 AND epoch = $4"
+                 total_points = (swap_points + bridge_points + stake_points + referral_points + social_points) * $1 * $3
+             WHERE user_address = $4 AND epoch = $5"
         )
         .bind(rust_decimal::Decimal::from_f64_retain(multiplier).unwrap())
         .bind(nft_boost)
+        .bind(rust_decimal::Decimal::from_f64_retain(nft_factor).unwrap())
         .bind(user_address)
         .bind(epoch)
         .execute(self.db.pool())
@@ -257,12 +359,11 @@ impl PointCalculator {
             return Ok(());
         }
 
-        let referrer_raw: Option<String> = sqlx::query_scalar(
-            "SELECT COALESCE(referrer, '') FROM users WHERE address = $1"
-        )
-        .bind(referee_address)
-        .fetch_optional(self.db.pool())
-        .await?;
+        let referrer_raw: Option<String> =
+            sqlx::query_scalar("SELECT COALESCE(referrer, '') FROM users WHERE address = $1")
+                .bind(referee_address)
+                .fetch_optional(self.db.pool())
+                .await?;
 
         let referrer = match referrer_raw {
             Some(value) => value.trim().to_string(),
@@ -278,7 +379,8 @@ impl PointCalculator {
         }
 
         let delta = new_total - prev_total;
-        let bonus = delta * Decimal::from_i64(REFERRAL_BONUS_BPS).unwrap_or(Decimal::ZERO) / Decimal::new(10000, 0);
+        let bonus = delta * Decimal::from_i64(REFERRAL_BONUS_BPS).unwrap_or(Decimal::ZERO)
+            / Decimal::new(10000, 0);
         if bonus <= Decimal::ZERO {
             return Ok(());
         }
@@ -286,7 +388,10 @@ impl PointCalculator {
         self.db.add_referral_points(&referrer, epoch, bonus).await?;
         self.apply_multipliers(&referrer, epoch).await?;
 
-        if let Err(err) = self.sync_referral_onchain(epoch, referee_address, new_total).await {
+        if let Err(err) = self
+            .sync_referral_onchain(epoch, referee_address, new_total)
+            .await
+        {
             tracing::warn!(
                 "Failed to sync referral onchain: referee={}, epoch={}, error={}",
                 referee_address,
@@ -336,8 +441,6 @@ impl PointCalculator {
     }
 }
 
- 
-
 fn build_referral_call(
     contract: &str,
     epoch: u64,
@@ -356,7 +459,25 @@ fn build_referral_call(
         Felt::from(0_u128),
     ];
 
-    Ok(Call { to, selector, calldata })
+    Ok(Call {
+        to,
+        selector,
+        calldata,
+    })
+}
+
+fn is_btc_bridge(tx: &crate::models::Transaction) -> bool {
+    tx.token_in
+        .as_deref()
+        .map(|symbol| {
+            let token = symbol.to_ascii_uppercase();
+            token == "BTC" || token == "WBTC"
+        })
+        .unwrap_or(false)
+}
+
+fn nft_factor_for_discount(discount_rate: f64) -> f64 {
+    1.0 + (discount_rate.max(0.0) / 100.0)
 }
 
 fn staking_multiplier_for(stake_amount: f64) -> f64 {
@@ -382,5 +503,11 @@ mod tests {
         assert_eq!(staking_multiplier_for(10_000.0), MULTIPLIER_TIER_2);
         assert_eq!(staking_multiplier_for(50_000.0), MULTIPLIER_TIER_3);
         assert_eq!(staking_multiplier_for(100_000.0), MULTIPLIER_TIER_4);
+    }
+
+    #[test]
+    fn nft_factor_for_discount_matches_percentage() {
+        assert_eq!(nft_factor_for_discount(0.0), 1.0);
+        assert_eq!(nft_factor_for_discount(25.0), 1.25);
     }
 }

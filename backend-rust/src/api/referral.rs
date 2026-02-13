@@ -1,7 +1,14 @@
+use super::{require_user, AppState};
+use crate::services::onchain::{felt_to_u128, parse_felt, OnchainReader};
+use crate::{
+    error::Result,
+    models::{ApiResponse, PaginatedResponse},
+    utils::ensure_page_limit,
+};
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
-use crate::{error::Result, models::{ApiResponse, PaginatedResponse}, utils::ensure_page_limit};
-use super::{AppState, require_user};
+use starknet_core::types::FunctionCall;
+use starknet_core::utils::get_selector_from_name;
 
 #[derive(Debug, Serialize)]
 pub struct ReferralCode {
@@ -48,6 +55,28 @@ fn build_referral_url(code: &str) -> String {
     format!("https://zkcarel.io?ref={}", code)
 }
 
+async fn onchain_referral_count(state: &AppState, referrer: &str) -> Result<Option<i64>> {
+    let Some(contract) = state.config.referral_system_address.as_deref() else {
+        return Ok(None);
+    };
+    if contract.trim().is_empty() || contract.starts_with("0x0000") {
+        return Ok(None);
+    }
+    let reader = OnchainReader::from_config(&state.config)?;
+    let call = FunctionCall {
+        contract_address: parse_felt(contract)?,
+        entry_point_selector: get_selector_from_name("get_referrals")
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?,
+        calldata: vec![parse_felt(referrer)?],
+    };
+    let result = reader.call(call).await?;
+    if result.is_empty() {
+        return Ok(Some(0));
+    }
+    let len = felt_to_u128(&result[0]).unwrap_or(0) as i64;
+    Ok(Some(len))
+}
+
 /// GET /api/v1/referral/code
 pub async fn get_code(
     State(state): State<AppState>,
@@ -55,12 +84,12 @@ pub async fn get_code(
 ) -> Result<Json<ApiResponse<ReferralCode>>> {
     let user_address = require_user(&headers, &state).await?;
     let code = build_referral_code(&user_address);
-    
+
     let response = ReferralCode {
         code: code.clone(),
         url: build_referral_url(&code),
     };
-    
+
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -70,14 +99,13 @@ pub async fn get_stats(
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<ReferralStats>>> {
     let user_address = require_user(&headers, &state).await?;
-    
+
     // Perbaikan: Gunakan query_as untuk menghindari keharusan DATABASE_URL saat compile
-    let stats_result: CountResult = sqlx::query_as(
-        "SELECT COUNT(*) as total FROM users WHERE referrer = $1"
-    )
-    .bind(&user_address)
-    .fetch_one(state.db.pool())
-    .await?;
+    let stats_result: CountResult =
+        sqlx::query_as("SELECT COUNT(*) as total FROM users WHERE referrer = $1")
+            .bind(&user_address)
+            .fetch_one(state.db.pool())
+            .await?;
 
     let active_result: CountResult = sqlx::query_as(
         "SELECT COUNT(*) as total FROM users WHERE referrer = $1 AND last_active > NOW() - INTERVAL '30 days'"
@@ -94,19 +122,25 @@ pub async fn get_stats(
     .await?;
 
     let total_rewards: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(referral_points), 0)::FLOAT FROM points WHERE user_address = $1"
+        "SELECT COALESCE(SUM(referral_points), 0)::FLOAT FROM points WHERE user_address = $1",
     )
-    .bind(user_address)
+    .bind(&user_address)
     .fetch_one(state.db.pool())
     .await?;
-    
+
+    let onchain_total = onchain_referral_count(&state, &user_address)
+        .await
+        .unwrap_or(None)
+        .unwrap_or(0);
+    let total_referrals = stats_result.total.max(onchain_total);
+
     let response = ReferralStats {
-        total_referrals: stats_result.total,
+        total_referrals,
         active_referrals: active_result.total,
         total_volume,
         total_rewards,
     };
-    
+
     Ok(Json(ApiResponse::success(response)))
 }
 

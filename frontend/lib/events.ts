@@ -16,11 +16,18 @@ export type WalletEvent = {
   provider?: string | null
 }
 
+export type AuthExpiredEvent = {
+  reason: "invalid_or_expired_token"
+  message?: string
+  path?: string
+}
+
 export type AppEvents = {
   "api:error": ApiErrorEvent
   "ws:status": WebSocketStatusEvent
   "wallet:connected": WalletEvent
   "wallet:disconnected": WalletEvent
+  "auth:expired": AuthExpiredEvent
 }
 
 type Handler<T> = (payload: T) => void

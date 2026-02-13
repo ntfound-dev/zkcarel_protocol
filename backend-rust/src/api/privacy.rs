@@ -1,10 +1,14 @@
+use crate::{
+    error::Result,
+    models::ApiResponse,
+    services::onchain::{parse_felt, OnchainInvoker},
+};
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
-use crate::{error::Result, models::ApiResponse, services::onchain::{OnchainInvoker, parse_felt}};
 use starknet_core::types::Call;
 use starknet_core::utils::get_selector_from_name;
 
-use super::{AppState, require_user};
+use super::{require_user, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyActionRequest {
@@ -35,12 +39,19 @@ pub async fn submit_private_action(
 ) -> Result<Json<ApiResponse<PrivacyActionResponse>>> {
     let user_address = require_user(&headers, &state).await?;
 
-    let router_v2 = state.config.privacy_router_address.as_deref().unwrap_or("").trim();
+    let router_v2 = state
+        .config
+        .privacy_router_address
+        .as_deref()
+        .unwrap_or("")
+        .trim();
     let router_v1 = state.config.zk_privacy_router_address.trim();
     let has_v2 = !router_v2.is_empty() && !router_v2.starts_with("0x0000");
     let has_v1 = !router_v1.is_empty() && !router_v1.starts_with("0x0000");
     if !has_v2 && !has_v1 {
-        return Err(crate::error::AppError::BadRequest("Privacy router not configured".into()));
+        return Err(crate::error::AppError::BadRequest(
+            "Privacy router not configured".into(),
+        ));
     }
 
     let nullifiers_len = req.nullifiers.as_ref().map(|v| v.len()).unwrap_or(0);
@@ -57,11 +68,16 @@ pub async fn submit_private_action(
         req.public_inputs.len()
     );
     if req.proof.is_empty() || req.public_inputs.is_empty() {
-        tracing::warn!("Privacy submit has empty proof/public_inputs for user={}", user_address);
+        tracing::warn!(
+            "Privacy submit has empty proof/public_inputs for user={}",
+            user_address
+        );
     }
 
     let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-        return Err(crate::error::AppError::BadRequest("On-chain invoker not configured".into()));
+        return Err(crate::error::AppError::BadRequest(
+            "On-chain invoker not configured".into(),
+        ));
     };
 
     let call = if has_v2 {
@@ -115,7 +131,9 @@ fn build_submit_call_v2(router: &str, req: &PrivacyActionRequest) -> Result<Call
         calldata.push(parse_felt(item)?);
     }
 
-    calldata.push(starknet_core::types::Felt::from(req.public_inputs.len() as u64));
+    calldata.push(starknet_core::types::Felt::from(
+        req.public_inputs.len() as u64
+    ));
     for item in &req.public_inputs {
         calldata.push(parse_felt(item)?);
     }
@@ -125,7 +143,11 @@ fn build_submit_call_v2(router: &str, req: &PrivacyActionRequest) -> Result<Call
         calldata.push(parse_felt(item)?);
     }
 
-    Ok(Call { to, selector, calldata })
+    Ok(Call {
+        to,
+        selector,
+        calldata,
+    })
 }
 
 fn build_submit_call_v1(router: &str, req: &PrivacyActionRequest) -> Result<Call> {
@@ -149,12 +171,18 @@ fn build_submit_call_v1(router: &str, req: &PrivacyActionRequest) -> Result<Call
         calldata.push(parse_felt(item)?);
     }
 
-    calldata.push(starknet_core::types::Felt::from(req.public_inputs.len() as u64));
+    calldata.push(starknet_core::types::Felt::from(
+        req.public_inputs.len() as u64
+    ));
     for item in &req.public_inputs {
         calldata.push(parse_felt(item)?);
     }
 
-    Ok(Call { to, selector, calldata })
+    Ok(Call {
+        to,
+        selector,
+        calldata,
+    })
 }
 
 fn parse_action_type(value: &str) -> Result<starknet_core::types::Felt> {

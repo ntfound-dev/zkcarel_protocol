@@ -7,12 +7,16 @@ import {
   markNotificationsRead,
   type BackendNotification,
 } from "@/lib/api"
-import { ETHERSCAN_SEPOLIA_BASE_URL, STARKSCAN_SEPOLIA_BASE_URL } from "@/lib/network-config"
+import {
+  BTC_TESTNET_EXPLORER_BASE_URL,
+  ETHERSCAN_SEPOLIA_BASE_URL,
+  STARKSCAN_SEPOLIA_BASE_URL,
+} from "@/lib/network-config"
 import { useWallet } from "@/hooks/use-wallet"
 import { emitEvent } from "@/lib/events"
 import { useWebSocket } from "@/hooks/use-websocket"
 
-type TxNetwork = "starknet" | "evm"
+type TxNetwork = "starknet" | "evm" | "btc"
 
 export interface TxExplorerLink {
   label: string
@@ -56,6 +60,7 @@ function normalizeTxNetwork(raw: unknown): TxNetwork | undefined {
   const normalized = raw.trim().toLowerCase()
   if (normalized === "starknet" || normalized === "sn") return "starknet"
   if (normalized === "evm" || normalized === "ethereum" || normalized === "eth") return "evm"
+  if (normalized === "btc" || normalized === "bitcoin") return "btc"
   return undefined
 }
 
@@ -74,6 +79,15 @@ function buildTxExplorerUrls(txHash?: string, txNetwork?: TxNetwork): TxExplorer
       {
         label: "Open Etherscan",
         url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
+      },
+    ]
+  }
+  if (txNetwork === "btc") {
+    const btcHash = txHash.startsWith("0x") ? txHash.slice(2) : txHash
+    return [
+      {
+        label: "Open Mempool",
+        url: `${BTC_TESTNET_EXPLORER_BASE_URL}/tx/${btcHash}`,
       },
     ]
   }

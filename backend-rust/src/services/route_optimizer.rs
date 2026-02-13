@@ -1,14 +1,22 @@
 use crate::{
     config::Config,
-    constants::{BRIDGE_ATOMIQ, BRIDGE_LAYERSWAP, BRIDGE_STARKGATE, BRIDGE_GARDEN},
+    constants::{BRIDGE_ATOMIQ, BRIDGE_GARDEN, BRIDGE_LAYERSWAP, BRIDGE_STARKGATE},
     error::Result,
     integrations::bridge::{AtomiqClient, GardenClient, LayerSwapClient},
 };
 
 fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     match (from, to) {
-        ("bitcoin", "starknet") => vec![BRIDGE_LAYERSWAP.to_string(), BRIDGE_ATOMIQ.to_string(), BRIDGE_GARDEN.to_string()],
-        ("ethereum", "starknet") => vec![BRIDGE_STARKGATE.to_string(), BRIDGE_ATOMIQ.to_string(), BRIDGE_GARDEN.to_string()],
+        ("bitcoin", "starknet") => vec![
+            BRIDGE_LAYERSWAP.to_string(),
+            BRIDGE_ATOMIQ.to_string(),
+            BRIDGE_GARDEN.to_string(),
+        ],
+        ("ethereum", "starknet") => vec![
+            BRIDGE_STARKGATE.to_string(),
+            BRIDGE_ATOMIQ.to_string(),
+            BRIDGE_GARDEN.to_string(),
+        ],
         ("starknet", "ethereum") => vec![BRIDGE_STARKGATE.to_string()],
         _ => vec![BRIDGE_ATOMIQ.to_string()],
     }
@@ -47,14 +55,17 @@ impl RouteOptimizer {
         amount: f64,
     ) -> Result<BridgeRoute> {
         let providers = self.get_bridge_providers(from_chain, to_chain);
-        
+
         let mut best_route: Option<BridgeRoute> = None;
         let mut best_score = 0.0;
 
         for provider in providers {
-            if let Ok(route) = self.get_bridge_quote(&provider, from_chain, to_chain, token, amount).await {
+            if let Ok(route) = self
+                .get_bridge_quote(&provider, from_chain, to_chain, token, amount)
+                .await
+            {
                 let score = self.calculate_bridge_score(&route);
-                
+
                 if best_route.is_none() || score > best_score {
                     best_route = Some(route);
                     best_score = score;
@@ -85,7 +96,9 @@ impl RouteOptimizer {
                     self.config.layerswap_api_key.clone().unwrap_or_default(),
                     self.config.layerswap_api_url.clone(),
                 );
-                let quote = client.get_quote(from_chain, to_chain, token, amount).await?;
+                let quote = client
+                    .get_quote(from_chain, to_chain, token, amount)
+                    .await?;
                 BridgeRoute {
                     provider: provider.to_string(),
                     token: token.to_string(),
@@ -100,7 +113,9 @@ impl RouteOptimizer {
                     self.config.atomiq_api_key.clone().unwrap_or_default(),
                     self.config.atomiq_api_url.clone(),
                 );
-                let quote = client.get_quote(from_chain, to_chain, token, amount).await?;
+                let quote = client
+                    .get_quote(from_chain, to_chain, token, amount)
+                    .await?;
                 BridgeRoute {
                     provider: provider.to_string(),
                     token: token.to_string(),
@@ -127,7 +142,9 @@ impl RouteOptimizer {
                     self.config.garden_api_key.clone().unwrap_or_default(),
                     self.config.garden_api_url.clone(),
                 );
-                let quote = client.get_quote(from_chain, to_chain, token, amount).await?;
+                let quote = client
+                    .get_quote(from_chain, to_chain, token, amount)
+                    .await?;
                 BridgeRoute {
                     provider: provider.to_string(),
                     token: token.to_string(),

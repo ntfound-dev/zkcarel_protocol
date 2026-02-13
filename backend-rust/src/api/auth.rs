@@ -1,13 +1,14 @@
 use axum::{extract::State, Json};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{Duration, Utc};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
-use chrono::{Utc, Duration};
 
 use crate::{
+    // Import SignatureVerifier agar kode di signature.rs tidak dead code
+    crypto::{hash, signature::SignatureVerifier},
     error::{AppError, Result},
     models::ApiResponse,
-    // Import SignatureVerifier agar kode di signature.rs tidak dead code
-    crypto::signature::SignatureVerifier,
 };
 
 use super::AppState;
@@ -22,6 +23,7 @@ pub struct ConnectWalletRequest {
     pub chain_id: u64,
     pub wallet_type: Option<String>, // starknet/evm/bitcoin
     pub sumo_login_token: Option<String>,
+    pub referral_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +51,15 @@ pub struct Claims {
     pub iat: usize,  // issued at
 }
 
+#[derive(Debug, Deserialize)]
+struct SumoTokenClaims {
+    sub: Option<String>,
+    iss: Option<String>,
+}
+
+const REFRESH_GRACE_MULTIPLIER: u64 = 7;
+const MIN_REFRESH_GRACE_HOURS: u64 = 24;
+
 // ==================== HANDLERS ====================
 
 /// POST /api/v1/auth/connect
@@ -56,8 +67,12 @@ pub async fn connect_wallet(
     State(state): State<AppState>,
     Json(req): Json<ConnectWalletRequest>,
 ) -> Result<Json<ApiResponse<ConnectWalletResponse>>> {
+    let requested_address = req.address.trim().to_string();
+    let detected_chain = detect_wallet_chain(req.chain_id, req.wallet_type.as_deref());
+    let mut sumo_subject: Option<String> = None;
+
     // 1. Verify signature OR Sumo Login token
-    if let Some(token) = req.sumo_login_token.as_ref() {
+    let canonical_user_address = if let Some(token) = req.sumo_login_token.as_ref() {
         let client = crate::integrations::sumo_login::SumoLoginClient::new(
             state.config.sumo_login_api_url.clone(),
             state.config.sumo_login_api_key.clone(),
@@ -69,20 +84,83 @@ pub async fn connect_wallet(
         if !ok {
             return Err(AppError::AuthError("Invalid Sumo login token".to_string()));
         }
+        let subject = derive_sumo_subject_key(token)?;
+        let canonical = if let Some(address) = state.db.find_user_by_sumo_subject(&subject).await? {
+            address
+        } else if !requested_address.is_empty() && !is_zero_placeholder_address(&requested_address)
+        {
+            state
+                .db
+                .find_user_by_wallet_address(&requested_address, detected_chain)
+                .await?
+                .unwrap_or_else(|| requested_address.clone())
+        } else {
+            canonical_address_for_sumo_subject(&subject)
+        };
+        sumo_subject = Some(subject);
+        canonical
     } else {
-        verify_signature(&req.address, &req.message, &req.signature, req.chain_id)?;
-    }
-
-    let canonical_user_address = req.address.clone();
+        verify_signature(
+            &requested_address,
+            &req.message,
+            &req.signature,
+            req.chain_id,
+        )?;
+        if requested_address.is_empty() {
+            return Err(AppError::BadRequest("Address is required".to_string()));
+        }
+        state
+            .db
+            .find_user_by_wallet_address(&requested_address, detected_chain)
+            .await?
+            .unwrap_or_else(|| requested_address.clone())
+    };
 
     // 2. Create or get user
     state.db.create_user(&canonical_user_address).await?;
-    let user = state.db.get_user(&canonical_user_address).await?
+    if let Some(subject) = sumo_subject.as_deref() {
+        state
+            .db
+            .bind_sumo_subject_once(&canonical_user_address, subject)
+            .await?;
+    }
+    let mut user = state
+        .db
+        .get_user(&canonical_user_address)
+        .await?
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
+    // Immutable referral bind: only on first bind (when referrer still NULL).
+    if user.referrer.is_none() {
+        if let Some(referral_suffix) = parse_referral_code(req.referral_code.as_deref())? {
+            let referrer_address = state
+                .db
+                .find_user_by_referral_code(&referral_suffix)
+                .await?
+                .ok_or_else(|| AppError::BadRequest("Invalid referral code".to_string()))?;
+            if referrer_address.eq_ignore_ascii_case(&canonical_user_address) {
+                return Err(AppError::BadRequest(
+                    "Cannot use own referral code".to_string(),
+                ));
+            }
+
+            let bound = state
+                .db
+                .bind_referrer_once(&canonical_user_address, &referrer_address)
+                .await?;
+            if bound {
+                user = state
+                    .db
+                    .get_user(&canonical_user_address)
+                    .await?
+                    .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+            }
+        }
+    }
+
     // Link wallet address to canonical user for multi-address account.
-    if let Some(chain) = detect_wallet_chain(req.chain_id, req.wallet_type.as_deref()) {
-        let address = req.address.trim();
+    if let Some(chain) = detected_chain {
+        let address = requested_address.as_str();
         if !address.is_empty() && !is_zero_placeholder_address(address) {
             state
                 .db
@@ -119,15 +197,31 @@ pub async fn refresh_token(
     State(state): State<AppState>,
     Json(req): Json<RefreshTokenRequest>,
 ) -> Result<Json<ApiResponse<ConnectWalletResponse>>> {
-    // 1. Decode token menggunakan helper
-    let user_address = extract_user_from_token(&req.refresh_token, &state.config.jwt_secret).await?;
+    // 1. Decode refresh token (allow expired access token within bounded grace window)
+    let refresh_max_age_hours = state
+        .config
+        .jwt_expiry_hours
+        .saturating_mul(REFRESH_GRACE_MULTIPLIER)
+        .max(MIN_REFRESH_GRACE_HOURS);
+    let user_address = extract_user_from_refresh_token(
+        &req.refresh_token,
+        &state.config.jwt_secret,
+        refresh_max_age_hours,
+    )?;
 
     // 2. Get user
-    let user = state.db.get_user(&user_address).await?
+    let user = state
+        .db
+        .get_user(&user_address)
+        .await?
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
     // 3. Generate new token
-    let new_token = generate_jwt_token(&user_address, &state.config.jwt_secret, state.config.jwt_expiry_hours)?;
+    let new_token = generate_jwt_token(
+        &user_address,
+        &state.config.jwt_secret,
+        state.config.jwt_expiry_hours,
+    )?;
 
     // 4. Calculate expiry
     let expires_in = state.config.jwt_expiry_hours * 3600;
@@ -146,15 +240,15 @@ pub async fn refresh_token(
 
 fn verify_signature(address: &str, message: &str, signature: &str, chain_id: u64) -> Result<()> {
     tracing::debug!(
-        "Initiating signature verification for {} on chain {}", 
-        address, 
+        "Initiating signature verification for {} on chain {}",
+        address,
         chain_id
     );
 
     // MENGHUBUNGKAN KE crypto/signature.rs
     // Sekarang SignatureVerifier resmi "Used"
     let is_valid = SignatureVerifier::verify_signature(address, message, signature)?;
-    
+
     if !is_valid {
         return Err(AppError::InvalidSignature);
     }
@@ -178,19 +272,48 @@ fn generate_jwt_token(address: &str, secret: &str, expiry_hours: u64) -> Result<
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(secret.as_bytes()),
-    ).map_err(|e| AppError::Internal(format!("Failed to generate token: {}", e)))?;
+    )
+    .map_err(|e| AppError::Internal(format!("Failed to generate token: {}", e)))?;
 
     Ok(token)
 }
 
-pub async fn extract_user_from_token(token: &str, secret: &str) -> Result<String> {
+fn decode_claims(token: &str, secret: &str, validate_exp: bool) -> Result<Claims> {
+    let mut validation = Validation::default();
+    validation.validate_exp = validate_exp;
+
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
-    ).map_err(|_| AppError::AuthError("Invalid or expired token".to_string()))?;
+        &validation,
+    )
+    .map_err(|_| AppError::AuthError("Invalid or expired token".to_string()))?;
 
-    Ok(token_data.claims.sub)
+    Ok(token_data.claims)
+}
+
+pub async fn extract_user_from_token(token: &str, secret: &str) -> Result<String> {
+    let claims = decode_claims(token, secret, true)?;
+
+    Ok(claims.sub)
+}
+
+fn extract_user_from_refresh_token(
+    token: &str,
+    secret: &str,
+    max_age_hours: u64,
+) -> Result<String> {
+    let claims = decode_claims(token, secret, false)?;
+    let issued_at = claims.iat as i64;
+    let now = Utc::now().timestamp();
+    let max_age_seconds = Duration::hours(max_age_hours as i64).num_seconds();
+
+    // Accept small positive skew, reject stale/invalid tokens.
+    if issued_at <= 0 || issued_at > now + 300 || now.saturating_sub(issued_at) > max_age_seconds {
+        return Err(AppError::AuthError("Invalid or expired token".to_string()));
+    }
+
+    Ok(claims.sub)
 }
 
 fn detect_wallet_chain(chain_id: u64, wallet_type: Option<&str>) -> Option<&'static str> {
@@ -217,6 +340,61 @@ fn is_zero_placeholder_address(address: &str) -> bool {
         || normalized == "0x0000000000000000000000000000000000000000000000000000000000000000"
 }
 
+fn derive_sumo_subject_key(token: &str) -> Result<String> {
+    let claims = token
+        .split('.')
+        .nth(1)
+        .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
+        .and_then(|decoded| serde_json::from_slice::<SumoTokenClaims>(&decoded).ok())
+        .ok_or_else(|| AppError::AuthError("Invalid Sumo token payload".to_string()))?;
+
+    let issuer = claims
+        .iss
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("sumo");
+    let subject = claims
+        .sub
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| AppError::AuthError("Sumo token missing subject".to_string()))?;
+    let key = format!("{}:{}", issuer.to_ascii_lowercase(), subject);
+
+    if key.len() <= 255 {
+        return Ok(key);
+    }
+    Ok(format!("sumo:{}", hash::hash_string(&key)))
+}
+
+fn canonical_address_for_sumo_subject(subject: &str) -> String {
+    let digest = hash::hash_string(subject);
+    let hex = digest.strip_prefix("0x").unwrap_or(digest.as_str());
+    let cut = hex.get(..40).unwrap_or(hex);
+    format!("0x{}", cut)
+}
+
+fn parse_referral_code(raw: Option<&str>) -> Result<Option<String>> {
+    let Some(input) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+
+    let upper = input.to_ascii_uppercase();
+    let suffix = upper
+        .strip_prefix("CAREL_")
+        .unwrap_or(upper.as_str())
+        .trim();
+
+    if suffix.len() != 8 || !suffix.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::BadRequest(
+            "Invalid referral code format".to_string(),
+        ));
+    }
+
+    Ok(Some(suffix.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +411,36 @@ mod tests {
         // Memastikan token invalid mengembalikan error autentikasi
         let result = extract_user_from_token("invalid.token", "secret").await;
         assert!(matches!(result, Err(AppError::AuthError(_))));
+    }
+
+    #[test]
+    fn parse_referral_code_accepts_prefixed_and_plain() {
+        let with_prefix = parse_referral_code(Some("carel_1234abcd")).unwrap();
+        let plain = parse_referral_code(Some("1234ABCD")).unwrap();
+        assert_eq!(with_prefix.as_deref(), Some("1234ABCD"));
+        assert_eq!(plain.as_deref(), Some("1234ABCD"));
+    }
+
+    #[test]
+    fn parse_referral_code_rejects_invalid() {
+        let result = parse_referral_code(Some("CAREL_12ZZ"));
+        assert!(matches!(result, Err(AppError::BadRequest(_))));
+    }
+
+    #[test]
+    fn derive_sumo_subject_key_prefers_iss_and_sub() {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"iss":"https://sumo","sub":"user-123"}"#);
+        let token = format!("{}.{}.", header, payload);
+        assert_eq!(
+            derive_sumo_subject_key(&token).unwrap(),
+            "https://sumo:user-123"
+        );
+    }
+
+    #[test]
+    fn derive_sumo_subject_key_rejects_invalid_token() {
+        let key = derive_sumo_subject_key("not-a-jwt");
+        assert!(matches!(key, Err(AppError::AuthError(_))));
     }
 }

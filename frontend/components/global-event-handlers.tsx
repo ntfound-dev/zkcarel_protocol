@@ -40,6 +40,20 @@ export function GlobalEventHandlers() {
   }, [notifications])
 
   React.useEffect(() => {
+    const unsubscribe = onEvent("auth:expired", () => {
+      const key = "auth:expired"
+      if (!shouldNotify(key, lastSeenRef.current)) return
+      notifications.addNotification({
+        type: "warning",
+        title: "Session expired",
+        message: "Login token invalid/expired. Please reconnect your wallet.",
+      })
+    })
+
+    return () => unsubscribe()
+  }, [notifications])
+
+  React.useEffect(() => {
     if (typeof window === "undefined") return
 
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {

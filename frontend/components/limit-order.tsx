@@ -20,6 +20,7 @@ import { ChevronDown, TrendingUp, TrendingDown, Info, Expand, X, Check, AlertCir
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
 import { cancelLimitOrder, createLimitOrder, getMarketDepth, getPortfolioBalance, getTokenOHLCV, listLimitOrders } from "@/lib/api"
+import { decimalToU256Parts, invokeStarknetCallFromWallet, toHexFelt } from "@/lib/onchain-trade"
 import { useLivePrices } from "@/hooks/use-live-prices"
 import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 
@@ -66,11 +67,61 @@ type UiOrder = {
 }
 
 const stableSymbols = new Set(["USDT", "USDC"])
+const STARKNET_LIMIT_ORDER_BOOK_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS ||
+  process.env.NEXT_PUBLIC_LIMIT_ORDER_BOOK_ADDRESS ||
+  ""
+
+const STARKNET_TOKEN_ADDRESS_MAP: Record<string, string> = {
+  CAREL:
+    process.env.NEXT_PUBLIC_TOKEN_CAREL_ADDRESS ||
+    process.env.NEXT_PUBLIC_CAREL_TOKEN_ADDRESS ||
+    "0x1",
+  STRK: process.env.NEXT_PUBLIC_TOKEN_STRK_ADDRESS || "0x4",
+  ETH: process.env.NEXT_PUBLIC_TOKEN_ETH_ADDRESS || "0x3",
+  BTC: process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS || "0x2",
+  WBTC:
+    process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
+    process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
+    "0x2",
+  USDT: process.env.NEXT_PUBLIC_TOKEN_USDT_ADDRESS || "0x5",
+  USDC: process.env.NEXT_PUBLIC_TOKEN_USDC_ADDRESS || "0x6",
+}
+
+const TOKEN_DECIMALS: Record<string, number> = {
+  CAREL: 18,
+  STRK: 18,
+  ETH: 18,
+  BTC: 8,
+  WBTC: 8,
+  USDT: 6,
+  USDC: 6,
+}
 
 const formatDateTime = (value: string) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })
+}
+
+const expiryToSeconds = (expiry: string) => {
+  switch (expiry) {
+    case "1d":
+      return 24 * 60 * 60
+    case "7d":
+      return 7 * 24 * 60 * 60
+    case "30d":
+      return 30 * 24 * 60 * 60
+    default:
+      return 7 * 24 * 60 * 60
+  }
+}
+
+const generateClientOrderId = () => {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")
+  return `0x${hex}`
 }
 
 export function LimitOrder() {
@@ -99,6 +150,12 @@ export function LimitOrder() {
     bids: [],
     asks: [],
   })
+  const starknetProviderHint = React.useMemo<"starknet" | "argentx" | "braavos">(() => {
+    if (wallet.provider === "argentx" || wallet.provider === "braavos") {
+      return wallet.provider
+    }
+    return "starknet"
+  }, [wallet.provider])
 
   React.useEffect(() => {
     let active = true
@@ -301,11 +358,49 @@ export function LimitOrder() {
     try {
       const fromToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
       const toToken = orderType === "buy" ? selectedToken.symbol : receiveToken.symbol
+      const fromTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[fromToken.toUpperCase()]
+      const toTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[toToken.toUpperCase()]
+      if (!fromTokenAddress || !toTokenAddress) {
+        throw new Error("Token pair belum didukung untuk limit order on-chain Starknet.")
+      }
+      if (!STARKNET_LIMIT_ORDER_BOOK_ADDRESS) {
+        throw new Error(
+          "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS belum diisi. Set alamat kontrak limit order di frontend/.env.local."
+        )
+      }
+      const clientOrderId = generateClientOrderId()
+      const [amountLow, amountHigh] = decimalToU256Parts(amount, TOKEN_DECIMALS[fromToken.toUpperCase()] || 18)
+      const [priceLow, priceHigh] = decimalToU256Parts(price, 18)
+      const expiryTs = Math.floor(Date.now() / 1000) + expiryToSeconds(expiry)
 
       notifications.addNotification({
         type: "info",
+        title: "Wallet signature required",
+        message: "Confirm create limit order transaction in your Starknet wallet.",
+      })
+      const onchainTxHash = await invokeStarknetCallFromWallet(
+        {
+          contractAddress: STARKNET_LIMIT_ORDER_BOOK_ADDRESS,
+          entrypoint: "create_limit_order",
+          calldata: [
+            clientOrderId,
+            fromTokenAddress,
+            toTokenAddress,
+            amountLow,
+            amountHigh,
+            priceLow,
+            priceHigh,
+            toHexFelt(expiryTs),
+          ],
+        },
+        starknetProviderHint
+      )
+      notifications.addNotification({
+        type: "info",
         title: "Order pending",
-        message: `Membuat order ${orderType === "buy" ? "beli" : "jual"} ${amount} ${selectedToken.symbol}...`,
+        message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} submitted on-chain.`,
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
       })
       const response = await createLimitOrder({
         from_token: fromToken,
@@ -314,6 +409,8 @@ export function LimitOrder() {
         price,
         expiry,
         recipient: null,
+        client_order_id: clientOrderId,
+        onchain_tx_hash: onchainTxHash,
       })
 
       const newOrder: UiOrder = {
@@ -332,7 +429,9 @@ export function LimitOrder() {
       notifications.addNotification({
         type: "success",
         title: "Order dibuat",
-        message: `Order ${orderType === "buy" ? "beli" : "jual"} ${amount} ${selectedToken.symbol} berhasil dibuat`,
+        message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} berhasil dibuat`,
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
       })
     } catch (error) {
       notifications.addNotification({
@@ -353,12 +452,32 @@ export function LimitOrder() {
 
   const cancelOrder = async (orderId: string) => {
     try {
-      await cancelLimitOrder(orderId)
+      if (!STARKNET_LIMIT_ORDER_BOOK_ADDRESS) {
+        throw new Error(
+          "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS belum diisi. Set alamat kontrak limit order di frontend/.env.local."
+        )
+      }
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: "Confirm cancel limit order transaction in your Starknet wallet.",
+      })
+      const onchainTxHash = await invokeStarknetCallFromWallet(
+        {
+          contractAddress: STARKNET_LIMIT_ORDER_BOOK_ADDRESS,
+          entrypoint: "cancel_limit_order",
+          calldata: [orderId],
+        },
+        starknetProviderHint
+      )
+      await cancelLimitOrder(orderId, { onchain_tx_hash: onchainTxHash })
       setOrders((prev) => prev.filter((order) => order.id !== orderId))
       notifications.addNotification({
         type: "success",
         title: "Order dibatalkan",
         message: "Order berhasil dibatalkan",
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
       })
     } catch (error) {
       notifications.addNotification({

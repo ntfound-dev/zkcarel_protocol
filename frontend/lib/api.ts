@@ -218,6 +218,15 @@ export interface PendingActionsResponse {
   pending: number[]
 }
 
+export interface PrepareAiActionResponse {
+  tx_hash: string
+  action_type: number
+  params: string
+  hashes_prepared: number
+  from_timestamp: number
+  to_timestamp: number
+}
+
 export interface PrivacySubmitResponse {
   tx_hash: string
 }
@@ -363,17 +372,109 @@ type ApiFetchOptions = RequestInit & {
   timeoutMs?: number
   context?: string
   suppressErrorNotification?: boolean
+  _authRetry?: boolean
 }
 
 const DEFAULT_TIMEOUT_MS = 15000
+const AUTH_TOKEN_STORAGE_KEY = "auth_token"
+const AUTH_EXPIRED_EMIT_DEDUPE_MS = 5000
+const INVALID_TOKEN_MESSAGE_REGEX = /invalid or expired token|invalid token|token expired|jwt/i
+
+let refreshTokenInFlight: Promise<string | null> | null = null
+let lastAuthExpiredEmitAt = 0
+
+function getStoredAuthToken() {
+  if (typeof window === "undefined") return null
+  return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+}
+
+function setStoredAuthToken(token: string) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
+}
+
+function clearStoredAuthToken() {
+  if (typeof window === "undefined") return
+  window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+}
+
+function tokenFromAuthorizationHeader(headerValue: string | null) {
+  if (!headerValue) return null
+  const matched = headerValue.match(/^Bearer\s+(.+)$/i)
+  return matched?.[1]?.trim() || null
+}
+
+function isInvalidOrExpiredAuth(status: number, message: string, hasAuthorizationHeader: boolean) {
+  return status === 401 && hasAuthorizationHeader && INVALID_TOKEN_MESSAGE_REGEX.test(message)
+}
+
+function emitAuthExpired(message: string, path: string) {
+  const now = Date.now()
+  if (now - lastAuthExpiredEmitAt < AUTH_EXPIRED_EMIT_DEDUPE_MS) return
+  lastAuthExpiredEmitAt = now
+  emitEvent("auth:expired", {
+    reason: "invalid_or_expired_token",
+    message,
+    path,
+  })
+}
+
+async function requestTokenRefresh(refreshToken: string): Promise<string | null> {
+  try {
+    const response = await fetch(joinUrl("/api/v1/auth/refresh"), {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    const text = await response.text()
+    let json: any = null
+    try {
+      json = text ? JSON.parse(text) : null
+    } catch {
+      json = null
+    }
+    if (!response.ok) return null
+    const newToken = json?.data?.token
+    if (typeof newToken !== "string" || !newToken.trim()) return null
+    return newToken
+  } catch {
+    return null
+  }
+}
+
+async function refreshTokenOnce(refreshToken: string): Promise<string | null> {
+  if (refreshTokenInFlight) return refreshTokenInFlight
+  refreshTokenInFlight = (async () => {
+    const refreshed = await requestTokenRefresh(refreshToken)
+    if (refreshed) {
+      setStoredAuthToken(refreshed)
+    }
+    return refreshed
+  })()
+  try {
+    return await refreshTokenInFlight
+  } finally {
+    refreshTokenInFlight = null
+  }
+}
 
 async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, context, suppressErrorNotification, ...requestInit } = init
+  const {
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    context,
+    suppressErrorNotification,
+    _authRetry = false,
+    ...requestInit
+  } = init
   const headers = new Headers(requestInit?.headers || {})
   headers.set("Content-Type", "application/json")
   headers.set("Accept", "application/json")
   if (typeof window !== "undefined" && !headers.has("Authorization")) {
-    const token = window.localStorage.getItem("auth_token")
+    const token = getStoredAuthToken()
     if (token) {
       headers.set("Authorization", `Bearer ${token}`)
     }
@@ -404,6 +505,30 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
       const isMissingAuthHeader =
         response.status === 401 &&
         (!hasAuthorizationHeader || /missing authorization header/i.test(message))
+      const isAuthExpired = isInvalidOrExpiredAuth(response.status, message, hasAuthorizationHeader)
+
+      if (isAuthExpired && !_authRetry) {
+        const currentToken =
+          tokenFromAuthorizationHeader(headers.get("Authorization")) || getStoredAuthToken()
+        if (currentToken) {
+          const refreshedToken = await refreshTokenOnce(currentToken)
+          if (refreshedToken) {
+            const retryHeaders = new Headers(headers)
+            retryHeaders.set("Authorization", `Bearer ${refreshedToken}`)
+            return apiFetch<T>(path, {
+              ...init,
+              headers: retryHeaders,
+              _authRetry: true,
+            })
+          }
+        }
+      }
+
+      if (isAuthExpired) {
+        clearStoredAuthToken()
+        emitAuthExpired(message, path)
+      }
+
       const error = new ApiError(message, {
         status: response.status,
         code: json?.error?.code || json?.code,
@@ -411,7 +536,7 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
         path,
         method: requestInit?.method || "GET",
       })
-      if (!suppressErrorNotification && !isMissingAuthHeader) {
+      if (!suppressErrorNotification && !isMissingAuthHeader && !isAuthExpired) {
         emitEvent("api:error", {
           error,
           context: context || path,
@@ -468,6 +593,7 @@ export async function connectWallet(payload: {
   chain_id: number
   wallet_type?: string
   sumo_login_token?: string
+  referral_code?: string
 }) {
   return apiFetch<ConnectWalletResponse>("/api/v1/auth/connect", {
     method: "POST",
@@ -493,7 +619,9 @@ export async function getNotificationsStats() {
 }
 
 export async function getPortfolioBalance() {
-  return apiFetch<BalanceResponse>("/api/v1/portfolio/balance")
+  return apiFetch<BalanceResponse>("/api/v1/portfolio/balance", {
+    timeoutMs: 30000,
+  })
 }
 
 export async function getPortfolioAnalytics() {
@@ -622,10 +750,12 @@ export async function executeBridge(payload: {
   from_chain: string
   to_chain: string
   token: string
+  to_token?: string
+  estimated_out_amount?: string
   amount: string
   recipient: string
   xverse_user_id?: string
-  onchain_tx_hash?: string
+  onchain_tx_hash: string
   mode?: string
   hide_balance?: boolean
 }) {
@@ -650,6 +780,8 @@ export async function createLimitOrder(payload: {
   price: string
   expiry: string
   recipient?: string | null
+  client_order_id?: string
+  onchain_tx_hash?: string
 }) {
   return apiFetch<LimitOrderResponse>("/api/v1/limit-order/create", {
     method: "POST",
@@ -659,9 +791,10 @@ export async function createLimitOrder(payload: {
   })
 }
 
-export async function cancelLimitOrder(orderId: string) {
+export async function cancelLimitOrder(orderId: string, payload?: { onchain_tx_hash?: string }) {
   return apiFetch<string>(`/api/v1/limit-order/${orderId}`, {
     method: "DELETE",
+    body: JSON.stringify(payload || {}),
     context: "Cancel limit order",
     suppressErrorNotification: true,
   })
@@ -675,7 +808,7 @@ export async function getStakePositions() {
   return apiFetch<StakingPosition[]>("/api/v1/stake/positions")
 }
 
-export async function stakeDeposit(payload: { pool_id: string; amount: string }) {
+export async function stakeDeposit(payload: { pool_id: string; amount: string; onchain_tx_hash?: string }) {
   return apiFetch<{ position_id: string; tx_hash: string; amount: number }>(
     "/api/v1/stake/deposit",
     {
@@ -687,7 +820,7 @@ export async function stakeDeposit(payload: { pool_id: string; amount: string })
   )
 }
 
-export async function stakeWithdraw(payload: { position_id: string; amount: string }) {
+export async function stakeWithdraw(payload: { position_id: string; amount: string; onchain_tx_hash?: string }) {
   return apiFetch<{ position_id: string; tx_hash: string; amount: number }>(
     "/api/v1/stake/withdraw",
     {
@@ -703,7 +836,7 @@ export async function getOwnedNfts() {
   return apiFetch<NFTItem[]>("/api/v1/nft/owned")
 }
 
-export async function mintNft(payload: { tier: number }) {
+export async function mintNft(payload: { tier: number; onchain_tx_hash?: string }) {
   return apiFetch<NFTItem>("/api/v1/nft/mint", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -771,6 +904,19 @@ export async function executeAiCommand(payload: { command: string; context?: str
 export async function getAiPendingActions(offset = 0, limit = 10) {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
   return apiFetch<PendingActionsResponse>(`/api/v1/ai/pending?${params.toString()}`)
+}
+
+export async function prepareAiAction(payload: {
+  level: number
+  context?: string
+  window_seconds?: number
+}) {
+  return apiFetch<PrepareAiActionResponse>("/api/v1/ai/prepare-action", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "AI prepare action",
+    suppressErrorNotification: true,
+  })
 }
 
 export async function submitPrivacyAction(payload: PrivacyActionPayload) {

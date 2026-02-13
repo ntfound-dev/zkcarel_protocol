@@ -1,8 +1,16 @@
-use axum::{extract::{State, Path}, http::HeaderMap, Json};
+use super::{require_user, AppState};
+use crate::{
+    error::Result,
+    models::{ApiResponse, Webhook},
+    services::WebhookService,
+};
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    Json,
+};
 use serde::{Deserialize, Serialize};
-use crate::{error::Result, models::{ApiResponse, Webhook}, services::WebhookService};
 use sqlx::Row;
-use super::{AppState, require_user};
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterWebhookRequest {
@@ -36,7 +44,9 @@ pub async fn register(
     let user_address = require_user(&headers, &state).await?;
     let service = WebhookService::new(state.db.clone(), state.config.clone());
 
-    let id = service.register(&user_address, &req.url, req.events.clone()).await?;
+    let id = service
+        .register(&user_address, &req.url, req.events.clone())
+        .await?;
 
     if let Some(first_event) = req.events.first() {
         let _ = service
@@ -55,7 +65,7 @@ pub async fn register(
         active: true,
         created_at: chrono::Utc::now().timestamp(),
     };
-    
+
     Ok(Json(ApiResponse::success(webhook)))
 }
 
@@ -68,7 +78,7 @@ pub async fn list(
 
     let rows = sqlx::query_as::<_, Webhook>(
         "SELECT id, user_address, url, events, secret, active, created_at
-         FROM webhooks WHERE user_address = $1 ORDER BY created_at DESC"
+         FROM webhooks WHERE user_address = $1 ORDER BY created_at DESC",
     )
     .bind(&user_address)
     .fetch_all(state.db.pool())
@@ -113,7 +123,7 @@ pub async fn get_logs(
          JOIN webhooks w ON wl.webhook_id = w.id
          WHERE w.user_address = $1
          ORDER BY delivered_at DESC
-         LIMIT 50"
+         LIMIT 50",
     )
     .bind(&user_address)
     .fetch_all(state.db.pool())

@@ -1,6 +1,6 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use ethers::{
-    providers::{Http, Provider, Middleware},
+    providers::{Http, Middleware, Provider},
     types::{Address, U256},
 };
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use crate::{
     services::onchain::{parse_felt, u256_from_felts, OnchainReader},
 };
 
-use super::{AppState, require_user};
+use super::{require_user, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct OnchainBalanceRequest {
@@ -61,7 +61,11 @@ pub async fn get_onchain_balances(
     Json(req): Json<OnchainBalanceRequest>,
 ) -> Result<Json<ApiResponse<OnchainBalanceResponse>>> {
     let user_address = require_user(&headers, &state).await?;
-    let linked_wallets = state.db.list_wallet_addresses(&user_address).await.unwrap_or_default();
+    let linked_wallets = state
+        .db
+        .list_wallet_addresses(&user_address)
+        .await
+        .unwrap_or_default();
 
     let starknet_address = req.starknet_address.or_else(|| {
         linked_wallets
@@ -84,7 +88,10 @@ pub async fn get_onchain_balances(
 
     let mut response = OnchainBalanceResponse::default();
 
-    if let (Some(addr), Some(token)) = (starknet_address.as_ref(), state.config.token_strk_address.as_ref()) {
+    if let (Some(addr), Some(token)) = (
+        starknet_address.as_ref(),
+        state.config.token_strk_address.as_ref(),
+    ) {
         response.strk_l2 = fetch_starknet_erc20_balance(&state.config, addr, token).await?;
     }
 
@@ -113,12 +120,19 @@ pub async fn link_wallet_address(
         .ok_or_else(|| AppError::BadRequest("Unsupported wallet chain".to_string()))?;
     let wallet_address = req.address.trim();
     if wallet_address.is_empty() {
-        return Err(AppError::BadRequest("Wallet address is required".to_string()));
+        return Err(AppError::BadRequest(
+            "Wallet address is required".to_string(),
+        ));
     }
 
     state
         .db
-        .upsert_wallet_address(&user_address, chain, wallet_address, req.provider.as_deref())
+        .upsert_wallet_address(
+            &user_address,
+            chain,
+            wallet_address,
+            req.provider.as_deref(),
+        )
         .await?;
 
     Ok(Json(ApiResponse::success(LinkWalletAddressResponse {
@@ -177,8 +191,12 @@ pub(crate) async fn fetch_starknet_erc20_balance(
         calldata: vec![owner_felt],
     };
     let values = reader.call(call).await?;
-    let low = values.get(0).ok_or_else(|| AppError::Internal("Balance low missing".into()))?;
-    let high = values.get(1).ok_or_else(|| AppError::Internal("Balance high missing".into()))?;
+    let low = values
+        .get(0)
+        .ok_or_else(|| AppError::Internal("Balance low missing".into()))?;
+    let high = values
+        .get(1)
+        .ok_or_else(|| AppError::Internal("Balance high missing".into()))?;
     let raw = u256_from_felts(low, high)?;
     let decimals = fetch_starknet_decimals(config, token).await.unwrap_or(18);
     Ok(Some(scale_u128(raw, decimals)))
@@ -206,7 +224,10 @@ pub(crate) async fn fetch_starknet_decimals(config: &Config, token: &str) -> Res
     Ok(parsed)
 }
 
-pub(crate) async fn fetch_evm_native_balance(config: &Config, address: &str) -> Result<Option<f64>> {
+pub(crate) async fn fetch_evm_native_balance(
+    config: &Config,
+    address: &str,
+) -> Result<Option<f64>> {
     if address.trim().is_empty() {
         return Ok(None);
     }

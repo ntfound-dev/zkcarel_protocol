@@ -1,22 +1,20 @@
 use axum::{extract::State, http::HeaderMap, Json};
-use serde::{Deserialize, Serialize};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
-use crate::{
-    constants::EPOCH_DURATION_SECONDS,
-    error::Result,
-    models::ApiResponse,
+use crate::services::onchain::{
+    parse_felt, u256_from_felts, u256_to_felts, OnchainInvoker, OnchainReader,
 };
-use crate::services::onchain::{OnchainInvoker, OnchainReader, parse_felt, u256_to_felts, u256_from_felts};
 use crate::services::MerkleGenerator;
+use crate::{constants::EPOCH_DURATION_SECONDS, error::Result, models::ApiResponse};
 
-use super::{AppState, require_user};
-use crate::indexer::starknet_client::StarknetClient;
+use super::{require_user, AppState};
 use crate::error::AppError;
+use crate::indexer::starknet_client::StarknetClient;
+use starknet_core::types::Felt;
 use starknet_core::types::{Call, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
-use starknet_core::types::Felt;
 use starknet_crypto::Felt as CryptoFelt;
 
 #[derive(Debug, Serialize)]
@@ -54,7 +52,11 @@ fn monthly_ecosystem_pool_carel() -> Decimal {
     total_supply * bps / denom / months
 }
 
-fn calculate_epoch_reward(points: Decimal, total_points: Decimal, total_distribution: Decimal) -> Decimal {
+fn calculate_epoch_reward(
+    points: Decimal,
+    total_points: Decimal,
+    total_distribution: Decimal,
+) -> Decimal {
     if total_points.is_zero() {
         return Decimal::ZERO;
     }
@@ -99,10 +101,7 @@ async fn fetch_treasury_distribution_onchain(state: &AppState) -> Result<Option<
     Ok(Some(balance_dec / denom))
 }
 
-async fn resolve_total_distribution(
-    state: &AppState,
-    requested: Option<f64>,
-) -> Result<Decimal> {
+async fn resolve_total_distribution(state: &AppState, requested: Option<f64>) -> Result<Decimal> {
     if let Some(val) = requested {
         return Ok(Decimal::from_f64_retain(val).unwrap_or(Decimal::ZERO));
     }
@@ -123,7 +122,10 @@ pub async fn get_points(
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64; // ~30 days
 
     // Get user points
-    let points = state.db.get_user_points(&user_address, current_epoch).await?
+    let points = state
+        .db
+        .get_user_points(&user_address, current_epoch)
+        .await?
         .unwrap_or_else(|| crate::models::UserPoints {
             user_address: user_address.to_string(),
             epoch: current_epoch,
@@ -166,26 +168,29 @@ pub async fn claim_rewards(
     let prev_epoch = current_epoch - 1;
 
     // Get user points from previous epoch
-    let points = state.db.get_user_points(&user_address, prev_epoch).await?
+    let points = state
+        .db
+        .get_user_points(&user_address, prev_epoch)
+        .await?
         .ok_or_else(|| crate::error::AppError::NotFound("No rewards to claim".to_string()))?;
 
     // Check if finalized
     if !points.finalized {
         return Err(crate::error::AppError::BadRequest(
-            "Epoch not finalized yet".to_string()
+            "Epoch not finalized yet".to_string(),
         ));
     }
 
     // Calculate CAREL amount based on monthly ecosystem pool
-    let total_points_epoch: rust_decimal::Decimal = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1"
-    )
-    .bind(prev_epoch)
-    .fetch_one(state.db.pool())
-    .await?;
+    let total_points_epoch: rust_decimal::Decimal =
+        sqlx::query_scalar("SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1")
+            .bind(prev_epoch)
+            .fetch_one(state.db.pool())
+            .await?;
 
     let total_distribution = resolve_total_distribution(&state, None).await?;
-    let carel_amount_dec = calculate_epoch_reward(points.total_points, total_points_epoch, total_distribution);
+    let carel_amount_dec =
+        calculate_epoch_reward(points.total_points, total_points_epoch, total_distribution);
     let net_carel_dec = carel_amount_dec * Decimal::new(95, 2); // 95% after tax
     let carel_amount = net_carel_dec.to_f64().unwrap_or(0.0);
     let total_points: f64 = points.total_points.to_string().parse().unwrap_or(0.0);
@@ -200,7 +205,9 @@ pub async fn claim_rewards(
         points.total_points,
         total_points_epoch,
         total_distribution,
-    ).await {
+    )
+    .await
+    {
         Ok(Some((onchain_tx, net_amount))) => {
             tx_hash = onchain_tx;
             carel_amount_out = net_amount.to_f64().unwrap_or(carel_amount);
@@ -247,30 +254,34 @@ pub async fn convert_to_carel(
     }
     if let Some(total) = req.total_distribution_carel {
         if total < 0.0 {
-            return Err(AppError::BadRequest("Invalid total_distribution_carel".into()));
+            return Err(AppError::BadRequest(
+                "Invalid total_distribution_carel".into(),
+            ));
         }
     }
 
     let points_value = if let Some(points) = req.points {
         Decimal::from_f64_retain(points).unwrap_or(Decimal::ZERO)
     } else {
-        state.db
+        state
+            .db
             .get_user_points(&user_address, epoch)
             .await?
             .map(|p| p.total_points)
             .unwrap_or(Decimal::ZERO)
     };
 
-    let total_points_epoch: Decimal = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1"
-    )
-    .bind(epoch)
-    .fetch_one(state.db.pool())
-    .await?;
+    let total_points_epoch: Decimal =
+        sqlx::query_scalar("SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1")
+            .bind(epoch)
+            .fetch_one(state.db.pool())
+            .await?;
 
-    let total_distribution = resolve_total_distribution(&state, req.total_distribution_carel).await?;
+    let total_distribution =
+        resolve_total_distribution(&state, req.total_distribution_carel).await?;
 
-    let mut carel_amount_dec = calculate_epoch_reward(points_value, total_points_epoch, total_distribution);
+    let mut carel_amount_dec =
+        calculate_epoch_reward(points_value, total_points_epoch, total_distribution);
     tracing::info!(
         "Convert points: user={}, epoch={}, points={}, total_points_epoch={}, total_distribution={}",
         user_address,
@@ -281,11 +292,19 @@ pub async fn convert_to_carel(
     );
     match convert_points_onchain(&state, epoch, points_value, total_distribution).await {
         Ok(Some(onchain_amount)) => {
-            tracing::info!("Using on-chain conversion for user={} epoch={}", user_address, epoch);
+            tracing::info!(
+                "Using on-chain conversion for user={} epoch={}",
+                user_address,
+                epoch
+            );
             carel_amount_dec = onchain_amount;
         }
         Ok(None) => {
-            tracing::debug!("Using off-chain conversion for user={} epoch={}", user_address, epoch);
+            tracing::debug!(
+                "Using off-chain conversion for user={} epoch={}",
+                user_address,
+                epoch
+            );
         }
         Err(err) => {
             tracing::warn!("On-chain conversion failed, fallback to off-chain: {}", err);
@@ -332,7 +351,9 @@ async fn claim_rewards_onchain(
         total_points_epoch,
         total_distribution,
     );
-    let proof = merkle.generate_proof(&tree, user_address, amount_wei, epoch).await?;
+    let proof = merkle
+        .generate_proof(&tree, user_address, amount_wei, epoch)
+        .await?;
 
     let proof_core: Vec<Felt> = proof
         .iter()
@@ -343,7 +364,13 @@ async fn claim_rewards_onchain(
     let submit_call = build_submit_root_call(contract, epoch as u64, root_core)?;
     let _ = invoker.invoke(submit_call).await?;
 
-    let call = build_batch_claim_call(contract, epoch as u64, user_address, amount_wei, &proof_core)?;
+    let call = build_batch_claim_call(
+        contract,
+        epoch as u64,
+        user_address,
+        amount_wei,
+        &proof_core,
+    )?;
     let tx_hash = invoker.invoke(call).await?;
 
     let net_wei = amount_wei.saturating_mul(95).saturating_div(100);
@@ -382,7 +409,9 @@ async fn convert_points_onchain(
         .await?;
 
     let carel_u128 = parse_u256_low(&result)?;
-    Ok(Some(Decimal::from_u128(carel_u128).unwrap_or(Decimal::ZERO)))
+    Ok(Some(
+        Decimal::from_u128(carel_u128).unwrap_or(Decimal::ZERO),
+    ))
 }
 
 fn to_u256_strings(value: u128) -> (String, String) {
@@ -413,7 +442,11 @@ fn build_batch_claim_call(
     calldata.push(Felt::from(proofs.len() as u128)); // proofs length
     calldata.extend_from_slice(proofs);
 
-    Ok(Call { to, selector, calldata })
+    Ok(Call {
+        to,
+        selector,
+        calldata,
+    })
 }
 
 fn build_submit_root_call(contract: &str, epoch: u64, root: Felt) -> Result<Call> {
@@ -422,7 +455,11 @@ fn build_submit_root_call(contract: &str, epoch: u64, root: Felt) -> Result<Call
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
 
     let calldata = vec![Felt::from(epoch as u128), root];
-    Ok(Call { to, selector, calldata })
+    Ok(Call {
+        to,
+        selector,
+        calldata,
+    })
 }
 
 fn parse_u256_low(values: &[String]) -> Result<u128> {
@@ -442,7 +479,8 @@ fn parse_felt_u128(value: &str) -> Result<u128> {
         u128::from_str_radix(stripped, 16)
             .map_err(|e| AppError::Internal(format!("Invalid felt hex: {}", e)))
     } else {
-        value.parse::<u128>()
+        value
+            .parse::<u128>()
             .map_err(|e| AppError::Internal(format!("Invalid felt dec: {}", e)))
     }
 }

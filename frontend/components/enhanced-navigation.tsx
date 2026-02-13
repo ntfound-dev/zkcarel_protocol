@@ -7,6 +7,7 @@ import { useWallet, type WalletProviderType, type BtcWalletProviderType } from "
 import { useNotifications } from "@/hooks/use-notifications"
 import { claimFaucet, getFaucetStatus, getTransactionsHistory, type Transaction } from "@/lib/api"
 import {
+  BTC_TESTNET_EXPLORER_BASE_URL,
   ETHERSCAN_SEPOLIA_BASE_URL,
   STARKSCAN_SEPOLIA_BASE_URL,
   formatNetworkLabel,
@@ -95,7 +96,7 @@ type UiTx = {
   value?: string
   time?: string
   txHash?: string
-  txNetwork?: "starknet" | "evm"
+  txNetwork?: "starknet" | "evm" | "btc"
 }
 
 export function EnhancedNavigation() {
@@ -184,13 +185,17 @@ export function EnhancedNavigation() {
     return shortenAddress(addr)
   }
 
-  const txExplorerLinks = (txHash?: string, txNetwork?: "starknet" | "evm") => {
+  const txExplorerLinks = (txHash?: string, txNetwork?: "starknet" | "evm" | "btc") => {
     if (!txHash) return []
     if (txNetwork === "evm") {
       return [{ label: "Etherscan", url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` }]
     }
     if (txNetwork === "starknet") {
       return [{ label: "Starkscan", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` }]
+    }
+    if (txNetwork === "btc") {
+      const btcHash = txHash.startsWith("0x") ? txHash.slice(2) : txHash
+      return [{ label: "Mempool", url: `${BTC_TESTNET_EXPLORER_BASE_URL}/tx/${btcHash}` }]
     }
     return [
       { label: "Starkscan", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` },
@@ -318,10 +323,13 @@ export function EnhancedNavigation() {
             value: usdValue ? `$${usdValue.toLocaleString()}` : "—",
             time: formatRelativeTime(tx.timestamp),
             txHash: tx.tx_hash,
-            txNetwork:
-              tx.tx_type === "bridge" && String(tx.token_in || "").toUpperCase() === "ETH"
+            txNetwork: tx.tx_type === "bridge"
+              ? String(tx.token_in || "").toUpperCase() === "ETH"
                 ? "evm"
-                : "starknet",
+                : String(tx.token_in || "").toUpperCase() === "BTC"
+                ? "btc"
+                : "starknet"
+              : "starknet",
           }
         })
         setTxHistory(mapped)

@@ -1,20 +1,20 @@
 use axum::{
-    extract::{State, Path},
-    Json,
-    response::IntoResponse,
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
+    response::IntoResponse,
+    Json,
 };
-use serde::Deserialize;
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 
 use crate::{
     error::Result,
-    models::{ApiResponse, Transaction, PaginatedResponse},
+    models::{ApiResponse, PaginatedResponse, Transaction},
     services::TransactionHistoryService,
     utils::ensure_page_limit,
 };
 
-use super::{AppState, require_user};
+use super::{require_user, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct HistoryQuery {
@@ -28,10 +28,14 @@ pub struct HistoryQuery {
 // Helper function agar logika parsing tanggal tidak berulang (DRY)
 fn parse_dates(query: &HistoryQuery) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
     let from = query.from_date.as_ref().and_then(|d| {
-        DateTime::parse_from_rfc3339(d).ok().map(|dt| dt.with_timezone(&Utc))
+        DateTime::parse_from_rfc3339(d)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
     });
     let to = query.to_date.as_ref().and_then(|d| {
-        DateTime::parse_from_rfc3339(d).ok().map(|dt| dt.with_timezone(&Utc))
+        DateTime::parse_from_rfc3339(d)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
     });
     (from, to)
 }
@@ -50,14 +54,16 @@ pub async fn get_history(
     ensure_page_limit(limit, state.config.rate_limit_authenticated)?;
 
     let service = TransactionHistoryService::new(state.db);
-    let history = service.get_user_history(
-        &user_address,
-        query.tx_type,
-        from_date,
-        to_date,
-        page,
-        limit,
-    ).await?;
+    let history = service
+        .get_user_history(
+            &user_address,
+            query.tx_type,
+            from_date,
+            to_date,
+            page,
+            limit,
+        )
+        .await?;
 
     if page == 1 {
         if let Ok(stats) = service.get_user_stats(&user_address).await {
@@ -92,20 +98,29 @@ pub async fn export_csv(
 
     // Menggunakan helper parse_dates
     let (from_date, to_date) = parse_dates(&query);
-    
+
     // Field 'tx_type', 'page', dan 'limit' mungkin tidak dipakai di export_csv
     // Kita panggil di tracing agar tidak kena warning 'unused' di masa depan
-    tracing::debug!("Exporting CSV for type: {:?}, page: {:?}, limit: {:?}", 
-        query.tx_type, query.page, query.limit);
+    tracing::debug!(
+        "Exporting CSV for type: {:?}, page: {:?}, limit: {:?}",
+        query.tx_type,
+        query.page,
+        query.limit
+    );
 
     let service = TransactionHistoryService::new(state.db);
-    let csv = service.export_to_csv(&user_address, from_date, to_date).await?;
+    let csv = service
+        .export_to_csv(&user_address, from_date, to_date)
+        .await?;
 
     Ok((
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "text/csv"),
-            (header::CONTENT_DISPOSITION, "attachment; filename=\"transactions.csv\""),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"transactions.csv\"",
+            ),
         ],
         csv,
     ))

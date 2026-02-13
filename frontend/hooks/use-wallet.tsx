@@ -8,7 +8,7 @@ import {
   getPortfolioBalance,
   linkWalletAddress,
 } from "@/lib/api"
-import { emitEvent } from "@/lib/events"
+import { emitEvent, onEvent } from "@/lib/events"
 import {
   EVM_SEPOLIA_CHAIN_ID,
   EVM_SEPOLIA_CHAIN_ID_HEX,
@@ -88,17 +88,45 @@ const STORAGE_KEYS = {
   btcAddress: "wallet_address_btc",
   sumoToken: "sumo_login_token",
   sumoAddress: "sumo_login_address",
+  referralCode: "referral_code",
 }
 
 const XVERSE_PROVIDER_ID = "XverseProviders.BitcoinProvider"
 const XVERSE_CONNECT_MESSAGE = "ZkCarel wants to connect your Bitcoin testnet wallet."
 
-export function WalletProvider({ children }: { children: ReactNode }) {
-  const [wallet, setWallet] = useState<WalletState>({
+function normalizeReferralCode(raw?: string | null): string | null {
+  if (!raw) return null
+  const upper = raw.trim().toUpperCase()
+  if (!upper) return null
+  const suffix = upper.startsWith("CAREL_") ? upper.slice(6) : upper
+  if (suffix.length !== 8 || !/^[0-9A-F]+$/.test(suffix)) return null
+  return `CAREL_${suffix}`
+}
+
+function readPendingReferralCode(): string | undefined {
+  if (typeof window === "undefined") return undefined
+
+  const stored = normalizeReferralCode(window.localStorage.getItem(STORAGE_KEYS.referralCode))
+  if (stored) {
+    window.localStorage.setItem(STORAGE_KEYS.referralCode, stored)
+    return stored
+  }
+
+  const fromQuery = normalizeReferralCode(new URLSearchParams(window.location.search).get("ref"))
+  if (fromQuery) {
+    window.localStorage.setItem(STORAGE_KEYS.referralCode, fromQuery)
+    return fromQuery
+  }
+
+  return undefined
+}
+
+function createInitialWalletState(): WalletState {
+  return {
     isConnected: false,
     address: null,
     provider: null,
-    balance: defaultBalance,
+    balance: { ...defaultBalance },
     onchainBalance: {
       STRK_L2: null,
       STRK_L1: null,
@@ -107,10 +135,35 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     },
     btcAddress: null,
     btcProvider: null,
+    starknetAddress: null,
+    evmAddress: null,
     network: "starknet",
     token: null,
     totalValueUSD: 0,
-  })
+  }
+}
+
+function clearWalletStorage() {
+  if (typeof window === "undefined") return
+  window.localStorage.removeItem(STORAGE_KEYS.token)
+  window.localStorage.removeItem(STORAGE_KEYS.address)
+  window.localStorage.removeItem(STORAGE_KEYS.provider)
+  window.localStorage.removeItem(STORAGE_KEYS.network)
+  window.localStorage.removeItem(STORAGE_KEYS.starknetAddress)
+  window.localStorage.removeItem(STORAGE_KEYS.evmAddress)
+  window.localStorage.removeItem(STORAGE_KEYS.btcAddress)
+  window.sessionStorage.removeItem(STORAGE_KEYS.sumoToken)
+  window.sessionStorage.removeItem(STORAGE_KEYS.sumoAddress)
+}
+
+export function WalletProvider({ children }: { children: ReactNode }) {
+  const [wallet, setWallet] = useState<WalletState>(() => createInitialWalletState())
+
+  const resetWalletSession = useCallback(() => {
+    clearWalletStorage()
+    setWallet(createInitialWalletState())
+    emitEvent("wallet:disconnected", { address: null, provider: null })
+  }, [])
 
   const updateBalance = useCallback((symbol: string, amount: number) => {
     setWallet((prev) => ({
@@ -121,6 +174,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       },
     }))
   }, [])
+
+  useEffect(() => {
+    const unsubscribe = onEvent("auth:expired", () => {
+      resetWalletSession()
+    })
+    return () => unsubscribe()
+  }, [resetWalletSession])
 
   const refreshPortfolio = useCallback(async () => {
     try {
@@ -467,12 +527,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     let token = ""
     let userAddress = address
     try {
+      const referralCode = readPendingReferralCode()
       const auth = await connectWallet({
         address,
         signature,
         message,
         chain_id: chainId,
         wallet_type: network === "evm" ? "evm" : "starknet",
+        referral_code: referralCode,
       })
       token = auth.token
       userAddress = auth.user.address || address
@@ -487,6 +549,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         if (network === "evm") {
           window.localStorage.setItem(STORAGE_KEYS.evmAddress, address)
         }
+        window.localStorage.removeItem(STORAGE_KEYS.referralCode)
       }
     } catch (error) {
       console.warn("Backend auth failed:", error)
@@ -552,22 +615,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [wallet.address, wallet.isConnected, wallet.token])
 
   const connectWithSumo = useCallback(async (sumoToken: string, address?: string) => {
-    const userAddress = address || "0x0000000000000000000000000000000000000000"
+    const requestedAddress = address || "0x0000000000000000000000000000000000000000"
+    let resolvedAddress = requestedAddress
     let token: string | null = null
     try {
+      const referralCode = readPendingReferralCode()
       const auth = await connectWallet({
-        address: userAddress,
+        address: requestedAddress,
         signature: "",
         message: "",
         chain_id: 0,
         sumo_login_token: sumoToken,
+        referral_code: referralCode,
       })
       token = auth.token
+      resolvedAddress = auth.user.address || requestedAddress
       if (typeof window !== "undefined") {
         window.localStorage.setItem(STORAGE_KEYS.token, auth.token)
-        window.localStorage.setItem(STORAGE_KEYS.address, userAddress)
+        window.localStorage.setItem(STORAGE_KEYS.address, resolvedAddress)
         window.localStorage.setItem(STORAGE_KEYS.provider, "")
         window.localStorage.setItem(STORAGE_KEYS.network, "starknet")
+        window.localStorage.removeItem(STORAGE_KEYS.referralCode)
         window.sessionStorage.setItem(STORAGE_KEYS.sumoToken, sumoToken)
         if (address) {
           window.sessionStorage.setItem(STORAGE_KEYS.sumoAddress, address)
@@ -580,12 +648,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setWallet((prev) => ({
       ...prev,
       isConnected: true,
-      address: userAddress,
+      address: resolvedAddress,
       provider: prev.provider,
       network: "starknet",
       token,
     }))
-    emitEvent("wallet:connected", { address: userAddress, provider: null })
+    emitEvent("wallet:connected", { address: resolvedAddress, provider: null })
     return !!token
   }, [])
 
@@ -706,38 +774,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [wallet.token])
 
   const disconnect = useCallback(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(STORAGE_KEYS.token)
-      window.localStorage.removeItem(STORAGE_KEYS.address)
-      window.localStorage.removeItem(STORAGE_KEYS.provider)
-      window.localStorage.removeItem(STORAGE_KEYS.network)
-      window.localStorage.removeItem(STORAGE_KEYS.starknetAddress)
-      window.localStorage.removeItem(STORAGE_KEYS.evmAddress)
-      window.localStorage.removeItem(STORAGE_KEYS.btcAddress)
-      window.sessionStorage.removeItem(STORAGE_KEYS.sumoToken)
-      window.sessionStorage.removeItem(STORAGE_KEYS.sumoAddress)
-    }
-    setWallet({
-      isConnected: false,
-      address: null,
-      provider: null,
-      balance: defaultBalance,
-      onchainBalance: {
-        STRK_L2: null,
-        STRK_L1: null,
-        ETH: null,
-        BTC: null,
-      },
-      btcAddress: null,
-      btcProvider: null,
-      starknetAddress: null,
-      evmAddress: null,
-      network: "starknet",
-      token: null,
-      totalValueUSD: 0,
-    })
-    emitEvent("wallet:disconnected", { address: null, provider: null })
-  }, [])
+    resetWalletSession()
+  }, [resetWalletSession])
 
   const switchNetwork = useCallback(async (network: string) => {
     await new Promise((resolve) => setTimeout(resolve, 300))

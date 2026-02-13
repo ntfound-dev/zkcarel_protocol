@@ -1,10 +1,10 @@
-use axum::{extract::{Path, Query, State}, Json};
+use axum::{
+    extract::{Path, Query, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    error::Result,
-    models::ApiResponse,
-};
+use crate::{error::Result, models::ApiResponse};
 
 use super::AppState;
 

@@ -1,37 +1,37 @@
 // All service modules
+pub mod ai_service;
+pub mod analytics_service;
+pub mod deposit_service;
+pub mod event_indexer;
 pub mod faucet_service;
-pub mod notification_service;
-pub mod transaction_history;
-pub mod price_chart_service;
+pub mod gas_optimizer;
 pub mod limit_order_executor;
 pub mod liquidity_aggregator;
-pub mod event_indexer;
-pub mod point_calculator;
 pub mod merkle_generator;
+pub mod notification_service;
+pub mod onchain;
+pub mod point_calculator;
+pub mod price_chart_service;
 pub mod route_optimizer;
 pub mod snapshot_manager;
 pub mod social_verifier;
-pub mod ai_service;
-pub mod deposit_service;
-pub mod analytics_service;
+pub mod transaction_history;
 pub mod webhook_service;
-pub mod gas_optimizer;
-pub mod onchain;
 
 // Re-export for convenience
-pub use notification_service::{NotificationService};
-pub use transaction_history::TransactionHistoryService;
-pub use price_chart_service::PriceChartService;
+pub use analytics_service::AnalyticsService;
+pub use deposit_service::DepositService;
+pub use event_indexer::EventIndexer;
 pub use limit_order_executor::LimitOrderExecutor;
 pub use liquidity_aggregator::LiquidityAggregator;
-pub use event_indexer::EventIndexer;
-pub use point_calculator::PointCalculator;
 pub use merkle_generator::MerkleGenerator;
+pub use notification_service::NotificationService;
+pub use point_calculator::PointCalculator;
+pub use price_chart_service::PriceChartService;
 pub use route_optimizer::RouteOptimizer;
 pub use snapshot_manager::SnapshotManager;
 pub use social_verifier::SocialVerifier;
-pub use deposit_service::DepositService;
-pub use analytics_service::AnalyticsService;
+pub use transaction_history::TransactionHistoryService;
 pub use webhook_service::WebhookService;
 
 use crate::{config::Config, db::Database};
@@ -74,7 +74,7 @@ pub async fn start_background_services(db: Database, config: Config) {
             if let Ok(sample) = sqlx::query(
                 "SELECT user_address, total_points FROM points
                  WHERE epoch = $1 AND finalized = true AND total_points > 0
-                 ORDER BY user_address ASC LIMIT 1"
+                 ORDER BY user_address ASC LIMIT 1",
             )
             .bind(finalize_epoch)
             .fetch_optional(db.pool())
@@ -84,14 +84,16 @@ pub async fn start_background_services(db: Database, config: Config) {
                     let address: String = row.get("user_address");
                     let points: rust_decimal::Decimal = row.get("total_points");
                     if let Ok(total_points) = sqlx::query_scalar::<_, rust_decimal::Decimal>(
-                        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1"
+                        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1",
                     )
                     .bind(finalize_epoch)
                     .fetch_one(db.pool())
                     .await
                     {
                         let amount_wei = merkle.calculate_reward_amount_wei(points, total_points);
-                        let _ = merkle.generate_proof(&tree, &address, amount_wei, finalize_epoch).await;
+                        let _ = merkle
+                            .generate_proof(&tree, &address, amount_wei, finalize_epoch)
+                            .await;
                     }
                     let _ = merkle.get_merkle_root(finalize_epoch).await;
                 }

@@ -126,7 +126,14 @@ impl GardenQuote {
     fn simulated_id(recipient: &str) -> String {
         let id_bytes: [u8; 16] = rand::random();
         let id_hex = hex::encode(id_bytes);
-        let suffix: String = recipient.chars().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect();
+        let suffix: String = recipient
+            .chars()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         format!("GD_{}_{}", id_hex, suffix)
     }
 }

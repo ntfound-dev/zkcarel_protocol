@@ -8,12 +8,43 @@ pub struct KeeperStats {
     pub earnings: u256,
 }
 
+#[derive(Copy, Drop, Serde, starknet::Store)]
+pub struct LimitOrderState {
+    pub owner: ContractAddress,
+    pub from_token: ContractAddress,
+    pub to_token: ContractAddress,
+    pub amount: u256,
+    pub target_price: u256,
+    pub expiry: u64,
+    pub status: u8, // 1=active, 2=filled, 3=cancelled
+}
+
 /// @title Keeper Network Interface
 /// @author CAREL Team
 /// @notice Defines keeper registration and execution entrypoints.
 /// @dev Tracks keeper performance and earnings.
 #[starknet::interface]
 pub trait IKeeperNetwork<TContractState> {
+    /// @notice Creates a new on-chain limit order.
+    /// @param order_id Client-generated felt id.
+    /// @param from_token Token sold.
+    /// @param to_token Token bought.
+    /// @param amount Amount sold.
+    /// @param target_price Target execution price.
+    /// @param expiry Expiry timestamp in seconds.
+    /// @return created_order_id Stored order id.
+    fn create_limit_order(
+        ref self: TContractState,
+        order_id: felt252,
+        from_token: ContractAddress,
+        to_token: ContractAddress,
+        amount: u256,
+        target_price: u256,
+        expiry: u64
+    ) -> felt252;
+    /// @notice Cancels an active on-chain limit order.
+    /// @param order_id Order id to cancel.
+    fn cancel_limit_order(ref self: TContractState, order_id: felt252);
     /// @notice Registers the caller as a keeper.
     /// @dev Initializes keeper stats.
     fn register_keeper(ref self: TContractState);
@@ -24,7 +55,7 @@ pub trait IKeeperNetwork<TContractState> {
     /// @dev Rewards keeper based on order value.
     /// @param order_id Limit order id.
     /// @param order_value Order value used for fee calculation.
-    fn execute_limit_order(ref self: TContractState, order_id: u64, order_value: u256);
+    fn execute_limit_order(ref self: TContractState, order_id: felt252, order_value: u256);
     /// @notice Executes a DCA job.
     /// @dev Rewards keeper based on execution value.
     /// @param dca_id DCA order id.
@@ -76,10 +107,10 @@ pub trait IKeeperNetworkPrivacy<TContractState> {
 #[starknet::contract]
 pub mod KeeperNetwork {
     use starknet::ContractAddress;
-    use starknet::get_caller_address;
+    use starknet::{get_caller_address, get_block_timestamp};
     // Selalu gunakan wildcard import untuk storage sesuai panduan dokumentasi
     use starknet::storage::*;
-    use super::KeeperStats;
+    use super::{KeeperStats, LimitOrderState};
     use core::num::traits::Zero;
     use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy::action_types::ACTION_DCA;
@@ -88,6 +119,8 @@ pub mod KeeperNetwork {
     pub struct Storage {
         pub registered_keepers: Map<ContractAddress, bool>,
         pub keeper_performance: Map<ContractAddress, KeeperStats>,
+        pub limit_orders: Map<felt252, LimitOrderState>,
+        pub limit_order_owner: Map<felt252, ContractAddress>,
         pub execution_fee_rate: u256,
         pub owner: ContractAddress,
         pub privacy_router: ContractAddress,
@@ -96,10 +129,24 @@ pub mod KeeperNetwork {
     #[event]
     #[derive(Drop, starknet::Event)]
     pub enum Event {
+        LimitOrderCreated: LimitOrderCreated,
+        LimitOrderCancelled: LimitOrderCancelled,
         KeeperRegistered: KeeperRegistered,
         KeeperUnregistered: KeeperUnregistered,
         ExecutionProcessed: ExecutionProcessed,
         KeeperSlashed: KeeperSlashed,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct LimitOrderCreated {
+        pub order_id: felt252,
+        pub owner: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct LimitOrderCancelled {
+        pub order_id: felt252,
+        pub owner: ContractAddress,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -115,7 +162,7 @@ pub mod KeeperNetwork {
     #[derive(Drop, starknet::Event)]
     pub struct ExecutionProcessed {
         pub keeper: ContractAddress,
-        pub id: u64,
+        pub id: felt252,
         pub fee_earned: u256,
     }
 
@@ -135,6 +182,49 @@ pub mod KeeperNetwork {
 
     #[abi(embed_v0)]
     impl KeeperNetworkImpl of super::IKeeperNetwork<ContractState> {
+        fn create_limit_order(
+            ref self: ContractState,
+            order_id: felt252,
+            from_token: ContractAddress,
+            to_token: ContractAddress,
+            amount: u256,
+            target_price: u256,
+            expiry: u64
+        ) -> felt252 {
+            let caller = get_caller_address();
+            assert!(!caller.is_zero(), "Invalid caller");
+            assert!(amount > 0_u256, "Amount required");
+            assert!(expiry > get_block_timestamp(), "Expiry must be in future");
+            let existing_owner = self.limit_order_owner.entry(order_id).read();
+            assert!(existing_owner.is_zero(), "Order already exists");
+
+            let order = LimitOrderState {
+                owner: caller,
+                from_token,
+                to_token,
+                amount,
+                target_price,
+                expiry,
+                status: 1_u8,
+            };
+            self.limit_orders.entry(order_id).write(order);
+            self.limit_order_owner.entry(order_id).write(caller);
+            self.emit(Event::LimitOrderCreated(LimitOrderCreated { order_id, owner: caller }));
+            order_id
+        }
+
+        fn cancel_limit_order(ref self: ContractState, order_id: felt252) {
+            let caller = get_caller_address();
+            let owner = self.limit_order_owner.entry(order_id).read();
+            assert!(owner == caller, "Not order owner");
+
+            let mut order = self.limit_orders.entry(order_id).read();
+            assert!(order.status == 1_u8, "Order not active");
+            order.status = 3_u8;
+            self.limit_orders.entry(order_id).write(order);
+            self.emit(Event::LimitOrderCancelled(LimitOrderCancelled { order_id, owner: caller }));
+        }
+
         /// @notice Registers the caller as a keeper.
         /// @dev Initializes keeper stats.
         fn register_keeper(ref self: ContractState) {
@@ -165,9 +255,14 @@ pub mod KeeperNetwork {
         /// @dev Rewards keeper based on order value.
         /// @param order_id Limit order id.
         /// @param order_value Order value used for fee calculation.
-        fn execute_limit_order(ref self: ContractState, order_id: u64, order_value: u256) {
+        fn execute_limit_order(ref self: ContractState, order_id: felt252, order_value: u256) {
             let caller = get_caller_address();
             assert!(self.registered_keepers.entry(caller).read(), "Unauthorized keeper");
+            let mut order = self.limit_orders.entry(order_id).read();
+            let owner = self.limit_order_owner.entry(order_id).read();
+            assert!(!owner.is_zero(), "Order not found");
+            assert!(order.status == 1_u8, "Order not active");
+            assert!(order.expiry > get_block_timestamp(), "Order expired");
 
             let mut stats = self.keeper_performance.entry(caller).read();
             let fee = (order_value * self.execution_fee_rate.read()) / 10000_u256;
@@ -177,6 +272,8 @@ pub mod KeeperNetwork {
             stats.earnings += fee;
 
             self.keeper_performance.entry(caller).write(stats);
+            order.status = 2_u8;
+            self.limit_orders.entry(order_id).write(order);
             self.emit(Event::ExecutionProcessed(ExecutionProcessed { keeper: caller, id: order_id, fee_earned: fee }));
         }
 
@@ -196,7 +293,7 @@ pub mod KeeperNetwork {
             stats.earnings += fee;
 
             self.keeper_performance.entry(caller).write(stats);
-            self.emit(Event::ExecutionProcessed(ExecutionProcessed { keeper: caller, id: dca_id, fee_earned: fee }));
+            self.emit(Event::ExecutionProcessed(ExecutionProcessed { keeper: caller, id: dca_id.into(), fee_earned: fee }));
         }
 
         /// @notice Claims accumulated keeper earnings.

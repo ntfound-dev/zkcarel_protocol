@@ -1,6 +1,6 @@
 use crate::error::Result;
-use url::Url;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct LayerSwapClient {
@@ -10,10 +10,7 @@ pub struct LayerSwapClient {
 
 impl LayerSwapClient {
     pub fn new(api_key: String, api_url: String) -> Self {
-        Self {
-            api_key,
-            api_url,
-        }
+        Self { api_key, api_url }
     }
 
     pub async fn get_quote(
@@ -24,11 +21,15 @@ impl LayerSwapClient {
         amount: f64,
     ) -> Result<LayerSwapQuote> {
         if self.api_url.trim().is_empty() {
-            return Ok(LayerSwapQuote::simulated(from_chain, to_chain, token, amount));
+            return Ok(LayerSwapQuote::simulated(
+                from_chain, to_chain, token, amount,
+            ));
         }
 
         let mut url = Url::parse(&format!("{}/quotes", self.api_url.trim_end_matches('/')))
-            .map_err(|e| crate::error::AppError::Internal(format!("Invalid LayerSwap URL: {}", e)))?;
+            .map_err(|e| {
+                crate::error::AppError::Internal(format!("Invalid LayerSwap URL: {}", e))
+            })?;
         url.query_pairs_mut()
             .append_pair("source", from_chain)
             .append_pair("destination", to_chain)
@@ -43,9 +44,8 @@ impl LayerSwapClient {
             .await;
 
         match resp {
-            Ok(res) => {
-                match res.json::<LayerSwapQuoteResponse>().await {
-                    Ok(body) => {
+            Ok(res) => match res.json::<LayerSwapQuoteResponse>().await {
+                Ok(body) => {
                     return Ok(LayerSwapQuote {
                         from_chain: from_chain.to_string(),
                         to_chain: to_chain.to_string(),
@@ -55,25 +55,22 @@ impl LayerSwapClient {
                         fee: body.fee.unwrap_or(0.0),
                         estimated_time_minutes: body.estimated_time_minutes.unwrap_or(15),
                     });
-                    }
-                    Err(err) => {
-                        tracing::warn!("LayerSwap quote parse failed: {}", err);
-                    }
                 }
-            }
+                Err(err) => {
+                    tracing::warn!("LayerSwap quote parse failed: {}", err);
+                }
+            },
             Err(err) => {
                 tracing::warn!("LayerSwap API request failed: {}", err);
             }
         }
 
-        Ok(LayerSwapQuote::simulated(from_chain, to_chain, token, amount))
+        Ok(LayerSwapQuote::simulated(
+            from_chain, to_chain, token, amount,
+        ))
     }
 
-    pub async fn execute_bridge(
-        &self,
-        quote: &LayerSwapQuote,
-        recipient: &str,
-    ) -> Result<String> {
+    pub async fn execute_bridge(&self, quote: &LayerSwapQuote, recipient: &str) -> Result<String> {
         if self.api_url.trim().is_empty() {
             return Ok(LayerSwapQuote::simulated_id(quote, recipient));
         }
@@ -152,9 +149,7 @@ impl LayerSwapQuote {
 
         let quote_summary = format!(
             "{}:{}->{:.6}",
-            &quote.token,
-            &quote.to_chain,
-            quote.amount_out
+            &quote.token, &quote.to_chain, quote.amount_out
         );
 
         format!("LS_{}_to_{}_{}", id_hex, recipient_short, quote_summary)
@@ -229,7 +224,10 @@ mod tests {
         assert!(id_hex.chars().all(|c| c.is_ascii_hexdigit()));
 
         let recipient_short = &recipient[recipient.len() - 10..];
-        let quote_summary = format!("{}:{}->{:.6}", quote.token, quote.to_chain, quote.amount_out);
+        let quote_summary = format!(
+            "{}:{}->{:.6}",
+            quote.token, quote.to_chain, quote.amount_out
+        );
         assert_eq!(parts[1], format!("{}_{}", recipient_short, quote_summary));
     }
 }

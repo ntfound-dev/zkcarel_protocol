@@ -213,7 +213,7 @@ mod tests {
 
         let parsed = parser.parse_event(&event);
         assert!(parsed.is_some());
-        
+
         let parsed = parsed.unwrap();
         assert_eq!(parsed.event_type, "Swap");
     }

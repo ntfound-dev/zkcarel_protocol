@@ -1,4 +1,8 @@
-use crate::{config::Config, constants::{DEX_AVNU, DEX_EKUBO, DEX_HAIKO}, error::Result};
+use crate::{
+    config::Config,
+    constants::{DEX_AVNU, DEX_EKUBO, DEX_HAIKO},
+    error::Result,
+};
 use std::collections::HashMap;
 
 fn score_route(route: &SwapRoute) -> f64 {
@@ -10,7 +14,11 @@ fn score_route(route: &SwapRoute) -> f64 {
 }
 
 fn apply_env_factor(score: f64, is_testnet: bool) -> f64 {
-    if is_testnet { score * 0.99 } else { score }
+    if is_testnet {
+        score * 0.99
+    } else {
+        score
+    }
 }
 
 // ==================== AGGREGATOR ====================
@@ -28,7 +36,10 @@ impl LiquidityAggregator {
         dex_clients.insert(DEX_HAIKO.to_string(), Box::new(HaikoClient::new()));
         dex_clients.insert(DEX_AVNU.to_string(), Box::new(AvnuClient::new()));
 
-        Self { config, dex_clients }
+        Self {
+            config,
+            dex_clients,
+        }
     }
 
     /// Get best swap quote from all DEXes
@@ -61,7 +72,8 @@ impl LiquidityAggregator {
                     path: q.path,
                     score: 0.0,
                 };
-                route.score = apply_env_factor(self.calculate_route_score(&route), self.config.is_testnet());
+                route.score =
+                    apply_env_factor(self.calculate_route_score(&route), self.config.is_testnet());
                 routes.push(route);
             }
         }
@@ -91,11 +103,7 @@ impl LiquidityAggregator {
             }
         }
 
-        quotes.sort_by(|a, b| {
-            b.1.amount_out
-                .partial_cmp(&a.1.amount_out)
-                .unwrap()
-        });
+        quotes.sort_by(|a, b| b.1.amount_out.partial_cmp(&a.1.amount_out).unwrap());
 
         let mut remaining = amount_in;
         let mut routes = Vec::new();
@@ -150,12 +158,8 @@ impl LiquidityAggregator {
 
 #[async_trait::async_trait]
 pub trait DEXClient: Send + Sync {
-    async fn get_quote(
-        &self,
-        from_token: &str,
-        to_token: &str,
-        amount_in: f64,
-    ) -> Result<DEXQuote>;
+    async fn get_quote(&self, from_token: &str, to_token: &str, amount_in: f64)
+        -> Result<DEXQuote>;
 
     async fn get_liquidity(&self, from_token: &str, to_token: &str) -> Result<f64>;
 }
@@ -171,12 +175,7 @@ impl EkuboClient {
 
 #[async_trait::async_trait]
 impl DEXClient for EkuboClient {
-    async fn get_quote(
-        &self,
-        from: &str,
-        to: &str,
-        amount: f64,
-    ) -> Result<DEXQuote> {
+    async fn get_quote(&self, from: &str, to: &str, amount: f64) -> Result<DEXQuote> {
         Ok(DEXQuote {
             amount_out: amount * 0.998,
             price_impact: 0.001,
@@ -202,12 +201,7 @@ impl HaikoClient {
 
 #[async_trait::async_trait]
 impl DEXClient for HaikoClient {
-    async fn get_quote(
-        &self,
-        from: &str,
-        to: &str,
-        amount: f64,
-    ) -> Result<DEXQuote> {
+    async fn get_quote(&self, from: &str, to: &str, amount: f64) -> Result<DEXQuote> {
         Ok(DEXQuote {
             amount_out: amount * 0.997,
             price_impact: 0.002,
@@ -233,12 +227,7 @@ impl AvnuClient {
 
 #[async_trait::async_trait]
 impl DEXClient for AvnuClient {
-    async fn get_quote(
-        &self,
-        from: &str,
-        to: &str,
-        amount: f64,
-    ) -> Result<DEXQuote> {
+    async fn get_quote(&self, from: &str, to: &str, amount: f64) -> Result<DEXQuote> {
         Ok(DEXQuote {
             amount_out: amount * 0.996,
             price_impact: 0.0015,
@@ -297,7 +286,10 @@ mod tests {
             path: vec![],
             score: 0.0,
         };
-        let route_high = SwapRoute { amount_out: 95.0, ..route_low.clone() };
+        let route_high = SwapRoute {
+            amount_out: 95.0,
+            ..route_low.clone()
+        };
         assert!(score_route(&route_high) > score_route(&route_low));
     }
 

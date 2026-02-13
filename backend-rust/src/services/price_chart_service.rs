@@ -1,12 +1,12 @@
+use crate::indexer::starknet_client::StarknetClient;
 use crate::{
     config::Config,
-    constants::PRICE_UPDATER_INTERVAL_SECS,
     constants::token_address_for,
+    constants::PRICE_UPDATER_INTERVAL_SECS,
     db::Database,
     error::{AppError, Result},
     models::PriceTick,
 };
-use crate::indexer::starknet_client::StarknetClient;
 
 use chrono::{DateTime, Timelike, Utc};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
@@ -59,7 +59,10 @@ impl PriceChartService {
                     tracing::error!("Failed to update prices: {}", e);
                 }
 
-                tokio::time::sleep(tokio::time::Duration::from_secs(PRICE_UPDATER_INTERVAL_SECS)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(
+                    PRICE_UPDATER_INTERVAL_SECS,
+                ))
+                .await;
             }
         });
     }
@@ -109,10 +112,11 @@ impl PriceChartService {
     }
 
     async fn fetch_price_from_oracle(&self, token: &str) -> Result<Decimal> {
-        let asset_id = self.config.oracle_asset_id_for(token)
+        let asset_id = self
+            .config
+            .oracle_asset_id_for(token)
             .ok_or_else(|| AppError::NotFound(format!("Missing asset_id for {}", token)))?;
-        let token_address = token_address_for(token)
-            .ok_or_else(|| AppError::InvalidToken)?;
+        let token_address = token_address_for(token).ok_or_else(|| AppError::InvalidToken)?;
 
         let client = StarknetClient::new(self.config.starknet_rpc_url.clone());
         let result = client
@@ -138,8 +142,8 @@ impl PriceChartService {
         let base_url = self.config.coingecko_api_url.trim_end_matches('/');
         let url = format!("{}/simple/price", base_url);
         let client = reqwest::Client::new();
-        let mut url = reqwest::Url::parse(&url)
-            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+        let mut url =
+            reqwest::Url::parse(&url).map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
         url.query_pairs_mut()
             .append_pair("ids", coin_id.as_str())
             .append_pair("vs_currencies", "usd");
@@ -250,10 +254,15 @@ impl PriceChartService {
             .save_price_tick(
                 token,
                 timestamp,
-                open.to_f64().ok_or_else(|| AppError::Internal("open".into()))?,
-                high.to_f64().ok_or_else(|| AppError::Internal("high".into()))?,
-                low.to_f64().ok_or_else(|| AppError::Internal("low".into()))?,
-                close.to_f64().ok_or_else(|| AppError::Internal("close".into()))?,
+                open.to_f64()
+                    .ok_or_else(|| AppError::Internal("open".into()))?,
+                high.to_f64()
+                    .ok_or_else(|| AppError::Internal("high".into()))?,
+                low.to_f64()
+                    .ok_or_else(|| AppError::Internal("low".into()))?,
+                close
+                    .to_f64()
+                    .ok_or_else(|| AppError::Internal("close".into()))?,
                 0.0,
                 interval,
             )
@@ -261,7 +270,6 @@ impl PriceChartService {
 
         Ok(())
     }
-
 
     pub async fn get_current_price(&self, token: &str) -> Result<Decimal> {
         self.price_cache
@@ -331,7 +339,10 @@ impl PriceChartService {
         let mut out = vec![];
 
         for i in period as usize..candles.len() {
-            let sum: Decimal = candles[i - period as usize..i].iter().map(|c| c.close).sum();
+            let sum: Decimal = candles[i - period as usize..i]
+                .iter()
+                .map(|c| c.close)
+                .sum();
             out.push((candles[i].timestamp, sum / Decimal::from(period)));
         }
 
@@ -430,7 +441,8 @@ fn parse_felt_u128(value: &str) -> Result<u128> {
         u128::from_str_radix(stripped, 16)
             .map_err(|e| AppError::Internal(format!("Invalid felt hex: {}", e)))
     } else {
-        value.parse::<u128>()
+        value
+            .parse::<u128>()
             .map_err(|e| AppError::Internal(format!("Invalid felt dec: {}", e)))
     }
 }

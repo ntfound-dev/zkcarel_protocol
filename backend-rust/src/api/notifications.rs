@@ -8,7 +8,7 @@ use crate::{
     utils::ensure_page_limit,
 };
 
-use super::{AppState, require_user};
+use super::{require_user, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct ListNotificationsQuery {
@@ -60,12 +60,11 @@ pub async fn list(
         .await?;
 
     // Perbaikan: Gunakan query_as
-    let total_res: CountResult = sqlx::query_as(
-        "SELECT COUNT(*) as count FROM notifications WHERE user_address = $1"
-    )
-    .bind(&user_address)
-    .fetch_one(state.db.pool())
-    .await?;
+    let total_res: CountResult =
+        sqlx::query_as("SELECT COUNT(*) as count FROM notifications WHERE user_address = $1")
+            .bind(&user_address)
+            .fetch_one(state.db.pool())
+            .await?;
 
     let response = PaginatedResponse {
         items: notifications,
@@ -94,7 +93,9 @@ pub async fn mark_read(
         }
     }
 
-    Ok(Json(ApiResponse::success("Notifications marked as read".to_string())))
+    Ok(Json(ApiResponse::success(
+        "Notifications marked as read".to_string(),
+    )))
 }
 
 /// PUT /api/v1/notifications/preferences
@@ -138,7 +139,7 @@ pub async fn get_stats(
     let stats: StatsResult = sqlx::query_as(
         "SELECT COUNT(*) as total
          FROM notifications
-         WHERE user_address = $1"
+         WHERE user_address = $1",
     )
     .bind(&user_address)
     .fetch_one(state.db.pool())

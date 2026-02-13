@@ -35,13 +35,14 @@ impl SnapshotManager {
             .fetch_one(self.db.pool())
             .await?;
 
-        let total_points: rust_decimal::Decimal = row.get::<Option<rust_decimal::Decimal>, _>("total")
+        let total_points: rust_decimal::Decimal = row
+            .get::<Option<rust_decimal::Decimal>, _>("total")
             .unwrap_or(rust_decimal::Decimal::ZERO);
 
         // 3. Save snapshot
         sqlx::query(
             "INSERT INTO epoch_snapshots (epoch, total_points, total_users, finalized_at)
-             VALUES ($1, $2, (SELECT COUNT(*) FROM points WHERE epoch = $1), NOW())"
+             VALUES ($1, $2, (SELECT COUNT(*) FROM points WHERE epoch = $1), NOW())",
         )
         .bind(epoch)
         .bind(total_points)

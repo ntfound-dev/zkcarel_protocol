@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { useTheme } from "@/components/theme-provider"
@@ -26,12 +27,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { 
   Collapsible,
   CollapsibleContent,
@@ -57,6 +52,18 @@ type QuoteState = {
   bridgeConvertedAmount?: number
 }
 
+type QuoteCacheEntry = {
+  expiresAt: number
+  quote: QuoteState
+  toAmount: string
+  quoteError: string | null
+}
+
+const TradePreviewDialog = dynamic(
+  () => import("@/components/trade-preview-dialog").then((mod) => mod.TradePreviewDialog),
+  { ssr: false }
+)
+
 const tokenCatalog = [
   { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 0, network: "Bitcoin Testnet" },
   { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 0, network: "Ethereum Sepolia" },
@@ -69,6 +76,8 @@ const tokenCatalog = [
 
 const slippagePresets = ["0.1", "0.3", "0.5", "1.0"]
 const MEV_FEE_RATE = 0.01
+const QUOTE_CACHE_TTL_MS = 20_000
+const MAX_QUOTE_CACHE_ENTRIES = 120
 
 const STARKNET_SWAP_CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS ||
@@ -116,6 +125,18 @@ const chainFromNetwork = (network: string) => {
   return key
 }
 
+const normalizeBtcTxHashInput = (raw: string): string => {
+  const trimmed = raw.trim().toLowerCase()
+  if (!trimmed) {
+    throw new Error("BTC tx hash wajib diisi untuk bridge native BTC.")
+  }
+  const body = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed
+  if (!/^[0-9a-f]{64}$/.test(body)) {
+    throw new Error("BTC tx hash tidak valid. Gunakan txid 64 karakter hex.")
+  }
+  return body
+}
+
 const convertAmountByUsdPrice = (
   amount: number,
   fromPrice: number,
@@ -145,6 +166,26 @@ const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
   })
 }
 
+const stableKeyNumber = (value: number, fractionDigits = 8) => {
+  if (!Number.isFinite(value)) return "0"
+  return value.toFixed(fractionDigits)
+}
+
+const sanitizeDecimalInput = (raw: string, maxDecimals = 18) => {
+  const cleaned = raw.replace(/,/g, "").replace(/[^\d.]/g, "")
+  if (!cleaned) return ""
+  const firstDot = cleaned.indexOf(".")
+  if (firstDot === -1) {
+    const noLeading = cleaned.replace(/^0+(?=\d)/, "")
+    return noLeading || "0"
+  }
+  const intPartRaw = cleaned.slice(0, firstDot).replace(/\./g, "")
+  const fracRaw = cleaned.slice(firstDot + 1).replace(/\./g, "")
+  const intPart = intPartRaw.replace(/^0+(?=\d)/, "") || "0"
+  const fracPart = fracRaw.slice(0, Math.max(0, maxDecimals))
+  return `${intPart}.${fracPart}`
+}
+
 interface TokenSelectorProps {
   selectedToken: TokenWithBalance
   onSelect: (token: TokenWithBalance) => void
@@ -161,9 +202,10 @@ type TokenWithBalance = (typeof tokenCatalog)[number] & { balance: number }
 function TokenSelector({ selectedToken, onSelect, tokens, label, amount, onAmountChange, readOnly, hideBalance }: TokenSelectorProps) {
   const hasPrice = selectedToken.price > 0
   const usdValue = Number.parseFloat(amount || "0") * selectedToken.price
+  const tokenDecimals = resolveTokenDecimals(selectedToken.symbol)
   
   return (
-    <div className="p-4 rounded-xl glass border border-border hover:border-primary/50 transition-all duration-300">
+    <div className="p-3 sm:p-4 rounded-xl glass border border-border hover:border-primary/50 transition-all duration-300">
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-muted-foreground">{label}</span>
         <span className="text-xs text-muted-foreground">
@@ -185,7 +227,7 @@ function TokenSelector({ selectedToken, onSelect, tokens, label, amount, onAmoun
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent className="w-56 glass-strong border-border">
+          <DropdownMenuContent className="w-52 sm:w-56 glass-strong border-border">
             {tokens.map((token) => (
               <DropdownMenuItem
                 key={token.symbol}
@@ -211,11 +253,18 @@ function TokenSelector({ selectedToken, onSelect, tokens, label, amount, onAmoun
           <input
             type="text"
             value={amount}
-            onChange={(e) => onAmountChange(e.target.value)}
+            inputMode={readOnly ? undefined : "decimal"}
+            autoComplete="off"
+            spellCheck={false}
+            aria-label={`${label} amount`}
+            onChange={(e) => {
+              if (readOnly) return
+              onAmountChange(sanitizeDecimalInput(e.target.value, tokenDecimals))
+            }}
             readOnly={readOnly}
             placeholder="0.0"
-            className={cn(
-              "w-full bg-transparent text-right text-2xl font-bold text-foreground outline-none placeholder:text-muted-foreground/50",
+              className={cn(
+              "w-full bg-transparent text-right text-xl sm:text-2xl font-bold text-foreground outline-none placeholder:text-muted-foreground/50",
               readOnly && "cursor-default"
             )}
           />
@@ -227,14 +276,16 @@ function TokenSelector({ selectedToken, onSelect, tokens, label, amount, onAmoun
         </div>
       </div>
       {!readOnly && (
-        <div className="flex gap-2 mt-3">
+        <div className="grid grid-cols-4 gap-1.5 sm:gap-2 mt-3">
           {[25, 50, 75, 100].map((pct) => (
             <button
               key={pct}
-              onClick={() => onAmountChange(String((selectedToken.balance * pct / 100).toFixed(6)))}
+              onClick={() =>
+                onAmountChange(sanitizeDecimalInput(String((selectedToken.balance * pct) / 100), tokenDecimals))
+              }
               className="flex-1 py-1 text-xs font-medium text-muted-foreground hover:text-primary border border-border hover:border-primary/50 rounded-md transition-colors"
             >
-              {pct}%
+              {pct === 100 ? "MAX" : `${pct}%`}
             </button>
           ))}
         </div>
@@ -328,12 +379,23 @@ export function TradingInterface() {
     }))
   }, [resolveTokenBalance, livePrices])
 
-  const [fromToken, setFromToken] = React.useState<TokenWithBalance>(
-    tokens.find((token) => token.symbol === "ETH") || tokens[0]
-  )
-  const [toToken, setToToken] = React.useState<TokenWithBalance>(
-    tokens.find((token) => token.symbol === "STRK") || tokens[1]
-  )
+  const [fromTokenSymbol, setFromTokenSymbol] = React.useState("ETH")
+  const [toTokenSymbol, setToTokenSymbol] = React.useState("STRK")
+  const fromToken = React.useMemo(() => {
+    return (
+      tokens.find((token) => token.symbol === fromTokenSymbol) ||
+      tokens.find((token) => token.symbol === "ETH") ||
+      tokens[0]
+    )
+  }, [fromTokenSymbol, tokens])
+  const toToken = React.useMemo(() => {
+    return (
+      tokens.find((token) => token.symbol === toTokenSymbol) ||
+      tokens.find((token) => token.symbol === "STRK") ||
+      tokens[1] ||
+      tokens[0]
+    )
+  }, [toTokenSymbol, tokens])
   const [fromAmount, setFromAmount] = React.useState("1.0")
   const [toAmount, setToAmount] = React.useState("")
   const [swapState, setSwapState] = React.useState<"idle" | "confirming" | "processing" | "success" | "error">("idle")
@@ -341,6 +403,7 @@ export function TradingInterface() {
   const [quote, setQuote] = React.useState<QuoteState | null>(null)
   const [isQuoteLoading, setIsQuoteLoading] = React.useState(false)
   const [quoteError, setQuoteError] = React.useState<string | null>(null)
+  const quoteCacheRef = React.useRef<Map<string, QuoteCacheEntry>>(new Map())
   const [activeNft, setActiveNft] = React.useState<NFTItem | null>(null)
   
   // Privacy mode - ONLY for hiding balance in this module
@@ -355,6 +418,7 @@ export function TradingInterface() {
   const [receiveAddress, setReceiveAddress] = React.useState("")
   const [isReceiveAddressManual, setIsReceiveAddressManual] = React.useState(false)
   const [xverseUserId, setXverseUserId] = React.useState("")
+  const [btcBridgeTxHash, setBtcBridgeTxHash] = React.useState("")
 
   const formatSource = (source?: string) => {
     switch (source) {
@@ -375,6 +439,16 @@ export function TradingInterface() {
 
   // Detect cross-chain
   const isCrossChain = fromToken.network !== toToken.network
+  const sourceChain = chainFromNetwork(fromToken.network)
+  const targetChain = chainFromNetwork(toToken.network)
+  const fromSymbol = fromToken.symbol
+  const toSymbol = toToken.symbol
+  const fromNetwork = fromToken.network
+  const toNetwork = toToken.network
+  const fromPrice = fromToken.price
+  const toPrice = toToken.price
+  const fromChain = chainFromNetwork(fromNetwork)
+  const toChain = chainFromNetwork(toNetwork)
 
   const preferredReceiveAddress = React.useMemo(
     () =>
@@ -410,6 +484,21 @@ export function TradingInterface() {
       window.sessionStorage.setItem("xverse_user_id", xverseUserId)
     }
   }, [xverseUserId])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const stored = window.sessionStorage.getItem("btc_bridge_tx_hash") || ""
+    if (stored) {
+      setBtcBridgeTxHash(stored)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    if (btcBridgeTxHash.trim()) {
+      window.sessionStorage.setItem("btc_bridge_tx_hash", btcBridgeTxHash.trim())
+    }
+  }, [btcBridgeTxHash])
 
   React.useEffect(() => {
     let active = true
@@ -464,15 +553,6 @@ export function TradingInterface() {
   }, [wallet.isConnected])
 
   React.useEffect(() => {
-    const fallbackFrom = tokens.find((token) => token.symbol === "ETH") || tokens[0]
-    const fallbackTo = tokens.find((token) => token.symbol === "STRK") || tokens[1] || tokens[0]
-    const nextFrom = tokens.find((token) => token.symbol === fromToken.symbol) || fallbackFrom
-    const nextTo = tokens.find((token) => token.symbol === toToken.symbol) || fallbackTo
-    setFromToken(nextFrom)
-    setToToken(nextTo)
-  }, [tokens])
-
-  React.useEffect(() => {
     const amountValue = Number.parseFloat(fromAmount || "0")
     if (!amountValue || amountValue <= 0) {
       setToAmount("")
@@ -480,16 +560,54 @@ export function TradingInterface() {
       setQuoteError(null)
       return
     }
+    const slippageValue = Number(customSlippage || slippage || "0.5")
+    const tradeMode = mevProtection ? "private" : "transparent"
+    const quoteCacheKey = [
+      isCrossChain ? "bridge" : "swap",
+      fromChain,
+      toChain,
+      fromSymbol,
+      toSymbol,
+      stableKeyNumber(amountValue, 8),
+      stableKeyNumber(slippageValue, 4),
+      tradeMode,
+    ].join("|")
 
     let cancelled = false
     const timer = setTimeout(async () => {
       setIsQuoteLoading(true)
       setQuoteError(null)
+      const now = Date.now()
+      const cached = quoteCacheRef.current.get(quoteCacheKey)
+      if (cached && cached.expiresAt > now) {
+        if (!cancelled) {
+          setToAmount(cached.toAmount)
+          setQuote(cached.quote)
+          setQuoteError(cached.quoteError)
+          setIsQuoteLoading(false)
+        }
+        return
+      }
+      if (cached) {
+        quoteCacheRef.current.delete(quoteCacheKey)
+      }
+
+      const saveQuoteToCache = (nextQuote: QuoteState, nextToAmount: string, nextQuoteError: string | null) => {
+        quoteCacheRef.current.set(quoteCacheKey, {
+          expiresAt: Date.now() + QUOTE_CACHE_TTL_MS,
+          quote: nextQuote,
+          toAmount: nextToAmount,
+          quoteError: nextQuoteError,
+        })
+        while (quoteCacheRef.current.size > MAX_QUOTE_CACHE_ENTRIES) {
+          const oldest = quoteCacheRef.current.keys().next().value
+          if (!oldest) break
+          quoteCacheRef.current.delete(oldest)
+        }
+      }
 
       try {
         if (isCrossChain) {
-          const fromChain = chainFromNetwork(fromToken.network)
-          const toChain = chainFromNetwork(toToken.network)
           if (fromChain === "starknet" && toChain === "ethereum") {
             setQuote(null)
             setToAmount("")
@@ -501,13 +619,13 @@ export function TradingInterface() {
           const response = await getBridgeQuote({
             from_chain: fromChain,
             to_chain: toChain,
-            token: fromToken.symbol,
+            token: fromSymbol,
             amount: fromAmount,
           })
           if (cancelled) return
           let protocolFee = Number(response.fee || 0)
           let networkFee = 0
-          if (fromChain === "ethereum" && toChain === "starknet" && fromToken.symbol.toUpperCase() === "ETH") {
+          if (fromChain === "ethereum" && toChain === "starknet" && fromSymbol.toUpperCase() === "ETH") {
             const [estimatedFeeWei, estimatedNetworkFeeWei] = await Promise.all([
               estimateStarkgateDepositFeeWei(STARKGATE_ETH_BRIDGE_ADDRESS),
               estimateEvmNetworkFeeWei(BigInt(210000)),
@@ -523,27 +641,26 @@ export function TradingInterface() {
           const bridgeFee = protocolFee + networkFee + mevFee
           const estimatedReceiveRaw = Number(response.estimated_receive || 0)
           const bridgeToSwapAmount = estimatedReceiveRaw * (1 - 0.003)
-          const slippageFactor = 1 - Number(customSlippage || slippage) / 100
+          const slippageFactor = 1 - slippageValue / 100
           const bridgeConvertedAmount =
-            fromToken.symbol !== toToken.symbol
+            fromSymbol !== toSymbol
               ? convertAmountByUsdPrice(
                   bridgeToSwapAmount * (Number.isFinite(slippageFactor) && slippageFactor > 0 ? slippageFactor : 1),
-                  fromToken.price,
-                  toToken.price
+                  fromPrice,
+                  toPrice
                 )
               : null
           const displayToAmount =
-            fromToken.symbol !== toToken.symbol
+            fromSymbol !== toSymbol
               ? Number.isFinite(bridgeConvertedAmount ?? NaN)
                 ? String(bridgeConvertedAmount)
                 : ""
               : response.estimated_receive
           const estimatedTimeLabel =
-            fromToken.symbol !== toToken.symbol
+            fromSymbol !== toSymbol
               ? `${response.estimated_time} + ~2-3 min swap`
               : response.estimated_time
-          setToAmount(displayToAmount)
-          setQuote({
+          const bridgeQuote: QuoteState = {
             type: "bridge",
             toAmount: displayToAmount,
             fee: bridgeFee,
@@ -555,23 +672,27 @@ export function TradingInterface() {
             provider: response.bridge_provider,
             bridgeSourceAmount: estimatedReceiveRaw,
             bridgeConvertedAmount: bridgeConvertedAmount ?? undefined,
-          })
-          if (fromToken.symbol !== toToken.symbol && !displayToAmount) {
-            setQuoteError("Estimasi cross-token belum tersedia (harga live token tujuan belum masuk).")
           }
+          const bridgeQuoteError =
+            fromSymbol !== toSymbol && !displayToAmount
+              ? "Estimasi cross-token belum tersedia (harga live token tujuan belum masuk)."
+              : null
+          setToAmount(displayToAmount)
+          setQuote(bridgeQuote)
+          setQuoteError(bridgeQuoteError)
+          saveQuoteToCache(bridgeQuote, displayToAmount, bridgeQuoteError)
         } else {
           const response = await getSwapQuote({
-            from_token: fromToken.symbol,
-            to_token: toToken.symbol,
+            from_token: fromSymbol,
+            to_token: toSymbol,
             amount: fromAmount,
-            slippage: Number(customSlippage || slippage),
-            mode: mevProtection ? "private" : "transparent",
+            slippage: slippageValue,
+            mode: tradeMode,
           })
           if (cancelled) return
           const protocolFee = Number(response.fee || 0)
           const mevFee = mevProtection ? amountValue * MEV_FEE_RATE : 0
-          setToAmount(response.to_amount)
-          setQuote({
+          const swapQuote: QuoteState = {
             type: "swap",
             toAmount: response.to_amount,
             fee: protocolFee + mevFee,
@@ -580,7 +701,11 @@ export function TradingInterface() {
             mevFee,
             estimatedTime: response.estimated_time,
             priceImpact: response.price_impact,
-          })
+          }
+          setToAmount(response.to_amount)
+          setQuote(swapQuote)
+          setQuoteError(null)
+          saveQuoteToCache(swapQuote, response.to_amount, null)
         }
       } catch (error) {
         if (cancelled) return
@@ -600,19 +725,21 @@ export function TradingInterface() {
     }
   }, [
     fromAmount,
-    fromToken,
-    toToken,
-    slippage,
-    customSlippage,
-    mevProtection,
+    fromChain,
+    fromSymbol,
     isCrossChain,
+    mevProtection,
+    slippage,
+    toChain,
+    toSymbol,
+    customSlippage,
   ])
 
   const handleSwapTokens = () => {
-    const tempToken = fromToken
+    const tempTokenSymbol = fromSymbol
     const tempAmount = fromAmount
-    setFromToken(toToken)
-    setToToken(tempToken)
+    setFromTokenSymbol(toSymbol)
+    setToTokenSymbol(tempTokenSymbol)
     setFromAmount(toAmount)
     setToAmount(tempAmount)
   }
@@ -664,6 +791,62 @@ export function TradingInterface() {
 
   const activeSlippage = customSlippage || slippage
   const routeLabel = isCrossChain ? (quote?.provider || "Bridge") : "Auto"
+  const fromAmountValue = Number.parseFloat(fromAmount || "0")
+  const hasPositiveAmount = Number.isFinite(fromAmountValue) && fromAmountValue > 0
+  const hasInsufficientBalance = hasPositiveAmount && fromAmountValue > (fromToken.balance || 0)
+  const resolvedReceiveAddress = (receiveAddress || preferredReceiveAddress).trim()
+  const requiresBtcTxHash = isCrossChain && sourceChain === "bitcoin"
+  const isBtcTxHashValid = !requiresBtcTxHash || /^[0-9a-fA-F]{64}$/.test((btcBridgeTxHash || "").trim().replace(/^0x/i, ""))
+  const hasValidQuote = hasQuote && !quoteError
+  const executeDisabledReason =
+    !wallet.isConnected
+      ? "Connect wallet dulu."
+      : !hasPositiveAmount
+      ? "Masukkan amount yang valid."
+      : hasInsufficientBalance
+      ? "Saldo tidak cukup."
+      : !hasValidQuote
+      ? "Quote belum siap."
+      : isCrossChain && !resolvedReceiveAddress
+      ? "Receive address wajib diisi."
+      : !isBtcTxHashValid
+      ? "BTC tx hash harus 64 hex."
+      : null
+  const executeButtonLabel = (() => {
+    if (swapState === "confirming") {
+      return (
+        <span className="flex items-center gap-2">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          Confirming...
+        </span>
+      )
+    }
+    if (swapState === "processing") {
+      return (
+        <span className="flex items-center gap-2">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          Processing {isCrossChain ? "Bridge" : "Swap"}...
+        </span>
+      )
+    }
+    if (swapState === "success") {
+      return (
+        <span className="flex items-center gap-2">
+          <Check className="h-5 w-5" />
+          {isCrossChain ? "Bridge" : "Swap"} Successful!
+        </span>
+      )
+    }
+    if (swapState === "error") {
+      return (
+        <span className="flex items-center gap-2">
+          <X className="h-5 w-5" />
+          Transaction Failed
+        </span>
+      )
+    }
+    return "Execute Trade"
+  })()
 
   const starknetProviderHint = React.useMemo<"starknet" | "argentx" | "braavos">(() => {
     if (wallet.provider === "argentx" || wallet.provider === "braavos") {
@@ -706,6 +889,12 @@ export function TradingInterface() {
     const fromChain = chainFromNetwork(fromToken.network)
     const toChain = chainFromNetwork(toToken.network)
     const recipient = (receiveAddress || preferredReceiveAddress).trim()
+    if (fromChain === "bitcoin") {
+      if (toChain !== "starknet") {
+        throw new Error("Bridge BTC native saat ini hanya didukung untuk tujuan Starknet.")
+      }
+      return normalizeBtcTxHashInput(btcBridgeTxHash)
+    }
     if (fromChain === "ethereum") {
       if (fromToken.symbol.toUpperCase() !== "ETH") {
         throw new Error(
@@ -718,23 +907,23 @@ export function TradingInterface() {
       if (!recipient) {
         throw new Error("Starknet recipient address is required for StarkGate bridge.")
       }
+      // Refresh fee right before submit to reduce mismatch with MetaMask preview.
+      const estimatedFeeWei = await estimateStarkgateDepositFeeWei(STARKGATE_ETH_BRIDGE_ADDRESS)
       const quotedProtocolFeeWei =
         quote?.type === "bridge" && typeof quote.protocolFee === "number" && quote.protocolFee > 0
           ? unitNumberToScaledBigInt(quote.protocolFee, 18)
           : null
-      const estimatedFeeWei =
-        quotedProtocolFeeWei ?? (await estimateStarkgateDepositFeeWei(STARKGATE_ETH_BRIDGE_ADDRESS))
       return sendEvmStarkgateEthDepositFromWallet({
         bridgeAddress: STARKGATE_ETH_BRIDGE_ADDRESS,
         tokenAddress: STARKGATE_ETH_TOKEN_ADDRESS,
         amountEth: fromAmount,
         l2Recipient: recipient,
-        feeWei: estimatedFeeWei,
+        feeWei: estimatedFeeWei ?? quotedProtocolFeeWei,
       })
     }
 
     if (fromChain !== "starknet") {
-      throw new Error("On-chain bridge currently supports Ethereum/Starknet source only.")
+      throw new Error("On-chain bridge currently supports Bitcoin/Ethereum/Starknet source only.")
     }
     if (toChain === "ethereum") {
       throw new Error(
@@ -776,6 +965,7 @@ export function TradingInterface() {
       starknetProviderHint
     )
   }, [
+    btcBridgeTxHash,
     fromAmount,
     fromToken.network,
     fromToken.symbol,
@@ -787,7 +977,7 @@ export function TradingInterface() {
   ])
 
   const handleExecuteTrade = () => {
-    if (!fromAmount || Number.parseFloat(fromAmount) === 0) return
+    if (executeDisabledReason) return
     setPreviewOpen(true)
   }
 
@@ -815,11 +1005,13 @@ export function TradingInterface() {
           title: "Wallet signature required",
           message:
             sourceChain === "ethereum"
-              ? "Confirm bridge transaction in MetaMask (StarkGate)."
+              ? "Confirm bridge transaction in MetaMask (StarkGate). Nilai final di MetaMask termasuk amount + L1 message fee + gas, jadi bisa sedikit beda dari estimasi UI."
+              : sourceChain === "bitcoin"
+              ? "Bridge BTC native: kirim BTC ke vault lewat wallet BTC, lalu isi BTC Tx Hash di form ini."
               : "Confirm bridge transaction in your Starknet wallet.",
         })
         const onchainTxHash = await submitOnchainBridgeTx()
-        const txNetwork = sourceChain === "ethereum" ? "evm" : "starknet"
+        const txNetwork = sourceChain === "ethereum" ? "evm" : sourceChain === "bitcoin" ? "btc" : "starknet"
 
         notifications.addNotification({
           type: "info",
@@ -832,6 +1024,8 @@ export function TradingInterface() {
           from_chain: sourceChain,
           to_chain: toChain,
           token: fromToken.symbol,
+          to_token: toToken.symbol,
+          estimated_out_amount: quote?.toAmount || toAmount || undefined,
           amount: fromAmount,
           recipient,
           xverse_user_id: xverseHint,
@@ -868,6 +1062,7 @@ export function TradingInterface() {
           txHash: onchainTxHash,
           txNetwork: "starknet",
         })
+
         const recipient = (receiveAddress || preferredReceiveAddress).trim() || undefined
         const response = await executeSwap({
           from_token: fromToken.symbol,
@@ -877,7 +1072,7 @@ export function TradingInterface() {
           slippage: slippageValue,
           deadline,
           recipient,
-          onchain_tx_hash: onchainTxHash,
+          onchain_tx_hash: onchainTxHash || undefined,
           mode: mevProtection ? "private" : "transparent",
         })
         notifications.addNotification({
@@ -914,10 +1109,10 @@ export function TradingInterface() {
   }
 
   return (
-    <div className="w-full max-w-xl mx-auto">
-      <div className="p-6 rounded-2xl glass-strong border border-border neon-border">
+    <div className="w-full max-w-xl mx-auto px-2 sm:px-0 pb-28 md:pb-0">
+      <div className="p-4 sm:p-6 rounded-xl sm:rounded-2xl glass-strong border border-border neon-border">
         {/* Header with Privacy Toggle */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4 sm:mb-6">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-bold text-foreground">Unified Trade</h2>
             <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide", fromSource.className)}>
@@ -952,7 +1147,7 @@ export function TradingInterface() {
         <div className="space-y-2">
           <TokenSelector
             selectedToken={fromToken}
-            onSelect={setFromToken}
+            onSelect={(token) => setFromTokenSymbol(token.symbol)}
             tokens={tokens}
             label="From"
             amount={fromAmount}
@@ -980,7 +1175,7 @@ export function TradingInterface() {
 
           <TokenSelector
             selectedToken={toToken}
-            onSelect={setToToken}
+            onSelect={(token) => setToTokenSymbol(token.symbol)}
             tokens={tokens}
             label="To"
             amount={toAmount}
@@ -991,7 +1186,7 @@ export function TradingInterface() {
         </div>
 
         {/* Simplified Route Display */}
-        <div className="mt-4 p-3 rounded-xl bg-surface/30 border border-border/50">
+        <div className="mt-3 sm:mt-4 p-3 rounded-xl bg-surface/30 border border-border/50">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Zap className="h-3 w-3 text-secondary" />
@@ -1009,7 +1204,7 @@ export function TradingInterface() {
         </div>
 
         {/* Settings Panel - Collapsible */}
-        <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen} className="mt-4">
+        <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen} className="mt-3 sm:mt-4">
           <CollapsibleTrigger asChild>
             <button className="w-full flex items-center justify-between p-3 rounded-xl bg-surface/30 border border-border/50 hover:border-primary/30 transition-colors">
               <span className="text-sm font-medium text-foreground flex items-center gap-2">
@@ -1073,7 +1268,17 @@ export function TradingInterface() {
                   <input
                     type="text"
                     value={customSlippage}
-                    onChange={(e) => setCustomSlippage(e.target.value)}
+                    inputMode="decimal"
+                    onChange={(e) => {
+                      const sanitized = sanitizeDecimalInput(e.target.value, 2)
+                      if (!sanitized) {
+                        setCustomSlippage("")
+                        return
+                      }
+                      const parsed = Number(sanitized)
+                      if (!Number.isFinite(parsed)) return
+                      setCustomSlippage(String(Math.min(parsed, 50)))
+                    }}
                     placeholder="Auto"
                     className="w-full py-2 px-2 rounded-lg text-xs font-medium bg-surface text-foreground border border-border focus:border-primary outline-none text-center"
                   />
@@ -1120,7 +1325,7 @@ export function TradingInterface() {
               )}
             </div>
 
-            {isCrossChain && (
+            {isCrossChain && targetChain === "bitcoin" && (
               <div>
                 <label className="text-sm text-foreground mb-2 block">Xverse User ID (optional)</label>
                 <input
@@ -1130,6 +1335,22 @@ export function TradingInterface() {
                   placeholder="Use if BTC address is managed by Xverse"
                   className="w-full py-2 px-3 rounded-lg text-sm bg-surface text-foreground border border-border focus:border-primary outline-none"
                 />
+              </div>
+            )}
+
+            {isCrossChain && sourceChain === "bitcoin" && (
+              <div>
+                <label className="text-sm text-foreground mb-2 block">BTC Tx Hash (required)</label>
+                <input
+                  type="text"
+                  value={btcBridgeTxHash}
+                  onChange={(e) => setBtcBridgeTxHash(e.target.value)}
+                  placeholder="Paste BTC txid from wallet (64 hex chars)"
+                  className="w-full py-2 px-3 rounded-lg text-sm bg-surface text-foreground border border-border focus:border-primary outline-none"
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Setelah kirim BTC ke vault bridge, paste txid di sini agar backend bisa lanjut settlement ke Starknet.
+                </p>
               </div>
             )}
 
@@ -1200,7 +1421,7 @@ export function TradingInterface() {
 
         {/* NFT Discount Counter */}
         {hasNftDiscount && (
-          <div className="mt-4 p-3 rounded-xl bg-gradient-to-r from-primary/10 to-accent/10 border border-primary/20">
+          <div className="mt-3 sm:mt-4 p-3 rounded-xl bg-gradient-to-r from-primary/10 to-accent/10 border border-primary/20">
             <div className="flex items-center justify-between">
               <span className="text-sm text-foreground flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-primary" />
@@ -1212,18 +1433,18 @@ export function TradingInterface() {
         )}
 
         {/* Quick Info */}
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          <div className="p-3 rounded-lg bg-surface/30 text-center">
+        <div className="mt-3 sm:mt-4 grid grid-cols-3 gap-2 sm:gap-3">
+          <div className="p-2.5 sm:p-3 rounded-lg bg-surface/30 text-center">
             <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
               <Clock className="h-3 w-3" /> Est. Time
             </p>
             <p className="text-sm font-medium text-foreground">{estimatedTime}</p>
           </div>
-          <div className="p-3 rounded-lg bg-surface/30 text-center">
+          <div className="p-2.5 sm:p-3 rounded-lg bg-surface/30 text-center">
             <p className="text-xs text-muted-foreground">Fee</p>
             <p className="text-sm font-medium text-foreground">{feeDisplayLabel}</p>
           </div>
-          <div className="p-3 rounded-lg bg-surface/30 text-center">
+          <div className="p-2.5 sm:p-3 rounded-lg bg-surface/30 text-center">
             <p className="text-xs text-muted-foreground">Impact</p>
             <p className={cn(
               "text-sm font-medium",
@@ -1240,7 +1461,7 @@ export function TradingInterface() {
 
         {/* Price Impact Warning */}
         {priceImpact !== null && priceImpact > 1 && (
-          <div className="mt-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
+          <div className="mt-3 sm:mt-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
             <div className="flex items-start gap-2">
               <Info className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
               <p className="text-xs text-foreground">
@@ -1253,9 +1474,9 @@ export function TradingInterface() {
         {/* Execute Button */}
         <Button 
           onClick={handleExecuteTrade}
-          disabled={swapState !== "idle" || !fromAmount || Number.parseFloat(fromAmount) === 0 || !hasQuote}
+          disabled={swapState !== "idle" || !!executeDisabledReason}
           className={cn(
-            "w-full mt-6 py-6 text-lg font-bold transition-all text-primary-foreground",
+            "hidden md:inline-flex w-full mt-6 py-6 text-lg font-bold transition-all text-primary-foreground",
             swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
             swapState === "confirming" && "bg-primary/80",
             swapState === "processing" && "bg-secondary/80",
@@ -1263,114 +1484,64 @@ export function TradingInterface() {
             swapState === "error" && "bg-destructive"
           )}
         >
-          {swapState === "idle" && "Execute Trade"}
-          {swapState === "confirming" && (
-            <span className="flex items-center gap-2">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              Confirming...
-            </span>
-          )}
-          {swapState === "processing" && (
-            <span className="flex items-center gap-2">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              Processing {isCrossChain ? "Bridge" : "Swap"}...
-            </span>
-          )}
-          {swapState === "success" && (
-            <span className="flex items-center gap-2">
-              <Check className="h-5 w-5" />
-              {isCrossChain ? "Bridge" : "Swap"} Successful!
-            </span>
-          )}
-          {swapState === "error" && (
-            <span className="flex items-center gap-2">
-              <X className="h-5 w-5" />
-              Transaction Failed
-            </span>
-          )}
+          {executeButtonLabel}
         </Button>
+        {swapState === "idle" && executeDisabledReason && (
+          <p className="hidden md:block text-center text-xs text-warning mt-2">{executeDisabledReason}</p>
+        )}
 
         <p className="text-center text-xs text-muted-foreground mt-4">
           By trading, you agree to our Terms of Service
         </p>
       </div>
 
-      {/* Preview/Confirmation Dialog */}
-      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="glass-strong border-border max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-foreground">Confirm Trade</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            {/* Trade Summary */}
-            <div className="p-4 rounded-xl bg-surface/50 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">You Pay</span>
-                <span className="font-medium text-foreground">
-                  {fromAmount} {fromToken.symbol}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">You Receive</span>
-                <span className="font-medium text-foreground">
-                  {toAmount ? `${Number.parseFloat(toAmount).toFixed(4)} ${toToken.symbol}` : "—"}
-                </span>
-              </div>
-              <div className="border-t border-border pt-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Route</span>
-                  <span className="text-sm text-foreground">{isCrossChain ? "Bridge" : "Swap"} via {routeLabel}</span>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-sm text-muted-foreground">Slippage</span>
-                  <span className="text-sm text-foreground">{activeSlippage}%</span>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-sm text-muted-foreground">MEV Protection</span>
-                  <span className="text-sm text-foreground">{mevProtection ? "Enabled" : "Disabled"}</span>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-sm text-muted-foreground">Fee</span>
-                  <span className="text-sm text-foreground">{feeDisplayLabel}</span>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-sm text-muted-foreground">Est. Time</span>
-                  <span className="text-sm text-foreground">{estimatedTime}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Points Estimate */}
-            <div className="p-3 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-between">
-              <span className="text-sm text-foreground">Estimated Points</span>
-              <span className="font-bold text-accent">{pointsEarned === null ? "—" : `+${pointsEarned}`}</span>
-            </div>
-
-            {/* Receive Address */}
-            <div className="p-3 rounded-lg bg-surface/50">
-              <p className="text-xs text-muted-foreground mb-1">Receive Address</p>
-              <p className="text-sm font-mono text-foreground truncate">{receiveAddress}</p>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex gap-3">
-              <Button
-                variant="outline"
-                className="flex-1 bg-transparent"
-                onClick={() => setPreviewOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button 
-                className="flex-1 bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
-                onClick={confirmTrade}
-              >
-                Confirm & Sign
-              </Button>
-            </div>
+      <div className="fixed md:hidden inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="mx-auto w-full max-w-xl px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+          <div className="mb-2 grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
+            <span className="truncate">Fee: {feeDisplayLabel}</span>
+            <span className="truncate text-center">Time: {estimatedTime}</span>
+            <span className="truncate text-right">{pointsEarned === null ? "Pts: —" : `Pts: +${pointsEarned}`}</span>
           </div>
-        </DialogContent>
-      </Dialog>
+          <Button
+            onClick={handleExecuteTrade}
+            disabled={swapState !== "idle" || !!executeDisabledReason}
+            className={cn(
+              "w-full h-12 text-base font-semibold transition-all text-primary-foreground",
+              swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
+              swapState === "confirming" && "bg-primary/80",
+              swapState === "processing" && "bg-secondary/80",
+              swapState === "success" && "bg-success",
+              swapState === "error" && "bg-destructive"
+            )}
+          >
+            {executeButtonLabel}
+          </Button>
+          {swapState === "idle" && executeDisabledReason && (
+            <p className="text-center text-[11px] text-warning mt-2">{executeDisabledReason}</p>
+          )}
+        </div>
+      </div>
+
+      {previewOpen ? (
+        <TradePreviewDialog
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
+          fromAmount={fromAmount}
+          fromSymbol={fromToken.symbol}
+          toAmount={toAmount}
+          toSymbol={toToken.symbol}
+          isCrossChain={isCrossChain}
+          routeLabel={routeLabel}
+          activeSlippage={activeSlippage}
+          mevProtection={mevProtection}
+          feeDisplayLabel={feeDisplayLabel}
+          estimatedTime={estimatedTime}
+          pointsEarned={pointsEarned}
+          receiveAddress={resolvedReceiveAddress}
+          onCancel={() => setPreviewOpen(false)}
+          onConfirm={confirmTrade}
+        />
+      ) : null}
     </div>
   )
 }

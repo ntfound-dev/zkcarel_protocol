@@ -25,8 +25,8 @@ const COINGECKO_API: &str =
 const MEMPOOL_TESTNET_API_BASE: &str = "https://mempool.space/testnet/api/address";
 
 const POLL_INTERVAL_SECS: u64 = 30;
-const MIN_USD_THRESHOLD: f64 = 50.0;
-const POINTS_PER_USD: f64 = 15.0;
+const MIN_USD_THRESHOLD: f64 = 100.0;
+const POINTS_PER_USD: f64 = 25.0;
 const POINT_DECIMALS_FACTOR: f64 = 1_000_000_000_000_000_000.0; // 1e18
 
 #[derive(Debug, Clone)]

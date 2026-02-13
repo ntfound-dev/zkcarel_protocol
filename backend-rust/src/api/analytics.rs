@@ -1,7 +1,7 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize;
 
-use super::{AppState, require_user};
+use super::{require_user, AppState};
 use crate::{
     constants::EPOCH_DURATION_SECONDS,
     error::Result,
@@ -111,12 +111,11 @@ pub async fn get_analytics(
         })
         .collect::<Vec<_>>();
 
-    let total_epoch_points: Decimal = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1"
-    )
-    .bind(current_epoch)
-    .fetch_one(state.db.pool())
-    .await?;
+    let total_epoch_points: Decimal =
+        sqlx::query_scalar("SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1")
+            .bind(current_epoch)
+            .fetch_one(state.db.pool())
+            .await?;
 
     let response = AnalyticsResponse {
         portfolio: PortfolioAnalytics {
@@ -166,7 +165,8 @@ mod tests {
         // Memastikan konversi poin memakai pool bulanan + tax
         let points = Decimal::from_f64_retain(100.0).unwrap();
         let total_points = Decimal::from_f64_retain(1000.0).unwrap();
-        let expected = (points / total_points) * monthly_ecosystem_pool_carel() * Decimal::new(95, 2);
+        let expected =
+            (points / total_points) * monthly_ecosystem_pool_carel() * Decimal::new(95, 2);
         assert_eq!(estimated_carel_from_points(points, total_points), expected);
     }
 }

@@ -1,14 +1,56 @@
-use crate::{config::Config, constants::{DEX_EKUBO, ORDER_EXECUTOR_INTERVAL_SECS, POINTS_PER_USD_SWAP}, db::Database, error::Result, models::{LimitOrder, Transaction}};
-use std::sync::Arc;
-use sqlx::Row; // Penting untuk .get()
+use crate::services::onchain::{parse_felt, OnchainInvoker};
+use crate::{
+    config::Config,
+    constants::{DEX_EKUBO, ORDER_EXECUTOR_INTERVAL_SECS},
+    db::Database,
+    error::Result,
+    models::{LimitOrder, Transaction},
+};
 use rust_decimal::prelude::ToPrimitive; // Penting untuk f64 conversion
+use sqlx::Row; // Penting untuk .get()
+use starknet_core::types::{Call, Felt};
+use starknet_core::utils::get_selector_from_name;
+use std::sync::Arc;
 
-fn is_order_expired(now: chrono::DateTime<chrono::Utc>, expiry: chrono::DateTime<chrono::Utc>) -> bool {
+fn is_order_expired(
+    now: chrono::DateTime<chrono::Utc>,
+    expiry: chrono::DateTime<chrono::Utc>,
+) -> bool {
     now > expiry
 }
 
 fn should_execute_price(current_price: f64, target_price: f64) -> bool {
     current_price <= target_price * 1.005
+}
+
+fn to_u256_felts(value: f64) -> (Felt, Felt) {
+    if !value.is_finite() || value <= 0.0 {
+        return (Felt::from(0_u128), Felt::from(0_u128));
+    }
+    let scaled = (value * 1e18_f64).round() as u128;
+    (Felt::from(scaled), Felt::from(0_u128))
+}
+
+fn fallback_price_for(token: &str) -> f64 {
+    match token.to_ascii_uppercase().as_str() {
+        "BTC" | "WBTC" => 65_000.0,
+        "ETH" => 1_900.0,
+        "STRK" => 0.05,
+        "USDT" | "USDC" => 1.0,
+        "CAREL" => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn normalize_usd_volume(usd_in: f64, usd_out: f64) -> f64 {
+    let in_valid = usd_in.is_finite() && usd_in > 0.0;
+    let out_valid = usd_out.is_finite() && usd_out > 0.0;
+    match (in_valid, out_valid) {
+        (true, true) => (usd_in + usd_out) / 2.0,
+        (true, false) => usd_in,
+        (false, true) => usd_out,
+        (false, false) => 0.0,
+    }
 }
 
 pub struct LimitOrderExecutor {
@@ -30,7 +72,10 @@ impl LimitOrderExecutor {
                 }
 
                 // Check every 10 seconds
-                tokio::time::sleep(tokio::time::Duration::from_secs(ORDER_EXECUTOR_INTERVAL_SECS)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(
+                    ORDER_EXECUTOR_INTERVAL_SECS,
+                ))
+                .await;
             }
         });
     }
@@ -52,11 +97,7 @@ impl LimitOrderExecutor {
                             tracing::info!("Executed limit order: {}", order.order_id);
                         }
                         Err(e) => {
-                            tracing::error!(
-                                "Failed to execute order {}: {}",
-                                order.order_id,
-                                e
-                            );
+                            tracing::error!("Failed to execute order {}: {}", order.order_id, e);
                         }
                     }
                 }
@@ -84,7 +125,7 @@ impl LimitOrderExecutor {
             "SELECT * FROM limit_orders
              WHERE status = 0 
              AND expiry > NOW()
-             ORDER BY created_at ASC"
+             ORDER BY created_at ASC",
         )
         .fetch_all(self.db.pool())
         .await?;
@@ -93,8 +134,10 @@ impl LimitOrderExecutor {
     }
 
     async fn should_execute_order(&self, order: &LimitOrder) -> Result<bool> {
-        let current_price = self.get_current_price(&order.from_token, &order.to_token).await?;
-        
+        let current_price = self
+            .get_current_price(&order.from_token, &order.to_token)
+            .await?;
+
         // Konversi Decimal ke f64 dengan ToPrimitive
         let target_price_f64 = order.price.to_f64().unwrap_or(0.0);
 
@@ -105,6 +148,17 @@ impl LimitOrderExecutor {
         Ok(65000.0)
     }
 
+    async fn latest_price_usd(&self, token: &str) -> Result<f64> {
+        let symbol = token.to_ascii_uppercase();
+        let price: Option<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+        )
+        .bind(&symbol)
+        .fetch_optional(self.db.pool())
+        .await?;
+        Ok(price.unwrap_or_else(|| fallback_price_for(&symbol)))
+    }
+
     /// Execute limit order (Ganti query! ke query)
     async fn execute_order(&self, order: &LimitOrder) -> Result<()> {
         let route = self.get_best_execution_route(order).await?;
@@ -112,8 +166,10 @@ impl LimitOrderExecutor {
 
         let filled_amount = order.amount - order.filled;
         let amount_in = filled_amount.to_f64().unwrap_or(0.0);
-        let _amount_out = (filled_amount * order.price).to_f64().unwrap_or(0.0);
-        let points = amount_in * POINTS_PER_USD_SWAP;
+        let amount_out = (filled_amount * order.price).to_f64().unwrap_or(0.0);
+        let from_price_usd = self.latest_price_usd(&order.from_token).await?;
+        let to_price_usd = self.latest_price_usd(&order.to_token).await?;
+        let usd_value = normalize_usd_volume(amount_in * from_price_usd, amount_out * to_price_usd);
 
         self.db.fill_order(&order.order_id, filled_amount).await?;
 
@@ -138,9 +194,9 @@ impl LimitOrderExecutor {
             token_out: Some(order.to_token.clone()),
             amount_in: Some(filled_amount),
             amount_out: Some(filled_amount * order.price),
-            usd_value: Some(rust_decimal::Decimal::from_f64_retain(amount_in).unwrap_or_default()),
+            usd_value: Some(rust_decimal::Decimal::from_f64_retain(usd_value).unwrap_or_default()),
             fee_paid: None,
-            points_earned: Some(rust_decimal::Decimal::from_f64_retain(points).unwrap_or_default()),
+            points_earned: Some(rust_decimal::Decimal::ZERO),
             timestamp: chrono::Utc::now(),
             processed: false,
         };
@@ -163,16 +219,39 @@ impl LimitOrderExecutor {
         Ok(DEX_EKUBO.to_string())
     }
 
-    async fn execute_swap_on_chain(&self, _order: &LimitOrder, _route: &str) -> Result<String> {
-        let tx_hash = format!("0x{}", hex::encode(&rand::random::<[u8; 32]>()));
-        Ok(tx_hash)
+    async fn execute_swap_on_chain(&self, order: &LimitOrder, _route: &str) -> Result<String> {
+        let contract = self.config.limit_order_book_address.trim();
+        if contract.is_empty() || contract.starts_with("0x0000") {
+            return Err(crate::error::AppError::BadRequest(
+                "LIMIT_ORDER_BOOK_ADDRESS is not configured".to_string(),
+            ));
+        }
+        let Some(invoker) = OnchainInvoker::from_config(&self.config).ok().flatten() else {
+            return Err(crate::error::AppError::BadRequest(
+                "Backend on-chain invoker is not configured".to_string(),
+            ));
+        };
+
+        let to = parse_felt(contract)?;
+        let selector = get_selector_from_name("execute_limit_order")
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+        let order_id = parse_felt(&order.order_id)?;
+        let order_value = (order.amount * order.price).to_f64().unwrap_or(0.0);
+        let amount_u256 = to_u256_felts(order_value);
+        let call = Call {
+            to,
+            selector,
+            calldata: vec![order_id, amount_u256.0, amount_u256.1],
+        };
+        let tx_hash = invoker.invoke(call).await?;
+        Ok(tx_hash.to_string())
     }
 
     async fn expire_order(&self, order_id: &str) -> Result<()> {
         sqlx::query(
             "UPDATE limit_orders
              SET status = 4
-             WHERE order_id = $1"
+             WHERE order_id = $1",
         )
         .bind(order_id)
         .execute(self.db.pool())
@@ -190,7 +269,7 @@ impl LimitOrderExecutor {
                 COUNT(*) FILTER (WHERE status = 2) as filled_orders,
                 COUNT(*) FILTER (WHERE status = 4) as expired_orders,
                 COUNT(*) as total_orders
-             FROM limit_orders"
+             FROM limit_orders",
         )
         .fetch_one(self.db.pool())
         .await?;

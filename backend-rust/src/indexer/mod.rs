@@ -1,6 +1,6 @@
-pub mod starknet_client;
-pub mod event_parser;
 pub mod block_processor;
+pub mod event_parser;
+pub mod starknet_client;
 
 // pub use starknet_client::StarknetClient;
 // pub use event_parser::EventParser;

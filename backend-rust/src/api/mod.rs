@@ -1,36 +1,37 @@
 // src/api/mod.rs
 
 // Re-export your API endpoint modules here (sesuaikan kalau ada/tdk ada)
-pub mod auth;
-pub mod health;
-pub mod swap;
-pub mod bridge;
-pub mod limit_order;
-pub mod stake;
-pub mod portfolio;
-pub mod analytics;
-pub mod leaderboard;
-pub mod rewards;
-pub mod nft;
-pub mod referral;
-pub mod social;
-pub mod faucet;
-pub mod notifications;
-pub mod transactions;
-pub mod charts;
-pub mod webhooks;
 pub mod ai;
+pub mod analytics;
+pub mod anonymous_credentials;
+pub mod auth;
+pub mod bridge;
+pub mod charts;
+pub mod dark_pool;
 pub mod deposit;
+pub mod faucet;
+pub mod health;
+pub mod leaderboard;
+pub mod limit_order;
 pub mod market;
+pub mod nft;
+pub mod notifications;
+pub mod portfolio;
 pub mod privacy;
 pub mod private_btc_swap;
-pub mod dark_pool;
 pub mod private_payments;
-pub mod anonymous_credentials;
+pub mod profile;
+pub mod referral;
+pub mod rewards;
+pub mod social;
+pub mod stake;
+pub mod swap;
+pub mod transactions;
 pub mod wallet;
+pub mod webhooks;
 
-use axum::http::{header::AUTHORIZATION, HeaderMap};
 use crate::error::{AppError, Result};
+use axum::http::{header::AUTHORIZATION, HeaderMap};
 
 // AppState definition
 use crate::config::Config;
@@ -60,6 +61,42 @@ pub async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<Strin
     state.db.create_user(&user_address).await?;
     state.db.update_last_active(&user_address).await?;
     Ok(user_address)
+}
+
+fn is_starknet_like_address(address: &str) -> bool {
+    let trimmed = address.trim();
+    if !trimmed.starts_with("0x") {
+        return false;
+    }
+    let hex = &trimmed[2..];
+    if hex.is_empty() || hex.len() > 64 {
+        return false;
+    }
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    // EVM address is 20 bytes (40 hex chars). Starknet felt addresses are typically longer.
+    hex.len() > 40
+}
+
+pub async fn require_starknet_user(headers: &HeaderMap, state: &AppState) -> Result<String> {
+    let user_address = require_user(headers, state).await?;
+    if is_starknet_like_address(&user_address) {
+        return Ok(user_address);
+    }
+
+    let linked = state.db.list_wallet_addresses(&user_address).await?;
+    if linked
+        .iter()
+        .any(|wallet| wallet.chain.eq_ignore_ascii_case("starknet"))
+    {
+        return Ok(user_address);
+    }
+
+    Err(AppError::BadRequest(
+        "This endpoint only supports Starknet users. Connect/link Starknet wallet first."
+            .to_string(),
+    ))
 }
 
 pub async fn ensure_user_exists(state: &AppState, address: &str) -> Result<()> {

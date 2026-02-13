@@ -20,26 +20,34 @@ pub const CONTRACT_LIMIT_ORDER: &str = "0x00000000000000000000000000000000000010
 
 // Points configuration
 pub const POINTS_PER_USD_SWAP: f64 = 10.0;
-pub const POINTS_PER_USD_BRIDGE: f64 = 15.0;
-pub const POINTS_PER_USD_STAKE_DAILY: f64 = 0.05 / 365.0; // 5% APY / 365
+pub const POINTS_MIN_USD_SWAP: f64 = 1.0;
+pub const POINTS_PER_USD_LIMIT_ORDER: f64 = 10.0;
+pub const POINTS_MIN_USD_LIMIT_ORDER: f64 = 1.0;
+pub const POINTS_PER_USD_BRIDGE_ETH: f64 = 15.0;
+pub const POINTS_PER_USD_BRIDGE_BTC: f64 = 25.0;
+pub const POINTS_MIN_USD_BRIDGE_ETH: f64 = 10.0;
+pub const POINTS_MIN_USD_BRIDGE_BTC: f64 = 100.0;
+pub const POINTS_PER_USD_STAKE: f64 = 3.0;
+pub const POINTS_MIN_STAKE_CAREL: f64 = 100.0;
+pub const POINTS_PER_USD_BRIDGE: f64 = POINTS_PER_USD_BRIDGE_ETH; // backward compatibility
 pub const POINTS_TWITTER_FOLLOW: f64 = 50.0;
 pub const POINTS_TELEGRAM_JOIN: f64 = 30.0;
 pub const POINTS_DISCORD_JOIN: f64 = 30.0;
 pub const POINTS_TWITTER_RETWEET: f64 = 25.0;
 
 // Staking multipliers
-pub const MULTIPLIER_TIER_1: f64 = 1.0;   // < 10k CAREL
-pub const MULTIPLIER_TIER_2: f64 = 1.25;  // 10k - 50k CAREL
-pub const MULTIPLIER_TIER_3: f64 = 1.5;   // 50k - 100k CAREL
-pub const MULTIPLIER_TIER_4: f64 = 2.0;   // 100k+ CAREL
+pub const MULTIPLIER_TIER_1: f64 = 1.0; // < 10k CAREL
+pub const MULTIPLIER_TIER_2: f64 = 1.25; // 10k - 50k CAREL
+pub const MULTIPLIER_TIER_3: f64 = 1.5; // 50k - 100k CAREL
+pub const MULTIPLIER_TIER_4: f64 = 2.0; // 100k+ CAREL
 
 // NFT discount tiers
-pub const NFT_TIER_1_DISCOUNT: f64 = 5.0;   // Bronze
-pub const NFT_TIER_2_DISCOUNT: f64 = 10.0;  // Silver
-pub const NFT_TIER_3_DISCOUNT: f64 = 25.0;  // Gold
-pub const NFT_TIER_4_DISCOUNT: f64 = 35.0;  // Platinum
-pub const NFT_TIER_5_DISCOUNT: f64 = 50.0;  // Onyx
-pub const NFT_TIER_6_DISCOUNT: f64 = 50.0;  // reserved
+pub const NFT_TIER_1_DISCOUNT: f64 = 5.0; // Bronze
+pub const NFT_TIER_2_DISCOUNT: f64 = 10.0; // Silver
+pub const NFT_TIER_3_DISCOUNT: f64 = 25.0; // Gold
+pub const NFT_TIER_4_DISCOUNT: f64 = 35.0; // Platinum
+pub const NFT_TIER_5_DISCOUNT: f64 = 50.0; // Onyx
+pub const NFT_TIER_6_DISCOUNT: f64 = 50.0; // reserved
 
 // Epoch configuration
 pub const EPOCH_DURATION_SECONDS: i64 = 2592000; // 30 days

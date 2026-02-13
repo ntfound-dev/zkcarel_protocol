@@ -1,18 +1,14 @@
+use async_trait::async_trait;
 use axum::{
-    extract::{State, Path},
+    extract::{Path, State},
     Json,
 };
-use serde::Serialize;
 use rust_decimal::Decimal;
-use async_trait::async_trait;
+use serde::Serialize;
 
-use crate::{
-    constants::EPOCH_DURATION_SECONDS,
-    error::Result,
-    models::ApiResponse,
-};
+use crate::{constants::EPOCH_DURATION_SECONDS, error::Result, models::ApiResponse};
 
-use super::{AppState, ensure_user_exists};
+use super::{ensure_user_exists, AppState};
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct LeaderboardEntry {
@@ -52,8 +48,16 @@ pub struct GlobalMetricsResponse {
 #[async_trait]
 trait GlobalMetricsStore {
     async fn points_total(&self, epoch: i64) -> Result<f64>;
-    async fn volume_total(&self, start: chrono::DateTime<chrono::Utc>, end: chrono::DateTime<chrono::Utc>) -> Result<f64>;
-    async fn referral_total(&self, start: chrono::DateTime<chrono::Utc>, end: chrono::DateTime<chrono::Utc>) -> Result<i64>;
+    async fn volume_total(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<f64>;
+    async fn referral_total(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<i64>;
 }
 
 struct PgMetricsStore<'a> {
@@ -78,7 +82,11 @@ impl<'a> GlobalMetricsStore for PgMetricsStore<'a> {
         end: chrono::DateTime<chrono::Utc>,
     ) -> Result<f64> {
         let value: Decimal = sqlx::query_scalar::<_, Decimal>(
-            "SELECT COALESCE(SUM(usd_value), 0) FROM transactions WHERE timestamp >= $1 AND timestamp < $2",
+            "SELECT COALESCE(SUM(usd_value), 0)
+             FROM transactions
+             WHERE timestamp >= $1
+               AND timestamp < $2
+               AND COALESCE(is_private, false) = false",
         )
         .bind(start)
         .bind(end)
@@ -103,7 +111,9 @@ impl<'a> GlobalMetricsStore for PgMetricsStore<'a> {
     }
 }
 
-fn epoch_window(epoch: i64) -> Result<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+fn epoch_window(
+    epoch: i64,
+) -> Result<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
     let start = chrono::DateTime::<chrono::Utc>::from_timestamp(epoch * EPOCH_DURATION_SECONDS, 0)
         .ok_or_else(|| crate::error::AppError::BadRequest("Invalid epoch".to_string()))?;
     let end = start + chrono::Duration::seconds(EPOCH_DURATION_SECONDS);
@@ -164,15 +174,18 @@ pub async fn get_leaderboard(
         "points" => get_points_leaderboard(&state).await?,
         "volume" => get_volume_leaderboard(&state).await?,
         "referrals" => get_referrals_leaderboard(&state).await?,
-        _ => return Err(crate::error::AppError::BadRequest(
-            "Invalid leaderboard type".to_string()
-        )),
+        _ => {
+            return Err(crate::error::AppError::BadRequest(
+                "Invalid leaderboard type".to_string(),
+            ))
+        }
     };
 
     // Gunakan query_as untuk menghindari keharusan DATABASE_URL saat compile
-    let total_users: CountResult = sqlx::query_as("SELECT COUNT(DISTINCT address) as count FROM users")
-        .fetch_one(state.db.pool())
-        .await?;
+    let total_users: CountResult =
+        sqlx::query_as("SELECT COUNT(DISTINCT address) as count FROM users")
+            .fetch_one(state.db.pool())
+            .await?;
 
     let response = LeaderboardResponse {
         leaderboard_type,
@@ -198,21 +211,28 @@ pub async fn get_user_rank(
         .unwrap_or(0.0);
 
     let rank_result: RankResult = sqlx::query_as(
-        "SELECT COUNT(*) + 1 as rank FROM points WHERE epoch = $1 AND total_points > $2"
+        "SELECT COUNT(*) + 1 as rank FROM points WHERE epoch = $1 AND total_points > $2",
     )
     .bind(current_epoch)
-    .bind(user_points.map(|points| points.total_points).unwrap_or(rust_decimal::Decimal::ZERO))
+    .bind(
+        user_points
+            .map(|points| points.total_points)
+            .unwrap_or(rust_decimal::Decimal::ZERO),
+    )
     .fetch_one(state.db.pool())
     .await?;
 
-    let total_users_res: CountResult = sqlx::query_as(
-        "SELECT COUNT(DISTINCT user_address) as count FROM points WHERE epoch = $1"
-    )
-    .bind(current_epoch)
-    .fetch_one(state.db.pool())
-    .await?;
+    let total_users_res: CountResult =
+        sqlx::query_as("SELECT COUNT(DISTINCT user_address) as count FROM points WHERE epoch = $1")
+            .bind(current_epoch)
+            .fetch_one(state.db.pool())
+            .await?;
 
-    let total_users = if total_users_res.count == 0 { 1 } else { total_users_res.count };
+    let total_users = if total_users_res.count == 0 {
+        1
+    } else {
+        total_users_res.count
+    };
     let percentile = compute_percentile(rank_result.rank, total_users);
 
     Ok(Json(ApiResponse::success(UserRankResponse {
@@ -237,16 +257,15 @@ pub async fn get_global_metrics(
     .await?;
 
     let volume_total: Decimal = sqlx::query_scalar::<_, Decimal>(
-        "SELECT COALESCE(SUM(total_volume_usd), 0) FROM users",
+        "SELECT COALESCE(SUM(usd_value), 0) FROM transactions WHERE COALESCE(is_private, false) = false",
     )
     .fetch_one(state.db.pool())
     .await?;
 
-    let referral_total: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM users WHERE referrer IS NOT NULL",
-    )
-    .fetch_one(state.db.pool())
-    .await?;
+    let referral_total: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE referrer IS NOT NULL")
+            .fetch_one(state.db.pool())
+            .await?;
 
     Ok(Json(ApiResponse::success(GlobalMetricsResponse {
         points_total: points_total.to_string().parse().unwrap_or(0.0),
@@ -260,7 +279,9 @@ pub async fn get_global_metrics_epoch(
     State(state): State<AppState>,
     Path(epoch): Path<i64>,
 ) -> Result<Json<ApiResponse<GlobalMetricsResponse>>> {
-    let store = PgMetricsStore { pool: state.db.pool() };
+    let store = PgMetricsStore {
+        pool: state.db.pool(),
+    };
     let metrics = get_global_metrics_epoch_with(&store, epoch).await?;
     Ok(Json(ApiResponse::success(metrics)))
 }
@@ -270,7 +291,7 @@ pub async fn get_user_categories(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> Result<Json<ApiResponse<UserRankCategoriesResponse>>> {
-    let user = state.db.get_or_create_user(&address).await?;
+    let _user = state.db.get_or_create_user(&address).await?;
 
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
@@ -289,33 +310,50 @@ pub async fn get_user_categories(
     .fetch_one(state.db.pool())
     .await?;
 
-    let points_total: CountResult = sqlx::query_as(
-        "SELECT COUNT(DISTINCT user_address) as count FROM points WHERE epoch = $1",
+    let points_total: CountResult =
+        sqlx::query_as("SELECT COUNT(DISTINCT user_address) as count FROM points WHERE epoch = $1")
+            .bind(current_epoch)
+            .fetch_one(state.db.pool())
+            .await?;
+
+    let volume_value: f64 = sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(usd_value), 0)::FLOAT
+         FROM transactions
+         WHERE user_address = $1
+           AND COALESCE(is_private, false) = false",
     )
-    .bind(current_epoch)
+    .bind(&address)
     .fetch_one(state.db.pool())
     .await?;
 
-    let volume_value: f64 = user.total_volume_usd.to_string().parse().unwrap_or(0.0);
-
     let volume_rank: RankResult = sqlx::query_as(
-        "SELECT COUNT(*) + 1 as rank FROM users WHERE total_volume_usd > $1",
+        r#"
+        WITH user_volumes AS (
+            SELECT u.address, COALESCE(SUM(t.usd_value), 0) as volume_usd
+            FROM users u
+            LEFT JOIN transactions t
+              ON t.user_address = u.address
+             AND COALESCE(t.is_private, false) = false
+            GROUP BY u.address
+        )
+        SELECT COUNT(*) + 1 as rank
+        FROM user_volumes
+        WHERE volume_usd > $1
+        "#,
     )
     .bind(volume_value)
     .fetch_one(state.db.pool())
     .await?;
 
-    let volume_total: CountResult =
-        sqlx::query_as("SELECT COUNT(*) as count FROM users")
+    let volume_total: CountResult = sqlx::query_as("SELECT COUNT(*) as count FROM users")
+        .fetch_one(state.db.pool())
+        .await?;
+
+    let referral_count: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE referrer = $1")
+            .bind(&address)
             .fetch_one(state.db.pool())
             .await?;
-
-    let referral_count: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM users WHERE referrer = $1",
-    )
-    .bind(&address)
-    .fetch_one(state.db.pool())
-    .await?;
 
     let referral_rank: RankResult = sqlx::query_as(
         r#"
@@ -362,7 +400,9 @@ pub async fn get_user_categories(
         },
     ];
 
-    Ok(Json(ApiResponse::success(UserRankCategoriesResponse { categories })))
+    Ok(Json(ApiResponse::success(UserRankCategoriesResponse {
+        categories,
+    })))
 }
 
 async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
@@ -373,7 +413,7 @@ async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
         "SELECT 
             ROW_NUMBER() OVER (ORDER BY p.total_points DESC) as rank,
             p.user_address,
-            u.display_name,
+            COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(u.address, 6))) as display_name,
             CAST(p.total_points AS FLOAT) as value,
             NULL as change_24h
          FROM points p
@@ -392,13 +432,19 @@ async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
 async fn get_volume_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
         "SELECT 
-            ROW_NUMBER() OVER (ORDER BY u.total_volume_usd DESC) as rank,
+            ROW_NUMBER() OVER (ORDER BY COALESCE(v.volume_usd, 0) DESC) as rank,
             u.address as user_address,
-            u.display_name,
-            CAST(u.total_volume_usd AS FLOAT) as value,
+            COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(u.address, 6))) as display_name,
+            CAST(COALESCE(v.volume_usd, 0) AS FLOAT) as value,
             NULL as change_24h
          FROM users u
-         ORDER BY u.total_volume_usd DESC
+         LEFT JOIN (
+            SELECT user_address, COALESCE(SUM(usd_value), 0) as volume_usd
+            FROM transactions
+            WHERE COALESCE(is_private, false) = false
+            GROUP BY user_address
+         ) v ON v.user_address = u.address
+         ORDER BY COALESCE(v.volume_usd, 0) DESC
          LIMIT 100"
     )
     .fetch_all(state.db.pool())
@@ -412,7 +458,7 @@ async fn get_referrals_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEn
         "SELECT 
             ROW_NUMBER() OVER (ORDER BY referral_count DESC) as rank,
             COALESCE(referrer, '') as user_address,
-            u.display_name,
+            COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(u.address, 6))) as display_name,
             CAST(referral_count AS FLOAT) as value,
             NULL as change_24h
          FROM (

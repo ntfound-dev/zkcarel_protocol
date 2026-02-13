@@ -1,24 +1,19 @@
 use axum::{
-    extract::{State, Path},
+    extract::{Path, State},
     http::HeaderMap,
     Json,
 };
 use serde::{Deserialize, Serialize};
 
+use crate::services::notification_service::{NotificationService, NotificationType};
 use crate::{
-    error::Result,
-    models::{ApiResponse, LimitOrder, PaginatedResponse, CreateLimitOrderRequest},
-    constants::POINTS_PER_USD_SWAP,
     // 1. Import modul hash agar terpakai
     crypto::hash,
+    error::Result,
+    models::{ApiResponse, CreateLimitOrderRequest, LimitOrder, PaginatedResponse},
 };
-use crate::services::notification_service::{NotificationService, NotificationType};
-use crate::services::onchain::{OnchainInvoker, parse_felt};
-use rust_decimal::prelude::ToPrimitive;
-use starknet_core::types::Call;
-use starknet_core::utils::get_selector_from_name;
 
-use super::{AppState, require_user};
+use super::{require_starknet_user, AppState};
 
 #[derive(Debug, Serialize)]
 pub struct CreateOrderResponse {
@@ -32,6 +27,11 @@ pub struct ListOrdersQuery {
     pub status: Option<String>,
     pub page: Option<i32>,
     pub limit: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CancelOrderRequest {
+    pub onchain_tx_hash: Option<String>,
 }
 
 fn expiry_duration_for(expiry: &str) -> chrono::Duration {
@@ -50,9 +50,60 @@ fn build_order_id(
     amount: f64,
     now_ts: i64,
 ) -> String {
-    let order_data = format!("{}{}{}{}{}", user_address, from_token, to_token, amount, now_ts);
+    let order_data = format!(
+        "{}{}{}{}{}",
+        user_address, from_token, to_token, amount, now_ts
+    );
     // Keep length <= 66 to fit DB (varchar(66))
     hash::hash_string(&order_data)
+}
+
+fn normalize_onchain_tx_hash(
+    tx_hash: Option<&str>,
+) -> std::result::Result<Option<String>, crate::error::AppError> {
+    let Some(raw) = tx_hash.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if !raw.starts_with("0x") {
+        return Err(crate::error::AppError::BadRequest(
+            "onchain_tx_hash must start with 0x".to_string(),
+        ));
+    }
+    if raw.len() > 66 {
+        return Err(crate::error::AppError::BadRequest(
+            "onchain_tx_hash exceeds maximum length (66)".to_string(),
+        ));
+    }
+    if !raw[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(crate::error::AppError::BadRequest(
+            "onchain_tx_hash must be hex-encoded".to_string(),
+        ));
+    }
+    Ok(Some(raw.to_ascii_lowercase()))
+}
+
+fn normalize_order_id(
+    raw: Option<&str>,
+) -> std::result::Result<Option<String>, crate::error::AppError> {
+    let Some(value) = raw.map(str::trim).filter(|item| !item.is_empty()) else {
+        return Ok(None);
+    };
+    if !value.starts_with("0x") {
+        return Err(crate::error::AppError::BadRequest(
+            "client_order_id must start with 0x".to_string(),
+        ));
+    }
+    if value.len() > 66 {
+        return Err(crate::error::AppError::BadRequest(
+            "client_order_id exceeds maximum length (66)".to_string(),
+        ));
+    }
+    if !value[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(crate::error::AppError::BadRequest(
+            "client_order_id must be hex-encoded".to_string(),
+        ));
+    }
+    Ok(Some(value.to_ascii_lowercase()))
 }
 
 // Struct bantuan untuk menghitung total
@@ -67,13 +118,31 @@ pub async fn create_order(
     headers: HeaderMap,
     Json(req): Json<CreateLimitOrderRequest>,
 ) -> Result<Json<ApiResponse<CreateOrderResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_address = require_starknet_user(&headers, &state).await?;
 
-    let amount: f64 = req.amount.parse()
+    let amount: f64 = req
+        .amount
+        .parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
-    
-    let price: f64 = req.price.parse()
+
+    let price: f64 = req
+        .price
+        .parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid price".to_string()))?;
+
+    if amount <= 0.0 || price <= 0.0 {
+        return Err(crate::error::AppError::BadRequest(
+            "Amount and price must be greater than 0".to_string(),
+        ));
+    }
+
+    let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        crate::error::AppError::BadRequest(
+            "Create order requires onchain_tx_hash from user-signed Starknet transaction"
+                .to_string(),
+        )
+    })?;
 
     let expiry_duration = expiry_duration_for(&req.expiry);
 
@@ -81,13 +150,15 @@ pub async fn create_order(
     let expiry = now + expiry_duration;
 
     // 2. GUNAKAN HASHER untuk membuat Order ID (Menghilangkan warning di hash.rs)
-    let order_id = build_order_id(
-        &user_address,
-        &req.from_token,
-        &req.to_token,
-        amount,
-        now.timestamp(),
-    );
+    let order_id = normalize_order_id(req.client_order_id.as_deref())?.unwrap_or_else(|| {
+        build_order_id(
+            &user_address,
+            &req.from_token,
+            &req.to_token,
+            amount,
+            now.timestamp(),
+        )
+    });
 
     let order = LimitOrder {
         order_id: order_id.clone(),
@@ -99,111 +170,33 @@ pub async fn create_order(
         price: rust_decimal::Decimal::from_f64_retain(price).unwrap(),
         expiry,
         recipient: req.recipient,
-        status: 0, 
+        status: 0,
         created_at: now,
     };
 
     state.db.create_limit_order(&order).await?;
-    let points = award_limit_order_points(&state, &user_address, amount, price).await?;
     let notification_service = NotificationService::new(state.db.clone(), state.config.clone());
     let _ = notification_service
         .send_notification(
             &user_address,
-            NotificationType::PointsAwarded,
-            "Limit order points awarded".to_string(),
-            format!("You earned {:.2} points for creating a limit order.", points),
+            NotificationType::System,
+            "Limit order submitted".to_string(),
+            "Order submitted on-chain and queued for execution.".to_string(),
             Some(serde_json::json!({
                 "source": "limit_order.create",
-                "points": points,
                 "order_id": order_id,
+                "onchain_tx_hash": tx_hash,
             })),
         )
         .await;
 
     let response = CreateOrderResponse {
         order_id,
-        status: "active".to_string(),
+        status: "submitted_onchain".to_string(),
         created_at: order.created_at,
     };
 
     Ok(Json(ApiResponse::success(response)))
-}
-
-async fn award_limit_order_points(
-    state: &AppState,
-    user_address: &str,
-    amount: f64,
-    price: f64,
-) -> Result<f64> {
-    let epoch = (chrono::Utc::now().timestamp() / crate::constants::EPOCH_DURATION_SECONDS) as i64;
-    let usd_value = amount * price;
-    let points = usd_value * POINTS_PER_USD_SWAP;
-    let points_decimal = rust_decimal::Decimal::from_f64_retain(points)
-        .unwrap_or(rust_decimal::Decimal::ZERO);
-
-    state.db.create_or_update_points(
-        user_address,
-        epoch,
-        points_decimal,
-        rust_decimal::Decimal::ZERO,
-        rust_decimal::Decimal::ZERO,
-    ).await?;
-
-    sync_points_onchain(state, epoch as u64, user_address, points_decimal).await?;
-    tracing::info!(
-        "Limit order points awarded: user={} epoch={} points={}",
-        user_address,
-        epoch,
-        points
-    );
-    Ok(points)
-}
-
-async fn sync_points_onchain(
-    state: &AppState,
-    epoch: u64,
-    user_address: &str,
-    points: rust_decimal::Decimal,
-) -> Result<()> {
-    let contract = state.config.point_storage_address.trim();
-    if contract.is_empty() || contract.starts_with("0x0000") {
-        return Ok(());
-    }
-
-    let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-        return Ok(());
-    };
-
-    let points_u128 = points.trunc().to_u128().unwrap_or(0);
-    if points_u128 == 0 {
-        return Ok(());
-    }
-
-    let call = build_add_points_call(contract, epoch, user_address, points_u128)?;
-    let _ = invoker.invoke(call).await?;
-    Ok(())
-}
-
-fn build_add_points_call(
-    contract: &str,
-    epoch: u64,
-    user: &str,
-    points: u128,
-) -> Result<Call> {
-    let to = parse_felt(contract)?;
-    let selector = get_selector_from_name("add_points")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let user_felt = parse_felt(user)?;
-
-    let calldata = vec![
-        starknet_core::types::Felt::from(epoch),
-        user_felt,
-        // u256 low/high
-        starknet_core::types::Felt::from(points),
-        starknet_core::types::Felt::from(0_u128),
-    ];
-
-    Ok(Call { to, selector, calldata })
 }
 
 /// GET /api/v1/limit-order/list
@@ -212,7 +205,7 @@ pub async fn list_orders(
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<ListOrdersQuery>,
 ) -> Result<Json<ApiResponse<PaginatedResponse<LimitOrder>>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_address = require_starknet_user(&headers, &state).await?;
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(10);
     let offset = (page - 1) * limit;
@@ -249,13 +242,18 @@ pub async fn list_orders(
 
     // Hitung total dengan filter status juga jika ada
     let total_query = if let Some(s) = status_int {
-        sqlx::query_as::<_, CountResult>("SELECT COUNT(*) as count FROM limit_orders WHERE owner = $1 AND status = $2")
-            .bind(&user_address).bind(s)
+        sqlx::query_as::<_, CountResult>(
+            "SELECT COUNT(*) as count FROM limit_orders WHERE owner = $1 AND status = $2",
+        )
+        .bind(&user_address)
+        .bind(s)
     } else {
-        sqlx::query_as::<_, CountResult>("SELECT COUNT(*) as count FROM limit_orders WHERE owner = $1")
-            .bind(&user_address)
+        sqlx::query_as::<_, CountResult>(
+            "SELECT COUNT(*) as count FROM limit_orders WHERE owner = $1",
+        )
+        .bind(&user_address)
     };
-    
+
     let total_res = total_query.fetch_one(state.db.pool()).await?;
 
     let response = PaginatedResponse {
@@ -273,22 +271,45 @@ pub async fn cancel_order(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(order_id): Path<String>,
+    Json(req): Json<CancelOrderRequest>,
 ) -> Result<Json<ApiResponse<String>>> {
-    let user_address = require_user(&headers, &state).await?;
-    let order = state.db.get_limit_order(&order_id).await?
+    let user_address = require_starknet_user(&headers, &state).await?;
+    let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        crate::error::AppError::BadRequest(
+            "Cancel order requires onchain_tx_hash from user-signed Starknet transaction"
+                .to_string(),
+        )
+    })?;
+    let order = state
+        .db
+        .get_limit_order(&order_id)
+        .await?
         .ok_or(crate::error::AppError::OrderNotFound)?;
 
     if order.owner != user_address {
-        return Err(crate::error::AppError::AuthError("Not allowed to cancel this order".to_string()));
+        return Err(crate::error::AppError::AuthError(
+            "Not allowed to cancel this order".to_string(),
+        ));
     }
 
     if order.status == 2 {
-        return Err(crate::error::AppError::BadRequest("Order already filled".to_string()));
+        return Err(crate::error::AppError::BadRequest(
+            "Order already filled".to_string(),
+        ));
     }
 
     state.db.update_order_status(&order_id, 3).await?;
+    tracing::info!(
+        "Limit order cancelled: user={}, order_id={}, onchain_tx_hash={}",
+        user_address,
+        order_id,
+        tx_hash
+    );
 
-    Ok(Json(ApiResponse::success("Order cancelled successfully".to_string())))
+    Ok(Json(ApiResponse::success(
+        "Order cancelled successfully".to_string(),
+    )))
 }
 
 #[cfg(test)]

@@ -1,8 +1,12 @@
-use crate::{config::Config, db::Database, error::{AppError, Result}};
-use serde::Serialize; // Disederhanakan (menghapus Deserialize yang tidak terpakai)
-use rust_decimal::prelude::{ToPrimitive, FromPrimitive}; 
+use crate::{
+    config::Config,
+    db::Database,
+    error::{AppError, Result},
+};
 use hex;
-use rand; 
+use rand;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use serde::Serialize; // Disederhanakan (menghapus Deserialize yang tidak terpakai)
 use sqlx::Row; // Tambahkan ini untuk akses .get()
 
 fn build_bank_details(deposit_id: &str) -> BankDetails {
@@ -32,12 +36,25 @@ impl DepositService {
         Self { db, config }
     }
 
-    pub async fn create_bank_transfer(&self, user_address: &str, amount: f64, currency: &str) -> Result<DepositInfo> {
+    pub async fn create_bank_transfer(
+        &self,
+        user_address: &str,
+        amount: f64,
+        currency: &str,
+    ) -> Result<DepositInfo> {
         let deposit_id = format!("DEP_BANK_{}", hex::encode(rand::random::<[u8; 16]>()));
         let bank_details = build_bank_details(&deposit_id);
 
-        let amount_dec = rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
-        self.save_deposit_with_decimal(&deposit_id, user_address, amount_dec, currency, "bank_transfer").await?;
+        let amount_dec =
+            rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
+        self.save_deposit_with_decimal(
+            &deposit_id,
+            user_address,
+            amount_dec,
+            currency,
+            "bank_transfer",
+        )
+        .await?;
 
         Ok(DepositInfo {
             deposit_id,
@@ -51,14 +68,18 @@ impl DepositService {
 
     pub async fn create_qris(&self, user_address: &str, amount: f64) -> Result<DepositInfo> {
         if self.config.moonpay_api_key.is_none() {
-            return Err(AppError::ExternalAPI("Moonpay API key not configured".into()));
+            return Err(AppError::ExternalAPI(
+                "Moonpay API key not configured".into(),
+            ));
         }
 
         let deposit_id = format!("DEP_QRIS_{}", hex::encode(rand::random::<[u8; 16]>()));
         let qr_data = build_qris_payload(&deposit_id, amount);
-        let amount_dec = rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
-        
-        self.save_deposit_with_decimal(&deposit_id, user_address, amount_dec, "IDR", "qris").await?;
+        let amount_dec =
+            rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
+
+        self.save_deposit_with_decimal(&deposit_id, user_address, amount_dec, "IDR", "qris")
+            .await?;
 
         Ok(DepositInfo {
             deposit_id,
@@ -70,16 +91,25 @@ impl DepositService {
         })
     }
 
-    pub async fn create_card_payment(&self, user_address: &str, amount: f64, currency: &str) -> Result<DepositInfo> {
+    pub async fn create_card_payment(
+        &self,
+        user_address: &str,
+        amount: f64,
+        currency: &str,
+    ) -> Result<DepositInfo> {
         if self.config.stripe_secret_key.is_none() {
-            return Err(AppError::ExternalAPI("Stripe secret key not configured".into()));
+            return Err(AppError::ExternalAPI(
+                "Stripe secret key not configured".into(),
+            ));
         }
 
         let deposit_id = format!("DEP_CARD_{}", hex::encode(rand::random::<[u8; 16]>()));
         let payment_url = build_stripe_url(&deposit_id);
-        let amount_dec = rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
+        let amount_dec =
+            rust_decimal::Decimal::from_f64(amount).unwrap_or(rust_decimal::Decimal::ZERO);
 
-        self.save_deposit_with_decimal(&deposit_id, user_address, amount_dec, currency, "card").await?;
+        self.save_deposit_with_decimal(&deposit_id, user_address, amount_dec, currency, "card")
+            .await?;
 
         Ok(DepositInfo {
             deposit_id,
@@ -91,7 +121,14 @@ impl DepositService {
         })
     }
 
-    async fn save_deposit_with_decimal(&self, id: &str, user: &str, amount_dec: rust_decimal::Decimal, currency: &str, method: &str) -> Result<()> {
+    async fn save_deposit_with_decimal(
+        &self,
+        id: &str,
+        user: &str,
+        amount_dec: rust_decimal::Decimal,
+        currency: &str,
+        method: &str,
+    ) -> Result<()> {
         // Ganti query! menjadi query (tanpa tanda seru)
         sqlx::query(
             "INSERT INTO deposits (deposit_id, user_address, amount, currency, payment_method, status, created_at)
@@ -121,7 +158,10 @@ impl DepositService {
             deposit_id: row.get("deposit_id"),
             status: row.get("status"),
             payment_method: row.get("payment_method"),
-            amount: row.get::<rust_decimal::Decimal, _>("amount").to_f64().unwrap_or(0.0),
+            amount: row
+                .get::<rust_decimal::Decimal, _>("amount")
+                .to_f64()
+                .unwrap_or(0.0),
             currency: row.get("currency"),
             details: None,
         })

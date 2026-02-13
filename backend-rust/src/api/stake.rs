@@ -1,17 +1,17 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader};
 use crate::{
-    error::Result,
-    models::ApiResponse,
     // 1. Import hasher agar fungsi di hash.rs terhitung "used"
     crypto::hash,
+    error::Result,
+    models::ApiResponse,
 };
-use crate::services::onchain::{OnchainReader, parse_felt, u256_from_felts, felt_to_u128};
 use starknet_core::types::FunctionCall;
 use starknet_core::utils::get_selector_from_name;
 
-use super::{AppState, require_user};
+use super::{require_starknet_user, AppState};
 
 #[derive(Debug, Serialize)]
 pub struct StakingPool {
@@ -40,12 +40,14 @@ pub struct StakingPosition {
 pub struct DepositRequest {
     pub pool_id: String,
     pub amount: String,
+    pub onchain_tx_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct WithdrawRequest {
     pub position_id: String,
     pub amount: String,
+    pub onchain_tx_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,13 +62,28 @@ fn build_position_id(user_address: &str, pool_id: &str, now_ts: i64) -> String {
     format!("POS_{}", hash::hash_string(&pos_data))
 }
 
-fn build_stake_tx_hash(user_address: &str, pool_id: &str, now_ts: i64) -> String {
-    let pos_data = format!("{}{}{}", user_address, pool_id, now_ts);
-    hash::hash_string(&format!("stake_{}", pos_data))
-}
-
-fn build_withdraw_tx_hash(user_address: &str, position_id: &str, now_ts: i64) -> String {
-    hash::hash_string(&format!("withdraw_{}{}{}", user_address, position_id, now_ts))
+fn normalize_onchain_tx_hash(
+    tx_hash: Option<&str>,
+) -> std::result::Result<Option<String>, crate::error::AppError> {
+    let Some(raw) = tx_hash.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    if !raw.starts_with("0x") {
+        return Err(crate::error::AppError::BadRequest(
+            "onchain_tx_hash must start with 0x".to_string(),
+        ));
+    }
+    if raw.len() > 66 {
+        return Err(crate::error::AppError::BadRequest(
+            "onchain_tx_hash exceeds maximum length (66)".to_string(),
+        ));
+    }
+    if !raw[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(crate::error::AppError::BadRequest(
+            "onchain_tx_hash must be hex-encoded".to_string(),
+        ));
+    }
+    Ok(Some(raw.to_ascii_lowercase()))
 }
 
 fn fallback_price_for(token: &str) -> f64 {
@@ -92,6 +109,20 @@ async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     .await?;
 
     Ok(price.unwrap_or_else(|| fallback_price_for(&token)))
+}
+
+fn staking_contract_or_error(state: &AppState) -> Result<&str> {
+    let Some(contract) = state.config.staking_carel_address.as_deref() else {
+        return Err(crate::error::AppError::BadRequest(
+            "STAKING_CAREL_ADDRESS is not configured".to_string(),
+        ));
+    };
+    if contract.trim().is_empty() || contract.starts_with("0x0000") {
+        return Err(crate::error::AppError::BadRequest(
+            "STAKING_CAREL_ADDRESS is placeholder/invalid".to_string(),
+        ));
+    }
+    Ok(contract)
 }
 
 /// GET /api/v1/stake/pools
@@ -156,17 +187,34 @@ pub async fn deposit(
     headers: HeaderMap,
     Json(req): Json<DepositRequest>,
 ) -> Result<Json<ApiResponse<DepositResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_address = require_starknet_user(&headers, &state).await?;
     let now = chrono::Utc::now().timestamp();
 
-    let amount: f64 = req.amount.parse()
+    let amount: f64 = req
+        .amount
+        .parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
+    if amount <= 0.0 {
+        return Err(crate::error::AppError::BadRequest(
+            "Amount must be greater than 0".to_string(),
+        ));
+    }
+    if !req.pool_id.eq_ignore_ascii_case("CAREL") {
+        return Err(crate::error::AppError::BadRequest(
+            "Only CAREL staking is supported for on-chain MVP".to_string(),
+        ));
+    }
+
+    let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        crate::error::AppError::BadRequest(
+            "Stake requires onchain_tx_hash from user-signed Starknet transaction".to_string(),
+        )
+    })?;
 
     // 2. Gunakan hasher untuk membuat Position ID (Menghilangkan warning di hash.rs)
     let position_id = build_position_id(&user_address, &req.pool_id, now);
-
-    // 3. Gunakan hasher untuk Tx Hash
-    let tx_hash = build_stake_tx_hash(&user_address, &req.pool_id, now);
+    let _ = staking_contract_or_error(&state)?;
 
     tracing::info!(
         "User {} staking deposit: {} in pool {} (position: {})",
@@ -175,6 +223,25 @@ pub async fn deposit(
         req.pool_id,
         position_id
     );
+
+    let price = latest_price(&state, "CAREL").await?;
+    let usd_value = amount * price;
+    let tx = crate::models::Transaction {
+        tx_hash: tx_hash.clone(),
+        block_number: 0,
+        user_address: user_address.clone(),
+        tx_type: "stake".to_string(),
+        token_in: Some("CAREL".to_string()),
+        token_out: Some("CAREL".to_string()),
+        amount_in: Some(rust_decimal::Decimal::from_f64_retain(amount).unwrap()),
+        amount_out: Some(rust_decimal::Decimal::from_f64_retain(amount).unwrap()),
+        usd_value: Some(rust_decimal::Decimal::from_f64_retain(usd_value).unwrap()),
+        fee_paid: None,
+        points_earned: Some(rust_decimal::Decimal::ZERO),
+        timestamp: chrono::Utc::now(),
+        processed: false,
+    };
+    state.db.save_transaction(&tx).await?;
 
     Ok(Json(ApiResponse::success(DepositResponse {
         position_id,
@@ -189,14 +256,25 @@ pub async fn withdraw(
     headers: HeaderMap,
     Json(req): Json<WithdrawRequest>,
 ) -> Result<Json<ApiResponse<DepositResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
-    let now = chrono::Utc::now().timestamp();
+    let user_address = require_starknet_user(&headers, &state).await?;
 
-    let amount: f64 = req.amount.parse()
+    let amount: f64 = req
+        .amount
+        .parse()
         .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
+    if amount <= 0.0 {
+        return Err(crate::error::AppError::BadRequest(
+            "Amount must be greater than 0".to_string(),
+        ));
+    }
 
-    // Gunakan hasher untuk Tx Hash withdraw
-    let tx_hash = build_withdraw_tx_hash(&user_address, &req.position_id, now);
+    let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        crate::error::AppError::BadRequest(
+            "Unstake requires onchain_tx_hash from user-signed Starknet transaction".to_string(),
+        )
+    })?;
+    let _ = staking_contract_or_error(&state)?;
 
     tracing::info!(
         "User {} stake withdraw: {} from position {}",
@@ -204,6 +282,23 @@ pub async fn withdraw(
         amount,
         req.position_id
     );
+
+    let tx = crate::models::Transaction {
+        tx_hash: tx_hash.clone(),
+        block_number: 0,
+        user_address,
+        tx_type: "unstake".to_string(),
+        token_in: Some("CAREL".to_string()),
+        token_out: Some("CAREL".to_string()),
+        amount_in: Some(rust_decimal::Decimal::from_f64_retain(amount).unwrap()),
+        amount_out: Some(rust_decimal::Decimal::from_f64_retain(amount).unwrap()),
+        usd_value: None,
+        fee_paid: None,
+        points_earned: Some(rust_decimal::Decimal::ZERO),
+        timestamp: chrono::Utc::now(),
+        processed: false,
+    };
+    state.db.save_transaction(&tx).await?;
 
     Ok(Json(ApiResponse::success(DepositResponse {
         position_id: req.position_id,
@@ -217,7 +312,7 @@ pub async fn get_positions(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<Vec<StakingPosition>>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_address = require_starknet_user(&headers, &state).await?;
 
     tracing::debug!("Fetching staking positions for user: {}", user_address);
 
@@ -232,7 +327,9 @@ pub async fn get_positions(
     let reader = OnchainReader::from_config(&state.config)?;
     if let Some(info) = fetch_carel_stake_info(&reader, contract, &user_address).await? {
         if info.amount > 0 {
-            let rewards = fetch_carel_rewards(&reader, contract, &user_address).await.unwrap_or(0);
+            let rewards = fetch_carel_rewards(&reader, contract, &user_address)
+                .await
+                .unwrap_or(0);
             let started_at = info.start_time as i64;
             let unlock_at = started_at + 604800; // 7 days lock period (contract constant)
             positions.push(StakingPosition {
@@ -275,10 +372,7 @@ async fn fetch_carel_stake_info(
     let amount = u256_from_felts(&result[0], &result[1])?;
     let start_time = felt_to_u128(&result[3])? as u64;
 
-    Ok(Some(CarelStakeInfo {
-        amount,
-        start_time,
-    }))
+    Ok(Some(CarelStakeInfo { amount, start_time }))
 }
 
 async fn fetch_carel_rewards(
@@ -313,10 +407,9 @@ mod tests {
     }
 
     #[test]
-    fn build_withdraw_tx_hash_is_deterministic() {
-        // Memastikan hash withdraw konsisten untuk input yang sama
-        let hash1 = build_withdraw_tx_hash("0xabc", "POS_1", 1_700_000_000);
-        let hash2 = build_withdraw_tx_hash("0xabc", "POS_1", 1_700_000_000);
-        assert_eq!(hash1, hash2);
+    fn normalize_onchain_tx_hash_rejects_non_hex() {
+        // Memastikan hash non-hex ditolak
+        let result = normalize_onchain_tx_hash(Some("0xZZ"));
+        assert!(result.is_err());
     }
 }

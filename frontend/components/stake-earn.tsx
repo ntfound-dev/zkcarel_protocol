@@ -15,6 +15,7 @@ import { useWallet } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useLivePrices } from "@/hooks/use-live-prices"
 import { getStakePools, getStakePositions, stakeDeposit, stakeWithdraw } from "@/lib/api"
+import { decimalToU256Parts, invokeStarknetCallFromWallet } from "@/lib/onchain-trade"
 
 const poolMeta: Record<string, { name: string; icon: string; type: string; gradient: string }> = {
   USDT: { name: "Tether", icon: "₮", type: "Stablecoin", gradient: "from-green-400 to-emerald-600" },
@@ -24,6 +25,11 @@ const poolMeta: Record<string, { name: string; icon: string; type: string; gradi
   STRK: { name: "StarkNet", icon: "◈", type: "Crypto", gradient: "from-pink-400 to-rose-600" },
   CAREL: { name: "ZkCarel", icon: "◐", type: "Crypto", gradient: "from-violet-400 to-purple-600" },
 }
+
+const STARKNET_STAKING_CAREL_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS ||
+  process.env.NEXT_PUBLIC_STAKING_CAREL_ADDRESS ||
+  ""
 
 const formatCompact = (value: number) => {
   try {
@@ -75,6 +81,12 @@ export function StakeEarn() {
     fallbackPrices: { CAREL: 1, USDC: 1, USDT: 1 },
   })
   const [activePositions, setActivePositions] = React.useState(0)
+  const starknetProviderHint = React.useMemo<"starknet" | "argentx" | "braavos">(() => {
+    if (wallet.provider === "argentx" || wallet.provider === "braavos") {
+      return wallet.provider
+    }
+    return "starknet"
+  }, [wallet.provider])
 
   const displayPools = React.useMemo(() => {
     if (pools.length === 0) return []
@@ -179,19 +191,56 @@ export function StakeEarn() {
     }
   }
 
+  const submitOnchainStakeTx = React.useCallback(
+    async (entrypoint: "stake" | "unstake", amount: string) => {
+      if (!STARKNET_STAKING_CAREL_ADDRESS) {
+        throw new Error(
+          "NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS belum diisi. Set alamat kontrak staking di frontend/.env.local."
+        )
+      }
+      const [amountLow, amountHigh] = decimalToU256Parts(amount, 18)
+      return invokeStarknetCallFromWallet(
+        {
+          contractAddress: STARKNET_STAKING_CAREL_ADDRESS,
+          entrypoint,
+          calldata: [amountLow, amountHigh],
+        },
+        starknetProviderHint
+      )
+    },
+    [starknetProviderHint]
+  )
+
   const confirmStake = async () => {
     if (!selectedPool) return
+    if (selectedPool.symbol !== "CAREL") {
+      notifications.addNotification({
+        type: "error",
+        title: "Pool belum didukung",
+        message: "On-chain staking saat ini hanya mendukung pool CAREL.",
+      })
+      return
+    }
     
     setIsStaking(true)
     try {
       notifications.addNotification({
         type: "info",
+        title: "Wallet signature required",
+        message: "Confirm staking transaction in your Starknet wallet.",
+      })
+      const onchainTxHash = await submitOnchainStakeTx("stake", stakeAmount)
+      notifications.addNotification({
+        type: "info",
         title: "Staking pending",
-        message: `Stake ${stakeAmount} ${selectedPool.symbol} sedang diproses...`,
+        message: `Stake ${stakeAmount} ${selectedPool.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
       })
       await stakeDeposit({
         pool_id: selectedPool.symbol,
         amount: stakeAmount,
+        onchain_tx_hash: onchainTxHash,
       })
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       await refreshPositions()
@@ -200,6 +249,8 @@ export function StakeEarn() {
         type: "success",
         title: "Staking berhasil",
         message: `Stake ${stakeAmount} ${selectedPool.symbol} berhasil`,
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
       })
     } catch (error) {
       notifications.addNotification({
@@ -223,16 +274,30 @@ export function StakeEarn() {
     try {
       notifications.addNotification({
         type: "info",
-        title: "Unstake pending",
-        message: `${target.amount} ${target.pool.symbol} sedang diproses...`,
+        title: "Wallet signature required",
+        message: "Confirm unstake transaction in your Starknet wallet.",
       })
-      await stakeWithdraw({ position_id: positionId, amount: target.amount.toString() })
+      const onchainTxHash = await submitOnchainStakeTx("unstake", target.amount.toString())
+      notifications.addNotification({
+        type: "info",
+        title: "Unstake pending",
+        message: `${target.amount} ${target.pool.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
+      })
+      await stakeWithdraw({
+        position_id: positionId,
+        amount: target.amount.toString(),
+        onchain_tx_hash: onchainTxHash,
+      })
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       await refreshPositions()
       notifications.addNotification({
         type: "success",
         title: "Unstake diproses",
         message: `${target.amount} ${target.pool.symbol} sedang diproses`,
+        txHash: onchainTxHash,
+        txNetwork: "starknet",
       })
     } catch (error) {
       setPositions((prev) =>
