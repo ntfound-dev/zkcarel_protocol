@@ -1,11 +1,14 @@
-use super::{require_starknet_user, AppState};
-use crate::services::onchain::{parse_felt, OnchainInvoker};
+use super::{require_starknet_user, require_user, AppState};
+use crate::services::onchain::{felt_to_u128, parse_felt, OnchainInvoker, OnchainReader};
+use crate::services::privacy_verifier::{
+    parse_privacy_verifier_kind, resolve_privacy_router_for_verifier, PrivacyVerifierKind,
+};
 use crate::{
-    constants::{token_address_for, DEX_EKUBO, DEX_HAIKO},
+    constants::{token_address_for, CONTRACT_SWAP_AGGREGATOR, DEX_EKUBO, DEX_HAIKO},
     // 1. IMPORT MODUL HASH AGAR TERPAKAI
     crypto::hash,
     error::{AppError, Result},
-    models::{ApiResponse, SwapQuoteRequest, SwapQuoteResponse},
+    models::{ApiResponse, StarknetWalletCall, SwapQuoteRequest, SwapQuoteResponse},
     services::gas_optimizer::GasOptimizer,
     services::notification_service::NotificationType,
     services::LiquidityAggregator,
@@ -13,11 +16,16 @@ use crate::{
 };
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
-use starknet_core::types::{Call, Felt};
+use starknet_core::types::{
+    Call, ExecutionResult, Felt, FunctionCall, InvokeTransaction, Transaction,
+    TransactionFinalityStatus,
+};
 use starknet_core::utils::get_selector_from_name;
+use tokio::time::{sleep, Duration};
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyVerificationPayload {
+    pub verifier: Option<String>,
     pub nullifier: Option<String>,
     pub commitment: Option<String>,
     pub proof: Option<Vec<String>>,
@@ -95,6 +103,856 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+fn is_supported_starknet_swap_token(token: &str) -> bool {
+    matches!(
+        token.to_ascii_uppercase().as_str(),
+        "STRK" | "WBTC" | "USDT" | "USDC" | "CAREL"
+    )
+}
+
+fn ensure_supported_starknet_swap_pair(from_token: &str, to_token: &str) -> Result<()> {
+    if !is_supported_starknet_swap_token(from_token) || !is_supported_starknet_swap_token(to_token)
+    {
+        return Err(AppError::BadRequest(
+            "On-chain swap currently supports STRK/WBTC/USDT/USDC/CAREL only".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ParsedExecuteCall {
+    to: Felt,
+    selector: Felt,
+    calldata: Vec<Felt>,
+}
+
+#[derive(Debug, Clone)]
+struct OnchainSwapRoute {
+    dex_id: Felt,
+    expected_amount_out_low: Felt,
+    expected_amount_out_high: Felt,
+    min_amount_out_low: Felt,
+    min_amount_out_high: Felt,
+}
+
+#[derive(Debug, Clone)]
+struct OnchainSwapContext {
+    swap_contract: Felt,
+    from_token: Felt,
+    to_token: Felt,
+    amount_low: Felt,
+    amount_high: Felt,
+    route: OnchainSwapRoute,
+}
+
+fn token_decimals(symbol: &str) -> u32 {
+    match symbol.to_ascii_uppercase().as_str() {
+        "BTC" | "WBTC" => 8,
+        "USDT" | "USDC" => 6,
+        _ => 18,
+    }
+}
+
+fn pow10_u128(exp: u32) -> Result<u128> {
+    let mut out = 1_u128;
+    for _ in 0..exp {
+        out = out.checked_mul(10).ok_or_else(|| {
+            AppError::BadRequest("Token decimals overflow while scaling amount".to_string())
+        })?;
+    }
+    Ok(out)
+}
+
+fn parse_decimal_to_scaled_u128(raw: &str, decimals: u32) -> Result<u128> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest("Amount is empty".to_string()));
+    }
+    if trimmed.starts_with('-') {
+        return Err(AppError::BadRequest(
+            "Amount must be non-negative".to_string(),
+        ));
+    }
+
+    let (whole_raw, frac_raw) = trimmed
+        .split_once('.')
+        .map(|(whole, frac)| (whole, frac))
+        .unwrap_or((trimmed, ""));
+    if !whole_raw.chars().all(|c| c.is_ascii_digit())
+        || !frac_raw.chars().all(|c| c.is_ascii_digit())
+    {
+        return Err(AppError::BadRequest(
+            "Amount must be a decimal number".to_string(),
+        ));
+    }
+
+    let whole = if whole_raw.is_empty() {
+        0_u128
+    } else {
+        whole_raw
+            .parse::<u128>()
+            .map_err(|_| AppError::BadRequest("Amount is too large".to_string()))?
+    };
+    let scale = pow10_u128(decimals)?;
+    let whole_scaled = whole
+        .checked_mul(scale)
+        .ok_or_else(|| AppError::BadRequest("Amount is too large".to_string()))?;
+
+    let frac_cut = if frac_raw.len() > decimals as usize {
+        &frac_raw[..decimals as usize]
+    } else {
+        frac_raw
+    };
+    let mut frac_padded = frac_cut.to_string();
+    while frac_padded.len() < decimals as usize {
+        frac_padded.push('0');
+    }
+    let frac_scaled = if frac_padded.is_empty() {
+        0_u128
+    } else {
+        frac_padded
+            .parse::<u128>()
+            .map_err(|_| AppError::BadRequest("Amount is too large".to_string()))?
+    };
+
+    whole_scaled
+        .checked_add(frac_scaled)
+        .ok_or_else(|| AppError::BadRequest("Amount is too large".to_string()))
+}
+
+fn parse_decimal_to_u256_parts(raw: &str, decimals: u32) -> Result<(Felt, Felt)> {
+    let scaled = parse_decimal_to_scaled_u128(raw, decimals)?;
+    Ok((Felt::from(scaled), Felt::ZERO))
+}
+
+fn onchain_u256_to_f64(low: Felt, high: Felt, decimals: u32) -> Result<f64> {
+    let low_u = felt_to_u128(&low).map_err(|_| {
+        AppError::BadRequest("Invalid on-chain amount: low limb is not numeric".to_string())
+    })?;
+    let high_u = felt_to_u128(&high).map_err(|_| {
+        AppError::BadRequest("Invalid on-chain amount: high limb is not numeric".to_string())
+    })?;
+
+    let value_raw = (high_u as f64) * 2_f64.powi(128) + (low_u as f64);
+    let scale = 10_f64.powi(decimals as i32);
+    if scale <= 0.0 {
+        return Err(AppError::BadRequest(
+            "Invalid token decimals for on-chain conversion".to_string(),
+        ));
+    }
+    let out = value_raw / scale;
+    if !out.is_finite() {
+        return Err(AppError::BadRequest(
+            "On-chain quote is out of supported range".to_string(),
+        ));
+    }
+    Ok(out)
+}
+
+fn felt_hex(value: Felt) -> String {
+    value.to_string()
+}
+
+fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
+    let raw = felt_to_u128(value).map_err(|_| {
+        AppError::BadRequest(format!("Invalid invoke calldata: {field_name} is not a valid number"))
+    })?;
+    usize::try_from(raw).map_err(|_| {
+        AppError::BadRequest(format!(
+            "Invalid invoke calldata: {field_name} exceeds supported size"
+        ))
+    })
+}
+
+fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
+    if calldata.is_empty() {
+        return Err(AppError::BadRequest(
+            "Invalid invoke calldata: empty calldata".to_string(),
+        ));
+    }
+
+    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
+    let header_start = 1usize;
+    let header_width = 4usize;
+    let headers_end = header_start
+        .checked_add(calls_len.checked_mul(header_width).ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: calls_len overflow".to_string())
+        })?)
+        .ok_or_else(|| AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string()))?;
+
+    if calldata.len() <= headers_end {
+        return Err(AppError::BadRequest(
+            "Invalid invoke calldata: missing calldata length".to_string(),
+        ));
+    }
+
+    let flattened_len = felt_to_usize(&calldata[headers_end], "flattened_len")?;
+    let flattened_start = headers_end + 1;
+    let flattened_end = flattened_start
+        .checked_add(flattened_len)
+        .ok_or_else(|| AppError::BadRequest("Invalid invoke calldata: flattened overflow".to_string()))?;
+
+    if calldata.len() < flattened_end {
+        return Err(AppError::BadRequest(
+            "Invalid invoke calldata: flattened segment out of bounds".to_string(),
+        ));
+    }
+
+    let flattened = &calldata[flattened_start..flattened_end];
+    let mut calls = Vec::with_capacity(calls_len);
+
+    for idx in 0..calls_len {
+        let offset = header_start + idx * header_width;
+        let to = calldata[offset];
+        let selector = calldata[offset + 1];
+        let data_offset = felt_to_usize(&calldata[offset + 2], "data_offset")?;
+        let data_len = felt_to_usize(&calldata[offset + 3], "data_len")?;
+        let data_end = data_offset.checked_add(data_len).ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: data segment overflow".to_string())
+        })?;
+        if data_end > flattened.len() {
+            return Err(AppError::BadRequest(
+                "Invalid invoke calldata: call segment out of bounds".to_string(),
+            ));
+        }
+
+        calls.push(ParsedExecuteCall {
+            to,
+            selector,
+            calldata: flattened[data_offset..data_end].to_vec(),
+        });
+    }
+
+    Ok(calls)
+}
+
+fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
+    if calldata.is_empty() {
+        return Err(AppError::BadRequest(
+            "Invalid invoke calldata: empty calldata".to_string(),
+        ));
+    }
+    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
+    let mut cursor = 1usize;
+    let mut calls = Vec::with_capacity(calls_len);
+
+    for _ in 0..calls_len {
+        let header_end = cursor
+            .checked_add(3)
+            .ok_or_else(|| AppError::BadRequest("Invalid invoke calldata: malformed call header".to_string()))?;
+        if calldata.len() < header_end {
+            return Err(AppError::BadRequest(
+                "Invalid invoke calldata: missing inline call header".to_string(),
+            ));
+        }
+
+        let to = calldata[cursor];
+        let selector = calldata[cursor + 1];
+        let data_len = felt_to_usize(&calldata[cursor + 2], "data_len")?;
+        let data_start = cursor + 3;
+        let data_end = data_start.checked_add(data_len).ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: inline data overflow".to_string())
+        })?;
+        if data_end > calldata.len() {
+            return Err(AppError::BadRequest(
+                "Invalid invoke calldata: inline data out of bounds".to_string(),
+            ));
+        }
+
+        calls.push(ParsedExecuteCall {
+            to,
+            selector,
+            calldata: calldata[data_start..data_end].to_vec(),
+        });
+        cursor = data_end;
+    }
+
+    Ok(calls)
+}
+
+fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
+    if let Ok(calls) = parse_execute_calls_offset(calldata) {
+        return Ok(calls);
+    }
+    parse_execute_calls_inline(calldata)
+}
+
+fn configured_swap_contract(state: &AppState) -> Result<Option<Felt>> {
+    let mut candidates = vec![
+        std::env::var("STARKNET_SWAP_CONTRACT_ADDRESS").ok(),
+        std::env::var("NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS").ok(),
+        std::env::var("SWAP_AGGREGATOR_ADDRESS").ok(),
+        std::env::var("CAREL_PROTOCOL_ADDRESS").ok(),
+        std::env::var("NEXT_PUBLIC_CAREL_PROTOCOL_ADDRESS").ok(),
+        Some(state.config.limit_order_book_address.clone()),
+        Some(CONTRACT_SWAP_AGGREGATOR.to_string()),
+    ];
+    for candidate in candidates.drain(..).flatten() {
+        let trimmed = candidate.trim();
+        if trimmed.is_empty() || trimmed.starts_with("0x0000") {
+            continue;
+        }
+        return Ok(Some(parse_felt(trimmed)?));
+    }
+    Ok(None)
+}
+
+fn env_truthy(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase()),
+        Some(value) if value == "1" || value == "true" || value == "yes"
+    )
+}
+
+fn is_event_only_swap_contract_configured(state: &AppState) -> Result<bool> {
+    if env_truthy("SWAP_CONTRACT_EVENT_ONLY") || env_truthy("NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY")
+    {
+        return Ok(true);
+    }
+
+    let Some(configured_swap) = configured_swap_contract(state)? else {
+        return Ok(false);
+    };
+
+    let carel_candidates = [
+        std::env::var("CAREL_PROTOCOL_ADDRESS").ok(),
+        std::env::var("NEXT_PUBLIC_CAREL_PROTOCOL_ADDRESS").ok(),
+    ];
+
+    for candidate in carel_candidates.into_iter().flatten() {
+        let trimmed = candidate.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(carel_protocol) = parse_felt(trimmed) {
+            if configured_swap == carel_protocol {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn push_token_candidate(raw: Option<String>, out: &mut Vec<Felt>) {
+    let Some(candidate) = raw else {
+        return;
+    };
+    match parse_felt(&candidate) {
+        Ok(felt) => {
+            if !out.iter().any(|existing| *existing == felt) {
+                out.push(felt);
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Ignoring invalid token address candidate '{}': {}",
+                candidate,
+                err
+            );
+        }
+    }
+}
+
+fn configured_token_candidates(state: &AppState, token: &str) -> Vec<Felt> {
+    let token = token.to_ascii_uppercase();
+    let mut candidates = Vec::new();
+    match token.as_str() {
+        "CAREL" => {
+            push_token_candidate(env_value("TOKEN_CAREL_ADDRESS"), &mut candidates);
+            push_token_candidate(env_value("NEXT_PUBLIC_TOKEN_CAREL_ADDRESS"), &mut candidates);
+            push_token_candidate(Some(state.config.carel_token_address.clone()), &mut candidates);
+        }
+        "STRK" => {
+            push_token_candidate(env_value("TOKEN_STRK_ADDRESS"), &mut candidates);
+            push_token_candidate(env_value("NEXT_PUBLIC_TOKEN_STRK_ADDRESS"), &mut candidates);
+            push_token_candidate(state.config.token_strk_address.clone(), &mut candidates);
+        }
+        "WBTC" | "BTC" => {
+            push_token_candidate(env_value("TOKEN_WBTC_ADDRESS"), &mut candidates);
+            push_token_candidate(env_value("NEXT_PUBLIC_TOKEN_WBTC_ADDRESS"), &mut candidates);
+            push_token_candidate(env_value("TOKEN_BTC_ADDRESS"), &mut candidates);
+            push_token_candidate(env_value("NEXT_PUBLIC_TOKEN_BTC_ADDRESS"), &mut candidates);
+            push_token_candidate(state.config.token_btc_address.clone(), &mut candidates);
+        }
+        "USDT" => {
+            push_token_candidate(env_value("TOKEN_USDT_ADDRESS"), &mut candidates);
+            push_token_candidate(env_value("NEXT_PUBLIC_TOKEN_USDT_ADDRESS"), &mut candidates);
+        }
+        "USDC" => {
+            push_token_candidate(env_value("TOKEN_USDC_ADDRESS"), &mut candidates);
+            push_token_candidate(env_value("NEXT_PUBLIC_TOKEN_USDC_ADDRESS"), &mut candidates);
+        }
+        "ETH" => {
+            push_token_candidate(env_value("TOKEN_ETH_ADDRESS"), &mut candidates);
+            push_token_candidate(env_value("NEXT_PUBLIC_TOKEN_ETH_ADDRESS"), &mut candidates);
+            push_token_candidate(state.config.token_eth_address.clone(), &mut candidates);
+        }
+        _ => {}
+    }
+
+    push_token_candidate(token_address_for(&token).map(|value| value.to_string()), &mut candidates);
+    candidates
+}
+
+fn resolve_primary_token_address(state: &AppState, token: &str) -> Result<Felt> {
+    configured_token_candidates(state, token)
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::BadRequest(format!("Token address is not configured for {}", token)))
+}
+
+fn parse_onchain_route(raw: &[Felt]) -> Result<OnchainSwapRoute> {
+    if raw.len() < 5 {
+        return Err(AppError::BadRequest(
+            "Invalid on-chain route response: expected 5 felts".to_string(),
+        ));
+    }
+    Ok(OnchainSwapRoute {
+        dex_id: raw[0],
+        expected_amount_out_low: raw[1],
+        expected_amount_out_high: raw[2],
+        min_amount_out_low: raw[3],
+        min_amount_out_high: raw[4],
+    })
+}
+
+async fn fetch_onchain_swap_context(
+    state: &AppState,
+    from_token: &str,
+    to_token: &str,
+    amount: &str,
+) -> Result<OnchainSwapContext> {
+    let swap_contract = configured_swap_contract(state)?.ok_or_else(|| {
+        AppError::BadRequest(
+            "STARKNET_SWAP_CONTRACT_ADDRESS is not configured for on-chain swap".to_string(),
+        )
+    })?;
+    let from_token_felt = resolve_primary_token_address(state, from_token)?;
+    let to_token_felt = resolve_primary_token_address(state, to_token)?;
+    let (amount_low, amount_high) = parse_decimal_to_u256_parts(amount, token_decimals(from_token))?;
+
+    let reader = OnchainReader::from_config(&state.config)?;
+    let route_selector = get_selector_from_name("get_best_swap_route")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let route_raw = reader
+        .call(FunctionCall {
+            contract_address: swap_contract,
+            entry_point_selector: route_selector,
+            calldata: vec![from_token_felt, to_token_felt, amount_low, amount_high],
+        })
+        .await
+        .map_err(|err| {
+            let message = err.to_string();
+            if message.to_ascii_lowercase().contains("no active dex found") {
+                AppError::BadRequest(
+                    "Swap aggregator on-chain belum siap: belum ada DEX router aktif / oracle quote."
+                        .to_string(),
+                )
+            } else {
+                AppError::BadRequest(format!(
+                    "Failed to fetch on-chain swap route from configured contract: {}",
+                    message
+                ))
+            }
+        })?;
+    let route = parse_onchain_route(&route_raw)?;
+
+    Ok(OnchainSwapContext {
+        swap_contract,
+        from_token: from_token_felt,
+        to_token: to_token_felt,
+        amount_low,
+        amount_high,
+        route,
+    })
+}
+
+fn build_onchain_swap_wallet_calls(
+    context: &OnchainSwapContext,
+    mev_protected: bool,
+) -> Vec<StarknetWalletCall> {
+    let mev_flag = if mev_protected { Felt::ONE } else { Felt::ZERO };
+    vec![
+        StarknetWalletCall {
+            contract_address: felt_hex(context.from_token),
+            entrypoint: "approve".to_string(),
+            calldata: vec![
+                felt_hex(context.swap_contract),
+                felt_hex(context.amount_low),
+                felt_hex(context.amount_high),
+            ],
+        },
+        StarknetWalletCall {
+            contract_address: felt_hex(context.swap_contract),
+            entrypoint: "execute_swap".to_string(),
+            calldata: vec![
+                felt_hex(context.route.dex_id),
+                felt_hex(context.route.expected_amount_out_low),
+                felt_hex(context.route.expected_amount_out_high),
+                felt_hex(context.route.min_amount_out_low),
+                felt_hex(context.route.min_amount_out_high),
+                felt_hex(context.from_token),
+                felt_hex(context.to_token),
+                felt_hex(context.amount_low),
+                felt_hex(context.amount_high),
+                felt_hex(mev_flag),
+            ],
+        },
+    ]
+}
+
+fn first_index_of_any(calldata: &[Felt], candidates: &[Felt]) -> Option<usize> {
+    calldata
+        .iter()
+        .position(|felt| candidates.iter().any(|candidate| candidate == felt))
+}
+
+fn first_index_of_any_from(calldata: &[Felt], candidates: &[Felt], start: usize) -> Option<usize> {
+    calldata
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find_map(|(idx, felt)| {
+            if candidates.iter().any(|candidate| candidate == felt) {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+}
+
+async fn resolve_allowed_swap_senders(
+    state: &AppState,
+    auth_subject: &str,
+    resolved_starknet_user: &str,
+) -> Result<Vec<Felt>> {
+    let mut out: Vec<Felt> = Vec::new();
+    for candidate in [resolved_starknet_user, auth_subject] {
+        if let Ok(felt) = parse_felt(candidate) {
+            if !out.iter().any(|existing| *existing == felt) {
+                out.push(felt);
+            }
+        }
+    }
+
+    if let Ok(linked_wallets) = state.db.list_wallet_addresses(auth_subject).await {
+        for wallet in linked_wallets {
+            if !wallet.chain.eq_ignore_ascii_case("starknet") {
+                continue;
+            }
+            if let Ok(felt) = parse_felt(wallet.wallet_address.trim()) {
+                if !out.iter().any(|existing| *existing == felt) {
+                    out.push(felt);
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        return Err(AppError::BadRequest(
+            "No Starknet sender address resolved for swap verification".to_string(),
+        ));
+    }
+    Ok(out)
+}
+
+fn verify_swap_invoke_payload_fallback_raw(
+    calldata: &[Felt],
+    swap_selectors: &[Felt],
+    expected_swap_contract: Option<Felt>,
+    from_token_candidates: &[Felt],
+    to_token_candidates: &[Felt],
+) -> bool {
+    for (idx, felt) in calldata.iter().enumerate() {
+        if !swap_selectors.iter().any(|selector| selector == felt) {
+            continue;
+        }
+
+        let contract_matches = match expected_swap_contract {
+            Some(expected) => (idx > 0 && calldata[idx - 1] == expected) || calldata.contains(&expected),
+            None => true,
+        };
+        if !contract_matches {
+            continue;
+        }
+
+        let from_idx = first_index_of_any_from(calldata, from_token_candidates, idx + 1);
+        let to_idx = from_idx.and_then(|from_idx| {
+            first_index_of_any_from(calldata, to_token_candidates, from_idx + 1)
+        });
+        if from_idx.is_some() && to_idx.is_some() {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn verify_swap_invoke_payload(
+    tx: &Transaction,
+    allowed_senders: &[Felt],
+    expected_swap_contract: Option<Felt>,
+    from_token_candidates: &[Felt],
+    to_token_candidates: &[Felt],
+) -> Result<()> {
+    if allowed_senders.is_empty() {
+        return Err(AppError::BadRequest(
+            "No Starknet sender allowed for swap verification".to_string(),
+        ));
+    }
+    if from_token_candidates.is_empty() {
+        return Err(AppError::BadRequest(
+            "from_token address candidates are empty".to_string(),
+        ));
+    }
+    if to_token_candidates.is_empty() {
+        return Err(AppError::BadRequest(
+            "to_token address candidates are empty".to_string(),
+        ));
+    }
+    let swap_selector = get_selector_from_name("swap")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let execute_swap_selector = get_selector_from_name("execute_swap")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let approve_selector = get_selector_from_name("approve")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let swap_selectors = [swap_selector, execute_swap_selector];
+
+    let invoke = match tx {
+        Transaction::Invoke(invoke) => invoke,
+        _ => {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash must be an INVOKE transaction".to_string(),
+            ));
+        }
+    };
+
+    let (sender, calldata) = match invoke {
+        InvokeTransaction::V1(tx) => (tx.sender_address, tx.calldata.as_slice()),
+        InvokeTransaction::V3(tx) => (tx.sender_address, tx.calldata.as_slice()),
+        InvokeTransaction::V0(_) => {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash uses unsupported INVOKE v0".to_string(),
+            ));
+        }
+    };
+
+    if !allowed_senders.iter().any(|candidate| *candidate == sender) {
+        let expected = allowed_senders
+            .iter()
+            .map(|felt| felt.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::BadRequest(format!(
+            "onchain_tx_hash sender does not match authenticated Starknet user (expected one of [{}], got {})",
+            expected, sender
+        )));
+    }
+
+    let calls = match parse_execute_calls(calldata) {
+        Ok(calls) => Some(calls),
+        Err(err) => {
+            tracing::warn!(
+                "Failed to parse invoke calldata with structured parser, fallback to raw heuristic: {}",
+                err
+            );
+            None
+        }
+    };
+    let mut saw_swap_selector = false;
+    let mut saw_expected_contract = expected_swap_contract.is_none();
+    let mut matched_swap_call = false;
+    let mut saw_approve_from_token = false;
+    let mut saw_valid_approve = false;
+
+    if let Some(calls) = calls {
+        for call in calls {
+            if call.selector == approve_selector {
+                if !from_token_candidates.iter().any(|candidate| *candidate == call.to) {
+                    continue;
+                }
+                saw_approve_from_token = true;
+                let approve_spender = call.calldata.first().copied();
+                let approve_matches = match expected_swap_contract {
+                    Some(expected_contract) => approve_spender == Some(expected_contract),
+                    None => approve_spender.is_some(),
+                };
+                if approve_matches {
+                    saw_valid_approve = true;
+                }
+                continue;
+            }
+            if !swap_selectors.iter().any(|selector| *selector == call.selector) {
+                continue;
+            }
+            saw_swap_selector = true;
+
+            if let Some(expected_contract) = expected_swap_contract {
+                if call.to != expected_contract {
+                    continue;
+                }
+                saw_expected_contract = true;
+            }
+
+            let from_idx = first_index_of_any(&call.calldata, &from_token_candidates);
+            let to_idx = from_idx.and_then(|idx| {
+                first_index_of_any_from(&call.calldata, &to_token_candidates, idx + 1)
+            });
+
+            if let (Some(from_idx), Some(to_idx)) = (from_idx, to_idx) {
+                if from_idx < to_idx {
+                    matched_swap_call = true;
+                }
+            }
+        }
+    } else if verify_swap_invoke_payload_fallback_raw(
+        calldata,
+        &swap_selectors,
+        expected_swap_contract,
+        from_token_candidates,
+        to_token_candidates,
+    ) {
+        matched_swap_call = true;
+    } else {
+        saw_swap_selector = swap_selectors
+            .iter()
+            .any(|selector| calldata.contains(selector));
+        saw_expected_contract = expected_swap_contract
+            .map(|expected| calldata.contains(&expected))
+            .unwrap_or(true);
+    }
+
+    if matched_swap_call {
+        if saw_approve_from_token && !saw_valid_approve {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash approve call does not target configured Starknet swap contract"
+                    .to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    if !saw_swap_selector {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash does not contain execute_swap/swap call".to_string(),
+        ));
+    }
+    if !saw_expected_contract {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash execute_swap/swap call is not targeting configured Starknet swap contract"
+                .to_string(),
+        ));
+    }
+
+    Err(AppError::BadRequest(
+        "onchain_tx_hash swap call does not match requested token pair".to_string(),
+    ))
+}
+
+async fn verify_onchain_swap_tx_hash(
+    state: &AppState,
+    tx_hash: &str,
+    auth_subject: &str,
+    resolved_starknet_user: &str,
+    from_token: &str,
+    to_token: &str,
+) -> Result<i64> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let tx_hash_felt = parse_felt(tx_hash)?;
+    let expected_swap_contract = configured_swap_contract(state)?;
+    let allowed_senders =
+        resolve_allowed_swap_senders(state, auth_subject, resolved_starknet_user).await?;
+    let from_token_candidates = configured_token_candidates(state, from_token);
+    if from_token_candidates.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "Token address is not configured for {}",
+            from_token
+        )));
+    }
+    let to_token_candidates = configured_token_candidates(state, to_token);
+    if to_token_candidates.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "Token address is not configured for {}",
+            to_token
+        )));
+    }
+    let mut last_rpc_error = String::new();
+
+    for attempt in 0..5 {
+        let tx = match reader.get_transaction(&tx_hash_felt).await {
+            Ok(tx) => tx,
+            Err(err) => {
+                last_rpc_error = err.to_string();
+                if attempt < 4 {
+                    sleep(Duration::from_millis(1000)).await;
+                    continue;
+                }
+                break;
+            }
+        };
+
+        verify_swap_invoke_payload(
+            &tx,
+            &allowed_senders,
+            expected_swap_contract,
+            &from_token_candidates,
+            &to_token_candidates,
+        )?;
+
+        match reader.get_transaction_receipt(&tx_hash_felt).await {
+            Ok(receipt) => {
+                if let ExecutionResult::Reverted { reason } = receipt.receipt.execution_result() {
+                    return Err(AppError::BadRequest(format!(
+                        "onchain_tx_hash reverted on Starknet: {}",
+                        reason
+                    )));
+                }
+                if matches!(
+                    receipt.receipt.finality_status(),
+                    TransactionFinalityStatus::PreConfirmed
+                ) {
+                    last_rpc_error = "transaction still pre-confirmed".to_string();
+                    if attempt < 4 {
+                        sleep(Duration::from_millis(1000)).await;
+                        continue;
+                    }
+                    break;
+                }
+                let block_number = receipt.block.block_number() as i64;
+                tracing::info!(
+                    "Verified Starknet swap tx {} at block {} with finality {:?}",
+                    tx_hash,
+                    block_number,
+                    receipt.receipt.finality_status()
+                );
+                return Ok(block_number);
+            }
+            Err(err) => {
+                last_rpc_error = err.to_string();
+                if attempt < 4 {
+                    sleep(Duration::from_millis(1000)).await;
+                }
+            }
+        }
+    }
+
+    Err(AppError::BadRequest(format!(
+        "onchain_tx_hash not found/confirmed on Starknet RPC: {}",
+        last_rpc_error
+    )))
+}
+
 async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
     let symbol = token.to_ascii_uppercase();
     let price: Option<f64> = sqlx::query_scalar(
@@ -103,7 +961,9 @@ async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
     .bind(&symbol)
     .fetch_optional(state.db.pool())
     .await?;
-    Ok(price.unwrap_or_else(|| fallback_price_for(&symbol)))
+    Ok(price
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or_else(|| fallback_price_for(&symbol)))
 }
 
 fn estimated_time_for_dex(dex: &str) -> &'static str {
@@ -163,26 +1023,25 @@ fn resolve_privacy_inputs(
     (nullifier, commitment, proof, public_inputs)
 }
 
-async fn verify_private_trade_with_garaga(
+async fn verify_private_trade_with_verifier(
     state: &AppState,
     seed: &str,
     payload: Option<&PrivacyVerificationPayload>,
+    verifier: PrivacyVerifierKind,
 ) -> Result<String> {
-    let router = state.config.zk_privacy_router_address.trim();
-    if router.is_empty() || router.starts_with("0x0000") {
-        return Err(AppError::BadRequest(
-            "ZK privacy router (Garaga) is not configured".to_string(),
-        ));
-    }
+    let router = resolve_privacy_router_for_verifier(&state.config, verifier)?;
     let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
         return Err(AppError::BadRequest(
-            "On-chain invoker is not configured for Garaga verification".to_string(),
+            format!(
+                "On-chain invoker is not configured for '{}' verification",
+                verifier.as_str()
+            ),
         ));
     };
 
     let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(seed, payload);
 
-    let to = parse_felt(router)?;
+    let to = parse_felt(&router)?;
     let selector = get_selector_from_name("submit_private_action")
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
 
@@ -215,6 +1074,9 @@ pub async fn get_quote(
         .amount
         .parse()
         .map_err(|_| AppError::BadRequest("Invalid amount".to_string()))?;
+    if !amount_in.is_finite() || amount_in <= 0.0 {
+        return Err(AppError::BadRequest("Amount must be greater than zero".to_string()));
+    }
 
     tracing::debug!(
         "Swap quote: from={}, to={}, slippage={}, mode={}",
@@ -223,6 +1085,13 @@ pub async fn get_quote(
         req.slippage,
         req.mode
     );
+
+    ensure_supported_starknet_swap_pair(&req.from_token, &req.to_token)?;
+    if is_event_only_swap_contract_configured(&state)? {
+        return Err(AppError::BadRequest(
+            "Swap real token belum aktif: kontrak swap terkonfigurasi masih event-only. Deploy/aktifkan router swap on-chain yang memindahkan token real terlebih dulu.".to_string(),
+        ));
+    }
 
     if token_address_for(&req.from_token).is_none() || token_address_for(&req.to_token).is_none() {
         return Err(AppError::InvalidToken);
@@ -238,6 +1107,22 @@ pub async fn get_quote(
     let best_route = aggregator
         .get_best_quote(&req.from_token, &req.to_token, amount_in)
         .await?;
+    let onchain_context =
+        fetch_onchain_swap_context(&state, &req.from_token, &req.to_token, &req.amount).await?;
+    let onchain_calls = build_onchain_swap_wallet_calls(
+        &onchain_context,
+        req.mode.eq_ignore_ascii_case("private"),
+    );
+    let onchain_to_amount = onchain_u256_to_f64(
+        onchain_context.route.expected_amount_out_low,
+        onchain_context.route.expected_amount_out_high,
+        token_decimals(&req.to_token),
+    )?;
+    let quoted_to_amount = if onchain_to_amount > 0.0 {
+        onchain_to_amount
+    } else {
+        best_route.amount_out
+    };
 
     if let Ok(split_routes) = aggregator
         .get_split_quote(&req.from_token, &req.to_token, amount_in)
@@ -260,14 +1145,15 @@ pub async fn get_quote(
 
     let response = SwapQuoteResponse {
         from_amount: req.amount.clone(),
-        to_amount: best_route.amount_out.to_string(),
-        rate: (best_route.amount_out / amount_in).to_string(),
+        to_amount: quoted_to_amount.to_string(),
+        rate: (quoted_to_amount / amount_in).to_string(),
         price_impact: format!("{:.2}%", best_route.price_impact * 100.0),
         fee: best_route.fee.to_string(),
         fee_usd: best_route.fee.to_string(),
         route: best_route.path,
         estimated_gas: gas.standard.to_string(),
         estimated_time: estimated_time_for_dex(best_route.dex.as_str()).to_string(),
+        onchain_calls: Some(onchain_calls),
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -287,6 +1173,7 @@ pub async fn execute_swap(
         ));
     }
 
+    let auth_subject = require_user(&headers, &state).await?;
     let user_address = require_starknet_user(&headers, &state).await?;
 
     // 2. LOGIKA RECIPIENT
@@ -296,18 +1183,30 @@ pub async fn execute_swap(
         .amount
         .parse()
         .map_err(|_| AppError::BadRequest("Invalid amount".to_string()))?;
+    if !amount_in.is_finite() || amount_in <= 0.0 {
+        return Err(AppError::BadRequest("Amount must be greater than zero".to_string()));
+    }
+
+    ensure_supported_starknet_swap_pair(&req.from_token, &req.to_token)?;
+    if is_event_only_swap_contract_configured(&state)? {
+        return Err(AppError::BadRequest(
+            "Swap real token belum aktif: kontrak swap terkonfigurasi masih event-only. Deploy/aktifkan router swap on-chain yang memindahkan token real terlebih dulu.".to_string(),
+        ));
+    }
 
     if token_address_for(&req.from_token).is_none() || token_address_for(&req.to_token).is_none() {
         return Err(AppError::InvalidToken);
     }
 
-    let aggregator = LiquidityAggregator::new(state.config.clone());
-    let best_route = aggregator
-        .get_best_quote(&req.from_token, &req.to_token, amount_in)
-        .await?;
+    let onchain_context =
+        fetch_onchain_swap_context(&state, &req.from_token, &req.to_token, &req.amount).await?;
 
     // 3. VALIDASI SLIPPAGE
-    let expected_out = best_route.amount_out;
+    let expected_out = onchain_u256_to_f64(
+        onchain_context.route.expected_amount_out_low,
+        onchain_context.route.expected_amount_out_high,
+        token_decimals(&req.to_token),
+    )?;
     let min_out: f64 = req
         .min_amount_out
         .parse()
@@ -315,12 +1214,11 @@ pub async fn execute_swap(
 
     if expected_out < min_out {
         tracing::warn!(
-            "Slippage too high: set={}%, min_expected={}, market={}",
+            "Off-chain quote below client min_out (set={}%, min_expected={}, market={}). Continuing because final execution validity is enforced by user-signed on-chain calldata.",
             req.slippage,
             min_out,
             expected_out
         );
-        return Err(AppError::SlippageTooHigh);
     }
 
     let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
@@ -330,6 +1228,15 @@ pub async fn execute_swap(
                 .to_string(),
         )
     })?;
+    let onchain_block_number = verify_onchain_swap_tx_hash(
+        &state,
+        &onchain_tx_hash,
+        &auth_subject,
+        &user_address,
+        &req.from_token,
+        &req.to_token,
+    )
+    .await?;
     let is_user_signed_onchain = true;
     let should_hide = is_private_trade(&req.mode, req.hide_balance.unwrap_or(false));
 
@@ -338,11 +1245,18 @@ pub async fn execute_swap(
 
     let mut privacy_verification_tx: Option<String> = None;
     if should_hide {
-        let privacy_tx = verify_private_trade_with_garaga(&state, &tx_hash, req.privacy.as_ref())
-            .await
-            .map_err(|e| {
-                AppError::BadRequest(format!("Garaga privacy verification failed: {}", e))
-            })?;
+        let verifier =
+            parse_privacy_verifier_kind(req.privacy.as_ref().and_then(|p| p.verifier.as_deref()))?;
+        let privacy_tx =
+            verify_private_trade_with_verifier(&state, &tx_hash, req.privacy.as_ref(), verifier)
+                .await
+                .map_err(|e| {
+                    AppError::BadRequest(format!(
+                        "Privacy verification failed via '{}': {}",
+                        verifier.as_str(),
+                        e
+                    ))
+                })?;
         privacy_verification_tx = Some(privacy_tx);
     }
 
@@ -360,7 +1274,7 @@ pub async fn execute_swap(
     // Simpan ke database
     let tx = crate::models::Transaction {
         tx_hash: tx_hash.clone(),
-        block_number: 0,
+        block_number: onchain_block_number,
         user_address: user_address.to_string(),
         tx_type: "swap".to_string(),
         token_in: Some(req.from_token.clone()),
@@ -454,5 +1368,193 @@ mod tests {
     fn estimated_time_for_dex_defaults() {
         // Memastikan estimasi waktu untuk DEX yang tidak dikenal
         assert_eq!(estimated_time_for_dex("UNKNOWN"), "~2-3 min");
+    }
+
+    #[test]
+    fn ensure_supported_starknet_swap_pair_rejects_non_starknet_tokens() {
+        assert!(ensure_supported_starknet_swap_pair("STRK", "USDT").is_ok());
+        assert!(ensure_supported_starknet_swap_pair("WBTC", "CAREL").is_ok());
+        assert!(ensure_supported_starknet_swap_pair("ETH", "USDT").is_err());
+        assert!(ensure_supported_starknet_swap_pair("BTC", "STRK").is_err());
+    }
+
+    #[test]
+    fn parse_execute_calls_parses_single_call() {
+        let to = Felt::from(10_u64);
+        let selector = Felt::from(20_u64);
+        let calldata = vec![
+            Felt::from(1_u64),
+            to,
+            selector,
+            Felt::from(0_u64),
+            Felt::from(2_u64),
+            Felt::from(2_u64),
+            Felt::from(111_u64),
+            Felt::from(222_u64),
+        ];
+
+        let calls = parse_execute_calls(&calldata).expect("must parse execute calldata");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].to, to);
+        assert_eq!(calls[0].selector, selector);
+        assert_eq!(calls[0].calldata, vec![Felt::from(111_u64), Felt::from(222_u64)]);
+    }
+
+    #[test]
+    fn parse_execute_calls_parses_inline_single_call() {
+        let to = Felt::from(10_u64);
+        let selector = Felt::from(20_u64);
+        let calldata = vec![
+            Felt::from(1_u64),
+            to,
+            selector,
+            Felt::from(4_u64),
+            Felt::from(25_u64),
+            Felt::from(0_u64),
+            Felt::from(111_u64),
+            Felt::from(222_u64),
+        ];
+
+        let calls = parse_execute_calls(&calldata).expect("must parse inline execute calldata");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].to, to);
+        assert_eq!(calls[0].selector, selector);
+        assert_eq!(
+            calls[0].calldata,
+            vec![
+                Felt::from(25_u64),
+                Felt::from(0_u64),
+                Felt::from(111_u64),
+                Felt::from(222_u64),
+            ]
+        );
+    }
+
+    #[test]
+    fn verify_swap_invoke_payload_requires_sender_match() {
+        let swap_contract = Felt::from(0x123_u64);
+        let swap_selector = get_selector_from_name("swap").expect("selector");
+        let from_token = parse_felt(token_address_for("STRK").unwrap()).expect("token");
+        let to_token = parse_felt(token_address_for("USDT").unwrap()).expect("token");
+        let tx = Transaction::Invoke(InvokeTransaction::V1(starknet_core::types::InvokeTransactionV1 {
+            transaction_hash: Felt::from(1_u64),
+            sender_address: Felt::from(0xdead_u64),
+            calldata: vec![
+                Felt::from(1_u64),
+                swap_contract,
+                swap_selector,
+                Felt::from(0_u64),
+                Felt::from(4_u64),
+                Felt::from(4_u64),
+                Felt::from(25_u64),
+                Felt::from(0_u64),
+                from_token,
+                to_token,
+            ],
+            max_fee: Felt::from(0_u64),
+            signature: Vec::new(),
+            nonce: Felt::from(0_u64),
+        }));
+
+        let result = verify_swap_invoke_payload(
+            &tx,
+            &[Felt::from(0xbeef_u64)],
+            Some(swap_contract),
+            &[from_token],
+            &[to_token],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_swap_invoke_payload_accepts_execute_swap_selector() {
+        let swap_contract = Felt::from(0x123_u64);
+        let execute_swap_selector = get_selector_from_name("execute_swap").expect("selector");
+        let from_token = parse_felt(token_address_for("STRK").unwrap()).expect("token");
+        let to_token = parse_felt(token_address_for("USDT").unwrap()).expect("token");
+        let tx = Transaction::Invoke(InvokeTransaction::V1(starknet_core::types::InvokeTransactionV1 {
+            transaction_hash: Felt::from(2_u64),
+            sender_address: Felt::from(0xbeef_u64),
+            calldata: vec![
+                Felt::from(1_u64),
+                swap_contract,
+                execute_swap_selector,
+                Felt::from(0_u64),
+                Felt::from(10_u64),
+                Felt::from(10_u64),
+                Felt::from(0x454b_u64), // dex_id
+                Felt::from(100_u64),    // expected low
+                Felt::from(0_u64),      // expected high
+                Felt::from(99_u64),     // min low
+                Felt::from(0_u64),      // min high
+                from_token,
+                to_token,
+                Felt::from(25_u64), // amount low
+                Felt::from(0_u64),  // amount high
+                Felt::from(0_u64),  // mev flag
+            ],
+            max_fee: Felt::from(0_u64),
+            signature: Vec::new(),
+            nonce: Felt::from(0_u64),
+        }));
+
+        let result = verify_swap_invoke_payload(
+            &tx,
+            &[Felt::from(0xbeef_u64)],
+            Some(swap_contract),
+            &[from_token],
+            &[to_token],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_swap_invoke_payload_rejects_wrong_approve_spender() {
+        let swap_contract = Felt::from(0x123_u64);
+        let execute_swap_selector = get_selector_from_name("execute_swap").expect("selector");
+        let approve_selector = get_selector_from_name("approve").expect("selector");
+        let from_token = parse_felt(token_address_for("STRK").unwrap()).expect("token");
+        let to_token = parse_felt(token_address_for("USDT").unwrap()).expect("token");
+        let tx = Transaction::Invoke(InvokeTransaction::V1(starknet_core::types::InvokeTransactionV1 {
+            transaction_hash: Felt::from(3_u64),
+            sender_address: Felt::from(0xbeef_u64),
+            calldata: vec![
+                Felt::from(2_u64),
+                from_token,
+                approve_selector,
+                Felt::from(0_u64),
+                Felt::from(3_u64),
+                swap_contract,
+                execute_swap_selector,
+                Felt::from(3_u64),
+                Felt::from(10_u64),
+                Felt::from(13_u64),
+                Felt::from(0x999_u64), // wrong approve spender
+                Felt::from(25_u64),    // approve amount low
+                Felt::from(0_u64),     // approve amount high
+                Felt::from(0x454b_u64),
+                Felt::from(100_u64),
+                Felt::from(0_u64),
+                Felt::from(99_u64),
+                Felt::from(0_u64),
+                from_token,
+                to_token,
+                Felt::from(25_u64),
+                Felt::from(0_u64),
+                Felt::from(0_u64),
+            ],
+            max_fee: Felt::from(0_u64),
+            signature: Vec::new(),
+            nonce: Felt::from(0_u64),
+        }));
+
+        let result = verify_swap_invoke_payload(
+            &tx,
+            &[Felt::from(0xbeef_u64)],
+            Some(swap_contract),
+            &[from_token],
+            &[to_token],
+        );
+        assert!(result.is_err());
     }
 }

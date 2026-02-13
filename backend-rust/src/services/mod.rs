@@ -10,6 +10,7 @@ pub mod liquidity_aggregator;
 pub mod merkle_generator;
 pub mod notification_service;
 pub mod onchain;
+pub mod privacy_verifier;
 pub mod point_calculator;
 pub mod price_chart_service;
 pub mod route_optimizer;

@@ -274,13 +274,44 @@ impl PointCalculator {
                 return Ok(0.0);
             }
         };
+        let contract_felt = match parse_felt(contract) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(
+                    "Invalid discount contract address for NFT discount check: {}",
+                    err
+                );
+                return Ok(0.0);
+            }
+        };
+        let user_felt = match parse_felt(user_address) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(
+                    "Invalid user address for NFT discount check: user={}, error={}",
+                    user_address,
+                    err
+                );
+                return Ok(0.0);
+            }
+        };
         let call = FunctionCall {
-            contract_address: parse_felt(contract)?,
+            contract_address: contract_felt,
             entry_point_selector: get_selector_from_name("has_active_discount")
                 .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?,
-            calldata: vec![parse_felt(user_address)?],
+            calldata: vec![user_felt],
         };
-        let result = reader.call(call).await?;
+        let result = match reader.call(call).await {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed on-chain NFT discount check for user={}: {}",
+                    user_address,
+                    err
+                );
+                return Ok(0.0);
+            }
+        };
         if result.len() < 3 {
             return Ok(0.0);
         }

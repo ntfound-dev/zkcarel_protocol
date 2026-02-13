@@ -15,6 +15,32 @@ if ! command -v sncast >/dev/null 2>&1; then
   exit 1
 fi
 
+SNCAST_MAX_RETRIES="${SNCAST_MAX_RETRIES:-8}"
+SNCAST_BASE_SLEEP_SECS="${SNCAST_BASE_SLEEP_SECS:-6}"
+
+run_sncast() {
+  local attempt=1
+  local out=""
+  local status=0
+  while [ "$attempt" -le "$SNCAST_MAX_RETRIES" ]; do
+    out="$("$@" 2>&1)" && {
+      echo "$out"
+      return 0
+    }
+    status=$?
+    echo "$out" >&2
+    if echo "$out" | grep -Eqi "cu limit exceeded|request too fast|too many requests|429|invalid transaction nonce|nonce is invalid|actual nonce"; then
+      local sleep_secs=$((SNCAST_BASE_SLEEP_SECS * attempt))
+      echo "Transient RPC/nonce issue. Retry $attempt/$SNCAST_MAX_RETRIES in ${sleep_secs}s..." >&2
+      sleep "$sleep_secs"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    return "$status"
+  done
+  return "$status"
+}
+
 # Load env
 set -a
 # shellcheck disable=SC1090
@@ -74,16 +100,42 @@ deploy_contract() {
   fi
 
   echo "Deploying $name -> $var"
-  local out
-  if [ "$#" -gt 0 ]; then
-    out=$(sncast deploy --network "$NET" --contract-name "$name" --constructor-calldata "$@")
+  local declare_out
+  if ! declare_out=$(run_sncast sncast declare --network "$NET" --contract-name "$name" 2>&1); then
+    if echo "$declare_out" | grep -qi "already declared"; then
+      echo "$declare_out"
+    else
+      echo "$declare_out" >&2
+      exit 1
+    fi
   else
-    out=$(sncast deploy --network "$NET" --contract-name "$name")
+    echo "$declare_out"
   fi
-  echo "$out"
 
-  local addr
-  addr=$(echo "$out" | awk '/Contract Address/ {print $NF; exit}')
+  local out=""
+  local addr=""
+  local deploy_attempt=1
+  while [ "$deploy_attempt" -le "$SNCAST_MAX_RETRIES" ]; do
+    if [ "$#" -gt 0 ]; then
+      out=$(run_sncast sncast deploy --network "$NET" --contract-name "$name" --constructor-calldata "$@")
+    else
+      out=$(run_sncast sncast deploy --network "$NET" --contract-name "$name")
+    fi
+    echo "$out"
+    addr=$(echo "$out" | awk '/Contract Address/ {print $NF; exit}')
+    if [ -n "$addr" ]; then
+      break
+    fi
+    if echo "$out" | grep -Eqi "cu limit exceeded|request too fast|too many requests|429|invalid transaction nonce|nonce is invalid|actual nonce"; then
+      local sleep_secs=$((SNCAST_BASE_SLEEP_SECS * deploy_attempt))
+      echo "Deploy output missing contract address due transient RPC/nonce issue. Retry $deploy_attempt/$SNCAST_MAX_RETRIES in ${sleep_secs}s..." >&2
+      sleep "$sleep_secs"
+      deploy_attempt=$((deploy_attempt + 1))
+      continue
+    fi
+    break
+  done
+
   if [ -z "$addr" ]; then
     echo "Failed to parse contract address for $name" >&2
     exit 1
@@ -92,6 +144,7 @@ deploy_contract() {
   export "$var"="$addr"
   update_env "$var" "$addr"
   echo "-> $var=$addr"
+  sleep 2
 }
 
 # Multisig
@@ -168,6 +221,7 @@ deploy_contract AI_SIGNATURE_VERIFIER_ADDRESS AISignatureVerifier "$ADMIN"
 
 # Bridge / Swap
 deploy_contract SWAP_AGGREGATOR_ADDRESS SwapAggregator "$ADMIN"
+deploy_contract LIMIT_ORDER_BOOK_ADDRESS KeeperNetwork "$ADMIN"
 
 deploy_contract BTC_NATIVE_BRIDGE_ADDRESS BtcNativeBridge "$ADMIN" "$BTC_LIGHT_CLIENT_ADDRESS" "$BTC_MINT_TOKEN_ADDRESS"
 

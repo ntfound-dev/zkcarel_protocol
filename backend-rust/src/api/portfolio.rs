@@ -104,7 +104,7 @@ fn period_to_interval(period: &str) -> (&'static str, i64) {
 
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_uppercase().as_str() {
-        "USDT" | "USDC" => 1.0,
+        "USDT" | "USDC" | "CAREL" => 1.0,
         _ => 0.0,
     }
 }
@@ -152,7 +152,9 @@ async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     .fetch_optional(state.db.pool())
     .await?;
 
-    Ok(price.unwrap_or_else(|| fallback_price_for(token)))
+    Ok(price
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or_else(|| fallback_price_for(token)))
 }
 
 async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64, f64)> {
@@ -166,8 +168,13 @@ async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64,
     let latest = rows
         .get(0)
         .copied()
+        .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or_else(|| fallback_price_for(token));
-    let prev = rows.get(1).copied().unwrap_or(latest);
+    let prev = rows
+        .get(1)
+        .copied()
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(latest);
     let change = if prev > 0.0 {
         ((latest - prev) / prev) * 100.0
     } else {

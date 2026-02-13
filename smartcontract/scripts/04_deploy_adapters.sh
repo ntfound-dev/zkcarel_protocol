@@ -25,12 +25,49 @@ if ! command -v sncast >/dev/null 2>&1; then
   exit 1
 fi
 
+SNCAST_MAX_RETRIES="${SNCAST_MAX_RETRIES:-8}"
+SNCAST_BASE_SLEEP_SECS="${SNCAST_BASE_SLEEP_SECS:-6}"
+
+run_sncast() {
+  local attempt=1
+  local out=""
+  local status=0
+  while [ "$attempt" -le "$SNCAST_MAX_RETRIES" ]; do
+    out="$("$@" 2>&1)" && {
+      echo "$out"
+      return 0
+    }
+    status=$?
+    echo "$out" >&2
+    if echo "$out" | grep -Eqi "cu limit exceeded|request too fast|too many requests|429"; then
+      local sleep_secs=$((SNCAST_BASE_SLEEP_SECS * attempt))
+      echo "Rate-limited RPC. Retry $attempt/$SNCAST_MAX_RETRIES in ${sleep_secs}s..." >&2
+      sleep "$sleep_secs"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    return "$status"
+  done
+  return "$status"
+}
+
 require_env() {
   local name="$1"
   if [ -z "${!name:-}" ] || [ "${!name}" = "0x..." ]; then
     echo "Missing env: $name" >&2
     exit 1
   fi
+}
+
+needs_deploy() {
+  local val="${1:-}"
+  if [ -z "$val" ]; then
+    return 0
+  fi
+  if [ "$val" = "0x..." ] || [ "$val" = "0x0" ] || [ "$val" = "0x00" ]; then
+    return 0
+  fi
+  return 1
 }
 
 update_env() {
@@ -47,16 +84,48 @@ deploy_contract() {
   local var="$1"
   local name="$2"
   shift 2
-  echo "Deploy $name..."
-  local out
-  if [ "$#" -gt 0 ]; then
-    out=$(sncast deploy --network "$NET" --contract-name "$name" --constructor-calldata "$@")
-  else
-    out=$(sncast deploy --network "$NET" --contract-name "$name")
+  local current="${!var:-}"
+  if ! needs_deploy "$current"; then
+    echo "Skip $name ($var already set)"
+    return 0
   fi
-  echo "$out"
-  local addr
-  addr=$(echo "$out" | awk '/Contract Address/ {print $NF; exit}')
+
+  echo "Deploy $name..."
+  local declare_out
+  if ! declare_out=$(run_sncast sncast declare --network "$NET" --contract-name "$name" 2>&1); then
+    if echo "$declare_out" | grep -qi "already declared"; then
+      echo "$declare_out"
+    else
+      echo "$declare_out" >&2
+      exit 1
+    fi
+  else
+    echo "$declare_out"
+  fi
+
+  local out=""
+  local addr=""
+  local deploy_attempt=1
+  while [ "$deploy_attempt" -le "$SNCAST_MAX_RETRIES" ]; do
+    if [ "$#" -gt 0 ]; then
+      out=$(run_sncast sncast deploy --network "$NET" --contract-name "$name" --constructor-calldata "$@")
+    else
+      out=$(run_sncast sncast deploy --network "$NET" --contract-name "$name")
+    fi
+    echo "$out"
+    addr=$(echo "$out" | awk '/Contract Address/ {print $NF; exit}')
+    if [ -n "$addr" ]; then
+      break
+    fi
+    if echo "$out" | grep -Eqi "cu limit exceeded|request too fast|too many requests|429|invalid transaction nonce|nonce is invalid|actual nonce"; then
+      local sleep_secs=$((SNCAST_BASE_SLEEP_SECS * deploy_attempt))
+      echo "Deploy output missing contract address due transient RPC/nonce issue. Retry $deploy_attempt/$SNCAST_MAX_RETRIES in ${sleep_secs}s..." >&2
+      sleep "$sleep_secs"
+      deploy_attempt=$((deploy_attempt + 1))
+      continue
+    fi
+    break
+  done
   if [ -z "$addr" ]; then
     echo "Failed to parse contract address for $name" >&2
     exit 1
@@ -64,6 +133,7 @@ deploy_contract() {
   export "$var"="$addr"
   update_env "$var" "$addr"
   echo "-> $var=$addr"
+  sleep 2
 }
 
 require_env OWNER_ADDRESS
@@ -120,13 +190,13 @@ deploy_contract SEMAPHORE_ADAPTER_ADDRESS SemaphoreVerifierAdapter "$OWNER_ADDRE
 
 # Configure AI executor verifier
 echo "Configuring AI executor verifier..."
-sncast invoke --network "$NET" --contract-address "$AI_EXECUTOR_ADDRESS" --function set_signature_verification --calldata "$AI_SIGNATURE_VERIFIER_ADDRESS" 1
+run_sncast sncast invoke --network "$NET" --contract-address "$AI_EXECUTOR_ADDRESS" --function set_signature_verification --calldata "$AI_SIGNATURE_VERIFIER_ADDRESS" 1 >/dev/null
 
 # Configure bridge adapters
 echo "Configuring bridge adapters..."
-sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x41544d51 "$ATOMIQ_ADAPTER_ADDRESS"
-sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x47415244 "$GARDEN_ADAPTER_ADDRESS"
-sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x4c535750 "$LAYERSWAP_ADAPTER_ADDRESS"
+run_sncast sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x41544d51 "$ATOMIQ_ADAPTER_ADDRESS" >/dev/null
+run_sncast sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x47415244 "$GARDEN_ADAPTER_ADDRESS" >/dev/null
+run_sncast sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x4c535750 "$LAYERSWAP_ADAPTER_ADDRESS" >/dev/null
 
 # Configure privacy router verifier (V1)
 echo "Configuring privacy router verifier (V1)..."
@@ -146,7 +216,7 @@ case "$PRIVACY_VERIFIER_KIND" in
     ;;
  esac
 
-sncast invoke --network "$NET" --contract-address "$ZK_PRIVACY_ROUTER_ADDRESS" --function set_verifier --calldata "$PRIVACY_ADAPTER_ADDRESS"
+run_sncast sncast invoke --network "$NET" --contract-address "$ZK_PRIVACY_ROUTER_ADDRESS" --function set_verifier --calldata "$PRIVACY_ADAPTER_ADDRESS" >/dev/null
 
 echo "=== Deployment complete ==="
 cat <<EOM

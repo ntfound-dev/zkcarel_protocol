@@ -126,7 +126,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_uppercase().as_str() {
-        "USDT" | "USDC" => 1.0,
+        "USDT" | "USDC" | "CAREL" => 1.0,
         _ => 0.0,
     }
 }
@@ -156,8 +156,13 @@ async fn latest_price_with_change(
     let latest = prices
         .get(0)
         .copied()
+        .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or_else(|| fallback_price_for(token));
-    let prev = prices.get(1).copied().unwrap_or(latest);
+    let prev = prices
+        .get(1)
+        .copied()
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(latest);
     let change = if prev > 0.0 {
         ((latest - prev) / prev) * 100.0
     } else {

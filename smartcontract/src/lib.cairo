@@ -13,3 +13,4 @@ pub mod trading;
 pub mod governance;
 pub mod privacy;
 pub mod point_token;
+pub mod mocks;

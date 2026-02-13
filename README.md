@@ -13,6 +13,7 @@ Monorepo ini berisi smart contract Cairo (Starknet), backend Rust (Axum + Postgr
 - Deploy testnet: `smartcontract/DEPLOY_TESTNET.md`
 - Backend detail: `backend-rust/README.md`
 - Frontend detail: `frontend/README.md`
+- Update integrasi terbaru (bridge/verifier/provider): `docs/integration_update_2026_02_13.md`
 
 **Arsitektur (Gambar)**
 ```mermaid

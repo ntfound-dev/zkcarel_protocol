@@ -108,7 +108,9 @@ async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     .fetch_optional(state.db.pool())
     .await?;
 
-    Ok(price.unwrap_or_else(|| fallback_price_for(&token)))
+    Ok(price
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or_else(|| fallback_price_for(&token)))
 }
 
 fn staking_contract_or_error(state: &AppState) -> Result<&str> {
@@ -324,12 +326,43 @@ pub async fn get_positions(
         return Ok(Json(ApiResponse::success(positions)));
     }
 
-    let reader = OnchainReader::from_config(&state.config)?;
-    if let Some(info) = fetch_carel_stake_info(&reader, contract, &user_address).await? {
+    let reader = match OnchainReader::from_config(&state.config) {
+        Ok(reader) => reader,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to initialize on-chain staking reader for {}: {}",
+                user_address,
+                err
+            );
+            return Ok(Json(ApiResponse::success(positions)));
+        }
+    };
+
+    let stake_info = match fetch_carel_stake_info(&reader, contract, &user_address).await {
+        Ok(info) => info,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to read on-chain staking positions for {}: {}",
+                user_address,
+                err
+            );
+            return Ok(Json(ApiResponse::success(positions)));
+        }
+    };
+
+    if let Some(info) = stake_info {
         if info.amount > 0 {
-            let rewards = fetch_carel_rewards(&reader, contract, &user_address)
-                .await
-                .unwrap_or(0);
+            let rewards = match fetch_carel_rewards(&reader, contract, &user_address).await {
+                Ok(value) => value,
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to read on-chain staking rewards for {}: {}",
+                        user_address,
+                        err
+                    );
+                    0
+                }
+            };
             let started_at = info.start_time as i64;
             let unlock_at = started_at + 604800; // 7 days lock period (contract constant)
             positions.push(StakingPosition {

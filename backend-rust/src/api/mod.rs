@@ -81,15 +81,29 @@ fn is_starknet_like_address(address: &str) -> bool {
 
 pub async fn require_starknet_user(headers: &HeaderMap, state: &AppState) -> Result<String> {
     let user_address = require_user(headers, state).await?;
-    if is_starknet_like_address(&user_address) {
-        return Ok(user_address);
+    let linked = state.db.list_wallet_addresses(&user_address).await?;
+    if let Some(starknet_wallet) = linked
+        .iter()
+        .rev()
+        .find(|wallet| {
+            wallet.chain.eq_ignore_ascii_case("starknet")
+                && !wallet.wallet_address.trim().is_empty()
+        })
+        .map(|wallet| wallet.wallet_address.clone())
+    {
+        tracing::debug!(
+            "Resolved Starknet wallet from linked addresses: subject={} starknet_wallet={}",
+            user_address,
+            starknet_wallet
+        );
+        return Ok(starknet_wallet);
     }
 
-    let linked = state.db.list_wallet_addresses(&user_address).await?;
-    if linked
-        .iter()
-        .any(|wallet| wallet.chain.eq_ignore_ascii_case("starknet"))
-    {
+    if is_starknet_like_address(&user_address) {
+        tracing::debug!(
+            "Using Starknet-like auth subject as Starknet user: {}",
+            user_address
+        );
         return Ok(user_address);
     }
 

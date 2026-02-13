@@ -32,6 +32,11 @@ type UseLivePricesOptions = {
 const DEFAULT_REFRESH_MS = 30000
 const DEFAULT_STALE_MS = 25000
 const CACHE_KEY = "zkcare_prices_cache"
+const STABLE_FLOOR_PRICE: Record<string, number> = {
+  USDT: 1,
+  USDC: 1,
+  CAREL: 1,
+}
 
 const getEnv = () => (typeof process !== "undefined" ? process.env : undefined)
 
@@ -53,9 +58,13 @@ function mergePrices(
   let changed = false
   const next = { ...prev }
   for (const [key, value] of Object.entries(updates)) {
-    if (!Number.isFinite(value)) continue
-    if (next[key] !== value) {
-      next[key] = value
+    const symbol = key.toUpperCase()
+    const floor = STABLE_FLOOR_PRICE[symbol]
+    const normalized =
+      floor !== undefined && (!Number.isFinite(value) || value <= 0) ? floor : value
+    if (!Number.isFinite(normalized)) continue
+    if (next[symbol] !== normalized) {
+      next[symbol] = normalized
       changed = true
     }
   }

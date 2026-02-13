@@ -17,6 +17,7 @@ pub use user::{
     OHLCVResponse,
     PaginatedResponse,
     PriceTick,
+    StarknetWalletCall,
     SwapQuoteRequest,
     SwapQuoteResponse,
     // add other exports as needed

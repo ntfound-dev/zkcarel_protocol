@@ -76,6 +76,7 @@ pub struct Config {
     pub sumo_login_api_url: String,
     pub xverse_api_key: Option<String>,
     pub xverse_api_url: String,
+    pub privacy_verifier_routers: String,
 
     // Payment Providers
     pub stripe_secret_key: Option<String>,
@@ -181,6 +182,8 @@ impl Config {
             sumo_login_api_url: env::var("SUMO_LOGIN_API_URL").unwrap_or_else(|_| "".to_string()),
             xverse_api_key: env::var("XVERSE_API_KEY").ok(),
             xverse_api_url: env::var("XVERSE_API_URL").unwrap_or_else(|_| "".to_string()),
+            privacy_verifier_routers: env::var("PRIVACY_VERIFIER_ROUTERS")
+                .unwrap_or_else(|_| "".to_string()),
 
             stripe_secret_key: env::var("STRIPE_SECRET_KEY").ok(),
             moonpay_api_key: env::var("MOONPAY_API_KEY").ok(),
@@ -305,6 +308,7 @@ impl Config {
         let _ = &self.sumo_login_api_url;
         let _ = &self.xverse_api_key;
         let _ = &self.xverse_api_url;
+        let _ = &self.privacy_verifier_routers;
         let _ = &self.stripe_secret_key;
         let _ = &self.moonpay_api_key;
         let _ = &self.starknet_chain_id;
@@ -356,6 +360,10 @@ impl Config {
 
     pub fn coingecko_id_for(&self, symbol: &str) -> Option<String> {
         parse_kv_map(&self.coingecko_ids, symbol)
+    }
+
+    pub fn privacy_router_for_verifier(&self, verifier: &str) -> Option<String> {
+        parse_kv_map(&self.privacy_verifier_routers, verifier)
     }
 }
 

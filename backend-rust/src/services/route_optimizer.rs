@@ -22,6 +22,19 @@ fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     }
 }
 
+fn is_active_config_value(raw: &str) -> bool {
+    let value = raw.trim();
+    if value.is_empty() {
+        return false;
+    }
+    let upper = value.to_ascii_uppercase();
+    !(upper == "DISABLED" || upper == "CHANGE_ME" || upper == "REPLACE_ME")
+}
+
+fn has_non_empty(value: Option<&String>) -> bool {
+    value.map(|item| is_active_config_value(item)).unwrap_or(false)
+}
+
 fn bridge_score(route: &BridgeRoute, is_testnet: bool) -> f64 {
     let output_score = route.amount_out / route.amount_in;
     let time_score = 1.0 / (route.estimated_time_minutes as f64 / 10.0);
@@ -80,6 +93,28 @@ impl RouteOptimizer {
 
     fn get_bridge_providers(&self, from: &str, to: &str) -> Vec<String> {
         bridge_providers_for(from, to)
+            .into_iter()
+            .filter(|provider| self.provider_is_configured(provider))
+            .collect()
+    }
+
+    fn provider_is_configured(&self, provider: &str) -> bool {
+        match provider {
+            BRIDGE_LAYERSWAP => {
+                is_active_config_value(&self.config.layerswap_api_url)
+                    && has_non_empty(self.config.layerswap_api_key.as_ref())
+            }
+            BRIDGE_ATOMIQ => {
+                is_active_config_value(&self.config.atomiq_api_url)
+                    && has_non_empty(self.config.atomiq_api_key.as_ref())
+            }
+            BRIDGE_GARDEN => {
+                is_active_config_value(&self.config.garden_api_url)
+                    && has_non_empty(self.config.garden_api_key.as_ref())
+            }
+            BRIDGE_STARKGATE => true,
+            _ => false,
+        }
     }
 
     async fn get_bridge_quote(

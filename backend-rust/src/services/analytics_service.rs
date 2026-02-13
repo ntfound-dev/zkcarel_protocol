@@ -23,7 +23,7 @@ fn pnl_multiplier(is_testnet: bool) -> f64 {
 
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_uppercase().as_str() {
-        "USDT" | "USDC" => 1.0,
+        "USDT" | "USDC" | "CAREL" => 1.0,
         _ => 0.0,
     }
 }
@@ -120,7 +120,9 @@ impl AnalyticsService {
             .fetch_optional(self.db.pool())
             .await?;
 
-            let latest_price = price.unwrap_or_else(|| fallback_price_for(&token));
+            let latest_price = price
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or_else(|| fallback_price_for(&token));
             let value_usd = amount * latest_price;
             total_value += value_usd;
             values.push((token, amount, value_usd));

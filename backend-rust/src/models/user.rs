@@ -128,6 +128,14 @@ pub struct SwapQuoteResponse {
     pub route: Vec<String>,
     pub estimated_gas: String,
     pub estimated_time: String,
+    pub onchain_calls: Option<Vec<StarknetWalletCall>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StarknetWalletCall {
+    pub contract_address: String,
+    pub entrypoint: String,
+    pub calldata: Vec<String>,
 }
 
 // ==================== BRIDGE ====================

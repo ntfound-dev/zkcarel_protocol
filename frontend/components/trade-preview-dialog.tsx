@@ -46,64 +46,76 @@ export function TradePreviewDialog({
   onCancel,
   onConfirm,
 }: TradePreviewDialogProps) {
+  const formatAmount = React.useCallback((raw: string, maxFractionDigits = 8) => {
+    const parsed = Number.parseFloat(raw)
+    if (!Number.isFinite(parsed)) return raw
+    return parsed.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: maxFractionDigits,
+    })
+  }, [])
+
   const parsedToAmount = Number.parseFloat(toAmount)
   const receiveLabel =
     Number.isFinite(parsedToAmount) && parsedToAmount > 0
       ? `${parsedToAmount.toFixed(4)} ${toSymbol}`
       : "—"
+  const payLabel = `${formatAmount(fromAmount)} ${fromSymbol}`
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass-strong border-border max-w-[calc(100vw-1rem)] sm:max-w-md p-4 sm:p-6">
+      <DialogContent className="glass-strong border-border max-w-[calc(100vw-1rem)] sm:max-w-md p-4 sm:p-6 overflow-x-hidden">
         <DialogHeader>
           <DialogTitle className="text-foreground">Confirm Trade</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 sm:space-y-4 py-2 sm:py-4">
           <div className="p-4 rounded-xl bg-surface/50 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3 min-w-0 pr-4 sm:pr-5">
               <span className="text-sm text-muted-foreground">You Pay</span>
-              <span className="font-medium text-foreground">
-                {fromAmount} {fromSymbol}
+              <span className="font-medium text-foreground min-w-0 max-w-[70%] text-right truncate" title={payLabel}>
+                {payLabel}
               </span>
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3 min-w-0 pr-4 sm:pr-5">
               <span className="text-sm text-muted-foreground">You Receive</span>
-              <span className="font-medium text-foreground">{receiveLabel}</span>
+              <span className="font-medium text-foreground min-w-0 max-w-[70%] text-right truncate" title={receiveLabel}>
+                {receiveLabel}
+              </span>
             </div>
             <div className="border-t border-border pt-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3 min-w-0 pr-4 sm:pr-5">
                 <span className="text-sm text-muted-foreground">Route</span>
-                <span className="text-sm text-foreground">
+                <span className="text-sm text-foreground min-w-0 max-w-[70%] text-right truncate" title={`${isCrossChain ? "Bridge" : "Swap"} via ${routeLabel}`}>
                   {isCrossChain ? "Bridge" : "Swap"} via {routeLabel}
                 </span>
               </div>
-              <div className="flex items-center justify-between mt-2">
+              <div className="flex items-center justify-between mt-2 gap-3 min-w-0 pr-4 sm:pr-5">
                 <span className="text-sm text-muted-foreground">Slippage</span>
-                <span className="text-sm text-foreground">{activeSlippage}%</span>
+                <span className="text-sm text-foreground min-w-0 max-w-[70%] text-right truncate">{activeSlippage}%</span>
               </div>
-              <div className="flex items-center justify-between mt-2">
+              <div className="flex items-center justify-between mt-2 gap-3 min-w-0 pr-4 sm:pr-5">
                 <span className="text-sm text-muted-foreground">MEV Protection</span>
-                <span className="text-sm text-foreground">{mevProtection ? "Enabled" : "Disabled"}</span>
+                <span className="text-sm text-foreground min-w-0 max-w-[70%] text-right truncate">{mevProtection ? "Enabled" : "Disabled"}</span>
               </div>
-              <div className="flex items-center justify-between mt-2">
+              <div className="flex items-center justify-between mt-2 gap-3 min-w-0 pr-4 sm:pr-5">
                 <span className="text-sm text-muted-foreground">Fee</span>
-                <span className="text-sm text-foreground">{feeDisplayLabel}</span>
+                <span className="text-sm text-foreground min-w-0 max-w-[70%] text-right truncate" title={feeDisplayLabel}>{feeDisplayLabel}</span>
               </div>
-              <div className="flex items-center justify-between mt-2">
+              <div className="flex items-center justify-between mt-2 gap-3 min-w-0 pr-4 sm:pr-5">
                 <span className="text-sm text-muted-foreground">Est. Time</span>
-                <span className="text-sm text-foreground">{estimatedTime}</span>
+                <span className="text-sm text-foreground min-w-0 max-w-[70%] text-right truncate" title={estimatedTime}>{estimatedTime}</span>
               </div>
             </div>
           </div>
 
-          <div className="p-3 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-between">
+          <div className="p-3 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-between pr-4 sm:pr-5">
             <span className="text-sm text-foreground">Estimated Points</span>
             <span className="font-bold text-accent">{pointsEarned === null ? "—" : `+${pointsEarned}`}</span>
           </div>
 
           <div className="p-3 rounded-lg bg-surface/50">
             <p className="text-xs text-muted-foreground mb-1">Receive Address</p>
-            <p className="text-sm font-mono text-foreground truncate">{receiveAddress}</p>
+            <p className="text-sm font-mono text-foreground break-all">{receiveAddress}</p>
           </div>
 
           <div className="flex gap-3">

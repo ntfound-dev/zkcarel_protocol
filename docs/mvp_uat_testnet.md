@@ -9,7 +9,7 @@ Environment: Starknet Sepolia + Ethereum Sepolia + Bitcoin Testnet
 - [ ] Backend starts without config error.
 - [ ] Required env is filled:
   - Frontend:
-    - `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS`
+    - `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` (must be real on-chain swap contract that moves token balances, not event-only contract)
     - `NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS`
     - `NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS`
     - `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS`

@@ -1,7 +1,10 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::services::onchain::{parse_felt, OnchainInvoker};
+use crate::services::onchain::{parse_felt, OnchainInvoker, OnchainReader};
+use crate::services::privacy_verifier::{
+    parse_privacy_verifier_kind, resolve_privacy_router_for_verifier, PrivacyVerifierKind,
+};
 use crate::{
     constants::{
         token_address_for, BRIDGE_ATOMIQ, BRIDGE_GARDEN, BRIDGE_LAYERSWAP, BRIDGE_STARKGATE,
@@ -15,13 +18,15 @@ use crate::{
     models::{ApiResponse, BridgeQuoteRequest, BridgeQuoteResponse},
     services::RouteOptimizer,
 };
-use starknet_core::types::{Call, Felt};
+use starknet_core::types::{Call, ExecutionResult, Felt, TransactionFinalityStatus};
 use starknet_core::utils::get_selector_from_name;
+use tokio::time::{sleep, Duration};
 
 use super::{require_user, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyVerificationPayload {
+    pub verifier: Option<String>,
     pub nullifier: Option<String>,
     pub commitment: Option<String>,
     pub proof: Option<Vec<String>>,
@@ -84,7 +89,9 @@ async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
     .bind(&symbol)
     .fetch_optional(state.db.pool())
     .await?;
-    Ok(price.unwrap_or_else(|| fallback_price_for(&symbol)))
+    Ok(price
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or_else(|| fallback_price_for(&symbol)))
 }
 
 fn build_bridge_id(tx_hash: &str) -> String {
@@ -123,6 +130,159 @@ fn normalize_bridge_onchain_tx_hash(
     }
 
     Ok(format!("0x{}", body.to_ascii_lowercase()))
+}
+
+fn parse_hex_u64(value: &str) -> Option<u64> {
+    let body = value.trim().strip_prefix("0x").unwrap_or(value.trim());
+    if body.is_empty() {
+        return Some(0);
+    }
+    u64::from_str_radix(body, 16).ok()
+}
+
+async fn verify_starknet_bridge_tx_hash(state: &AppState, tx_hash: &str) -> Result<i64> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let tx_hash_felt = parse_felt(tx_hash)?;
+    let mut last_rpc_error = String::new();
+
+    for attempt in 0..5 {
+        match reader.get_transaction_receipt(&tx_hash_felt).await {
+            Ok(receipt) => {
+                if let ExecutionResult::Reverted { reason } = receipt.receipt.execution_result() {
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "onchain_tx_hash reverted on Starknet: {}",
+                        reason
+                    )));
+                }
+                if matches!(
+                    receipt.receipt.finality_status(),
+                    TransactionFinalityStatus::PreConfirmed
+                ) {
+                    last_rpc_error = "transaction still pre-confirmed".to_string();
+                    if attempt < 4 {
+                        sleep(Duration::from_millis(1000)).await;
+                        continue;
+                    }
+                    break;
+                }
+                let block_number = receipt.block.block_number() as i64;
+                tracing::info!(
+                    "Verified Starknet bridge tx {} at block {} with finality {:?}",
+                    tx_hash,
+                    block_number,
+                    receipt.receipt.finality_status()
+                );
+                return Ok(block_number);
+            }
+            Err(err) => {
+                last_rpc_error = err.to_string();
+                if attempt < 4 {
+                    sleep(Duration::from_millis(1000)).await;
+                }
+            }
+        }
+    }
+
+    Err(crate::error::AppError::BadRequest(format!(
+        "onchain_tx_hash not found/confirmed on Starknet RPC: {}",
+        last_rpc_error
+    )))
+}
+
+async fn verify_ethereum_bridge_tx_hash(state: &AppState, tx_hash: &str) -> Result<i64> {
+    let rpc_url = state.config.ethereum_rpc_url.trim();
+    if rpc_url.is_empty() {
+        return Err(crate::error::AppError::BadRequest(
+            "ETHEREUM_RPC_URL is empty".to_string(),
+        ));
+    }
+
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getTransactionReceipt",
+        "params": [tx_hash],
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(rpc_url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| {
+            crate::error::AppError::BadRequest(format!(
+                "Failed to query Ethereum RPC for onchain_tx_hash: {}",
+                e
+            ))
+        })?;
+
+    let body: serde_json::Value = response.json().await.map_err(|e| {
+        crate::error::AppError::BadRequest(format!(
+            "Failed to parse Ethereum RPC response for onchain_tx_hash: {}",
+            e
+        ))
+    })?;
+
+    if let Some(err) = body.get("error") {
+        return Err(crate::error::AppError::BadRequest(format!(
+            "Ethereum RPC returned error for onchain_tx_hash: {}",
+            err
+        )));
+    }
+
+    let receipt = body.get("result").ok_or_else(|| {
+        crate::error::AppError::BadRequest(
+            "Ethereum RPC response missing result for onchain_tx_hash".to_string(),
+        )
+    })?;
+    if receipt.is_null() {
+        return Err(crate::error::AppError::BadRequest(
+            "onchain_tx_hash not found yet on Ethereum RPC".to_string(),
+        ));
+    }
+
+    let status = receipt.get("status").and_then(|value| value.as_str());
+    if matches!(status, Some("0x0") | Some("0x00")) {
+        return Err(crate::error::AppError::BadRequest(
+            "onchain_tx_hash reverted on Ethereum".to_string(),
+        ));
+    }
+
+    let block_number_hex = receipt
+        .get("blockNumber")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            crate::error::AppError::BadRequest(
+                "Ethereum receipt missing blockNumber".to_string(),
+            )
+        })?;
+
+    let block_number = parse_hex_u64(block_number_hex).ok_or_else(|| {
+        crate::error::AppError::BadRequest("Invalid Ethereum blockNumber format".to_string())
+    })? as i64;
+
+    tracing::info!(
+        "Verified Ethereum bridge tx {} at block {}",
+        tx_hash,
+        block_number
+    );
+
+    Ok(block_number)
+}
+
+async fn verify_bridge_onchain_tx_hash(
+    state: &AppState,
+    tx_hash: &str,
+    from_chain: &str,
+) -> Result<i64> {
+    match from_chain.trim().to_ascii_lowercase().as_str() {
+        "starknet" => verify_starknet_bridge_tx_hash(state, tx_hash).await,
+        "ethereum" => verify_ethereum_bridge_tx_hash(state, tx_hash).await,
+        // Native BTC settles asynchronously via bridge providers; txid is validated format-wise above.
+        "bitcoin" | "btc" => Ok(0),
+        _ => Ok(0),
+    }
 }
 
 fn privacy_seed_from_tx_hash(tx_hash: &str) -> String {
@@ -172,25 +332,24 @@ fn resolve_privacy_inputs(
     (nullifier, commitment, proof, public_inputs)
 }
 
-async fn verify_private_trade_with_garaga(
+async fn verify_private_trade_with_verifier(
     state: &AppState,
     seed: &str,
     payload: Option<&PrivacyVerificationPayload>,
+    verifier: PrivacyVerifierKind,
 ) -> Result<String> {
-    let router = state.config.zk_privacy_router_address.trim();
-    if router.is_empty() || router.starts_with("0x0000") {
-        return Err(crate::error::AppError::BadRequest(
-            "ZK privacy router (Garaga) is not configured".to_string(),
-        ));
-    }
+    let router = resolve_privacy_router_for_verifier(&state.config, verifier)?;
     let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
         return Err(crate::error::AppError::BadRequest(
-            "On-chain invoker is not configured for Garaga verification".to_string(),
+            format!(
+                "On-chain invoker is not configured for '{}' verification",
+                verifier.as_str()
+            ),
         ));
     };
     let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(seed, payload);
 
-    let to = parse_felt(router)?;
+    let to = parse_felt(&router)?;
     let selector = get_selector_from_name("submit_private_action")
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
     let mut calldata = vec![parse_felt(&nullifier)?, parse_felt(&commitment)?];
@@ -299,22 +458,31 @@ pub async fn execute_bridge(
 
     let tx_hash =
         normalize_bridge_onchain_tx_hash(req.onchain_tx_hash.as_deref(), &req.from_chain)?;
+    let onchain_block_number =
+        verify_bridge_onchain_tx_hash(&state, &tx_hash, &from_chain_normalized).await?;
     let should_hide = is_private_trade(req.mode.as_deref(), req.hide_balance.unwrap_or(false));
 
     // Keep DB tx_hash within varchar(66), while exposing a human-friendly bridge_id.
     let mut bridge_id = build_bridge_id(&tx_hash);
     let mut privacy_verification_tx: Option<String> = None;
     if should_hide {
+        let verifier =
+            parse_privacy_verifier_kind(req.privacy.as_ref().and_then(|p| p.verifier.as_deref()))?;
         let privacy_seed = privacy_seed_from_tx_hash(&tx_hash);
-        let privacy_tx =
-            verify_private_trade_with_garaga(&state, &privacy_seed, req.privacy.as_ref())
-                .await
-                .map_err(|e| {
-                    crate::error::AppError::BadRequest(format!(
-                        "Garaga privacy verification failed: {}",
-                        e
-                    ))
-                })?;
+        let privacy_tx = verify_private_trade_with_verifier(
+            &state,
+            &privacy_seed,
+            req.privacy.as_ref(),
+            verifier,
+        )
+        .await
+        .map_err(|e| {
+            crate::error::AppError::BadRequest(format!(
+                "Privacy verification failed via '{}': {}",
+                verifier.as_str(),
+                e
+            ))
+        })?;
         privacy_verification_tx = Some(privacy_tx);
     }
 
@@ -340,7 +508,7 @@ pub async fn execute_bridge(
 
     let tx = crate::models::Transaction {
         tx_hash: tx_hash.clone(),
-        block_number: 0,
+        block_number: onchain_block_number,
         user_address: user_address.to_string(),
         tx_type: "bridge".to_string(),
         token_in: Some(from_token),
@@ -590,5 +758,13 @@ mod tests {
         let normalized = normalize_bridge_onchain_tx_hash(Some(txid), "ethereum")
             .expect("evm tx hash should be valid");
         assert_eq!(normalized, format!("0x{}", txid));
+    }
+
+    #[test]
+    fn parse_hex_u64_supports_prefixed_and_plain_values() {
+        assert_eq!(parse_hex_u64("0x10"), Some(16));
+        assert_eq!(parse_hex_u64("ff"), Some(255));
+        assert_eq!(parse_hex_u64("0x"), Some(0));
+        assert_eq!(parse_hex_u64("not-hex"), None);
     }
 }

@@ -2,6 +2,7 @@ use crate::{
     error::Result,
     models::ApiResponse,
     services::onchain::{parse_felt, OnchainInvoker},
+    services::privacy_verifier::{parse_privacy_verifier_kind, resolve_privacy_router_for_verifier},
 };
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,7 @@ use super::{require_user, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyActionRequest {
+    pub verifier: Option<String>,
     // V2: PrivacyRouter.submit_action(...)
     pub action_type: Option<String>,
     pub old_root: Option<String>,
@@ -38,6 +40,7 @@ pub async fn submit_private_action(
     Json(req): Json<PrivacyActionRequest>,
 ) -> Result<Json<ApiResponse<PrivacyActionResponse>>> {
     let user_address = require_user(&headers, &state).await?;
+    let verifier_kind = parse_privacy_verifier_kind(req.verifier.as_deref())?;
 
     let router_v2 = state
         .config
@@ -54,13 +57,20 @@ pub async fn submit_private_action(
         ));
     }
 
+    let wants_v2 = req.action_type.is_some()
+        || req.old_root.is_some()
+        || req.new_root.is_some()
+        || req.nullifiers.is_some()
+        || req.commitments.is_some();
+
     let nullifiers_len = req.nullifiers.as_ref().map(|v| v.len()).unwrap_or(0);
     let commitments_len = req.commitments.as_ref().map(|v| v.len()).unwrap_or(0);
     tracing::info!(
-        "Privacy submit: user={}, v2={}, v1={}, action_type={:?}, nullifiers={}, commitments={}, proof={}, public_inputs={}",
+        "Privacy submit: user={}, v2={}, v1={}, verifier={}, action_type={:?}, nullifiers={}, commitments={}, proof={}, public_inputs={}",
         user_address,
         has_v2,
         has_v1,
+        verifier_kind.as_str(),
         req.action_type,
         nullifiers_len,
         commitments_len,
@@ -80,12 +90,30 @@ pub async fn submit_private_action(
         ));
     };
 
-    let call = if has_v2 {
-        tracing::debug!("Submitting privacy action via V2 router");
+    let call = if wants_v2 {
+        if !has_v2 {
+            return Err(crate::error::AppError::BadRequest(
+                "Privacy router V2 is not configured".into(),
+            ));
+        }
+        tracing::debug!(
+            "Submitting privacy action via V2 router with verifier={}",
+            verifier_kind.as_str()
+        );
         build_submit_call_v2(router_v2, &req)?
     } else {
-        tracing::debug!("Submitting privacy action via V1 router");
-        build_submit_call_v1(router_v1, &req)?
+        let router_v1 = if has_v1 {
+            resolve_privacy_router_for_verifier(&state.config, verifier_kind)?
+        } else {
+            return Err(crate::error::AppError::BadRequest(
+                "Privacy router V1 is not configured".into(),
+            ));
+        };
+        tracing::debug!(
+            "Submitting privacy action via V1 router with verifier={}",
+            verifier_kind.as_str()
+        );
+        build_submit_call_v1(&router_v1, &req)?
     };
     let tx_hash = invoker.invoke(call).await?;
 

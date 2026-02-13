@@ -71,6 +71,7 @@ mod tests {
             sumo_login_api_url: "".to_string(),
             xverse_api_key: None,
             xverse_api_url: "".to_string(),
+            privacy_verifier_routers: "".to_string(),
             stripe_secret_key: None,
             moonpay_api_key: None,
             rate_limit_public: 1,

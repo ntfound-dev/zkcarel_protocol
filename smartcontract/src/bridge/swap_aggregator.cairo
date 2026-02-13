@@ -89,6 +89,39 @@ pub trait ISwapAggregator<TContractState> {
     fn set_max_dexes(ref self: TContractState, max_dexes: u64);
 }
 
+/// @title ERC20 Minimal Interface
+/// @author CAREL Team
+/// @notice Minimal token interface used for settlement and fees.
+/// @dev Keeps swap aggregator dependency surface small.
+#[starknet::interface]
+pub trait IERC20<TContractState> {
+    /// @notice Returns token balance of an account.
+    /// @param account Account address.
+    /// @return balance Account token balance.
+    fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
+    /// @notice Transfers tokens from caller to recipient.
+    /// @param recipient Recipient address.
+    /// @param amount Transfer amount.
+    /// @return success True if transfer succeeds.
+    fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+    /// @notice Transfers tokens between two addresses using allowance.
+    /// @param sender Token source address.
+    /// @param recipient Token destination address.
+    /// @param amount Transfer amount.
+    /// @return success True if transfer succeeds.
+    fn transfer_from(
+        ref self: TContractState,
+        sender: ContractAddress,
+        recipient: ContractAddress,
+        amount: u256
+    ) -> bool;
+    /// @notice Approves spender to spend caller tokens.
+    /// @param spender Spender address.
+    /// @param amount Allowance amount.
+    /// @return success True if approve succeeds.
+    fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
+}
+
 /// @title Swap Aggregator Privacy Interface
 /// @author CAREL Team
 /// @notice ZK privacy hooks for swap aggregation.
@@ -115,11 +148,14 @@ pub trait ISwapAggregatorPrivacy<TContractState> {
 #[starknet::contract]
 pub mod SwapAggregator {
     // Menghapus get_contract_address karena tidak digunakan
-    use starknet::{ContractAddress, get_caller_address};
+    use starknet::{ContractAddress, get_caller_address, get_contract_address};
     // Wajib untuk akses storage Vec dan Map
     use starknet::storage::*;
     use core::num::traits::Zero;
-    use super::{Route, ISwapAggregator, IDEXRouterDispatcher, IDEXRouterDispatcherTrait};
+    use super::{
+        Route, ISwapAggregator, IDEXRouterDispatcher, IDEXRouterDispatcherTrait, IERC20Dispatcher,
+        IERC20DispatcherTrait
+    };
     use crate::utils::price_oracle::{IPriceOracleDispatcher, IPriceOracleDispatcherTrait};
     use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy::action_types::ACTION_SWAP_AGG;
@@ -231,7 +267,14 @@ pub mod SwapAggregator {
             amount: u256, 
             mev_protected: bool
         ) {
-            assert!(route.dex_id != 'ORCL', "Oracle route not executable");
+            assert!(amount > 0, "Amount required");
+            let user = get_caller_address();
+
+            // Pull input tokens from user (wallet must approve swap aggregator first).
+            let from_token_dispatcher = IERC20Dispatcher { contract_address: from_token };
+            let pulled = from_token_dispatcher.transfer_from(user, get_contract_address(), amount);
+            assert!(pulled, "Token transfer_from failed");
+
             let swap_fee_bps = self.lp_fee_bps.read() + self.dev_fee_bps.read();
             let swap_fee = (amount * swap_fee_bps) / BASIS_POINTS;
             let mev_fee = if mev_protected {
@@ -240,20 +283,57 @@ pub mod SwapAggregator {
                 0
             };
 
-            let total_fee = swap_fee + mev_fee;
-            let final_amount = amount - total_fee;
-
-            let router_addr = self.dex_routers.entry(route.dex_id).read();
-            assert!(self.active_dexes.entry(router_addr).read(), "DEX not active");
-
-            IDEXRouterDispatcher { contract_address: router_addr }.swap(
-                from_token, to_token, final_amount, route.min_amount_out
-            );
-
             let dev_fee = (amount * self.dev_fee_bps.read()) / BASIS_POINTS;
             let lp_fee = swap_fee - dev_fee;
+            let total_fee = swap_fee + mev_fee;
+            assert!(amount > total_fee, "Amount too small");
+            let final_amount = amount - total_fee;
+
+            if dev_fee > 0 {
+                let dev_fee_ok = from_token_dispatcher.transfer(self.dev_fund.read(), dev_fee);
+                assert!(dev_fee_ok, "Dev fee transfer failed");
+            }
+            let protocol_fee = lp_fee + mev_fee;
+            if protocol_fee > 0 {
+                let protocol_fee_ok =
+                    from_token_dispatcher.transfer(self.fee_recipient.read(), protocol_fee);
+                assert!(protocol_fee_ok, "Protocol fee transfer failed");
+            }
+
+            let amount_out = if from_token == to_token {
+                final_amount
+            } else if route.dex_id == 'ORCL' {
+                let oracle_amount_out = _oracle_quote(@self, from_token, to_token, final_amount);
+                assert!(oracle_amount_out > 0, "Oracle quote unavailable");
+                assert!(
+                    oracle_amount_out >= route.min_amount_out, "Insufficient output amount"
+                );
+                oracle_amount_out
+            } else {
+                let router_addr = self.dex_routers.entry(route.dex_id).read();
+                assert!(self.active_dexes.entry(router_addr).read(), "DEX not active");
+
+                let approve_ok = from_token_dispatcher.approve(router_addr, final_amount);
+                assert!(approve_ok, "Router approve failed");
+
+                let to_token_dispatcher = IERC20Dispatcher { contract_address: to_token };
+                let out_before = to_token_dispatcher.balance_of(get_contract_address());
+                IDEXRouterDispatcher { contract_address: router_addr }.swap(
+                    from_token, to_token, final_amount, route.min_amount_out
+                );
+                let out_after = to_token_dispatcher.balance_of(get_contract_address());
+                assert!(out_after > out_before, "DEX swap produced zero output");
+                let dex_amount_out = out_after - out_before;
+                assert!(dex_amount_out >= route.min_amount_out, "Insufficient output amount");
+                dex_amount_out
+            };
+
+            let to_token_dispatcher = IERC20Dispatcher { contract_address: to_token };
+            let payout_ok = to_token_dispatcher.transfer(user, amount_out);
+            assert!(payout_ok, "Output token transfer failed");
+
             self.emit(Event::FeeCharged(FeeCharged {
-                user: get_caller_address(),
+                user,
                 lp_fee,
                 dev_fee,
                 mev_fee,

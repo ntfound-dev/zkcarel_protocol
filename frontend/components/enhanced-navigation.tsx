@@ -191,14 +191,14 @@ export function EnhancedNavigation() {
       return [{ label: "Etherscan", url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` }]
     }
     if (txNetwork === "starknet") {
-      return [{ label: "Starkscan", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` }]
+      return [{ label: "Explorer", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` }]
     }
     if (txNetwork === "btc") {
       const btcHash = txHash.startsWith("0x") ? txHash.slice(2) : txHash
       return [{ label: "Mempool", url: `${BTC_TESTNET_EXPLORER_BASE_URL}/tx/${btcHash}` }]
     }
     return [
-      { label: "Starkscan", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` },
+      { label: "Explorer", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` },
       { label: "Etherscan", url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` },
     ]
   }
@@ -581,7 +581,7 @@ export function EnhancedNavigation() {
                         <p className="text-xs text-muted-foreground">{token.name}</p>
                         {faucetTx[token.symbol] && (
                           <a
-                            href={`https://sepolia.starkscan.co/tx/${faucetTx[token.symbol]}`}
+                            href={`${STARKSCAN_SEPOLIA_BASE_URL}/tx/${faucetTx[token.symbol]}`}
                             target="_blank"
                             rel="noreferrer"
                             className="text-[10px] text-primary hover:underline"

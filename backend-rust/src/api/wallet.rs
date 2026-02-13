@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::{
     config::Config,
+    constants::token_address_for,
     error::{AppError, Result},
     models::ApiResponse,
     services::onchain::{parse_felt, u256_from_felts, OnchainReader},
@@ -52,6 +53,10 @@ pub struct OnchainBalanceResponse {
     pub strk_l1: Option<f64>,
     pub eth: Option<f64>,
     pub btc: Option<f64>,
+    pub carel: Option<f64>,
+    pub usdc: Option<f64>,
+    pub usdt: Option<f64>,
+    pub wbtc: Option<f64>,
 }
 
 /// POST /api/v1/wallet/onchain-balances
@@ -88,11 +93,30 @@ pub async fn get_onchain_balances(
 
     let mut response = OnchainBalanceResponse::default();
 
-    if let (Some(addr), Some(token)) = (
-        starknet_address.as_ref(),
-        state.config.token_strk_address.as_ref(),
-    ) {
-        response.strk_l2 = fetch_starknet_erc20_balance(&state.config, addr, token).await?;
+    if let Some(addr) = starknet_address.as_ref() {
+        if let Some(token) = resolve_starknet_token_address(&state.config, "STRK") {
+            response.strk_l2 = fetch_starknet_erc20_balance(&state.config, addr, &token).await?;
+        }
+        if let Some(token) = resolve_starknet_token_address(&state.config, "CAREL") {
+            if let Ok(value) = fetch_starknet_erc20_balance(&state.config, addr, &token).await {
+                response.carel = value;
+            }
+        }
+        if let Some(token) = resolve_starknet_token_address(&state.config, "USDC") {
+            if let Ok(value) = fetch_starknet_erc20_balance(&state.config, addr, &token).await {
+                response.usdc = value;
+            }
+        }
+        if let Some(token) = resolve_starknet_token_address(&state.config, "USDT") {
+            if let Ok(value) = fetch_starknet_erc20_balance(&state.config, addr, &token).await {
+                response.usdt = value;
+            }
+        }
+        if let Some(token) = resolve_starknet_token_address(&state.config, "WBTC") {
+            if let Ok(value) = fetch_starknet_erc20_balance(&state.config, addr, &token).await {
+                response.wbtc = value;
+            }
+        }
     }
 
     if let Some(evm_addr) = evm_address.as_ref() {
@@ -168,6 +192,40 @@ fn normalize_wallet_chain(chain: &str) -> Option<&'static str> {
         "starknet" | "strk" => Some("starknet"),
         "evm" | "ethereum" | "eth" => Some("evm"),
         "bitcoin" | "btc" => Some("bitcoin"),
+        _ => None,
+    }
+}
+
+fn clean_address(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty() && v != "0x..." && v != "0x0")
+}
+
+fn env_address(key: &str) -> Option<String> {
+    clean_address(std::env::var(key).ok())
+}
+
+fn resolve_starknet_token_address(config: &Config, symbol: &str) -> Option<String> {
+    match symbol.to_ascii_uppercase().as_str() {
+        "STRK" => clean_address(config.token_strk_address.clone())
+            .or_else(|| env_address("TOKEN_STRK_ADDRESS"))
+            .or_else(|| token_address_for("STRK").map(str::to_string)),
+        "CAREL" => clean_address(Some(config.carel_token_address.clone()))
+            .or_else(|| env_address("TOKEN_CAREL_ADDRESS"))
+            .or_else(|| env_address("NEXT_PUBLIC_TOKEN_CAREL_ADDRESS"))
+            .or_else(|| token_address_for("CAREL").map(str::to_string)),
+        "USDC" => env_address("TOKEN_USDC_ADDRESS")
+            .or_else(|| env_address("NEXT_PUBLIC_TOKEN_USDC_ADDRESS"))
+            .or_else(|| token_address_for("USDC").map(str::to_string)),
+        "USDT" => env_address("TOKEN_USDT_ADDRESS")
+            .or_else(|| env_address("NEXT_PUBLIC_TOKEN_USDT_ADDRESS"))
+            .or_else(|| token_address_for("USDT").map(str::to_string)),
+        "WBTC" | "BTC" => env_address("TOKEN_WBTC_ADDRESS")
+            .or_else(|| env_address("TOKEN_BTC_ADDRESS"))
+            .or_else(|| env_address("NEXT_PUBLIC_TOKEN_WBTC_ADDRESS"))
+            .or_else(|| env_address("NEXT_PUBLIC_TOKEN_BTC_ADDRESS"))
+            .or_else(|| token_address_for("WBTC").map(str::to_string)),
         _ => None,
     }
 }

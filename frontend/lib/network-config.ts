@@ -9,8 +9,11 @@ export const BITCOIN_TESTNET_LABEL = "Bitcoin Testnet"
 
 export const ETHERSCAN_SEPOLIA_BASE_URL =
   process.env.NEXT_PUBLIC_ETHERSCAN_SEPOLIA_URL || "https://sepolia.etherscan.io"
-export const STARKSCAN_SEPOLIA_BASE_URL =
-  process.env.NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL || "https://sepolia.starkscan.co"
+export const STARKNET_EXPLORER_SEPOLIA_BASE_URL =
+  process.env.NEXT_PUBLIC_STARKNET_EXPLORER_URL ||
+  process.env.NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL ||
+  "https://sepolia.voyager.online"
+export const STARKSCAN_SEPOLIA_BASE_URL = STARKNET_EXPLORER_SEPOLIA_BASE_URL
 export const BTC_TESTNET_EXPLORER_BASE_URL =
   process.env.NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL || "https://mempool.space/testnet"
 

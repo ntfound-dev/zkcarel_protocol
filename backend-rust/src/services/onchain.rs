@@ -1,6 +1,8 @@
 use crate::{config::Config, error::Result};
 use starknet_accounts::{Account, ExecutionEncoding, SingleOwnerAccount};
-use starknet_core::types::{BlockId, BlockTag, Call, Felt, FunctionCall};
+use starknet_core::types::{
+    BlockId, BlockTag, Call, Felt, FunctionCall, Transaction, TransactionReceiptWithBlockInfo,
+};
 use starknet_providers::jsonrpc::{HttpTransport, JsonRpcClient};
 use starknet_providers::Provider;
 use starknet_signers::{LocalWallet, SigningKey};
@@ -79,6 +81,23 @@ impl OnchainReader {
     pub async fn call(&self, call: FunctionCall) -> Result<Vec<Felt>> {
         self.provider
             .call(call, BlockId::Tag(BlockTag::Latest))
+            .await
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
+    }
+
+    pub async fn get_transaction_receipt(
+        &self,
+        tx_hash: &Felt,
+    ) -> Result<TransactionReceiptWithBlockInfo> {
+        self.provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
+    }
+
+    pub async fn get_transaction(&self, tx_hash: &Felt) -> Result<Transaction> {
+        self.provider
+            .get_transaction_by_hash(tx_hash)
             .await
             .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
     }

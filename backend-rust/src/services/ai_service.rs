@@ -109,7 +109,7 @@ fn contains_any_keyword(text: &str, keywords: &[&str]) -> bool {
 
 fn fallback_price_for(token: &str) -> f64 {
     match token {
-        "USDT" | "USDC" => 1.0,
+        "USDT" | "USDC" | "CAREL" => 1.0,
         _ => 0.0,
     }
 }
@@ -428,7 +428,9 @@ impl AIService {
         .bind(token)
         .fetch_optional(self.db.pool())
         .await?;
-        Ok(latest.unwrap_or_else(|| fallback_price_for(token)))
+        Ok(latest
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or_else(|| fallback_price_for(token)))
     }
 }
 

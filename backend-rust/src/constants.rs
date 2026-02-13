@@ -2,11 +2,11 @@
 
 // Token addresses (Starknet)
 pub const TOKEN_CAREL: &str = "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545";
-pub const TOKEN_BTC: &str = "0x0000000000000000000000000000000000000002";
+pub const TOKEN_BTC: &str = "0x016f2d46ab5cc2244aeeb195cf76f75e7a316a92b71d56618c1bf1b69ab70998";
 pub const TOKEN_ETH: &str = "0x0000000000000000000000000000000000000003";
-pub const TOKEN_STRK: &str = "0x0000000000000000000000000000000000000004";
-pub const TOKEN_USDT: &str = "0x0000000000000000000000000000000000000005";
-pub const TOKEN_USDC: &str = "0x0000000000000000000000000000000000000006";
+pub const TOKEN_STRK: &str = "0x04718f5a0Fc34cC1AF16A1cdee98fFB20C31f5cD61D6Ab07201858f4287c938D";
+pub const TOKEN_USDT: &str = "0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5";
+pub const TOKEN_USDC: &str = "0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8";
 
 // Contract addresses
 pub const CONTRACT_SWAP_AGGREGATOR: &str = "0x0000000000000000000000000000000000001001";
@@ -98,7 +98,7 @@ pub const ORDER_EXECUTOR_INTERVAL_SECS: u64 = 10;
 pub fn token_address_for(symbol: &str) -> Option<&'static str> {
     match symbol.to_ascii_uppercase().as_str() {
         "CAREL" => Some(TOKEN_CAREL),
-        "BTC" => Some(TOKEN_BTC),
+        "BTC" | "WBTC" => Some(TOKEN_BTC),
         "ETH" => Some(TOKEN_ETH),
         "STRK" => Some(TOKEN_STRK),
         "USDT" => Some(TOKEN_USDT),

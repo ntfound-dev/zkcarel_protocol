@@ -102,6 +102,13 @@ export interface SwapQuoteResponse {
   route: string[]
   estimated_gas: string
   estimated_time: string
+  onchain_calls?: StarknetWalletCall[]
+}
+
+export interface StarknetWalletCall {
+  contract_address: string
+  entrypoint: string
+  calldata: string[]
 }
 
 export interface ExecuteSwapResponse {
@@ -805,7 +812,9 @@ export async function getStakePools() {
 }
 
 export async function getStakePositions() {
-  return apiFetch<StakingPosition[]>("/api/v1/stake/positions")
+  return apiFetch<StakingPosition[]>("/api/v1/stake/positions", {
+    suppressErrorNotification: true,
+  })
 }
 
 export async function stakeDeposit(payload: { pool_id: string; amount: string; onchain_tx_hash?: string }) {

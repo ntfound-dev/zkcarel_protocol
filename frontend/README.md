@@ -24,9 +24,11 @@ NEXT_PUBLIC_PRICE_FALLBACKS=CAREL=1,USDC=1,USDT=1
 NEXT_PUBLIC_STRK_L1_TOKEN_ADDRESS=0xca14007eff0db1f8135f4c25b34de49ab0d42766
 NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL=https://rpc.sepolia.org
 NEXT_PUBLIC_ETHERSCAN_SEPOLIA_URL=https://sepolia.etherscan.io
+NEXT_PUBLIC_STARKNET_EXPLORER_URL=https://sepolia.voyager.online
 NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL=https://sepolia.starkscan.co
 NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL=https://mempool.space/testnet
 NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS=0x...
+NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY=0
 NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS=0x...
 NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS=0x8453FC6Cd1bCfE8D4dFC069C400B433054d47bDc
 NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS=0x0000000000000000000000000000000000455448
@@ -45,8 +47,13 @@ Catatan:
 - `NEXT_PUBLIC_PRICE_FALLBACKS` opsional. Format `TOKEN=harga_usd`.
 - `NEXT_PUBLIC_STRK_L1_TOKEN_ADDRESS` opsional, dipakai untuk baca saldo `STRK L1 (ERC20)` di Ethereum Sepolia lewat wallet EVM.
 - `NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL` dipakai saat wallet EVM perlu auto-switch / add network ke Sepolia.
+- `NEXT_PUBLIC_STARKNET_EXPLORER_URL` opsional. Jika diisi, dipakai sebagai explorer utama Starknet (contoh Voyager) untuk link tx di UI.
 - `NEXT_PUBLIC_ETHERSCAN_SEPOLIA_URL`, `NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL`, `NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL` dipakai untuk link explorer testnet.
 - `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` dipakai untuk submit transaksi swap langsung dari wallet Starknet.
+- Flow swap Starknet sekarang memakai calldata dari backend (`onchain_calls`) dan wallet men-submit multicall `approve + execute_swap` ke kontrak swap real.
+- Jika backend mengembalikan error aggregator belum siap (DEX router/oracle belum aktif), UI tidak akan mengizinkan execute swap.
+- `NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY` opsional (`1/true` atau `0/false`). Jika aktif, UI akan memblokir execute swap karena kontrak dianggap event-only (belum transfer token real).
+- Nilai `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` harus mengarah ke kontrak swap **real token transfer** (bukan kontrak event-only). Jika masih menunjuk ke `CAREL_PROTOCOL_ADDRESS` event-only, UI/backend akan memblokir execute agar tidak misleading.
 - `NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS` dipakai untuk submit transaksi bridge langsung dari wallet Starknet.
 - `NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS` dan `NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS` dipakai untuk bridge langsung ETH Sepolia -> Starknet via StarkGate (MetaMask sign tx ke kontrak StarkGate).
 - `NEXT_PUBLIC_TOKEN_*_ADDRESS` dipakai sebagai mapping token saat membangun calldata on-chain.

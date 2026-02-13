@@ -50,10 +50,14 @@ const BIGINT_ONE = BigInt(1)
 const TWO_POW_128 = powBigInt(2, 128)
 const MAX_U128 = TWO_POW_128 - BIGINT_ONE
 
-export async function invokeStarknetCallFromWallet(
-  call: StarknetInvokeCall,
+export async function invokeStarknetCallsFromWallet(
+  calls: StarknetInvokeCall[],
   providerHint: StarknetWalletHint = "starknet"
 ): Promise<string> {
+  if (!Array.isArray(calls) || calls.length === 0) {
+    throw new Error("No Starknet calls to execute.")
+  }
+
   const injected = getInjectedStarknet(providerHint)
   if (!injected) {
     throw new Error("No Starknet wallet detected. Install Braavos or ArgentX.")
@@ -70,12 +74,24 @@ export async function invokeStarknetCallFromWallet(
     )
   }
 
-  const normalizedCalldata = call.calldata.map((item) => toHexFelt(item))
+  const normalizedCalls = calls.map((call) => ({
+    contractAddress: call.contractAddress,
+    entrypoint: call.entrypoint,
+    calldata: call.calldata.map((item) => toHexFelt(item)),
+  }))
   const account = injected.account as InjectedStarknet["account"] | undefined
   if (account?.execute) {
     const attempts = [
-      [{ contractAddress: call.contractAddress, entrypoint: call.entrypoint, calldata: normalizedCalldata }],
-      [{ contract_address: call.contractAddress, entry_point: call.entrypoint, calldata: normalizedCalldata }],
+      normalizedCalls.map((call) => ({
+        contractAddress: call.contractAddress,
+        entrypoint: call.entrypoint,
+        calldata: call.calldata,
+      })),
+      normalizedCalls.map((call) => ({
+        contract_address: call.contractAddress,
+        entry_point: call.entrypoint,
+        calldata: call.calldata,
+      })),
     ]
     for (const payload of attempts) {
       try {
@@ -92,25 +108,23 @@ export async function invokeStarknetCallFromWallet(
     throw new Error("Injected Starknet wallet does not support transaction request.")
   }
 
-  const invokeCalls = [
-    {
-      contract_address: call.contractAddress,
-      entry_point: call.entrypoint,
-      calldata: normalizedCalldata,
-    },
-    {
-      contractAddress: call.contractAddress,
-      entrypoint: call.entrypoint,
-      calldata: normalizedCalldata,
-    },
-  ]
+  const invokeCallsSnake = normalizedCalls.map((call) => ({
+    contract_address: call.contractAddress,
+    entry_point: call.entrypoint,
+    calldata: call.calldata,
+  }))
+  const invokeCallsCamel = normalizedCalls.map((call) => ({
+    contractAddress: call.contractAddress,
+    entrypoint: call.entrypoint,
+    calldata: call.calldata,
+  }))
 
   const requestPayloads: Array<{ type: string; params: unknown }> = [
-    { type: "wallet_addInvokeTransaction", params: { calls: [invokeCalls[0]] } },
-    { type: "wallet_addInvokeTransaction", params: [{ calls: [invokeCalls[0]] }] },
-    { type: "starknet_addInvokeTransaction", params: [{ calls: [invokeCalls[0]] }] },
-    { type: "starknet_addInvokeTransaction", params: { calls: [invokeCalls[0]] } },
-    { type: "wallet_addInvokeTransaction", params: { calls: [invokeCalls[1]] } },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsSnake } },
+    { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsSnake }] },
+    { type: "starknet_addInvokeTransaction", params: [{ calls: invokeCallsSnake }] },
+    { type: "starknet_addInvokeTransaction", params: { calls: invokeCallsSnake } },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsCamel } },
   ]
 
   for (const payload of requestPayloads) {
@@ -124,6 +138,13 @@ export async function invokeStarknetCallFromWallet(
   }
 
   throw new Error("Failed to submit Starknet transaction from wallet.")
+}
+
+export async function invokeStarknetCallFromWallet(
+  call: StarknetInvokeCall,
+  providerHint: StarknetWalletHint = "starknet"
+): Promise<string> {
+  return invokeStarknetCallsFromWallet([call], providerHint)
 }
 
 export async function sendEvmNativeTransferFromWallet(

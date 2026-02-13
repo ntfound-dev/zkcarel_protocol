@@ -69,7 +69,7 @@ function buildTxExplorerUrls(txHash?: string, txNetwork?: TxNetwork): TxExplorer
   if (txNetwork === "starknet") {
     return [
       {
-        label: "Open Starkscan",
+        label: "Open Explorer",
         url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
       },
     ]
@@ -93,7 +93,7 @@ function buildTxExplorerUrls(txHash?: string, txNetwork?: TxNetwork): TxExplorer
   }
   return [
     {
-      label: "Open Starkscan",
+      label: "Open Explorer",
       url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
     },
     {
