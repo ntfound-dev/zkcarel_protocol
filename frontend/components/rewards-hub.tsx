@@ -6,41 +6,46 @@ import { Gift, Diamond, Trophy, Sparkles, ArrowRight, Check, Shield } from "luci
 import { Button } from "@/components/ui/button"
 import { useWallet } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
-import { claimRewards, convertRewards, getOwnedNfts, getPortfolioAnalytics, getRewardsPoints, mintNft, verifySocialTask, type NFTItem } from "@/lib/api"
+import { claimRewards, convertRewards, getOwnedNfts, getPortfolioAnalytics, getRewardsPoints, mintNft, syncRewardsPointsOnchain, verifySocialTask, type NFTItem } from "@/lib/api"
 import { invokeStarknetCallFromWallet } from "@/lib/onchain-trade"
 
 const tierDefinitions = [
   { 
+    tierId: 1,
     name: "Bronze", 
-    points: 1000, 
+    points: 5000, 
     discount: "5%", 
     color: "from-amber-600 to-amber-800",
     borderColor: "border-amber-600",
   },
   { 
+    tierId: 2,
     name: "Silver", 
-    points: 5000, 
-    discount: "15%", 
+    points: 15000, 
+    discount: "10%", 
     color: "from-gray-300 to-gray-500",
     borderColor: "border-gray-400",
   },
   { 
+    tierId: 3,
     name: "Gold", 
-    points: 10000, 
+    points: 50000, 
     discount: "25%", 
     color: "from-yellow-400 to-yellow-600",
     borderColor: "border-yellow-500",
   },
   { 
+    tierId: 4,
     name: "Platinum", 
-    points: 25000, 
+    points: 150000, 
     discount: "35%", 
     color: "from-cyan-300 to-cyan-500",
     borderColor: "border-cyan-400",
   },
   { 
+    tierId: 5,
     name: "Onyx", 
-    points: 50000, 
+    points: 500000, 
     discount: "50%", 
     color: "from-purple-900 to-black",
     borderColor: "border-purple-600",
@@ -52,9 +57,12 @@ const nftTiers = [
     tierId: 0,
     tier: "None",
     name: "No NFT",
+    image: "/nft/none-tier-animated.svg",
+    fallbackImage: "/nft/none-tier.png",
     discount: "0%",
     uses: 0,
     maxUses: 0,
+    rechargeCost: 0,
     cost: 0,
     gradient: "from-muted to-muted-foreground",
     description: "No discount benefits",
@@ -63,10 +71,13 @@ const nftTiers = [
     tierId: 1,
     tier: "Bronze",
     name: "Cyberpunk Shield NFT",
+    image: "/nft/bronze-shield-animated.svg",
+    fallbackImage: "/nft/bronze-shield.png",
     discount: "5%",
     uses: 5,
     maxUses: 5,
-    cost: 1000,
+    rechargeCost: 0,
+    cost: 5000,
     gradient: "from-amber-600 to-amber-800",
     description: "5% fee discount on all transactions",
   },
@@ -74,10 +85,13 @@ const nftTiers = [
     tierId: 2,
     tier: "Silver",
     name: "Cyberpunk Blade NFT",
+    image: "/nft/silver-blade-animated.svg",
+    fallbackImage: "/nft/silver-blade.png",
     discount: "10%",
-    uses: 5,
-    maxUses: 5,
-    cost: 5000,
+    uses: 7,
+    maxUses: 7,
+    rechargeCost: 0,
+    cost: 15000,
     gradient: "from-gray-300 to-gray-500",
     description: "10% fee discount on all transactions",
   },
@@ -85,10 +99,13 @@ const nftTiers = [
     tierId: 3,
     tier: "Gold",
     name: "Cyberpunk Blade NFT",
+    image: "/nft/gold-blade-animated.svg",
+    fallbackImage: "/nft/gold-blade.png",
     discount: "25%",
     uses: 10,
     maxUses: 10,
-    cost: 10000,
+    rechargeCost: 0,
+    cost: 50000,
     gradient: "from-yellow-400 to-yellow-600",
     description: "25% fee discount on all transactions",
   },
@@ -96,10 +113,13 @@ const nftTiers = [
     tierId: 4,
     tier: "Platinum",
     name: "Cyberpunk Blade NFT",
+    image: "/nft/platinum-blade-animated.svg",
+    fallbackImage: "/nft/platinum-blade.png",
     discount: "35%",
     uses: 15,
     maxUses: 15,
-    cost: 25000,
+    rechargeCost: 0,
+    cost: 150000,
     gradient: "from-cyan-300 to-cyan-500",
     description: "35% fee discount on all transactions",
   },
@@ -107,10 +127,13 @@ const nftTiers = [
     tierId: 5,
     tier: "Onyx",
     name: "Cyberpunk Blade NFT",
+    image: "/nft/onyx-blade-animated.svg",
+    fallbackImage: "/nft/onyx-blade.png",
     discount: "50%",
     uses: 20,
     maxUses: 20,
-    cost: 50000,
+    rechargeCost: 0,
+    cost: 500000,
     gradient: "from-purple-900 to-black",
     description: "50% fee discount on all transactions",
   },
@@ -151,16 +174,39 @@ const STARKNET_DISCOUNT_SOULBOUND_ADDRESS =
   process.env.NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS ||
   ""
 
-function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tiers: TierInfo[] }) {
-  const currentTierIndex = Math.max(
-    0,
-    tiers.findIndex((tier, idx) => currentPoints < (tiers[idx + 1]?.points ?? Infinity))
-  )
-  const nextTier = tiers[currentTierIndex + 1]
-  const prevTier = tiers[currentTierIndex]
+function TierProgressBar({
+  currentPoints,
+  currentTierId,
+  tiers,
+}: {
+  currentPoints: number
+  currentTierId: number
+  tiers: TierInfo[]
+}) {
+  if (tiers.length === 0) {
+    return null
+  }
+
+  const activeTierIndex = tiers.findIndex((tier) => tier.tierId === currentTierId)
+  const hasActiveTier = activeTierIndex >= 0
+  const safeCurrentTierIndex = hasActiveTier ? activeTierIndex : 0
+  const currentTier = hasActiveTier ? tiers[safeCurrentTierIndex] : null
+  const nextTier = hasActiveTier ? tiers[safeCurrentTierIndex + 1] : tiers[0]
+  const isMaxTier = hasActiveTier && !nextTier
+  const targetName = nextTier?.name ?? "Max Tier"
+  const targetPoints = nextTier?.points ?? currentPoints
+  const remainingPoints = Math.max(0, targetPoints - currentPoints)
+  const targetDiscount = nextTier?.discount ?? currentTier?.discount ?? "0%"
+  const hasReachedMintRequirement = !hasActiveTier && Boolean(nextTier) && currentPoints >= (nextTier?.points ?? 0)
+  const tierSpan = Math.max(1, tiers.length - 1)
   const progressInCurrentTier = nextTier
-    ? Math.min(100, Math.max(0, ((currentPoints - prevTier.points) / (nextTier.points - prevTier.points)) * 100))
+    ? Math.min(100, Math.max(0, (currentPoints / nextTier.points) * 100))
     : 100
+  // Top timeline follows active NFT tier only (not point simulation).
+  const progressWidth = hasActiveTier ? (safeCurrentTierIndex / tierSpan) * 100 : 0
+  const currentTierLabel = currentTier?.name ?? "None"
+  const actionLabel = hasActiveTier ? "upgrade" : "mint"
+  const highlightedTierIndex = hasActiveTier ? safeCurrentTierIndex : -1
 
   return (
     <div className="p-6 rounded-2xl glass border border-border">
@@ -168,6 +214,9 @@ function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tier
         <Trophy className="h-5 w-5 text-primary" />
         <span className="font-medium text-foreground">Tier Progression</span>
       </div>
+      <p className="text-xs text-muted-foreground mb-4">
+        Tier aktif mengikuti NFT discount on-chain. Points hanya untuk unlock/mint tier berikutnya.
+      </p>
 
       {/* Tier Progress Line */}
       <div className="relative mt-8 mb-12">
@@ -177,7 +226,7 @@ function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tier
         {/* Progress line */}
         <div 
           className="absolute top-1/2 left-0 h-1 bg-gradient-to-r from-primary to-secondary -translate-y-1/2 rounded-full transition-all duration-500"
-          style={{ width: `${((currentTierIndex + progressInCurrentTier / 100) / (tiers.length - 1)) * 100}%` }}
+          style={{ width: `${progressWidth}%` }}
         />
         
         {/* Tier markers */}
@@ -194,7 +243,11 @@ function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tier
               </div>
               <span className={cn(
                 "text-xs mt-2 font-medium",
-                index === currentTierIndex ? "text-primary" : tier.achieved ? "text-foreground" : "text-muted-foreground"
+                index === highlightedTierIndex
+                  ? "text-primary"
+                  : tier.achieved
+                  ? "text-foreground"
+                  : "text-muted-foreground"
               )}>
                 {tier.name}
               </span>
@@ -208,11 +261,11 @@ function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tier
         <div className="flex items-center justify-between mb-3">
           <div>
             <p className="text-sm text-muted-foreground">Current Tier</p>
-            <p className="text-xl font-bold text-foreground">{tiers[currentTierIndex].name}</p>
+            <p className="text-xl font-bold text-foreground">{currentTierLabel}</p>
           </div>
           <div className="text-right">
-            <p className="text-sm text-muted-foreground">Progress to {nextTier.name}</p>
-            <p className="text-xl font-bold text-primary">{currentPoints.toLocaleString()} / {nextTier.points.toLocaleString()}</p>
+            <p className="text-sm text-muted-foreground">Progress to {targetName}</p>
+            <p className="text-xl font-bold text-primary">{currentPoints.toLocaleString()} / {targetPoints.toLocaleString()}</p>
           </div>
         </div>
         <div className="h-3 rounded-full bg-surface overflow-hidden">
@@ -221,9 +274,19 @@ function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tier
             style={{ width: `${progressInCurrentTier}%` }}
           />
         </div>
-        <p className="text-sm text-muted-foreground mt-2">
-          Need {(nextTier.points - currentPoints).toLocaleString()} more points for {nextTier.discount} discount
-        </p>
+        {isMaxTier ? (
+          <p className="text-sm text-muted-foreground mt-2">
+            You are at the highest tier ({targetDiscount} discount).
+          </p>
+        ) : hasReachedMintRequirement ? (
+          <p className="text-sm text-muted-foreground mt-2">
+            Points requirement met. Mint {targetName} NFT to activate tier ({targetDiscount} discount).
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground mt-2">
+            Need {remainingPoints.toLocaleString()} more points to {actionLabel} {targetName} ({targetDiscount} discount)
+          </p>
+        )}
       </div>
     </div>
   )
@@ -232,14 +295,27 @@ function TierProgressBar({ currentPoints, tiers }: { currentPoints: number; tier
 function NFTCard({ 
   nft, 
   isOwned, 
+  isActive,
+  ownedNft,
   isMinting,
   onMint 
 }: { 
   nft: typeof nftTiers[0]
   isOwned: boolean
+  isActive: boolean
+  ownedNft?: NFTItem | null
   isMinting?: boolean
   onMint?: () => void
 }) {
+  const dynamicMaxUsage =
+    typeof ownedNft?.max_usage === "number" && Number.isFinite(ownedNft.max_usage)
+      ? Math.max(0, Math.floor(ownedNft.max_usage))
+      : null
+  const dynamicRemainingUsage =
+    typeof ownedNft?.remaining_usage === "number" && Number.isFinite(ownedNft.remaining_usage)
+      ? Math.max(0, Math.floor(ownedNft.remaining_usage))
+      : null
+
   return (
     <div className={cn(
       "group relative p-4 rounded-2xl glass border transition-all duration-300 overflow-hidden",
@@ -255,27 +331,44 @@ function NFTCard({
       )}
       
       {/* Glow effect on hover */}
-      <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+      <div className="absolute inset-0 pointer-events-none bg-gradient-to-br from-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
       
       {/* NFT Visual */}
       <div className={cn(
         "relative h-32 rounded-xl mb-3 flex items-center justify-center bg-gradient-to-br overflow-hidden",
         nft.gradient
       )}>
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.1),transparent)]" />
-        <Sparkles className="h-12 w-12 text-white/80 animate-float" />
+        <picture className="h-full w-full">
+          <source srcSet={nft.image} type="image/svg+xml" />
+          <img
+            src={nft.fallbackImage || nft.image}
+            alt={`${nft.name} artwork`}
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
+        </picture>
+        <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(to_top,rgba(0,0,0,0.35),transparent_60%)]" />
         
         {/* 3D effect border */}
         <div className="absolute inset-0 border-2 border-white/20 rounded-xl" />
       </div>
       
-      <div>
+      <div className="relative z-10">
         <h3 className="font-bold text-foreground text-sm group-hover:text-primary transition-colors">{nft.name}</h3>
         <p className="text-xs text-muted-foreground mb-2">{nft.tier} Tier</p>
         
         {nft.maxUses > 0 && (
           <div className="mb-3 text-xs text-muted-foreground">
-            Uses per NFT: {nft.maxUses}
+            {isOwned && dynamicMaxUsage !== null
+              ? dynamicRemainingUsage !== null
+                ? `Uses left: ${dynamicRemainingUsage}/${dynamicMaxUsage}`
+                : `Max uses: ${dynamicMaxUsage}`
+              : `Max uses: ${nft.maxUses}`}
+          </div>
+        )}
+        {nft.rechargeCost > 0 && (
+          <div className="mb-3 text-xs text-muted-foreground">
+            Recharge cost: {nft.rechargeCost.toLocaleString()} pts
           </div>
         )}
         
@@ -289,19 +382,24 @@ function NFTCard({
         <p className="text-xs text-muted-foreground mb-3">{nft.description}</p>
 
         {/* Action Button */}
-        {!isOwned && nft.tier !== "None" && (
+        {nft.tier !== "None" && (
           <Button 
             size="sm" 
-            className="w-full bg-gradient-to-r from-primary to-accent hover:opacity-90 text-xs"
+            className="relative z-10 w-full bg-gradient-to-r from-primary to-accent hover:opacity-90 text-xs"
             onClick={onMint}
             disabled={isMinting}
           >
-            {isMinting ? "Minting..." : "Mint with Points"}
+            {isMinting ? "Minting..." : isOwned ? "Mint Again" : "Mint On-chain"}
           </Button>
         )}
-        {isOwned && (
+        {isOwned && isActive && (
           <div className="text-center py-2 px-3 rounded-lg bg-success/10 border border-success/20">
             <p className="text-xs font-medium text-success">Active</p>
+          </div>
+        )}
+        {isOwned && !isActive && (
+          <div className="text-center py-2 px-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+            <p className="text-xs font-medium text-amber-300">Owned (Inactive)</p>
           </div>
         )}
       </div>
@@ -335,18 +433,6 @@ export function RewardsHub() {
     return "starknet"
   }, [wallet.provider])
 
-  const tiers = React.useMemo<TierInfo[]>(() => {
-    return tierDefinitions.map((tier) => ({
-      ...tier,
-      achieved: usablePoints >= tier.points,
-    }))
-  }, [usablePoints])
-
-  const currentTierName = React.useMemo(() => {
-    const achieved = tiers.filter((tier) => tier.achieved)
-    return achieved.length > 0 ? achieved[achieved.length - 1].name : tiers[0]?.name || "Bronze"
-  }, [tiers])
-
   const activeOwnedNft = React.useMemo(() => {
     const now = Math.floor(Date.now() / 1000)
     return ownedNfts.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now)) || null
@@ -357,29 +443,58 @@ export function RewardsHub() {
     return nftTiers.find((tier) => tier.tierId === activeOwnedNft.tier) || null
   }, [activeOwnedNft])
 
-  const ownedTierIds = React.useMemo(() => new Set(ownedNfts.map((nft) => nft.tier)), [ownedNfts])
+  const tiers = React.useMemo<TierInfo[]>(() => {
+    const activeTierId = activeNftTier?.tierId ?? 0
+    return tierDefinitions.map((tier) => ({
+      ...tier,
+      achieved: activeTierId >= tier.tierId && activeTierId > 0,
+    }))
+  }, [activeNftTier])
+
+  const currentTierName = React.useMemo(() => {
+    return activeNftTier?.tier || "None"
+  }, [activeNftTier])
+
+  const ownedNftByTier = React.useMemo(() => {
+    const map = new Map<number, NFTItem>()
+    for (const nft of ownedNfts) {
+      const existing = map.get(nft.tier)
+      if (!existing) {
+        map.set(nft.tier, nft)
+        continue
+      }
+      if (existing.used && !nft.used) {
+        map.set(nft.tier, nft)
+      }
+    }
+    return map
+  }, [ownedNfts])
 
   React.useEffect(() => {
     let active = true
-    ;(async () => {
+    const loadRewardsPoints = async () => {
       try {
         const rewards = await getRewardsPoints()
         if (!active) return
         setUsablePoints(Math.round(rewards.total_points))
         setEverPoints(Math.round(rewards.total_points))
         setCurrentEpoch(rewards.current_epoch)
-        if (!convertEpoch) {
-          setConvertEpoch(String(rewards.current_epoch))
-        }
+        setConvertEpoch((prev) => (prev ? prev : String(rewards.current_epoch)))
       } catch {
         // keep existing values
       }
-    })()
+    }
+
+    void loadRewardsPoints()
+    const timer = window.setInterval(() => {
+      void loadRewardsPoints()
+    }, 10000)
 
     return () => {
       active = false
+      window.clearInterval(timer)
     }
-  }, [])
+  }, [wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
 
   React.useEffect(() => {
     let active = true
@@ -401,20 +516,33 @@ export function RewardsHub() {
 
   React.useEffect(() => {
     let active = true
-    ;(async () => {
+    const loadOwnedNfts = async () => {
       try {
         const nfts = await getOwnedNfts()
         if (!active) return
-        setOwnedNfts(nfts)
+        setOwnedNfts((prev) => {
+          if (nfts.length > 0) return nfts
+          const now = Math.floor(Date.now() / 1000)
+          const prevHasActiveOrOwned = prev.some(
+            (nft) => nft.tier > 0 && (!nft.expiry || nft.expiry > now)
+          )
+          return prevHasActiveOrOwned ? prev : nfts
+        })
       } catch {
         // keep existing values
       }
-    })()
+    }
+
+    void loadOwnedNfts()
+    const timer = window.setInterval(() => {
+      void loadOwnedNfts()
+    }, 10000)
 
     return () => {
       active = false
+      window.clearInterval(timer)
     }
-  }, [])
+  }, [wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
 
   const handleMintNFT = async (nft: typeof nftTiers[number]) => {
     if (nft.tierId === 0) return
@@ -444,6 +572,26 @@ export function RewardsHub() {
       }
       notifications.addNotification({
         type: "info",
+        title: "Syncing points",
+        message: "Sinkronisasi points backend ke PointStorage on-chain...",
+      })
+      const syncResult = await syncRewardsPointsOnchain({ minimum_points: nft.cost })
+      if (syncResult.onchain_points_after < nft.cost) {
+        throw new Error(
+          `On-chain points belum cukup untuk mint. Required ${nft.cost.toLocaleString()}, on-chain ${Math.floor(syncResult.onchain_points_after).toLocaleString()}.`
+        )
+      }
+      if (syncResult.sync_tx_hash) {
+        notifications.addNotification({
+          type: "success",
+          title: "Points synced on-chain",
+          message: `On-chain points siap: ${Math.floor(syncResult.onchain_points_after).toLocaleString()} pts.`,
+          txHash: syncResult.sync_tx_hash,
+          txNetwork: "starknet",
+        })
+      }
+      notifications.addNotification({
+        type: "info",
         title: "Wallet signature required",
         message: "Confirm mint NFT transaction in your Starknet wallet.",
       })
@@ -466,10 +614,19 @@ export function RewardsHub() {
         txNetwork: "starknet",
       })
     } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : "Gagal mint NFT."
+      let normalizedMessage = rawMessage
+      if (/sudah memiliki nft|already has nft/i.test(rawMessage)) {
+        normalizedMessage =
+          "Kontrak NFT yang aktif masih mode single-mint. Deploy versi unlimited-mint agar mint berulang bisa jalan."
+      } else if (/invalid felt hex|representative out of range/i.test(rawMessage)) {
+        normalizedMessage =
+          "Backend signer on-chain belum valid. Sync points gagal sebelum wallet signature. Cek BACKEND_PRIVATE_KEY/BACKEND_ACCOUNT_ADDRESS lalu restart backend."
+      }
       notifications.addNotification({
         type: "error",
         title: "Mint failed",
-        message: error instanceof Error ? error.message : "Gagal mint NFT.",
+        message: normalizedMessage,
       })
     } finally {
       setIsMintingTier(null)
@@ -602,7 +759,11 @@ export function RewardsHub() {
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Tier Progression */}
         <div className="lg:col-span-2">
-          <TierProgressBar currentPoints={usablePoints} tiers={tiers} />
+          <TierProgressBar
+            currentPoints={usablePoints}
+            currentTierId={activeNftTier?.tierId ?? 0}
+            tiers={tiers}
+          />
         </div>
 
         {/* Points Balance */}
@@ -703,7 +864,7 @@ export function RewardsHub() {
               <p className="text-sm text-muted-foreground">Fee Discount</p>
             </div>
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-4">
+          <div className="mt-4 grid grid-cols-4 gap-4">
             <div className="p-3 rounded-lg bg-surface/50">
               <p className="text-xs text-muted-foreground">NFT Tier</p>
               <p className="text-sm font-medium text-foreground">{activeNftTier.tier}</p>
@@ -723,6 +884,14 @@ export function RewardsHub() {
                 {activeOwnedNft.used ? "Expired" : "Active"}
               </p>
             </div>
+            <div className="p-3 rounded-lg bg-surface/50">
+              <p className="text-xs text-muted-foreground">Usage Left</p>
+              <p className="text-sm font-medium text-foreground">
+                {typeof activeOwnedNft.remaining_usage === "number" && typeof activeOwnedNft.max_usage === "number"
+                  ? `${Math.max(0, Math.floor(activeOwnedNft.remaining_usage))}/${Math.max(0, Math.floor(activeOwnedNft.max_usage))}`
+                  : "—"}
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -732,19 +901,24 @@ export function RewardsHub() {
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold text-foreground">NFT Discount System</h3>
           <div className="text-sm text-muted-foreground">
-            Limited uses • Non-transferable
+            Limited uses • Non-transferable • Auto inactive when depleted
           </div>
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-          {nftTiers.map((nft) => (
-            <NFTCard 
-              key={nft.tier} 
-              nft={nft}
-              isOwned={ownedTierIds.has(nft.tierId)}
-              isMinting={isMintingTier === nft.tierId}
-              onMint={() => handleMintNFT(nft)}
-            />
-          ))}
+          {nftTiers.map((nft) => {
+            const ownedNft = ownedNftByTier.get(nft.tierId) || null
+            return (
+              <NFTCard
+                key={nft.tier}
+                nft={nft}
+                isOwned={Boolean(ownedNft)}
+                isActive={(activeNftTier?.tierId ?? 0) === nft.tierId}
+                ownedNft={ownedNft}
+                isMinting={isMintingTier === nft.tierId}
+                onMint={() => handleMintNFT(nft)}
+              />
+            )
+          })}
         </div>
 
         {/* How NFT System Works */}
@@ -758,7 +932,7 @@ export function RewardsHub() {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-foreground">Mint NFT with Points</p>
-                  <p className="text-xs text-muted-foreground">Use your points to mint discount NFTs</p>
+                  <p className="text-xs text-muted-foreground">Mint on-chain. Points are consumed by contract logic.</p>
                 </div>
               </div>
               <div className="flex gap-3">
@@ -767,7 +941,7 @@ export function RewardsHub() {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-foreground">Get Fee Discounts</p>
-                  <p className="text-xs text-muted-foreground">Each transaction uses one count from your NFT</p>
+                  <p className="text-xs text-muted-foreground">Each eligible transaction consumes NFT usage quota</p>
                 </div>
               </div>
             </div>
@@ -778,7 +952,7 @@ export function RewardsHub() {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-foreground">Uses Depleted</p>
-                  <p className="text-xs text-muted-foreground">After all uses, you return to None tier</p>
+                  <p className="text-xs text-muted-foreground">NFT stays owned but automatically becomes inactive when usage quota is exhausted</p>
                 </div>
               </div>
               <div className="flex gap-3">
@@ -786,8 +960,8 @@ export function RewardsHub() {
                   <span className="text-xs font-bold text-primary">4</span>
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-foreground">Mint Again</p>
-                  <p className="text-xs text-muted-foreground">Buy new NFTs with points to continue discounts</p>
+                  <p className="text-sm font-medium text-foreground">Mint Again Anytime</p>
+                  <p className="text-xs text-muted-foreground">Unlimited mint is allowed as long as point requirement is met</p>
                 </div>
               </div>
             </div>

@@ -150,6 +150,19 @@ export interface RewardsPointsResponse {
   social_points: number
   multiplier: number
   nft_boost: boolean
+  onchain_points?: number
+  onchain_starknet_address?: string
+}
+
+export interface RewardsOnchainSyncResponse {
+  current_epoch: number
+  starknet_address: string
+  offchain_points: number
+  required_points: number
+  onchain_points_before: number
+  onchain_points_after: number
+  synced_delta: number
+  sync_tx_hash?: string | null
 }
 
 export interface ReferralCodeResponse {
@@ -331,6 +344,9 @@ export interface NFTItem {
   discount: number
   expiry: number
   used: boolean
+  max_usage?: number
+  used_in_period?: number
+  remaining_usage?: number
 }
 
 export interface SocialVerifyResponse {
@@ -362,6 +378,10 @@ export interface OnchainBalancesResponse {
   strk_l1?: number | null
   eth?: number | null
   btc?: number | null
+  carel?: number | null
+  usdc?: number | null
+  usdt?: number | null
+  wbtc?: number | null
 }
 
 export interface LinkedWalletsResponse {
@@ -386,9 +406,24 @@ const DEFAULT_TIMEOUT_MS = 15000
 const AUTH_TOKEN_STORAGE_KEY = "auth_token"
 const AUTH_EXPIRED_EMIT_DEDUPE_MS = 5000
 const INVALID_TOKEN_MESSAGE_REGEX = /invalid or expired token|invalid token|token expired|jwt/i
+const SHARED_READ_CACHE_TTL_MS = 8000
+const SHARED_ONCHAIN_CACHE_TTL_MS = 6000
+
+type TimedCacheEntry<T> = {
+  expiresAt: number
+  data: T
+}
 
 let refreshTokenInFlight: Promise<string | null> | null = null
 let lastAuthExpiredEmitAt = 0
+let portfolioBalanceInFlight: Promise<BalanceResponse> | null = null
+let portfolioBalanceCache: TimedCacheEntry<BalanceResponse> | null = null
+let rewardsPointsInFlight: Promise<RewardsPointsResponse> | null = null
+let rewardsPointsCache: TimedCacheEntry<RewardsPointsResponse> | null = null
+let ownedNftsInFlight: Promise<NFTItem[]> | null = null
+let ownedNftsCache: TimedCacheEntry<NFTItem[]> | null = null
+const onchainBalancesInFlight = new Map<string, Promise<OnchainBalancesResponse>>()
+const onchainBalancesCache = new Map<string, TimedCacheEntry<OnchainBalancesResponse>>()
 
 function getStoredAuthToken() {
   if (typeof window === "undefined") return null
@@ -625,10 +660,29 @@ export async function getNotificationsStats() {
   return apiFetch<{ unread_count: number; total_count: number }>("/api/v1/notifications/stats")
 }
 
-export async function getPortfolioBalance() {
-  return apiFetch<BalanceResponse>("/api/v1/portfolio/balance", {
+export async function getPortfolioBalance(options?: { force?: boolean }) {
+  const force = options?.force === true
+  const now = Date.now()
+  if (!force && portfolioBalanceCache && portfolioBalanceCache.expiresAt > now) {
+    return portfolioBalanceCache.data
+  }
+  if (!force && portfolioBalanceInFlight) {
+    return portfolioBalanceInFlight
+  }
+  portfolioBalanceInFlight = apiFetch<BalanceResponse>("/api/v1/portfolio/balance", {
     timeoutMs: 30000,
   })
+    .then((data) => {
+      portfolioBalanceCache = {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      }
+      return data
+    })
+    .finally(() => {
+      portfolioBalanceInFlight = null
+    })
+  return portfolioBalanceInFlight
 }
 
 export async function getPortfolioAnalytics() {
@@ -669,8 +723,39 @@ export async function getLeaderboardUserCategories(address: string) {
   return apiFetch<LeaderboardUserCategoriesResponse>(`/api/v1/leaderboard/user/${address}/categories`)
 }
 
-export async function getRewardsPoints() {
-  return apiFetch<RewardsPointsResponse>("/api/v1/rewards/points")
+export async function getRewardsPoints(options?: { force?: boolean }) {
+  const force = options?.force === true
+  const now = Date.now()
+  if (!force && rewardsPointsCache && rewardsPointsCache.expiresAt > now) {
+    return rewardsPointsCache.data
+  }
+  if (!force && rewardsPointsInFlight) {
+    return rewardsPointsInFlight
+  }
+  rewardsPointsInFlight = apiFetch<RewardsPointsResponse>("/api/v1/rewards/points", {
+    timeoutMs: 25000,
+  })
+    .then((data) => {
+      rewardsPointsCache = {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      }
+      return data
+    })
+    .finally(() => {
+      rewardsPointsInFlight = null
+    })
+  return rewardsPointsInFlight
+}
+
+export async function syncRewardsPointsOnchain(payload?: { minimum_points?: number }) {
+  return apiFetch<RewardsOnchainSyncResponse>("/api/v1/rewards/sync-onchain", {
+    method: "POST",
+    body: JSON.stringify(payload ?? {}),
+    context: "Sync rewards points",
+    timeoutMs: 45000,
+    suppressErrorNotification: true,
+  })
 }
 
 export async function getReferralCode() {
@@ -841,8 +926,29 @@ export async function stakeWithdraw(payload: { position_id: string; amount: stri
   )
 }
 
-export async function getOwnedNfts() {
-  return apiFetch<NFTItem[]>("/api/v1/nft/owned")
+export async function getOwnedNfts(options?: { force?: boolean }) {
+  const force = options?.force === true
+  const now = Date.now()
+  if (!force && ownedNftsCache && ownedNftsCache.expiresAt > now) {
+    return ownedNftsCache.data
+  }
+  if (!force && ownedNftsInFlight) {
+    return ownedNftsInFlight
+  }
+  ownedNftsInFlight = apiFetch<NFTItem[]>("/api/v1/nft/owned", {
+    timeoutMs: 25000,
+  })
+    .then((data) => {
+      ownedNftsCache = {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      }
+      return data
+    })
+    .finally(() => {
+      ownedNftsInFlight = null
+    })
+  return ownedNftsInFlight
 }
 
 export async function mintNft(payload: { tier: number; onchain_tx_hash?: string }) {
@@ -954,13 +1060,46 @@ export async function getOnchainBalances(payload: {
   starknet_address?: string | null
   evm_address?: string | null
   btc_address?: string | null
-}) {
-  return apiFetch<OnchainBalancesResponse>("/api/v1/wallet/onchain-balances", {
+}, options?: { force?: boolean }) {
+  const force = options?.force === true
+  const normalizedPayload = {
+    starknet_address: payload.starknet_address ?? null,
+    evm_address: payload.evm_address ?? null,
+    btc_address: payload.btc_address ?? null,
+  }
+  const cacheKey = JSON.stringify(normalizedPayload)
+  const now = Date.now()
+  if (!force) {
+    const cached = onchainBalancesCache.get(cacheKey)
+    if (cached && cached.expiresAt > now) {
+      return cached.data
+    }
+    const inFlight = onchainBalancesInFlight.get(cacheKey)
+    if (inFlight) {
+      return inFlight
+    }
+  }
+
+  const request = apiFetch<OnchainBalancesResponse>("/api/v1/wallet/onchain-balances", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(normalizedPayload),
     context: "Onchain balances",
     suppressErrorNotification: true,
+    timeoutMs: 25000,
   })
+    .then((data) => {
+      onchainBalancesCache.set(cacheKey, {
+        data,
+        expiresAt: Date.now() + SHARED_ONCHAIN_CACHE_TTL_MS,
+      })
+      return data
+    })
+    .finally(() => {
+      onchainBalancesInFlight.delete(cacheKey)
+    })
+
+  onchainBalancesInFlight.set(cacheKey, request)
+  return request
 }
 
 export async function linkWalletAddress(payload: {

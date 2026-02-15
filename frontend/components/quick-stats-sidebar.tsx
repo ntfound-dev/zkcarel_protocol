@@ -3,7 +3,14 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Diamond, Trophy, BarChart3, ChevronUp, ChevronDown } from "lucide-react"
-import { getLeaderboardUserCategories, getLeaderboardUserRank, getPortfolioAnalytics, getRewardsPoints } from "@/lib/api"
+import {
+  getLeaderboardUserCategories,
+  getLeaderboardUserRank,
+  getOwnedNfts,
+  getPortfolioAnalytics,
+  getRewardsPoints,
+  type NFTItem,
+} from "@/lib/api"
 import { useWallet } from "@/hooks/use-wallet"
 
 interface StatCardProps {
@@ -122,6 +129,7 @@ export function QuickStatsSidebar() {
   const [tierProgress, setTierProgress] = React.useState(0)
   const [tierSubValue, setTierSubValue] = React.useState("—")
   const [volumeLabel, setVolumeLabel] = React.useState("—")
+  const [lastKnownActiveTierId, setLastKnownActiveTierId] = React.useState<number | null>(null)
   const [rankData, setRankData] = React.useState<{ rank: number | null; change: number; total: number }>({ rank: null, change: 0, total: 0 })
   const [categoryRanks, setCategoryRanks] = React.useState<Array<{ label: string; rank: number | null }>>([
     { label: "Total Points", rank: null },
@@ -129,37 +137,81 @@ export function QuickStatsSidebar() {
     { label: "Referral", rank: null },
   ])
 
+  const nftTierConfig = React.useMemo(
+    () => [
+      { tierId: 1, name: "Bronze", mintCost: 5_000 },
+      { tierId: 2, name: "Silver", mintCost: 15_000 },
+      { tierId: 3, name: "Gold", mintCost: 50_000 },
+      { tierId: 4, name: "Platinum", mintCost: 150_000 },
+      { tierId: 5, name: "Onyx", mintCost: 500_000 },
+    ],
+    []
+  )
+
   React.useEffect(() => {
     let active = true
-    ;(async () => {
+
+    const loadPoints = async () => {
       try {
-        const response = await getRewardsPoints()
+        const [response, nfts] = await Promise.all([
+          getRewardsPoints(),
+          getOwnedNfts().catch(() => [] as NFTItem[]),
+        ])
         if (!active) return
         const totalPoints = Math.round(response.total_points)
         setPoints(totalPoints)
+        const now = Math.floor(Date.now() / 1000)
+        const activeNft = nfts.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now)) || null
+        const activeTier = activeNft
+          ? nftTierConfig.find((tier) => tier.tierId === activeNft.tier) || null
+          : null
 
-        const tiers = [
-          { name: "Bronze", threshold: 1000 },
-          { name: "Silver", threshold: 5000 },
-          { name: "Gold", threshold: 10000 },
-          { name: "Platinum", threshold: 20000 },
-        ]
+        if (!activeTier) {
+          if (nfts.length === 0 && lastKnownActiveTierId) {
+            const cachedTier = nftTierConfig.find((tier) => tier.tierId === lastKnownActiveTierId) || null
+            if (cachedTier) {
+              const cachedIndex = nftTierConfig.findIndex((tier) => tier.tierId === cachedTier.tierId)
+              const nextTier = cachedIndex >= 0 ? nftTierConfig[cachedIndex + 1] : undefined
+              if (!nextTier) {
+                setTierLabel(cachedTier.name)
+                setTierProgress(100)
+                setTierSubValue("Max NFT tier active (cached)")
+                return
+              }
+              const progress = Math.min(100, Math.max(0, (totalPoints / nextTier.mintCost) * 100))
+              setTierLabel(cachedTier.name)
+              setTierProgress(progress)
+              setTierSubValue(`Upgrade unlock: ${totalPoints.toLocaleString()} / ${nextTier.mintCost.toLocaleString()} (cached)`)
+              return
+            }
+          }
+          const firstTier = nftTierConfig[0]
+          const progress = firstTier ? Math.min(100, Math.max(0, (totalPoints / firstTier.mintCost) * 100)) : 0
+          const isMintReady = Boolean(firstTier && totalPoints >= firstTier.mintCost)
+          setTierLabel("None")
+          setTierProgress(progress)
+          setTierSubValue(
+            isMintReady
+              ? `Mint ${firstTier.name} NFT to activate tier`
+              : `Progress to ${firstTier?.name ?? "first tier"}: ${totalPoints.toLocaleString()} / ${firstTier?.mintCost.toLocaleString() ?? "—"}`
+          )
+          return
+        }
 
-        const currentTier = tiers.find((tier, idx) =>
-          totalPoints < tiers[Math.min(idx + 1, tiers.length - 1)].threshold
-        ) || tiers[tiers.length - 1]
+        const activeIndex = nftTierConfig.findIndex((tier) => tier.tierId === activeTier.tierId)
+        setLastKnownActiveTierId(activeTier.tierId)
+        const nextTier = activeIndex >= 0 ? nftTierConfig[activeIndex + 1] : undefined
+        if (!nextTier) {
+          setTierLabel(activeTier.name)
+          setTierProgress(100)
+          setTierSubValue("Max NFT tier active")
+          return
+        }
 
-        const currentIndex = tiers.indexOf(currentTier)
-        const nextTier = tiers[currentIndex + 1]
-        const prevThreshold = currentIndex === 0 ? 0 : tiers[currentIndex - 1].threshold
-        const nextThreshold = nextTier ? nextTier.threshold : currentTier.threshold
-        const progress = nextThreshold === prevThreshold
-          ? 100
-          : ((totalPoints - prevThreshold) / (nextThreshold - prevThreshold)) * 100
-
-        setTierLabel(currentTier.name)
-        setTierProgress(Math.min(Math.max(progress, 0), 100))
-        setTierSubValue(`${totalPoints.toLocaleString()} / ${nextThreshold.toLocaleString()}`)
+        const progress = Math.min(100, Math.max(0, (totalPoints / nextTier.mintCost) * 100))
+        setTierLabel(activeTier.name)
+        setTierProgress(progress)
+        setTierSubValue(`Upgrade unlock: ${totalPoints.toLocaleString()} / ${nextTier.mintCost.toLocaleString()}`)
       } catch {
         if (!active) return
         setPoints(null)
@@ -167,12 +219,18 @@ export function QuickStatsSidebar() {
         setTierProgress(0)
         setTierSubValue("—")
       }
-    })()
+    }
+
+    void loadPoints()
+    const timer = window.setInterval(() => {
+      void loadPoints()
+    }, 10000)
 
     return () => {
       active = false
+      window.clearInterval(timer)
     }
-  }, [])
+  }, [wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress, nftTierConfig, lastKnownActiveTierId])
 
   React.useEffect(() => {
     let active = true
@@ -195,20 +253,28 @@ export function QuickStatsSidebar() {
 
   React.useEffect(() => {
     let active = true
-    ;(async () => {
+
+    const rankAddress = wallet.starknetAddress || wallet.address
+    const resetRank = () => {
+      setRankData({ rank: null, change: 0, total: 0 })
+      setCategoryRanks([
+        { label: "Total Points", rank: null },
+        { label: "Trading", rank: null },
+        { label: "Referral", rank: null },
+      ])
+    }
+
+    const loadRanks = async () => {
       try {
-        if (!wallet.address) {
-          setRankData({ rank: null, change: 0, total: 0 })
-          setCategoryRanks([
-            { label: "Total Points", rank: null },
-            { label: "Trading", rank: null },
-            { label: "Referral", rank: null },
-          ])
+        if (!rankAddress) {
+          if (!active) return
+          resetRank()
           return
         }
+
         const [rankRes, categoriesRes] = await Promise.allSettled([
-          getLeaderboardUserRank(wallet.address),
-          getLeaderboardUserCategories(wallet.address),
+          getLeaderboardUserRank(rankAddress),
+          getLeaderboardUserCategories(rankAddress),
         ])
         if (!active) return
         if (rankRes.status === "fulfilled") {
@@ -226,19 +292,20 @@ export function QuickStatsSidebar() {
         }
       } catch {
         if (!active) return
-        setRankData({ rank: null, change: 0, total: 0 })
-        setCategoryRanks([
-          { label: "Total Points", rank: null },
-          { label: "Trading", rank: null },
-          { label: "Referral", rank: null },
-        ])
+        resetRank()
       }
-    })()
+    }
+
+    void loadRanks()
+    const timer = window.setInterval(() => {
+      void loadRanks()
+    }, 15000)
 
     return () => {
       active = false
+      window.clearInterval(timer)
     }
-  }, [wallet.address])
+  }, [wallet.address, wallet.starknetAddress])
 
   return (
     <aside className="w-72 shrink-0 hidden xl:block">

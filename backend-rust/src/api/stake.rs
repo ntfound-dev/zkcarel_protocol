@@ -7,6 +7,7 @@ use crate::{
     crypto::hash,
     error::Result,
     models::ApiResponse,
+    services::nft_discount::consume_nft_usage_if_active,
 };
 use starknet_core::types::FunctionCall;
 use starknet_core::utils::get_selector_from_name;
@@ -244,6 +245,15 @@ pub async fn deposit(
         processed: false,
     };
     state.db.save_transaction(&tx).await?;
+    if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "stake_deposit").await
+    {
+        tracing::warn!(
+            "Failed to consume NFT discount usage after stake deposit: user={} tx_hash={} err={}",
+            user_address,
+            tx_hash,
+            err
+        );
+    }
 
     Ok(Json(ApiResponse::success(DepositResponse {
         position_id,
@@ -288,7 +298,7 @@ pub async fn withdraw(
     let tx = crate::models::Transaction {
         tx_hash: tx_hash.clone(),
         block_number: 0,
-        user_address,
+        user_address: user_address.clone(),
         tx_type: "unstake".to_string(),
         token_in: Some("CAREL".to_string()),
         token_out: Some("CAREL".to_string()),
@@ -301,6 +311,15 @@ pub async fn withdraw(
         processed: false,
     };
     state.db.save_transaction(&tx).await?;
+    if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "stake_withdraw").await
+    {
+        tracing::warn!(
+            "Failed to consume NFT discount usage after stake withdraw: user={} tx_hash={} err={}",
+            user_address,
+            tx_hash,
+            err
+        );
+    }
 
     Ok(Json(ApiResponse::success(DepositResponse {
         position_id: req.position_id,

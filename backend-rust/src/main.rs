@@ -194,6 +194,10 @@ fn build_router(state: api::AppState) -> Router {
         )
         // Rewards & Points
         .route("/api/v1/rewards/points", get(api::rewards::get_points))
+        .route(
+            "/api/v1/rewards/sync-onchain",
+            post(api::rewards::sync_points_onchain),
+        )
         .route("/api/v1/rewards/claim", post(api::rewards::claim_rewards))
         .route(
             "/api/v1/rewards/convert",

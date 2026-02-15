@@ -32,6 +32,7 @@ pub mod webhooks;
 
 use crate::error::{AppError, Result};
 use axum::http::{header::AUTHORIZATION, HeaderMap};
+use tokio::time::{timeout, Duration};
 
 // AppState definition
 use crate::config::Config;
@@ -58,9 +59,74 @@ pub async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<Strin
         .ok_or_else(|| AppError::AuthError("Invalid Authorization scheme".to_string()))?;
 
     let user_address = auth::extract_user_from_token(token, &state.config.jwt_secret).await?;
-    state.db.create_user(&user_address).await?;
-    state.db.update_last_active(&user_address).await?;
+    // Do not block API path when DB is temporarily slow.
+    match timeout(Duration::from_millis(800), state.db.create_user(&user_address)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => tracing::warn!("require_user create_user failed for {}: {}", user_address, err),
+        Err(_) => tracing::warn!("require_user create_user timed out for {}", user_address),
+    }
+    match timeout(
+        Duration::from_millis(800),
+        state.db.update_last_active(&user_address),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => tracing::warn!(
+            "require_user update_last_active failed for {}: {}",
+            user_address,
+            err
+        ),
+        Err(_) => tracing::warn!("require_user update_last_active timed out for {}", user_address),
+    }
     Ok(user_address)
+}
+
+fn normalize_scope_address(address: &str) -> Option<String> {
+    let trimmed = address.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn push_scope_address(scopes: &mut Vec<String>, address: &str) {
+    let Some(normalized) = normalize_scope_address(address) else {
+        return;
+    };
+    if scopes
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(normalized.as_str()))
+    {
+        return;
+    }
+    scopes.push(normalized);
+}
+
+pub async fn resolve_user_scope_addresses(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<Vec<String>> {
+    let auth_subject = require_user(headers, state).await?;
+    let mut scopes = Vec::new();
+    push_scope_address(&mut scopes, &auth_subject);
+
+    match state.db.list_wallet_addresses(&auth_subject).await {
+        Ok(linked_wallets) => {
+            for linked in linked_wallets {
+                push_scope_address(&mut scopes, &linked.wallet_address);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                "Failed to list linked wallets for user scope resolution ({}): {}",
+                auth_subject,
+                error
+            );
+        }
+    }
+
+    Ok(scopes)
 }
 
 fn is_starknet_like_address(address: &str) -> bool {

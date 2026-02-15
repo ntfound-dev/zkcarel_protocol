@@ -1,11 +1,11 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize;
 
-use super::{require_user, AppState};
+use super::{resolve_user_scope_addresses, AppState};
 use crate::{
     constants::EPOCH_DURATION_SECONDS,
     error::Result,
-    models::{ApiResponse, UserPoints},
+    models::ApiResponse,
     services::AnalyticsService,
 };
 
@@ -30,6 +30,22 @@ fn estimated_carel_from_points(total_points: Decimal, total_epoch_points: Decima
     }
     let gross = (total_points / total_epoch_points) * monthly_ecosystem_pool_carel();
     gross * Decimal::new(95, 2) // 5% tax
+}
+
+fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for address in user_addresses {
+        let trimmed = address.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if normalized.iter().any(|existing| existing == &lower) {
+            continue;
+        }
+        normalized.push(lower);
+    }
+    normalized
 }
 
 #[derive(Debug, Serialize)]
@@ -79,28 +95,31 @@ pub async fn get_analytics(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<AnalyticsResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
+    let normalized_addresses = normalize_scope_addresses(&user_addresses);
 
     let analytics = AnalyticsService::new(state.db.clone(), state.config.clone());
-    let pnl_24h = analytics.calculate_pnl(&user_address, "24h").await?;
-    let pnl_7d = analytics.calculate_pnl(&user_address, "7d").await?;
-    let pnl_30d = analytics.calculate_pnl(&user_address, "30d").await?;
-    let pnl_all = analytics.calculate_pnl(&user_address, "all_time").await?;
-    let allocation = analytics.get_allocation(&user_address).await?;
-    let trading = analytics.get_trading_performance(&user_address).await?;
+    let pnl_24h = analytics.calculate_pnl(&user_addresses, "24h").await?;
+    let pnl_7d = analytics.calculate_pnl(&user_addresses, "7d").await?;
+    let pnl_30d = analytics.calculate_pnl(&user_addresses, "30d").await?;
+    let pnl_all = analytics.calculate_pnl(&user_addresses, "all_time").await?;
+    let allocation = analytics.get_allocation(&user_addresses).await?;
+    let trading = analytics.get_trading_performance(&user_addresses).await?;
 
     // Current epoch (30 days window)
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
-    // Explicit DB helper return type assumed: Result<Option<UserPoints>>
-    let points: Option<UserPoints> = state
-        .db
-        .get_user_points(&user_address, current_epoch)
-        .await?;
-    let total_points: Decimal = points
-        .as_ref()
-        .map(|p| p.total_points)
-        .unwrap_or(Decimal::ZERO);
+    let total_points: Decimal = if normalized_addresses.is_empty() {
+        Decimal::ZERO
+    } else {
+        sqlx::query_scalar(
+            "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE LOWER(user_address) = ANY($1) AND epoch = $2",
+        )
+        .bind(normalized_addresses)
+        .bind(current_epoch)
+        .fetch_one(state.db.pool())
+        .await?
+    };
 
     let allocation = allocation
         .into_iter()

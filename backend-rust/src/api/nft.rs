@@ -11,8 +11,11 @@ use crate::{
 use axum::{extract::State, http::HeaderMap, Json};
 use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
-use starknet_core::types::FunctionCall;
-use starknet_core::utils::get_selector_from_name;
+use starknet_core::types::{Felt, FunctionCall};
+use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
+use tokio::time::{timeout, Duration};
+
+const ONCHAIN_NFT_READ_TIMEOUT_MS: u64 = 3_500;
 
 #[derive(Debug, Serialize)]
 pub struct NFT {
@@ -21,6 +24,12 @@ pub struct NFT {
     pub discount: f64,
     pub expiry: i64,
     pub used: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_usage: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used_in_period: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_usage: Option<u128>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,27 +63,15 @@ fn discount_for_tier(tier: i32) -> f64 {
 }
 
 fn tier_for_discount(discount: f64) -> i32 {
-    if discount <= 0.0 {
-        return 0;
+    let rounded = discount.round() as i64;
+    match rounded {
+        i if i <= 0 => 0,
+        1..=7 => 1,    // bronze ~5%
+        8..=15 => 2,   // silver ~10%
+        16..=25 => 3,  // gold 25%
+        26..=35 => 4,  // platinum 35%
+        _ => 5,        // onyx 50%+
     }
-    if discount <= 5.0 {
-        return 1;
-    }
-    if discount <= 10.0 {
-        return 2;
-    }
-    if discount <= 25.0 {
-        return 3;
-    }
-    if discount <= 35.0 {
-        return 4;
-    }
-    5
-}
-
-fn short_user_key(user_address: &str) -> String {
-    let trimmed = user_address.trim_start_matches("0x");
-    trimmed.chars().take(8).collect::<String>()
 }
 
 fn discount_contract_or_error(state: &AppState) -> Result<&str> {
@@ -123,6 +120,25 @@ fn normalize_onchain_tx_hash(
     Ok(Some(raw.to_ascii_lowercase()))
 }
 
+fn looks_like_transient_rpc_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("jsonrpcresponse")
+        || lower.contains("error decoding response body")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OnchainNftState {
+    token_id: u128,
+    tier: i32,
+    discount_rate: f64,
+    max_usage: u128,
+    used_in_period: u128,
+}
+
 async fn read_discount_state_onchain(
     state: &AppState,
     contract: &str,
@@ -142,6 +158,109 @@ async fn read_discount_state_onchain(
     let active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
     let discount_u128 = u256_from_felts(&result[1], &result[2]).unwrap_or(0);
     Ok((active, discount_u128 as f64))
+}
+
+async fn read_user_nft_token_id_onchain(
+    state: &AppState,
+    contract: &str,
+    user_address: &str,
+) -> Result<u128> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let contract_felt = parse_felt(contract)?;
+    let user_felt = parse_felt(user_address)?;
+    let storage_key = get_storage_var_address("user_nft", &[user_felt]).map_err(|e| {
+        crate::error::AppError::Internal(format!("Storage key resolution error: {}", e))
+    })?;
+    let raw_value = reader.get_storage_at(contract_felt, storage_key).await?;
+    Ok(felt_to_u128(&raw_value).unwrap_or(0))
+}
+
+fn u256_calldata(value: u128) -> [Felt; 2] {
+    [Felt::from(value), Felt::from(0_u8)]
+}
+
+async fn read_nft_info_onchain(state: &AppState, contract: &str, token_id: u128) -> Result<OnchainNftState> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let [token_low, token_high] = u256_calldata(token_id);
+    let call = FunctionCall {
+        contract_address: parse_felt(contract)?,
+        entry_point_selector: get_selector_from_name("get_nft_info")
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?,
+        calldata: vec![token_low, token_high],
+    };
+    let result = reader.call(call).await?;
+    if result.len() < 9 {
+        return Err(crate::error::AppError::Internal(
+            "get_nft_info returned malformed payload".to_string(),
+        ));
+    }
+
+    let tier = felt_to_u128(&result[0]).unwrap_or(0) as i32;
+    let discount_rate = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
+    let max_usage = u256_from_felts(&result[3], &result[4]).unwrap_or(0);
+    let used_in_period = u256_from_felts(&result[5], &result[6]).unwrap_or(0);
+    let _last_reset = felt_to_u128(&result[8]).unwrap_or(0) as i64;
+
+    Ok(OnchainNftState {
+        token_id,
+        tier,
+        discount_rate,
+        max_usage,
+        used_in_period,
+    })
+}
+
+async fn fallback_owned_nft_from_discount_state(
+    state: &AppState,
+    contract: &str,
+    user_address: &str,
+) -> Option<NFT> {
+    let read = timeout(
+        Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
+        read_discount_state_onchain(state, contract, user_address),
+    )
+    .await;
+
+    let (active, discount) = match read {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "nft_owned_discount_fallback failed user={} contract={} err={}",
+                user_address,
+                contract,
+                err
+            );
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!(
+                "nft_owned_discount_fallback timeout user={} contract={}",
+                user_address,
+                contract
+            );
+            return None;
+        }
+    };
+
+    if !active && discount <= 0.0 {
+        return None;
+    }
+
+    let mut tier = tier_for_discount(discount);
+    if tier <= 0 && active {
+        tier = 1;
+    }
+
+    Some(NFT {
+        token_id: "0x0".to_string(),
+        tier,
+        discount,
+        expiry: 0,
+        used: !active,
+        max_usage: None,
+        used_in_period: None,
+        remaining_usage: None,
+    })
 }
 
 /// POST /api/v1/nft/mint
@@ -190,8 +309,11 @@ pub async fn mint_nft(
         token_id: format!("NFT_{}", tx_hash.trim_start_matches("0x")),
         tier: req.tier,
         discount,
-        expiry: chrono::Utc::now().timestamp() + EPOCH_DURATION_SECONDS,
+        expiry: 0,
         used: false,
+        max_usage: None,
+        used_in_period: None,
+        remaining_usage: None,
     };
 
     Ok(Json(ApiResponse::success(nft)))
@@ -207,23 +329,175 @@ pub async fn get_owned_nfts(
         return Ok(Json(ApiResponse::success(Vec::new())));
     };
 
-    let (active, discount) = read_discount_state_onchain(&state, contract, &user_address).await?;
-    if discount <= 0.0 {
+    let token_id = match timeout(
+        Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
+        read_user_nft_token_id_onchain(&state, contract, &user_address),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            let message = err.to_string();
+            if looks_like_transient_rpc_error(&message) {
+                tracing::warn!(
+                    "nft_owned_token_lookup transient rpc issue user={} contract={} err={}",
+                    user_address,
+                    contract,
+                    message
+                );
+            } else {
+                tracing::warn!(
+                    "nft_owned_token_lookup failed user={} contract={} err={}",
+                    user_address,
+                    contract,
+                    message
+                );
+            }
+            if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
+                return Ok(Json(ApiResponse::success(vec![nft])));
+            }
+            return Ok(Json(ApiResponse::success(Vec::new())));
+        }
+        Err(_) => {
+            tracing::warn!(
+                "nft_owned_token_lookup timeout user={} contract={}",
+                user_address,
+                contract
+            );
+            if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
+                return Ok(Json(ApiResponse::success(vec![nft])));
+            }
+            return Ok(Json(ApiResponse::success(Vec::new())));
+        }
+    };
+    if token_id == 0 {
+        if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
+            return Ok(Json(ApiResponse::success(vec![nft])));
+        }
         return Ok(Json(ApiResponse::success(Vec::new())));
     }
 
-    let tier = tier_for_discount(discount);
-    let now = chrono::Utc::now().timestamp();
-    let nfts = vec![NFT {
-        token_id: format!("NFT_ONCHAIN_{}", short_user_key(&user_address)),
+    let nft_state = match timeout(
+        Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
+        read_nft_info_onchain(&state, contract, token_id),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            let message = err.to_string();
+            if looks_like_transient_rpc_error(&message) {
+                tracing::warn!(
+                    "nft_owned_info transient rpc issue user={} contract={} token_id={} err={}",
+                    user_address,
+                    contract,
+                    token_id,
+                    message
+                );
+            } else {
+                tracing::warn!(
+                    "nft_owned_info failed user={} contract={} token_id={} err={}",
+                    user_address,
+                    contract,
+                    token_id,
+                    message
+                );
+            }
+            if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
+                return Ok(Json(ApiResponse::success(vec![nft])));
+            }
+            return Ok(Json(ApiResponse::success(Vec::new())));
+        }
+        Err(_) => {
+            tracing::warn!(
+                "nft_owned_info timeout user={} contract={} token_id={}",
+                user_address,
+                contract,
+                token_id
+            );
+            if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
+                return Ok(Json(ApiResponse::success(vec![nft])));
+            }
+            return Ok(Json(ApiResponse::success(Vec::new())));
+        }
+    };
+
+    let fallback_active = nft_state.max_usage > 0 && nft_state.used_in_period < nft_state.max_usage;
+    let fallback_discount = if fallback_active {
+        nft_state.discount_rate
+    } else {
+        0.0
+    };
+
+    let (active, onchain_discount) = match timeout(
+        Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
+        read_discount_state_onchain(&state, contract, &user_address),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            let message = err.to_string();
+            if looks_like_transient_rpc_error(&message) {
+                tracing::warn!(
+                    "nft_owned_active_lookup transient rpc issue user={} contract={} token_id={} err={}",
+                    user_address,
+                    contract,
+                    token_id,
+                    message
+                );
+            } else {
+                tracing::warn!(
+                    "nft_owned_active_lookup failed user={} contract={} token_id={} err={}",
+                    user_address,
+                    contract,
+                    token_id,
+                    message
+                );
+            }
+            (fallback_active, fallback_discount)
+        }
+        Err(_) => {
+            tracing::warn!(
+                "nft_owned_active_lookup timeout user={} contract={} token_id={}",
+                user_address,
+                contract,
+                token_id
+            );
+            (fallback_active, fallback_discount)
+        }
+    };
+
+    let tier = if nft_state.tier > 0 {
+        nft_state.tier
+    } else {
+        tier_for_discount(nft_state.discount_rate)
+    };
+    let display_discount = if nft_state.discount_rate > 0.0 {
+        nft_state.discount_rate
+    } else {
+        onchain_discount
+    };
+    tracing::info!(
+        "nft_owned_check user={} token_id={} active={} tier={} discount={} used_in_period={} max_usage={}",
+        user_address,
+        nft_state.token_id,
+        active,
         tier,
-        discount,
-        expiry: if active {
-            now + EPOCH_DURATION_SECONDS
-        } else {
-            now
-        },
+        display_discount,
+        nft_state.used_in_period,
+        nft_state.max_usage
+    );
+
+    let nfts = vec![NFT {
+        token_id: format!("0x{:x}", nft_state.token_id),
+        tier,
+        discount: display_discount,
+        expiry: 0,
         used: !active,
+        max_usage: Some(nft_state.max_usage),
+        used_in_period: Some(nft_state.used_in_period),
+        remaining_usage: Some(nft_state.max_usage.saturating_sub(nft_state.used_in_period)),
     }];
     Ok(Json(ApiResponse::success(nfts)))
 }

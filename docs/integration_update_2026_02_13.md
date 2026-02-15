@@ -307,3 +307,93 @@ Contoh jadwal berkala (setiap 5 menit):
 ```bash
 */5 * * * * cd /mnt/c/Users/frend/zkcare_protocol/smartcontract && ./scripts/08_rebalance_liquidity_healthcheck.sh >> /tmp/zkcare_rebalance.log 2>&1
 ```
+
+## 11) Fix Live Balance UI + Aktivasi Faucet CAREL (2026-02-14)
+
+Masalah:
+1. Swap sukses on-chain, tetapi saldo `CAREL/USDC/USDT/WBTC` di UI tidak langsung naik.
+2. Penyebab utama: frontend live on-chain balance sebelumnya hanya membaca `STRK/ETH/BTC`, token Starknet lain fallback ke portfolio backend (bisa delay).
+
+Patch:
+1. Backend endpoint `POST /api/v1/wallet/onchain-balances` sekarang mengembalikan:
+2. `carel`, `usdc`, `usdt`, `wbtc` (selain `strk_l2/strk_l1/eth/btc`).
+3. Frontend `useWallet` sekarang menyimpan dan refresh nilai on-chain untuk:
+4. `CAREL`, `USDC`, `USDT`, `WBTC`.
+5. Trading UI sekarang membaca source balance live on-chain untuk token Starknet tersebut.
+
+File terkait:
+1. `backend-rust/src/api/wallet.rs`
+2. `frontend/lib/api.ts`
+3. `frontend/hooks/use-wallet.tsx`
+4. `frontend/components/trading-interface.tsx`
+
+Faucet CAREL:
+1. `FAUCET_CAREL_AMOUNT` diset ke `25` di `backend-rust/.env`.
+2. `FAUCET_CAREL_UNLIMITED=true` diaktifkan untuk mode testnet QA (claim CAREL tanpa cooldown).
+3. Backend signer/faucet wallet ditop-up CAREL via mint:
+4. Tx mint: https://sepolia.starkscan.co/tx/0x05e3c540952f4bd6949d4e5a5c0fd74a7c1cd18a1261ff0442a6adf4e8ab8617
+5. Saldo CAREL backend signer setelah top-up: `1000.04243 CAREL` (base unit: `1000042430000000000000`).
+
+## 12) Catatan Sementara Sebelum Fokus Limit Order
+
+1. Swap aggregator dan transfer swap berjalan on-chain real.
+2. CAREL menggunakan token kontrak utama proyek.
+3. USDC/USDT/WBTC pada fase ini masih token mock Starknet testnet untuk kebutuhan QA internal.
+4. CAREL faucet backend saat ini diset unlimited (khusus testnet/dev) agar pengujian limit order tidak terhambat saldo.
+
+## 13) Update NFT Discount Soulbound (2026-02-15)
+
+Perubahan model bisnis yang sudah diimplementasikan:
+1. Tier ditentukan oleh NFT discount aktif on-chain, bukan langsung dari total points.
+2. Points lifetime user tetap bisa naik tanpa batas.
+3. Points current dipakai untuk mint NFT dan berkurang saat mint.
+4. NFT bersifat soulbound (non-transferable).
+5. NFT tidak diburn saat usage habis; status berubah menjadi inactive.
+6. Unlimited remint diaktifkan (user bisa mint lagi selama points cukup).
+
+Konfigurasi tier aktif saat ini:
+1. Bronze: biaya `5000`, discount `5%`, max use `5`
+2. Silver: biaya `15000`, discount `10%`, max use `7`
+3. Gold: biaya `50000`, discount `25%`, max use `10`
+4. Platinum: biaya `150000`, discount `35%`, max use `15`
+5. Onyx: biaya `500000`, discount `50%`, max use `20`
+
+File terkait:
+1. `smartcontract/src/nft/discount_soulbound.cairo`
+2. `frontend/components/rewards-hub.tsx`
+3. `backend-rust/src/api/nft.rs`
+
+## 14) Redeploy DiscountSoulbound + Fix Authorization (2026-02-15)
+
+Masalah:
+1. Mint NFT gagal dengan error `Caller is not authorized`.
+2. Akar penyebab: kontrak `DiscountSoulbound` baru belum terdaftar sebagai `authorized_consumer` di `PointStorage`.
+
+Perbaikan:
+1. Redeploy kontrak `DiscountSoulbound`.
+2. Update env address:
+3. `backend-rust/.env` -> `DISCOUNT_SOULBOUND_ADDRESS`
+4. `frontend/.env` + `frontend/.env.local` -> `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` dan `NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS`
+5. Invoke `PointStorage.add_consumer(DISCOUNT_SOULBOUND_ADDRESS)` agar `mint_nft -> consume_points` authorized.
+6. Patch script deploy agar otomatis add consumer setelah redeploy.
+
+Deploy details:
+1. Class hash: `0x02639624ccc7d46135fef2c78bfcd47a5b9bbab24e03339655deb5cb5e1774c7`
+2. Contract address: `0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809`
+3. Declare tx: `0x029ca8e1aa78e661abe2178fff9bb8530e9d17b54e7c7346239154724292217d`
+4. Deploy tx: `0x06fe2368ea1ef7dd882ee38e8a1b6d43d03be849e17265c04c088b78cc87b288`
+5. Add consumer tx: `0x025e0a290ebbf7a988cbac8ce22e757fdb3236a998c2dff59ae3273625d066dd`
+
+Explorer links:
+1. Starkscan class: https://sepolia.starkscan.co/class/0x02639624ccc7d46135fef2c78bfcd47a5b9bbab24e03339655deb5cb5e1774c7
+2. Starkscan contract: https://sepolia.starkscan.co/contract/0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809
+3. Voyager contract: https://sepolia.voyager.online/contract/0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809
+
+Script patch:
+1. `smartcontract/scripts/06_deploy_remaining.sh` kini otomatis invoke:
+```bash
+sncast invoke --network sepolia \
+  --contract-address $POINT_STORAGE_ADDRESS \
+  --function add_consumer \
+  --calldata $DISCOUNT_SOULBOUND_ADDRESS
+```

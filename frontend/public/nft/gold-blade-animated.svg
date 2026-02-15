@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Gold Blade Animated</title>
+  <desc id="desc">Cyberpunk gold tier with elite blade crest and intense neon gold aura.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2f2203"/>
+      <stop offset="100%" stop-color="#0d0801"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffe38d"/>
+      <stop offset="100%" stop-color="#b27006"/>
+    </linearGradient>
+    <linearGradient id="blade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fff8bf"/>
+      <stop offset="50%" stop-color="#ffd33f"/>
+      <stop offset="100%" stop-color="#cc7a05"/>
+    </linearGradient>
+    <radialGradient id="aura" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#ffd24c" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#ffd24c" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .aura { animation: pulse 2.2s ease-in-out infinite; transform-origin: 512px 446px; }
+      .sword { animation: bob 4.1s ease-in-out infinite; transform-origin: 512px 450px; }
+      .flare { animation: flare 1.5s ease-in-out infinite; }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.55; transform: scale(0.88); }
+        50% { opacity: 1; transform: scale(1.16); }
+      }
+      @keyframes bob {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+      }
+      @keyframes flare {
+        0%, 100% { opacity: 0.45; transform: scale(0.96); }
+        50% { opacity: 1; transform: scale(1.08); }
+      }
+    </style>
+  </defs>
+
+  <rect width="1024" height="1024" rx="72" fill="url(#bg)"/>
+  <rect x="24" y="24" width="976" height="976" rx="58" fill="none" stroke="url(#frame)" stroke-width="8"/>
+  <polygon points="512,90 840,226 944,512 840,798 512,934 184,798 80,512 184,226" fill="none" stroke="#6f4a06" stroke-width="5"/>
+  <circle class="aura" cx="512" cy="446" r="306" fill="url(#aura)"/>
+
+  <g class="sword">
+    <polygon points="512,156 594,332 548,588 512,808 476,588 430,332" fill="url(#blade)"/>
+    <polygon points="360,578 664,578 728,674 628,742 396,742 296,674" fill="#ffd454"/>
+    <polygon points="466,742 558,742 530,836 494,836" fill="#d98a08"/>
+    <path class="flare" d="M512 254L554 348L650 390L554 432L512 526L470 432L374 390L470 348Z" fill="#fff3b7" opacity="0.95"/>
+    <path d="M368 520L260 612L354 642L430 582M656 520L764 612L670 642L594 582" fill="none" stroke="#ffde7f" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="512" y="812" text-anchor="middle" fill="#ffec9f" font-family="Verdana, sans-serif" font-size="84" font-weight="700">GOLD</text>
+  <text x="512" y="874" text-anchor="middle" fill="#ffd45d" font-family="Verdana, sans-serif" font-size="34">Cyberpunk Blade</text>
+</svg>

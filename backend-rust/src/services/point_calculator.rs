@@ -7,8 +7,9 @@ use crate::{
         EPOCH_DURATION_SECONDS, MULTIPLIER_TIER_1, MULTIPLIER_TIER_2, MULTIPLIER_TIER_3,
         MULTIPLIER_TIER_4, POINTS_MIN_STAKE_CAREL, POINTS_MIN_USD_BRIDGE_BTC,
         POINTS_MIN_USD_BRIDGE_ETH, POINTS_MIN_USD_LIMIT_ORDER, POINTS_MIN_USD_SWAP,
-        POINTS_PER_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_ETH, POINTS_PER_USD_LIMIT_ORDER,
-        POINTS_PER_USD_STAKE, POINTS_PER_USD_SWAP, POINT_CALCULATOR_INTERVAL_SECS,
+        POINTS_MIN_USD_SWAP_TESTNET, POINTS_PER_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_ETH,
+        POINTS_PER_USD_LIMIT_ORDER, POINTS_PER_USD_STAKE, POINTS_PER_USD_SWAP,
+        POINT_CALCULATOR_INTERVAL_SECS,
     },
     db::Database,
     error::Result,
@@ -44,7 +45,12 @@ impl PointCalculator {
     /// Start point calculation loop
     pub async fn start(self: Arc<Self>) {
         tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(POINT_CALCULATOR_INTERVAL_SECS)); // Every minute
+            let interval_secs = if self.config.is_testnet() {
+                10
+            } else {
+                POINT_CALCULATOR_INTERVAL_SECS
+            };
+            let mut ticker = interval(Duration::from_secs(interval_secs));
 
             loop {
                 ticker.tick().await;
@@ -159,6 +165,18 @@ impl PointCalculator {
         .fetch_one(self.db.pool())
         .await?;
 
+        if let Err(err) = self
+            .sync_points_total_onchain(current_epoch, &tx.user_address, new_total)
+            .await
+        {
+            tracing::warn!(
+                "Failed to sync trading points onchain: user={}, epoch={}, error={}",
+                tx.user_address,
+                current_epoch,
+                err
+            );
+        }
+
         self.apply_referral_bonus(&tx.user_address, current_epoch, prev_total, new_total)
             .await?;
 
@@ -182,7 +200,12 @@ impl PointCalculator {
 
     async fn calculate_swap_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
         let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
-        if usd_value < POINTS_MIN_USD_SWAP {
+        let min_usd = if self.config.is_testnet() {
+            POINTS_MIN_USD_SWAP_TESTNET
+        } else {
+            POINTS_MIN_USD_SWAP
+        };
+        if usd_value < min_usd {
             return Ok(0.0);
         }
         self.apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_SWAP)
@@ -470,6 +493,40 @@ impl PointCalculator {
 
         Ok(())
     }
+
+    async fn sync_points_total_onchain(
+        &self,
+        epoch: i64,
+        user_address: &str,
+        expected_total: Decimal,
+    ) -> Result<()> {
+        let contract = self.config.point_storage_address.trim();
+        if contract.is_empty() || contract.starts_with("0x0000") {
+            return Ok(());
+        }
+        let Some(invoker) = &self.onchain else {
+            return Ok(());
+        };
+
+        let expected_u128 = expected_total.max(Decimal::ZERO).trunc().to_u128().unwrap_or(0);
+        if expected_u128 == 0 {
+            return Ok(());
+        }
+
+        // Write exact aggregate points to on-chain storage to avoid drift/race from repeated delta adds.
+        let submit_call =
+            build_point_storage_submit_points_call(contract, epoch as u64, user_address, expected_u128)?;
+        let tx_hash = invoker.invoke(submit_call).await?;
+        tracing::info!(
+            "Trading points synced onchain: user={}, epoch={}, total={}, tx={}",
+            user_address,
+            epoch,
+            expected_u128,
+            tx_hash
+        );
+
+        Ok(())
+    }
 }
 
 fn build_referral_call(
@@ -487,6 +544,30 @@ fn build_referral_call(
         Felt::from(epoch as u128),
         referee_felt,
         Felt::from(total_points),
+        Felt::from(0_u128),
+    ];
+
+    Ok(Call {
+        to,
+        selector,
+        calldata,
+    })
+}
+
+fn build_point_storage_submit_points_call(
+    contract: &str,
+    epoch: u64,
+    user: &str,
+    points: u128,
+) -> Result<Call> {
+    let to = parse_felt(contract)?;
+    let selector = get_selector_from_name("submit_points")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let user_felt = parse_felt(user)?;
+    let calldata = vec![
+        Felt::from(epoch as u128),
+        user_felt,
+        Felt::from(points),
         Felt::from(0_u128),
     ];
 

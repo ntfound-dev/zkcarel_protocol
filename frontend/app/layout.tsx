@@ -1,20 +1,7 @@
 import React from "react"
 import type { Metadata, Viewport } from 'next'
-import { Orbitron, Exo_2 } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
-
-const orbitron = Orbitron({ 
-  subsets: ["latin"],
-  variable: '--font-orbitron',
-  display: 'swap',
-});
-
-const exo2 = Exo_2({ 
-  subsets: ["latin"],
-  variable: '--font-exo2',
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   title: 'ZkCarel - Privacy-First Crypto Trading',
@@ -41,7 +28,7 @@ export default function RootLayout({
       className="dark"
       suppressHydrationWarning
     >
-      <body className={`${orbitron.variable} ${exo2.variable} font-sans antialiased min-h-screen bg-background circuit-bg`}>
+      <body className="font-sans antialiased min-h-screen bg-background circuit-bg">
         {children}
         <Analytics />
       </body>

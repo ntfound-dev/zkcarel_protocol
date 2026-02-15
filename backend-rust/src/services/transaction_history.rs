@@ -25,6 +25,22 @@ fn format_csv_row(tx: &Transaction) -> String {
     )
 }
 
+fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for address in user_addresses {
+        let trimmed = address.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if normalized.iter().any(|existing| existing == &lower) {
+            continue;
+        }
+        normalized.push(lower);
+    }
+    normalized
+}
+
 pub struct TransactionHistoryService {
     db: Database,
 }
@@ -37,17 +53,23 @@ impl TransactionHistoryService {
     /// Get user transaction history with pagination and filters
     pub async fn get_user_history(
         &self,
-        user_address: &str,
+        user_addresses: &[String],
         tx_type: Option<String>,
         from_date: Option<DateTime<Utc>>,
         to_date: Option<DateTime<Utc>>,
         page: i32,
         limit: i32,
     ) -> Result<PaginatedResponse<Transaction>> {
+        let normalized_addresses = normalize_scope_addresses(user_addresses);
+        if normalized_addresses.is_empty() {
+            return Err(AppError::BadRequest(
+                "No wallet address available for transaction history".to_string(),
+            ));
+        }
         let offset = (page - 1) * limit;
 
         let mut query = String::from(
-            "SELECT * FROM transactions WHERE user_address = $1 AND COALESCE(is_private, false) = false",
+            "SELECT * FROM transactions WHERE LOWER(user_address) = ANY($1) AND COALESCE(is_private, false) = false",
         );
         let mut param_count = 2;
 
@@ -73,7 +95,7 @@ impl TransactionHistoryService {
 
         // Gunakan sqlx::query_as (Runtime) bukan macro query_as!
         let mut query_builder = sqlx::query_as::<_, Transaction>(&query);
-        query_builder = query_builder.bind(user_address);
+        query_builder = query_builder.bind(normalized_addresses.clone());
 
         if let Some(ref t) = tx_type {
             query_builder = query_builder.bind(t);
@@ -90,7 +112,7 @@ impl TransactionHistoryService {
 
         let transactions = query_builder.fetch_all(self.db.pool()).await?;
         let total = self
-            .get_total_count(user_address, tx_type, from_date, to_date)
+            .get_total_count(&normalized_addresses, tx_type, from_date, to_date)
             .await?;
 
         Ok(PaginatedResponse {
@@ -103,13 +125,17 @@ impl TransactionHistoryService {
 
     async fn get_total_count(
         &self,
-        user_address: &str,
+        user_addresses: &[String],
         tx_type: Option<String>,
         from_date: Option<DateTime<Utc>>,
         to_date: Option<DateTime<Utc>>,
     ) -> Result<i64> {
+        let normalized_addresses = normalize_scope_addresses(user_addresses);
+        if normalized_addresses.is_empty() {
+            return Ok(0);
+        }
         let mut query = String::from(
-            "SELECT COUNT(*) as count FROM transactions WHERE user_address = $1 AND COALESCE(is_private, false) = false",
+            "SELECT COUNT(*) as count FROM transactions WHERE LOWER(user_address) = ANY($1) AND COALESCE(is_private, false) = false",
         );
         let mut param_count = 2;
 
@@ -126,7 +152,7 @@ impl TransactionHistoryService {
         }
 
         let mut query_builder = sqlx::query(&query);
-        query_builder = query_builder.bind(user_address);
+        query_builder = query_builder.bind(normalized_addresses);
         if let Some(ref t) = tx_type {
             query_builder = query_builder.bind(t);
         }
@@ -149,19 +175,35 @@ impl TransactionHistoryService {
             .ok_or_else(|| AppError::NotFound("Transaction not found".to_string()))
     }
 
-    pub async fn get_recent_transactions(&self, user_address: &str) -> Result<Vec<Transaction>> {
+    pub async fn get_recent_transactions(&self, user_addresses: &[String]) -> Result<Vec<Transaction>> {
+        let normalized_addresses = normalize_scope_addresses(user_addresses);
+        if normalized_addresses.is_empty() {
+            return Ok(Vec::new());
+        }
         let transactions = sqlx::query_as::<_, Transaction>(
             "SELECT * FROM transactions
-             WHERE user_address = $1 AND COALESCE(is_private, false) = false
+             WHERE LOWER(user_address) = ANY($1) AND COALESCE(is_private, false) = false
              ORDER BY timestamp DESC LIMIT 10",
         )
-        .bind(user_address)
+        .bind(normalized_addresses)
         .fetch_all(self.db.pool())
         .await?;
         Ok(transactions)
     }
 
-    pub async fn get_user_stats(&self, user_address: &str) -> Result<TransactionStats> {
+    pub async fn get_user_stats(&self, user_addresses: &[String]) -> Result<TransactionStats> {
+        let normalized_addresses = normalize_scope_addresses(user_addresses);
+        if normalized_addresses.is_empty() {
+            return Ok(TransactionStats {
+                total_transactions: 0,
+                total_swaps: 0,
+                total_bridges: 0,
+                total_stakes: 0,
+                total_volume_usd: rust_decimal::Decimal::ZERO,
+                total_fees_paid: rust_decimal::Decimal::ZERO,
+                total_points_earned: rust_decimal::Decimal::ZERO,
+            });
+        }
         let row = sqlx::query(
             "SELECT 
                 COUNT(*) as total_transactions,
@@ -172,9 +214,9 @@ impl TransactionHistoryService {
                 SUM(fee_paid) as total_fees_paid,
                 SUM(points_earned) as total_points_earned
              FROM transactions
-             WHERE user_address = $1 AND COALESCE(is_private, false) = false",
+             WHERE LOWER(user_address) = ANY($1) AND COALESCE(is_private, false) = false",
         )
-        .bind(user_address)
+        .bind(normalized_addresses)
         .fetch_one(self.db.pool())
         .await?;
 
@@ -197,12 +239,12 @@ impl TransactionHistoryService {
 
     pub async fn export_to_csv(
         &self,
-        user_address: &str,
+        user_addresses: &[String],
         from_date: Option<DateTime<Utc>>,
         to_date: Option<DateTime<Utc>>,
     ) -> Result<String> {
         let transactions = self
-            .get_user_history(user_address, None, from_date, to_date, 1, 10000)
+            .get_user_history(user_addresses, None, from_date, to_date, 1, 10000)
             .await?;
 
         let mut csv = String::from(csv_header());

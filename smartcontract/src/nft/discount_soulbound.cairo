@@ -55,7 +55,7 @@ pub trait IDiscountSoulbound<TContractState> {
     /// @param tier Tier id to mint.
     fn mint_nft(ref self: TContractState, tier: u8);
     /// @notice Consumes a discount use for a user.
-    /// @dev Burns NFT when usage is exhausted.
+    /// @dev NFT tetap dimiliki user; menjadi inactive saat usage habis.
     /// @param user User address.
     /// @return discount Discount percentage or rate.
     fn use_discount(ref self: TContractState, user: ContractAddress) -> u256;
@@ -65,8 +65,8 @@ pub trait IDiscountSoulbound<TContractState> {
     /// @param uses Number of uses to consume.
     /// @return discount Discount percentage or rate.
     fn use_discount_batch(ref self: TContractState, user: ContractAddress, uses: u256) -> u256;
-    /// @notice Recharges monthly usage for the caller's NFT.
-    /// @dev Consumes points based on tier recharge cost.
+    /// @notice Recharges usage quota for the caller's NFT.
+    /// @dev Optional path if recharge cost is configured (>0).
     fn recharge_nft(ref self: TContractState);
     /// @notice Returns a user's current discount rate.
     /// @dev Read-only helper for pricing.
@@ -147,7 +147,7 @@ pub trait IDiscountSoulboundAdmin<TContractState> {
 /// @title Discount Soulbound Contract
 /// @author CAREL Team
 /// @notice Soulbound discount NFTs backed by point spending.
-/// @dev Burns NFTs when usage is exhausted (except base tier).
+/// @dev NFT tidak diburn saat usage habis; status jadi inactive sampai mint ulang/recharge.
 #[starknet::contract]
 pub mod DiscountSoulbound {
     use starknet::ContractAddress;
@@ -158,8 +158,6 @@ pub mod DiscountSoulbound {
     use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy::action_types::ACTION_NFT;
     use super::{DiscountNFT, IPointStorageDispatcher, IPointStorageDispatcherTrait};
-
-    const PERIOD_SECONDS: u64 = 2592000;
 
     #[storage]
     pub struct Storage {
@@ -181,7 +179,7 @@ pub mod DiscountSoulbound {
     pub enum Event {
         NFTMinted: NFTMinted,
         NFTUsed: NFTUsed,
-        NFTBurned: NFTBurned,
+        NFTDeactivated: NFTDeactivated,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -199,9 +197,11 @@ pub mod DiscountSoulbound {
     }
 
     #[derive(Drop, starknet::Event)]
-    pub struct NFTBurned {
+    pub struct NFTDeactivated {
         pub user: ContractAddress,
-        pub token_id: u256
+        pub token_id: u256,
+        pub used_in_period: u256,
+        pub max_usage: u256
     }
 
     /// @notice Initializes the discount NFT contract.
@@ -215,31 +215,32 @@ pub mod DiscountSoulbound {
         self.current_epoch.write(epoch);
         self.next_token_id.write(1);
 
-        // Recharge model tiers
+        // Tier config sesuai model bisnis:
+        // Bronze 5% (5 use), Silver 10% (7), Gold 25% (10), Platinum 35% (15), Onyx 50% (20).
         self.tier_costs.entry(1).write(5000);
         self.tier_discounts.entry(1).write(5);
-        self.tier_max_usage.entry(1).write(30);
-        self.tier_recharge_costs.entry(1).write(500);
+        self.tier_max_usage.entry(1).write(5);
+        self.tier_recharge_costs.entry(1).write(0);
 
         self.tier_costs.entry(2).write(15000);
         self.tier_discounts.entry(2).write(10);
-        self.tier_max_usage.entry(2).write(40);
-        self.tier_recharge_costs.entry(2).write(1500);
+        self.tier_max_usage.entry(2).write(7);
+        self.tier_recharge_costs.entry(2).write(0);
 
         self.tier_costs.entry(3).write(50000);
-        self.tier_discounts.entry(3).write(20);
-        self.tier_max_usage.entry(3).write(50);
-        self.tier_recharge_costs.entry(3).write(5000);
+        self.tier_discounts.entry(3).write(25);
+        self.tier_max_usage.entry(3).write(10);
+        self.tier_recharge_costs.entry(3).write(0);
 
         self.tier_costs.entry(4).write(150000);
-        self.tier_discounts.entry(4).write(30);
-        self.tier_max_usage.entry(4).write(60);
-        self.tier_recharge_costs.entry(4).write(15000);
+        self.tier_discounts.entry(4).write(35);
+        self.tier_max_usage.entry(4).write(15);
+        self.tier_recharge_costs.entry(4).write(0);
 
         self.tier_costs.entry(5).write(500000);
-        self.tier_discounts.entry(5).write(40);
-        self.tier_max_usage.entry(5).write(100);
-        self.tier_recharge_costs.entry(5).write(50000);
+        self.tier_discounts.entry(5).write(50);
+        self.tier_max_usage.entry(5).write(20);
+        self.tier_recharge_costs.entry(5).write(0);
     }
 
     #[abi(embed_v0)]
@@ -251,10 +252,8 @@ pub mod DiscountSoulbound {
             let user = get_caller_address();
             assert!(tier >= 1 && tier <= 5, "Tier tidak valid");
 
-            let existing_id = self.user_nft.entry(user).read();
-            if existing_id != 0 {
-                panic!("User sudah memiliki NFT");
-            }
+            // Unlimited mint allowed: user dapat mint lagi kapan pun selama points cukup.
+            // Mapping user_nft akan menunjuk NFT terakhir yang aktif.
 
             let cost = self.tier_costs.entry(tier).read();
             let point_dispatcher = IPointStorageDispatcher { 
@@ -284,7 +283,7 @@ pub mod DiscountSoulbound {
         }
 
         /// @notice Consumes a discount use for a user.
-        /// @dev Enforces monthly usage limits.
+        /// @dev Enforces finite usage limits.
         /// @param user User address.
         /// @return discount Discount percentage or rate.
         fn use_discount(ref self: ContractState, user: ContractAddress) -> u256 {
@@ -292,7 +291,7 @@ pub mod DiscountSoulbound {
         }
 
         /// @notice Consumes multiple discount uses for a user.
-        /// @dev Enforces monthly usage limits in O(1).
+        /// @dev Enforces finite usage limits in O(1).
         /// @param user User address.
         /// @param uses Number of uses to consume.
         /// @return discount Discount percentage or rate.
@@ -307,11 +306,6 @@ pub mod DiscountSoulbound {
             }
 
             let mut nft = self.nfts.entry(token_id).read();
-            let now = get_block_timestamp();
-            if now >= nft.last_reset + PERIOD_SECONDS {
-                nft.used_in_period = 0;
-                nft.last_reset = now;
-            }
             let discount = nft.discount_rate;
 
             if nft.used_in_period + uses > nft.max_usage {
@@ -322,12 +316,20 @@ pub mod DiscountSoulbound {
             let remaining = nft.max_usage - nft.used_in_period;
             self.nfts.entry(token_id).write(nft);
             self.emit(Event::NFTUsed(NFTUsed { user, token_id, remaining_usage: remaining }));
+            if remaining == 0 {
+                self.emit(Event::NFTDeactivated(NFTDeactivated {
+                    user,
+                    token_id,
+                    used_in_period: nft.used_in_period,
+                    max_usage: nft.max_usage
+                }));
+            }
 
             discount
         }
 
-        /// @notice Recharges monthly usage for the caller's NFT.
-        /// @dev Consumes points based on tier recharge cost.
+        /// @notice Recharges usage quota for the caller's NFT.
+        /// @dev Consumes points based on tier recharge cost (if enabled).
         fn recharge_nft(ref self: ContractState) {
             let user = get_caller_address();
             let token_id = self.user_nft.entry(user).read();
@@ -358,9 +360,7 @@ pub mod DiscountSoulbound {
                 return 0;
             }
             let nft = self.nfts.entry(token_id).read();
-            let now = get_block_timestamp();
-            let used = if now >= nft.last_reset + PERIOD_SECONDS { 0 } else { nft.used_in_period };
-            if used >= nft.max_usage { return 0; }
+            if nft.used_in_period >= nft.max_usage { return 0; }
             nft.discount_rate
         }
 
@@ -374,9 +374,7 @@ pub mod DiscountSoulbound {
                 return (false, 0);
             }
             let nft = self.nfts.entry(token_id).read();
-            let now = get_block_timestamp();
-            let used = if now >= nft.last_reset + PERIOD_SECONDS { 0 } else { nft.used_in_period };
-            let active = used < nft.max_usage;
+            let active = nft.used_in_period < nft.max_usage;
             let rate = if active { nft.discount_rate } else { 0 };
             (active, rate)
         }

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Platinum Blade Animated</title>
+  <desc id="desc">Cyberpunk platinum tier with crystalline blade and cyan energy rings.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a2634"/>
+      <stop offset="100%" stop-color="#040b12"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b7fbff"/>
+      <stop offset="100%" stop-color="#2c8ba8"/>
+    </linearGradient>
+    <linearGradient id="blade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#edffff"/>
+      <stop offset="45%" stop-color="#76edff"/>
+      <stop offset="100%" stop-color="#2788a2"/>
+    </linearGradient>
+    <radialGradient id="aura" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#59ecff" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#59ecff" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .aura { animation: pulse 2.3s ease-in-out infinite; transform-origin: 512px 448px; }
+      .ring-a { animation: spin 10s linear infinite; transform-origin: 512px 448px; }
+      .ring-b { animation: spin-rev 8s linear infinite; transform-origin: 512px 448px; }
+      .blade { animation: bob 4.2s ease-in-out infinite; transform-origin: 512px 454px; }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.55; transform: scale(0.9); }
+        50% { opacity: 1; transform: scale(1.18); }
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      @keyframes spin-rev {
+        0% { transform: rotate(360deg); }
+        100% { transform: rotate(0deg); }
+      }
+      @keyframes bob {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+      }
+    </style>
+  </defs>
+
+  <rect width="1024" height="1024" rx="72" fill="url(#bg)"/>
+  <rect x="24" y="24" width="976" height="976" rx="58" fill="none" stroke="url(#frame)" stroke-width="8"/>
+  <polygon points="512,90 840,224 946,512 840,800 512,934 184,800 78,512 184,224" fill="none" stroke="#2b6f86" stroke-width="5"/>
+  <circle class="aura" cx="512" cy="448" r="310" fill="url(#aura)"/>
+
+  <polygon class="ring-a" points="512,214 694,286 766,448 694,610 512,682 330,610 258,448 330,286" fill="none" stroke="#79f0ff" stroke-opacity="0.75" stroke-width="6"/>
+  <polygon class="ring-b" points="512,254 658,314 718,448 658,582 512,642 366,582 306,448 366,314" fill="none" stroke="#adfbff" stroke-opacity="0.5" stroke-width="4"/>
+
+  <g class="blade">
+    <polygon points="512,150 602,336 552,610 512,842 472,610 422,336" fill="url(#blade)"/>
+    <polygon points="342,602 682,602 748,706 640,776 384,776 276,706" fill="#54e6ff"/>
+    <polygon points="466,776 558,776 532,868 492,868" fill="#2f95af"/>
+    <path d="M512 246L560 356L672 406L560 456L512 566L464 456L352 406L464 356Z" fill="#dcffff" opacity="0.96"/>
+  </g>
+
+  <text x="512" y="812" text-anchor="middle" fill="#cbfbff" font-family="Verdana, sans-serif" font-size="78" font-weight="700">PLATINUM</text>
+  <text x="512" y="874" text-anchor="middle" fill="#8af0ff" font-family="Verdana, sans-serif" font-size="34">Cyberpunk Blade</text>
+</svg>

@@ -4,7 +4,17 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { TrendingUp, TrendingDown, PieChart, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { getPortfolioAnalytics, getPortfolioOHLCV, getTransactionsHistory, type AnalyticsResponse, type PortfolioOHLCVPoint, type Transaction } from "@/lib/api"
+import {
+  getPortfolioAnalytics,
+  getPortfolioBalance,
+  getPortfolioOHLCV,
+  getTransactionsHistory,
+  type AnalyticsResponse,
+  type BalanceResponse,
+  type PortfolioOHLCVPoint,
+  type Transaction,
+} from "@/lib/api"
+import { useWallet } from "@/hooks/use-wallet"
 import {
   Dialog,
   DialogContent,
@@ -182,27 +192,39 @@ type UiTransaction = {
 }
 
 export function PortfolioDashboard() {
+  const wallet = useWallet()
   const [detailsOpen, setDetailsOpen] = React.useState(false)
   const [selectedPeriod, setSelectedPeriod] = React.useState("7D")
   const [analytics, setAnalytics] = React.useState<AnalyticsResponse | null>(null)
+  const [portfolioBalance, setPortfolioBalance] = React.useState<BalanceResponse | null>(null)
   const [chartData, setChartData] = React.useState<ChartPoint[]>([])
   const [transactions, setTransactions] = React.useState<UiTransaction[]>([])
 
   React.useEffect(() => {
     let active = true
-    ;(async () => {
+    const loadPortfolio = async () => {
       try {
-        const response = await getPortfolioAnalytics()
+        const [analyticsRes, balanceRes] = await Promise.all([
+          getPortfolioAnalytics().catch(() => null),
+          getPortfolioBalance().catch(() => null),
+        ])
         if (!active) return
-        setAnalytics(response)
+        setAnalytics(analyticsRes)
+        setPortfolioBalance(balanceRes)
       } catch {
         if (!active) return
         setAnalytics(null)
+        setPortfolioBalance(null)
       }
-    })()
+    }
+    void loadPortfolio()
+    const interval = window.setInterval(() => {
+      void loadPortfolio()
+    }, 30000)
 
     return () => {
       active = false
+      window.clearInterval(interval)
     }
   }, [])
 
@@ -239,6 +261,7 @@ export function PortfolioDashboard() {
   }, [selectedPeriod])
 
   React.useEffect(() => {
+    if (!detailsOpen) return
     let active = true
     const formatRelativeTime = (iso: string) => {
       const date = new Date(iso)
@@ -287,7 +310,7 @@ export function PortfolioDashboard() {
     return () => {
       active = false
     }
-  }, [])
+  }, [detailsOpen, analytics?.portfolio.total_value_usd])
 
   const safeNumber = (value: string | number | undefined, fallback: number) => {
     if (value === undefined) return fallback
@@ -307,16 +330,46 @@ export function PortfolioDashboard() {
   const totalValue = analytics
     ? safeNumber(analytics.portfolio.total_value_usd, 0)
     : 0
+  const effectiveStarknetAddress =
+    wallet.starknetAddress || (wallet.network === "starknet" ? wallet.address : null)
+  const onchainAmountOverride: Record<string, number | null> = {
+    STRK: effectiveStarknetAddress ? wallet.onchainBalance.STRK_L2 : null,
+    CAREL: effectiveStarknetAddress ? wallet.onchainBalance.CAREL : null,
+    USDC: effectiveStarknetAddress ? wallet.onchainBalance.USDC : null,
+    USDT: effectiveStarknetAddress ? wallet.onchainBalance.USDT : null,
+    WBTC: effectiveStarknetAddress ? wallet.onchainBalance.WBTC : null,
+    ETH: wallet.evmAddress ? wallet.onchainBalance.ETH : null,
+    BTC: wallet.btcAddress ? wallet.onchainBalance.BTC : null,
+  }
 
   const pnlValue = analytics
     ? safeNumber(analytics.portfolio[periodKey], 0)
     : 0
 
-  const pnlPercent = totalValue > 0
-    ? (pnlValue / totalValue) * 100
-    : 0
-
-  const assets: PortfolioAsset[] = analytics
+  const assetsRaw: PortfolioAsset[] = portfolioBalance
+    ? portfolioBalance.balances.map((item) => {
+        const symbol = item.token.toUpperCase()
+        const meta = assetMeta[symbol] || { name: symbol, icon: "•" }
+        const overrideAmount = onchainAmountOverride[symbol]
+        const amount = overrideAmount ?? Number(item.amount || 0)
+        const backendValue = Number(item.value_usd || 0)
+        const fallbackPrice = Number(item.price || 0)
+        const inferredPrice = amount > 0 ? backendValue / amount : 0
+        const price = Number.isFinite(fallbackPrice) && fallbackPrice > 0 ? fallbackPrice : inferredPrice
+        const value =
+          overrideAmount !== null && Number.isFinite(price) && price > 0
+            ? amount * price
+            : backendValue
+        return {
+          symbol,
+          name: meta.name,
+          icon: meta.icon,
+          value,
+          percent: 0,
+          change: Number(item.change_24h || 0),
+        }
+      })
+    : analytics
     ? analytics.portfolio.allocation.map((item) => {
         const meta = assetMeta[item.asset] || { name: item.asset, icon: "•" }
         return {
@@ -324,11 +377,21 @@ export function PortfolioDashboard() {
           name: meta.name,
           icon: meta.icon,
           value: safeNumber(item.value_usd, 0),
-          percent: Number.isFinite(item.percentage) ? item.percentage : 0,
+          percent: 0,
           change: 0,
         }
       })
     : []
+
+  const totalValueFromAssets = assetsRaw.reduce((sum, asset) => sum + asset.value, 0)
+  const resolvedTotalValue = totalValueFromAssets > 0 ? totalValueFromAssets : totalValue
+  const pnlPercent = resolvedTotalValue > 0
+    ? (pnlValue / resolvedTotalValue) * 100
+    : 0
+  const assets = assetsRaw.map((asset) => ({
+    ...asset,
+    percent: resolvedTotalValue > 0 ? (asset.value / resolvedTotalValue) * 100 : 0,
+  }))
 
   const bestPerformer = assets.reduce<PortfolioAsset | null>((best, asset) => {
     if (!best) return asset
@@ -336,7 +399,7 @@ export function PortfolioDashboard() {
   }, null)
 
   const displayData: PortfolioSnapshot = {
-    totalValue,
+    totalValue: resolvedTotalValue,
     pnl: pnlValue,
     pnlPercent: Number.isFinite(pnlPercent) ? Number(pnlPercent.toFixed(2)) : 0,
     period: selectedPeriod,

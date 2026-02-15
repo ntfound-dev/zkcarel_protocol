@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Bronze Shield NFT</title>
+  <desc id="desc">Cyberpunk bronze shield artwork for bronze tier NFT.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b1906"/>
+      <stop offset="100%" stop-color="#120603"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffca7b"/>
+      <stop offset="45%" stop-color="#dc7b27"/>
+      <stop offset="100%" stop-color="#8f3908"/>
+    </linearGradient>
+    <radialGradient id="aura" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#ff9f43" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#ff9f43" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="80" fill="url(#bg)"/>
+  <rect x="26" y="26" width="972" height="972" rx="64" fill="none" stroke="#f2a456" stroke-opacity="0.6" stroke-width="8"/>
+  <circle cx="512" cy="430" r="290" fill="url(#aura)"/>
+
+  <g transform="translate(512 440)">
+    <path d="M0 -285L220 -205V-10C220 110 145 220 0 290C-145 220 -220 110 -220 -10V-205Z" fill="#2d1103" stroke="#f4ad67" stroke-width="14"/>
+    <path d="M0 -230L162 -170V-20C162 64 113 150 0 215C-113 150 -162 64 -162 -20V-170Z" fill="url(#metal)"/>
+    <path d="M0 -152L48 -20L176 26L48 72L0 204L-48 72L-176 26L-48 -20Z" fill="#ffe5ba" opacity="0.95"/>
+  </g>
+
+  <text x="512" y="810" text-anchor="middle" fill="#ffd8a2" font-family="Verdana, sans-serif" font-size="84" font-weight="700">BRONZE</text>
+  <text x="512" y="874" text-anchor="middle" fill="#f2a456" font-family="Verdana, sans-serif" font-size="34">Cyberpunk Shield</text>
+</svg>

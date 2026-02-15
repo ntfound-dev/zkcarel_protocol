@@ -151,6 +151,42 @@ fn compute_percentile(rank: i64, total_users: i64) -> f64 {
     (1.0 - (safe_rank as f64 / total_users as f64)) * 100.0
 }
 
+fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for address in user_addresses {
+        let trimmed = address.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if normalized.iter().any(|existing| existing == &lower) {
+            continue;
+        }
+        normalized.push(lower);
+    }
+    normalized
+}
+
+async fn resolve_leaderboard_identity(
+    state: &AppState,
+    address: &str,
+) -> Result<(String, Vec<String>)> {
+    let canonical_address = state
+        .db
+        .find_user_by_wallet_address(address, None)
+        .await?
+        .unwrap_or_else(|| address.to_string());
+    ensure_user_exists(state, &canonical_address).await?;
+
+    let mut scopes = vec![canonical_address.clone(), address.to_string()];
+    if let Ok(linked_wallets) = state.db.list_wallet_addresses(&canonical_address).await {
+        for linked in linked_wallets {
+            scopes.push(linked.wallet_address);
+        }
+    }
+    Ok((canonical_address, normalize_scope_addresses(&scopes)))
+}
+
 #[derive(Debug, Serialize)]
 pub struct UserRankCategory {
     pub category: String,
@@ -203,30 +239,65 @@ pub async fn get_user_rank(
 ) -> Result<Json<ApiResponse<UserRankResponse>>> {
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
-    ensure_user_exists(&state, &address).await?;
-    let user_points = state.db.get_user_points(&address, current_epoch).await?;
-    let user_total: f64 = user_points
-        .as_ref()
-        .map(|points| points.total_points.to_string().parse().unwrap_or(0.0))
-        .unwrap_or(0.0);
+    let (canonical_address, scope_addresses) = resolve_leaderboard_identity(&state, &address).await?;
+    let user_total: f64 = sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(total_points), 0)::FLOAT
+         FROM points
+         WHERE LOWER(user_address) = ANY($1) AND epoch = $2",
+    )
+    .bind(scope_addresses)
+    .bind(current_epoch)
+    .fetch_one(state.db.pool())
+    .await?
+    ;
 
     let rank_result: RankResult = sqlx::query_as(
-        "SELECT COUNT(*) + 1 as rank FROM points WHERE epoch = $1 AND total_points > $2",
+        r#"
+        WITH identity_points AS (
+            SELECT
+                COALESCE(uw.user_address, p.user_address) as identity,
+                COALESCE(SUM(p.total_points), 0) as total_points
+            FROM points p
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+            WHERE p.epoch = $1
+            GROUP BY COALESCE(uw.user_address, p.user_address)
+        )
+        SELECT COUNT(*) + 1 as rank
+        FROM identity_points
+        WHERE total_points > COALESCE(
+              (
+                  SELECT ip.total_points
+                  FROM identity_points ip
+                  WHERE LOWER(ip.identity) = LOWER($2)
+                  LIMIT 1
+              ),
+              0
+          )
+        "#,
     )
     .bind(current_epoch)
-    .bind(
-        user_points
-            .map(|points| points.total_points)
-            .unwrap_or(rust_decimal::Decimal::ZERO),
-    )
+    .bind(&canonical_address)
     .fetch_one(state.db.pool())
     .await?;
 
     let total_users_res: CountResult =
-        sqlx::query_as("SELECT COUNT(DISTINCT user_address) as count FROM points WHERE epoch = $1")
-            .bind(current_epoch)
-            .fetch_one(state.db.pool())
-            .await?;
+        sqlx::query_as(
+            r#"
+            SELECT COUNT(*) as count
+            FROM (
+                SELECT COALESCE(uw.user_address, p.user_address) as identity
+                FROM points p
+                LEFT JOIN user_wallet_addresses uw
+                  ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+                WHERE p.epoch = $1
+                GROUP BY COALESCE(uw.user_address, p.user_address)
+            ) s
+            "#,
+        )
+        .bind(current_epoch)
+        .fetch_one(state.db.pool())
+        .await?;
 
     let total_users = if total_users_res.count == 0 {
         1
@@ -291,67 +362,126 @@ pub async fn get_user_categories(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> Result<Json<ApiResponse<UserRankCategoriesResponse>>> {
-    let _user = state.db.get_or_create_user(&address).await?;
+    let (canonical_address, scope_addresses) = resolve_leaderboard_identity(&state, &address).await?;
 
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
-    let user_points_total = state
-        .db
-        .get_user_points(&address, current_epoch)
-        .await?
-        .map(|points| points.total_points.to_string().parse().unwrap_or(0.0))
-        .unwrap_or(0.0);
+    let user_points_total: f64 = sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(total_points), 0)::FLOAT
+         FROM points
+         WHERE LOWER(user_address) = ANY($1) AND epoch = $2",
+    )
+    .bind(scope_addresses.clone())
+    .bind(current_epoch)
+    .fetch_one(state.db.pool())
+    .await?
+    ;
 
     let points_rank: RankResult = sqlx::query_as(
-        "SELECT COUNT(*) + 1 as rank FROM points WHERE epoch = $1 AND total_points > $2",
+        r#"
+        WITH identity_points AS (
+            SELECT
+                COALESCE(uw.user_address, p.user_address) as identity,
+                COALESCE(SUM(p.total_points), 0) as total_points
+            FROM points p
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+            WHERE p.epoch = $1
+            GROUP BY COALESCE(uw.user_address, p.user_address)
+        )
+        SELECT COUNT(*) + 1 as rank
+        FROM identity_points
+        WHERE total_points > COALESCE(
+              (
+                  SELECT ip.total_points
+                  FROM identity_points ip
+                  WHERE LOWER(ip.identity) = LOWER($2)
+                  LIMIT 1
+              ),
+              0
+          )
+        "#,
     )
     .bind(current_epoch)
-    .bind(user_points_total)
+    .bind(&canonical_address)
     .fetch_one(state.db.pool())
     .await?;
 
-    let points_total: CountResult =
-        sqlx::query_as("SELECT COUNT(DISTINCT user_address) as count FROM points WHERE epoch = $1")
-            .bind(current_epoch)
-            .fetch_one(state.db.pool())
-            .await?;
+    let points_total: CountResult = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) as count
+        FROM (
+            SELECT COALESCE(uw.user_address, p.user_address) as identity
+            FROM points p
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+            WHERE p.epoch = $1
+            GROUP BY COALESCE(uw.user_address, p.user_address)
+        ) s
+        "#,
+    )
+    .bind(current_epoch)
+    .fetch_one(state.db.pool())
+    .await?;
 
     let volume_value: f64 = sqlx::query_scalar::<_, f64>(
         "SELECT COALESCE(SUM(usd_value), 0)::FLOAT
          FROM transactions
-         WHERE user_address = $1
+         WHERE LOWER(user_address) = ANY($1)
            AND COALESCE(is_private, false) = false",
     )
-    .bind(&address)
+    .bind(scope_addresses)
     .fetch_one(state.db.pool())
     .await?;
 
     let volume_rank: RankResult = sqlx::query_as(
         r#"
-        WITH user_volumes AS (
-            SELECT u.address, COALESCE(SUM(t.usd_value), 0) as volume_usd
-            FROM users u
-            LEFT JOIN transactions t
-              ON t.user_address = u.address
-             AND COALESCE(t.is_private, false) = false
-            GROUP BY u.address
+        WITH identity_volume AS (
+            SELECT
+                COALESCE(uw.user_address, t.user_address) as identity,
+                COALESCE(SUM(t.usd_value), 0) as volume_usd
+            FROM transactions t
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(t.user_address)
+            WHERE COALESCE(t.is_private, false) = false
+            GROUP BY COALESCE(uw.user_address, t.user_address)
         )
         SELECT COUNT(*) + 1 as rank
-        FROM user_volumes
-        WHERE volume_usd > $1
+        FROM identity_volume
+        WHERE volume_usd > COALESCE(
+            (
+                SELECT iv.volume_usd
+                FROM identity_volume iv
+                WHERE LOWER(iv.identity) = LOWER($1)
+                LIMIT 1
+            ),
+            0
+        )
         "#,
     )
-    .bind(volume_value)
+    .bind(&canonical_address)
     .fetch_one(state.db.pool())
     .await?;
 
-    let volume_total: CountResult = sqlx::query_as("SELECT COUNT(*) as count FROM users")
-        .fetch_one(state.db.pool())
-        .await?;
+    let volume_total: CountResult = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) as count
+        FROM (
+            SELECT COALESCE(uw.user_address, t.user_address) as identity
+            FROM transactions t
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(t.user_address)
+            WHERE COALESCE(t.is_private, false) = false
+            GROUP BY COALESCE(uw.user_address, t.user_address)
+        ) s
+        "#,
+    )
+    .fetch_one(state.db.pool())
+    .await?;
 
     let referral_count: i64 =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE referrer = $1")
-            .bind(&address)
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE LOWER(referrer) = LOWER($1)")
+            .bind(&canonical_address)
             .fetch_one(state.db.pool())
             .await?;
 
@@ -368,13 +498,24 @@ pub async fn get_user_categories(
             ) r ON u.address = r.referrer
         )
         SELECT COUNT(*) + 1 as rank
-        FROM referral_counts
-        WHERE referral_count > $1
+        FROM referral_counts rc
+        WHERE rc.referral_count > COALESCE(
+            (
+                SELECT COUNT(*)
+                FROM users
+                WHERE LOWER(referrer) = LOWER($1)
+            ),
+            0
+        )
         "#,
     )
-    .bind(referral_count)
+    .bind(&canonical_address)
     .fetch_one(state.db.pool())
     .await?;
+
+    let referral_total: CountResult = sqlx::query_as("SELECT COUNT(*) as count FROM users")
+        .fetch_one(state.db.pool())
+        .await?;
 
     let categories = vec![
         UserRankCategory {
@@ -394,8 +535,8 @@ pub async fn get_user_categories(
         UserRankCategory {
             category: "referrals".to_string(),
             rank: referral_rank.rank,
-            total_users: volume_total.count,
-            percentile: compute_percentile(referral_rank.rank, volume_total.count),
+            total_users: referral_total.count,
+            percentile: compute_percentile(referral_rank.rank, referral_total.count),
             value: referral_count as f64,
         },
     ];
@@ -408,19 +549,29 @@ pub async fn get_user_categories(
 async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
-    // Perhatikan penggunaan CAST(... AS FLOAT) agar cocok dengan struct f64
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
-        "SELECT 
-            ROW_NUMBER() OVER (ORDER BY p.total_points DESC) as rank,
-            p.user_address,
-            COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(u.address, 6))) as display_name,
-            CAST(p.total_points AS FLOAT) as value,
+        r#"
+        WITH identity_points AS (
+            SELECT
+                COALESCE(uw.user_address, p.user_address) as identity,
+                COALESCE(SUM(p.total_points), 0) as total_points
+            FROM points p
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+            WHERE p.epoch = $1
+            GROUP BY COALESCE(uw.user_address, p.user_address)
+        )
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY ip.total_points DESC) as rank,
+            ip.identity as user_address,
+            COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(ip.identity, 6))) as display_name,
+            CAST(ip.total_points AS FLOAT) as value,
             NULL as change_24h
-         FROM points p
-         JOIN users u ON p.user_address = u.address
-         WHERE p.epoch = $1
-         ORDER BY p.total_points DESC
-         LIMIT 100"
+        FROM identity_points ip
+        LEFT JOIN users u ON LOWER(u.address) = LOWER(ip.identity)
+        ORDER BY ip.total_points DESC
+        LIMIT 100
+        "#,
     )
     .bind(current_epoch)
     .fetch_all(state.db.pool())
@@ -431,21 +582,28 @@ async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
 
 async fn get_volume_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
-        "SELECT 
-            ROW_NUMBER() OVER (ORDER BY COALESCE(v.volume_usd, 0) DESC) as rank,
-            u.address as user_address,
-            COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(u.address, 6))) as display_name,
-            CAST(COALESCE(v.volume_usd, 0) AS FLOAT) as value,
+        r#"
+        WITH identity_volume AS (
+            SELECT
+                COALESCE(uw.user_address, t.user_address) as identity,
+                COALESCE(SUM(t.usd_value), 0) as volume_usd
+            FROM transactions t
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(t.user_address)
+            WHERE COALESCE(t.is_private, false) = false
+            GROUP BY COALESCE(uw.user_address, t.user_address)
+        )
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY iv.volume_usd DESC) as rank,
+            iv.identity as user_address,
+            COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(iv.identity, 6))) as display_name,
+            CAST(iv.volume_usd AS FLOAT) as value,
             NULL as change_24h
-         FROM users u
-         LEFT JOIN (
-            SELECT user_address, COALESCE(SUM(usd_value), 0) as volume_usd
-            FROM transactions
-            WHERE COALESCE(is_private, false) = false
-            GROUP BY user_address
-         ) v ON v.user_address = u.address
-         ORDER BY COALESCE(v.volume_usd, 0) DESC
-         LIMIT 100"
+        FROM identity_volume iv
+        LEFT JOIN users u ON LOWER(u.address) = LOWER(iv.identity)
+        ORDER BY iv.volume_usd DESC
+        LIMIT 100
+        "#,
     )
     .fetch_all(state.db.pool())
     .await?;

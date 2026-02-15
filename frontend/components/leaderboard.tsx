@@ -125,22 +125,32 @@ export function Leaderboard() {
   const [loadError, setLoadError] = React.useState<string | null>(null)
 
   const isYouAddress = React.useCallback((entryAddress: string) => {
-    if (!wallet.address) return false
+    const candidates = [
+      wallet.address,
+      wallet.starknetAddress,
+      wallet.evmAddress,
+      wallet.btcAddress,
+    ]
+      .map((value) => value?.toLowerCase().trim())
+      .filter((value): value is string => Boolean(value))
+
+    if (candidates.length === 0) return false
     const normalizedEntry = entryAddress.toLowerCase()
-    const normalizedWallet = wallet.address.toLowerCase()
-    if (normalizedWallet.includes("...")) {
-      const [prefix, suffix] = normalizedWallet.split("...")
-      return normalizedEntry.startsWith(prefix) && normalizedEntry.endsWith(suffix)
-    }
-    return normalizedEntry === normalizedWallet
-  }, [wallet.address])
+    return candidates.some((normalizedWallet) => {
+      if (normalizedWallet.includes("...")) {
+        const [prefix, suffix] = normalizedWallet.split("...")
+        return normalizedEntry.startsWith(prefix) && normalizedEntry.endsWith(suffix)
+      }
+      return normalizedEntry === normalizedWallet
+    })
+  }, [wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
 
   React.useEffect(() => {
     let active = true
     const leaderboardType =
       activeTab === "total" ? "points" : activeTab === "trading" ? "volume" : "referrals"
 
-    ;(async () => {
+    const loadLeaderboard = async () => {
       setIsLoading(true)
       setLoadError(null)
       try {
@@ -172,10 +182,16 @@ export function Leaderboard() {
       } finally {
         if (active) setIsLoading(false)
       }
-    })()
+    }
+
+    void loadLeaderboard()
+    const timer = window.setInterval(() => {
+      void loadLeaderboard()
+    }, 15000)
 
     return () => {
       active = false
+      window.clearInterval(timer)
     }
   }, [activeTab, isYouAddress])
 

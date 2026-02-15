@@ -191,6 +191,11 @@ deploy_contract MERKLE_VERIFIER_ADDRESS MerkleVerifier
 
 if ! needs_deploy "${POINT_STORAGE_ADDRESS:-}"; then
   deploy_contract DISCOUNT_SOULBOUND_ADDRESS DiscountSoulbound "$POINT_STORAGE_ADDRESS" "$DISCOUNT_EPOCH"
+  if [ -n "${DISCOUNT_SOULBOUND_ADDRESS:-}" ]; then
+    echo "Authorizing DiscountSoulbound as PointStorage consumer..."
+    add_consumer_out=$(run_sncast sncast invoke --network "$NET" --contract-address "$POINT_STORAGE_ADDRESS" --function add_consumer --calldata "$DISCOUNT_SOULBOUND_ADDRESS")
+    echo "$add_consumer_out"
+  fi
   if needs_deploy "${NFT_CONTRACT_ADDRESS:-}" && [ -n "${DISCOUNT_SOULBOUND_ADDRESS:-}" ]; then
     update_env NFT_CONTRACT_ADDRESS "$DISCOUNT_SOULBOUND_ADDRESS"
     export NFT_CONTRACT_ADDRESS="$DISCOUNT_SOULBOUND_ADDRESS"

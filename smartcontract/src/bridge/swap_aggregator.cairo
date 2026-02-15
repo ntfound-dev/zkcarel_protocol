@@ -329,6 +329,8 @@ pub mod SwapAggregator {
             };
 
             let to_token_dispatcher = IERC20Dispatcher { contract_address: to_token };
+            let available_out = to_token_dispatcher.balance_of(get_contract_address());
+            assert!(available_out >= amount_out, "Insufficient aggregator output liquidity");
             let payout_ok = to_token_dispatcher.transfer(user, amount_out);
             assert!(payout_ok, "Output token transfer failed");
 

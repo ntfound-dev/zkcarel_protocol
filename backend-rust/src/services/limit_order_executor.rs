@@ -5,6 +5,7 @@ use crate::{
     db::Database,
     error::Result,
     models::{LimitOrder, Transaction},
+    services::nft_discount::consume_nft_usage_if_active,
 };
 use rust_decimal::prelude::ToPrimitive; // Penting untuk f64 conversion
 use sqlx::Row; // Penting untuk .get()
@@ -201,6 +202,17 @@ impl LimitOrderExecutor {
             processed: false,
         };
         self.db.save_transaction(&tx).await?;
+        if let Err(err) =
+            consume_nft_usage_if_active(&self.config, &order.owner, "limit_order_fill").await
+        {
+            tracing::warn!(
+                "Failed to consume NFT discount usage after limit order fill: user={} order_id={} tx_hash={} err={}",
+                order.owner,
+                order.order_id,
+                tx_hash,
+                err
+            );
+        }
 
         tracing::info!(
             "Order {} filled: {} {} → {} {} at price {}",

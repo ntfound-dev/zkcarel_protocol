@@ -171,6 +171,7 @@ pub struct LayerSwapQuote {
     pub estimated_time_minutes: u32,
 }
 
+#[cfg(test)]
 impl LayerSwapQuote {
     fn simulated(from_chain: &str, to_chain: &str, token: &str, amount: f64) -> Self {
         Self {

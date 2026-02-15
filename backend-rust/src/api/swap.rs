@@ -1,5 +1,5 @@
 use super::{require_starknet_user, require_user, AppState};
-use crate::services::onchain::{felt_to_u128, parse_felt, OnchainInvoker, OnchainReader};
+use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader};
 use crate::services::privacy_verifier::{
     parse_privacy_verifier_kind, resolve_privacy_router_for_verifier, PrivacyVerifierKind,
 };
@@ -10,6 +10,7 @@ use crate::{
     error::{AppError, Result},
     models::{ApiResponse, StarknetWalletCall, SwapQuoteRequest, SwapQuoteResponse},
     services::gas_optimizer::GasOptimizer,
+    services::nft_discount::consume_nft_usage_if_active,
     services::notification_service::NotificationType,
     services::LiquidityAggregator,
     services::NotificationService,
@@ -21,7 +22,10 @@ use starknet_core::types::{
     TransactionFinalityStatus,
 };
 use starknet_core::utils::get_selector_from_name;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
+
+const ORACLE_ROUTE_DEX_ID_HEX: &str = "0x4f52434c"; // 'ORCL'
+const ONCHAIN_DISCOUNT_TIMEOUT_MS: u64 = 2_500;
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyVerificationPayload {
@@ -73,8 +77,102 @@ fn mev_fee_for_mode(mode: &str, amount_in: f64) -> f64 {
     }
 }
 
-fn total_fee(amount_in: f64, mode: &str) -> f64 {
-    base_fee(amount_in) + mev_fee_for_mode(mode, amount_in)
+fn total_fee(amount_in: f64, mode: &str, nft_discount_percent: f64) -> f64 {
+    let undiscounted = base_fee(amount_in) + mev_fee_for_mode(mode, amount_in);
+    let discount_factor = 1.0 - (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
+    undiscounted * discount_factor
+}
+
+fn discount_contract_address(state: &AppState) -> Option<&str> {
+    state
+        .config
+        .discount_soulbound_address
+        .as_deref()
+        .filter(|addr| !addr.trim().is_empty() && !addr.starts_with("0x0000"))
+}
+
+async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f64 {
+    let Some(contract) = discount_contract_address(state) else {
+        return 0.0;
+    };
+
+    let reader = match OnchainReader::from_config(&state.config) {
+        Ok(reader) => reader,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to initialize on-chain reader for NFT discount in swap: {}",
+                err
+            );
+            return 0.0;
+        }
+    };
+
+    let contract_address = match parse_felt(contract) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                "Invalid discount contract address while calculating swap fee discount: {}",
+                err
+            );
+            return 0.0;
+        }
+    };
+    let user_felt = match parse_felt(user_address) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                "Invalid user address while calculating swap fee discount: user={}, err={}",
+                user_address,
+                err
+            );
+            return 0.0;
+        }
+    };
+
+    let selector = match get_selector_from_name("has_active_discount") {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!("Selector resolution failed for has_active_discount: {}", err);
+            return 0.0;
+        }
+    };
+
+    let call = FunctionCall {
+        contract_address,
+        entry_point_selector: selector,
+        calldata: vec![user_felt],
+    };
+
+    let result = match timeout(Duration::from_millis(ONCHAIN_DISCOUNT_TIMEOUT_MS), reader.call(call)).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "Failed on-chain NFT discount check in swap for user={}: {}",
+                user_address,
+                err
+            );
+            return 0.0;
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Timeout on-chain NFT discount check in swap for user={}",
+                user_address
+            );
+            return 0.0;
+        }
+    };
+
+    if result.len() < 3 {
+        return 0.0;
+    }
+
+    let is_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
+    if !is_active {
+        return 0.0;
+    }
+
+    let discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
+    discount.clamp(0.0, 100.0)
 }
 
 fn normalize_usd_volume(usd_in: f64, usd_out: f64) -> f64 {
@@ -525,6 +623,121 @@ fn parse_onchain_route(raw: &[Felt]) -> Result<OnchainSwapRoute> {
         min_amount_out_low: raw[3],
         min_amount_out_high: raw[4],
     })
+}
+
+fn u256_limbs_to_u128_parts(low: Felt, high: Felt, label: &str) -> Result<(u128, u128)> {
+    let low_u = felt_to_u128(&low).map_err(|_| {
+        AppError::BadRequest(format!(
+            "Invalid on-chain {} amount: low limb is not numeric",
+            label
+        ))
+    })?;
+    let high_u = felt_to_u128(&high).map_err(|_| {
+        AppError::BadRequest(format!(
+            "Invalid on-chain {} amount: high limb is not numeric",
+            label
+        ))
+    })?;
+    Ok((low_u, high_u))
+}
+
+fn u256_is_greater(
+    left_low: Felt,
+    left_high: Felt,
+    right_low: Felt,
+    right_high: Felt,
+    left_label: &str,
+    right_label: &str,
+) -> Result<bool> {
+    let (left_low_u, left_high_u) = u256_limbs_to_u128_parts(left_low, left_high, left_label)?;
+    let (right_low_u, right_high_u) = u256_limbs_to_u128_parts(right_low, right_high, right_label)?;
+    Ok(left_high_u > right_high_u || (left_high_u == right_high_u && left_low_u > right_low_u))
+}
+
+async fn read_erc20_balance_parts(
+    reader: &OnchainReader,
+    token: Felt,
+    owner: Felt,
+) -> Result<(Felt, Felt)> {
+    for selector_name in ["balance_of", "balanceOf"] {
+        let selector = get_selector_from_name(selector_name)
+            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+        let response = reader
+            .call(FunctionCall {
+                contract_address: token,
+                entry_point_selector: selector,
+                calldata: vec![owner],
+            })
+            .await;
+        if let Ok(values) = response {
+            if values.len() >= 2 {
+                return Ok((values[0], values[1]));
+            }
+        }
+    }
+    Err(AppError::BadRequest(
+        "Failed to read on-chain token liquidity (balance_of)".to_string(),
+    ))
+}
+
+fn is_oracle_route(route: &OnchainSwapRoute) -> bool {
+    parse_felt(ORACLE_ROUTE_DEX_ID_HEX)
+        .map(|oracle_id| route.dex_id == oracle_id)
+        .unwrap_or(false)
+}
+
+async fn ensure_oracle_route_liquidity(
+    state: &AppState,
+    context: &OnchainSwapContext,
+    from_token: &str,
+    to_token: &str,
+    from_amount: &str,
+) -> Result<()> {
+    if !is_oracle_route(&context.route) {
+        return Ok(());
+    }
+
+    let reader = OnchainReader::from_config(&state.config)?;
+    let (available_low, available_high) =
+        read_erc20_balance_parts(&reader, context.to_token, context.swap_contract).await?;
+
+    let required_is_higher = u256_is_greater(
+        context.route.expected_amount_out_low,
+        context.route.expected_amount_out_high,
+        available_low,
+        available_high,
+        "required output",
+        "available liquidity",
+    )?;
+    if !required_is_higher {
+        return Ok(());
+    }
+
+    let required = onchain_u256_to_f64(
+        context.route.expected_amount_out_low,
+        context.route.expected_amount_out_high,
+        token_decimals(to_token),
+    )?;
+    let available = onchain_u256_to_f64(available_low, available_high, token_decimals(to_token))?;
+    let input_amount = from_amount.trim().parse::<f64>().unwrap_or(0.0);
+    let max_input = if required > 0.0 && available > 0.0 && input_amount > 0.0 {
+        input_amount * (available / required)
+    } else {
+        0.0
+    };
+
+    Err(AppError::BadRequest(format!(
+        "Likuiditas on-chain {} tidak cukup untuk {} -> {} via oracle route. Butuh sekitar {:.6} {}, tersedia sekitar {:.6} {} di swap aggregator. Kurangi amount (maks sekitar {:.6} {}) atau top-up liquidity.",
+        to_token.to_ascii_uppercase(),
+        from_token.to_ascii_uppercase(),
+        to_token.to_ascii_uppercase(),
+        required,
+        to_token.to_ascii_uppercase(),
+        available,
+        to_token.to_ascii_uppercase(),
+        max_input.max(0.0),
+        from_token.to_ascii_uppercase(),
+    )))
 }
 
 async fn fetch_onchain_swap_context(
@@ -1109,6 +1322,14 @@ pub async fn get_quote(
         .await?;
     let onchain_context =
         fetch_onchain_swap_context(&state, &req.from_token, &req.to_token, &req.amount).await?;
+    ensure_oracle_route_liquidity(
+        &state,
+        &onchain_context,
+        &req.from_token,
+        &req.to_token,
+        &req.amount,
+    )
+    .await?;
     let onchain_calls = build_onchain_swap_wallet_calls(
         &onchain_context,
         req.mode.eq_ignore_ascii_case("private"),
@@ -1200,6 +1421,14 @@ pub async fn execute_swap(
 
     let onchain_context =
         fetch_onchain_swap_context(&state, &req.from_token, &req.to_token, &req.amount).await?;
+    ensure_oracle_route_liquidity(
+        &state,
+        &onchain_context,
+        &req.from_token,
+        &req.to_token,
+        &req.amount,
+    )
+    .await?;
 
     // 3. VALIDASI SLIPPAGE
     let expected_out = onchain_u256_to_f64(
@@ -1266,7 +1495,8 @@ pub async fn execute_swap(
         .await
         .unwrap_or_default();
 
-    let total_fee = total_fee(amount_in, &req.mode);
+    let nft_discount_percent = active_nft_discount_percent(&state, &user_address).await;
+    let total_fee = total_fee(amount_in, &req.mode, nft_discount_percent);
     let from_price = latest_price_usd(&state, &req.from_token).await?;
     let to_price = latest_price_usd(&state, &req.to_token).await?;
     let volume_usd = normalize_usd_volume(amount_in * from_price, expected_out * to_price);
@@ -1291,6 +1521,17 @@ pub async fn execute_swap(
     state.db.save_transaction(&tx).await?;
     if should_hide {
         state.db.mark_transaction_private(&tx_hash).await?;
+    }
+    if nft_discount_percent > 0.0 {
+        if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "swap").await
+        {
+            tracing::warn!(
+                "Failed to consume NFT discount usage after swap success: user={} tx_hash={} err={}",
+                user_address,
+                tx_hash,
+                err
+            );
+        }
     }
 
     if let Ok(batch) = gas_optimizer.optimize_batch(vec![tx_hash.clone()]).await {

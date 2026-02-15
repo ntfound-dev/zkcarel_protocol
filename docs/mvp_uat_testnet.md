@@ -110,12 +110,18 @@ Pass criteria:
 
 ## 8) NFT discount impact
 
-- [ ] Mint/get active discount NFT.
-- [ ] Repeat one bridge/swap/limit/stake action with and without NFT.
+- [ ] Sebelum mint, pastikan current tier UI = `None`.
+- [ ] Mint Bronze NFT on-chain, pastikan tier aktif berubah ke `Bronze`.
+- [ ] Repeat satu aksi (bridge/swap/limit/stake) sebelum vs sesudah NFT aktif.
 - [ ] Verify effective points increase matches NFT discount factor.
+- [ ] Gunakan NFT sampai `max_usage` habis, pastikan status discount jadi inactive (tanpa burn token).
+- [ ] Mint ulang (remint) tier yang sama atau lebih tinggi, pastikan tier aktif kembali.
+- [ ] Verifikasi tidak ada auto-reset usage tanpa remint.
 
 Pass criteria:
 - NFT discount modifies points outcome as configured.
+- Tier progression mengikuti NFT aktif on-chain, bukan total points raw.
+- Usage berkurang hanya pada transaksi yang sukses.
 
 ## 9) Leaderboard and totals
 

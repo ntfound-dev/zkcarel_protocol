@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Silver Blade Animated</title>
+  <desc id="desc">Cyberpunk silver tier with angular blade and scanning energy lines.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18202e"/>
+      <stop offset="100%" stop-color="#06090f"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e3eafc"/>
+      <stop offset="100%" stop-color="#6b7691"/>
+    </linearGradient>
+    <linearGradient id="blade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f7fbff"/>
+      <stop offset="50%" stop-color="#b8c4dd"/>
+      <stop offset="100%" stop-color="#6e7b96"/>
+    </linearGradient>
+    <radialGradient id="aura" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#d7e2ff" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#d7e2ff" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .aura { animation: pulse 2.8s ease-in-out infinite; transform-origin: 512px 448px; }
+      .sword { animation: bob 4.4s ease-in-out infinite; transform-origin: 512px 456px; }
+      .scan { animation: scan 2s linear infinite; }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.5; transform: scale(0.9); }
+        50% { opacity: 1; transform: scale(1.12); }
+      }
+      @keyframes bob {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-9px); }
+      }
+      @keyframes scan {
+        0% { opacity: 0; transform: translateY(-120px); }
+        50% { opacity: 1; }
+        100% { opacity: 0; transform: translateY(120px); }
+      }
+    </style>
+  </defs>
+
+  <rect width="1024" height="1024" rx="72" fill="url(#bg)"/>
+  <rect x="24" y="24" width="976" height="976" rx="58" fill="none" stroke="url(#frame)" stroke-width="8"/>
+  <polygon points="512,92 836,224 944,512 836,800 512,932 188,800 80,512 188,224" fill="none" stroke="#44516b" stroke-width="5"/>
+  <circle class="aura" cx="512" cy="448" r="300" fill="url(#aura)"/>
+
+  <g class="sword">
+    <polygon points="512,168 586,328 542,556 512,756 482,556 438,328" fill="url(#blade)"/>
+    <polygon points="392,558 632,558 674,638 598,688 426,688 350,638" fill="#d4def3"/>
+    <polygon points="468,688 556,688 530,786 494,786" fill="#8f9ab4"/>
+    <polygon points="512,262 540,336 614,366 540,396 512,470 484,396 410,366 484,336" fill="#eff4ff" opacity="0.95"/>
+  </g>
+
+  <rect class="scan" x="338" y="450" width="348" height="10" rx="5" fill="#f5f9ff" opacity="0.75"/>
+
+  <text x="512" y="812" text-anchor="middle" fill="#ecf2ff" font-family="Verdana, sans-serif" font-size="84" font-weight="700">SILVER</text>
+  <text x="512" y="874" text-anchor="middle" fill="#bac5de" font-family="Verdana, sans-serif" font-size="34">Cyberpunk Blade</text>
+</svg>

@@ -28,6 +28,41 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+async fn latest_price_for_token(db: &Database, token: &str) -> Result<Option<f64>> {
+    let token_upper = token.to_ascii_uppercase();
+    let mut price: Option<f64> = sqlx::query_scalar(
+        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+    )
+    .bind(&token_upper)
+    .fetch_optional(db.pool())
+    .await?;
+    if price.is_none() && token_upper == "WBTC" {
+        price = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+        )
+        .bind("BTC")
+        .fetch_optional(db.pool())
+        .await?;
+    }
+    Ok(price)
+}
+
+fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for address in user_addresses {
+        let trimmed = address.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if normalized.iter().any(|existing| existing == &lower) {
+            continue;
+        }
+        normalized.push(lower);
+    }
+    normalized
+}
+
 /// Analytics Service - Portfolio analytics and insights
 pub struct AnalyticsService {
     db: Database,
@@ -40,7 +75,17 @@ impl AnalyticsService {
     }
 
     /// Calculate portfolio PnL
-    pub async fn calculate_pnl(&self, user_address: &str, period: &str) -> Result<PnLData> {
+    pub async fn calculate_pnl(&self, user_addresses: &[String], period: &str) -> Result<PnLData> {
+        let normalized_addresses = normalize_scope_addresses(user_addresses);
+        if normalized_addresses.is_empty() {
+            return Ok(PnLData {
+                period: period.to_string(),
+                pnl: 0.0,
+                pnl_percentage: 0.0,
+                initial_value: 0.0,
+                current_value: 0.0,
+            });
+        }
         let multiplier = pnl_multiplier(self.config.is_testnet());
         let now = Utc::now();
         let from_ts = period_to_duration(period).map(|d| now - d);
@@ -51,11 +96,11 @@ impl AnalyticsService {
                 COALESCE(SUM(usd_value) FILTER (WHERE timestamp < $2), 0) AS initial_value,
                 COALESCE(SUM(usd_value), 0) AS current_value
             FROM transactions
-            WHERE user_address = $1
+            WHERE LOWER(user_address) = ANY($1)
               AND usd_value IS NOT NULL
             "#,
         )
-        .bind(user_address)
+        .bind(normalized_addresses)
         .bind(from_ts)
         .fetch_one(self.db.pool())
         .await?;
@@ -82,23 +127,27 @@ impl AnalyticsService {
     }
 
     /// Get portfolio allocation
-    pub async fn get_allocation(&self, user_address: &str) -> Result<Vec<AssetAllocation>> {
+    pub async fn get_allocation(&self, user_addresses: &[String]) -> Result<Vec<AssetAllocation>> {
+        let normalized_addresses = normalize_scope_addresses(user_addresses);
+        if normalized_addresses.is_empty() {
+            return Ok(Vec::new());
+        }
         let rows = sqlx::query(
             r#"
             SELECT token, SUM(amount) as amount
             FROM (
                 SELECT UPPER(token_out) as token, COALESCE(CAST(amount_out AS FLOAT), 0) as amount
                 FROM transactions
-                WHERE user_address = $1 AND token_out IS NOT NULL
+                WHERE LOWER(user_address) = ANY($1) AND token_out IS NOT NULL
                 UNION ALL
                 SELECT UPPER(token_in) as token, -COALESCE(CAST(amount_in AS FLOAT), 0) as amount
                 FROM transactions
-                WHERE user_address = $1 AND token_in IS NOT NULL
+                WHERE LOWER(user_address) = ANY($1) AND token_in IS NOT NULL
             ) t
             GROUP BY token
             "#,
         )
-        .bind(user_address)
+        .bind(normalized_addresses)
         .fetch_all(self.db.pool())
         .await?;
 
@@ -113,12 +162,7 @@ impl AnalyticsService {
                 continue;
             }
 
-            let price: Option<f64> = sqlx::query_scalar(
-                "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
-            )
-            .bind(&token)
-            .fetch_optional(self.db.pool())
-            .await?;
+            let price = latest_price_for_token(&self.db, &token).await?;
 
             let latest_price = price
                 .filter(|value| value.is_finite() && *value > 0.0)
@@ -146,7 +190,21 @@ impl AnalyticsService {
     }
 
     /// Get trading performance
-    pub async fn get_trading_performance(&self, user_address: &str) -> Result<TradingPerformance> {
+    pub async fn get_trading_performance(
+        &self,
+        user_addresses: &[String],
+    ) -> Result<TradingPerformance> {
+        let normalized_addresses = normalize_scope_addresses(user_addresses);
+        if normalized_addresses.is_empty() {
+            return Ok(TradingPerformance {
+                total_trades: 0,
+                total_volume_usd: 0.0,
+                avg_trade_size: 0.0,
+                win_rate: 0.0,
+                best_trade: 0.0,
+                worst_trade: 0.0,
+            });
+        }
         // Use runtime query + Row extraction to avoid compile-time sqlx macros
         let row = sqlx::query(
             r#"
@@ -158,11 +216,11 @@ impl AnalyticsService {
                 COALESCE(MIN(usd_value), 0)::FLOAT AS worst_trade,
                 COALESCE(AVG(CASE WHEN usd_value >= 0 THEN 1 ELSE 0 END), 0)::FLOAT * 100 AS win_rate
             FROM transactions
-            WHERE user_address = $1
+            WHERE LOWER(user_address) = ANY($1)
               AND usd_value IS NOT NULL
             "#,
         )
-        .bind(user_address)
+        .bind(normalized_addresses)
         .fetch_one(self.db.pool())
         .await?;
 

@@ -203,30 +203,35 @@ export function EnhancedNavigation() {
     ]
   }
 
+  const effectiveStarknetAddress =
+    wallet.starknetAddress || (wallet.network === "starknet" ? wallet.address : null)
+
   const connectedTestnets = React.useMemo(() => {
     const labels: string[] = []
-    if (wallet.starknetAddress) labels.push(formatNetworkLabel("starknet"))
+    if (effectiveStarknetAddress) labels.push(formatNetworkLabel("starknet"))
     if (wallet.evmAddress) labels.push(formatNetworkLabel("evm"))
     if (wallet.btcAddress) labels.push(formatNetworkLabel("btc"))
     return labels
-  }, [wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
+  }, [effectiveStarknetAddress, wallet.evmAddress, wallet.btcAddress])
 
   const connectedTestnetSummary =
     connectedTestnets.length > 0
       ? `Connected to ${connectedTestnets.join(" + ")}`
       : "Connected, but no testnet wallet linked yet."
   const primaryConnectedTestnet = React.useMemo(() => {
-    if (wallet.starknetAddress) return formatNetworkLabel("starknet")
+    if (effectiveStarknetAddress) return formatNetworkLabel("starknet")
     if (wallet.evmAddress) return formatNetworkLabel("evm")
     if (wallet.btcAddress) return formatNetworkLabel("btc")
     return "Testnet"
-  }, [wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
+  }, [effectiveStarknetAddress, wallet.evmAddress, wallet.btcAddress])
   const networkStatusHeadline = React.useMemo(() => {
     if (primaryConnectedTestnet === "Testnet") {
       return "Connected, no testnet wallet linked yet."
     }
     return `Connected to ${primaryConnectedTestnet}`
   }, [primaryConnectedTestnet])
+
+  const hasStarknetBalanceSource = Boolean(effectiveStarknetAddress)
   const effectivePortfolioBalance = React.useMemo(
     () => ({
       BTC:
@@ -238,29 +243,49 @@ export function EnhancedNavigation() {
           ? wallet.onchainBalance.ETH
           : wallet.balance?.ETH ?? 0,
       STRK:
-        wallet.starknetAddress &&
-        wallet.onchainBalance?.STRK_L2 !== null &&
-        wallet.onchainBalance?.STRK_L2 !== undefined
-          ? wallet.onchainBalance.STRK_L2
+        hasStarknetBalanceSource
+          ? wallet.onchainBalance?.STRK_L2 ?? 0
           : wallet.evmAddress &&
             wallet.onchainBalance?.STRK_L1 !== null &&
             wallet.onchainBalance?.STRK_L1 !== undefined
           ? wallet.onchainBalance.STRK_L1
           : wallet.balance?.STRK ?? 0,
-      CAREL: wallet.balance?.CAREL ?? 0,
+      CAREL:
+        hasStarknetBalanceSource
+          ? wallet.onchainBalance?.CAREL ?? 0
+          : wallet.balance?.CAREL ?? 0,
+      USDC:
+        hasStarknetBalanceSource
+          ? wallet.onchainBalance?.USDC ?? 0
+          : wallet.balance?.USDC ?? 0,
+      USDT:
+        hasStarknetBalanceSource
+          ? wallet.onchainBalance?.USDT ?? 0
+          : wallet.balance?.USDT ?? 0,
+      WBTC:
+        hasStarknetBalanceSource
+          ? wallet.onchainBalance?.WBTC ?? 0
+          : wallet.balance?.WBTC ?? 0,
     }),
     [
       wallet.balance?.BTC,
       wallet.balance?.CAREL,
       wallet.balance?.ETH,
       wallet.balance?.STRK,
+      wallet.balance?.USDC,
+      wallet.balance?.USDT,
+      wallet.balance?.WBTC,
       wallet.btcAddress,
       wallet.evmAddress,
       wallet.onchainBalance?.BTC,
+      wallet.onchainBalance?.CAREL,
       wallet.onchainBalance?.ETH,
       wallet.onchainBalance?.STRK_L1,
       wallet.onchainBalance?.STRK_L2,
-      wallet.starknetAddress,
+      wallet.onchainBalance?.USDC,
+      wallet.onchainBalance?.USDT,
+      wallet.onchainBalance?.WBTC,
+      hasStarknetBalanceSource,
     ]
   )
 
@@ -344,7 +369,16 @@ export function EnhancedNavigation() {
     return () => {
       active = false
     }
-  }, [txHistoryOpen, wallet.isConnected])
+  }, [
+    txHistoryOpen,
+    wallet.isConnected,
+    wallet.totalValueUSD,
+    wallet.balance?.STRK,
+    wallet.balance?.CAREL,
+    wallet.balance?.USDC,
+    wallet.balance?.USDT,
+    wallet.balance?.WBTC,
+  ])
 
   // --- Handlers ---
   const handleWalletConnect = async (provider: WalletProviderType) => {
@@ -700,9 +734,9 @@ export function EnhancedNavigation() {
                       <div className="space-y-1 mt-1 text-xs">
                         <div className="flex items-center justify-between">
                           <span className="text-muted-foreground">Starknet Sepolia</span>
-                          <span className="font-mono text-foreground">{renderLinkStatus(wallet.starknetAddress)}</span>
+                          <span className="font-mono text-foreground">{renderLinkStatus(effectiveStarknetAddress)}</span>
                         </div>
-                        {!wallet.starknetAddress && (
+                        {!effectiveStarknetAddress && (
                           <div className="flex flex-wrap gap-1">
                             {starknetWalletProviders.map((starknetProvider) => (
                               <Button
@@ -795,19 +829,19 @@ export function EnhancedNavigation() {
                           <p className="text-sm font-medium">
                             {renderOnchainValue(
                               wallet?.onchainBalance?.STRK_L2,
-                              !!wallet?.starknetAddress,
+                              !!effectiveStarknetAddress,
                               "Not linked"
                             )}
                           </p>
-                          {!wallet?.starknetAddress && (
+                          {!effectiveStarknetAddress && (
                             <p className="text-[10px] text-muted-foreground">
                               Link Starknet wallet to read STRK (Starknet Sepolia)
                             </p>
                           )}
-                          {wallet?.starknetAddress && (
+                          {effectiveStarknetAddress && (
                             <p className="text-[10px] text-muted-foreground">Native STRK on Starknet Sepolia</p>
                           )}
-                          {!wallet?.starknetAddress && (
+                          {!effectiveStarknetAddress && (
                             <div className="mt-2 flex flex-wrap gap-1">
                               {starknetWalletProviders.map((starknetProvider) => (
                                 <Button
@@ -863,6 +897,58 @@ export function EnhancedNavigation() {
                             <p className="text-[10px] text-muted-foreground">Link BTC wallet to read BTC</p>
                           )}
                         </div>
+                        <div className="p-2 rounded-lg bg-surface/50">
+                          <p className="text-xs text-muted-foreground">CAREL Starknet Sepolia</p>
+                          <p className="text-sm font-medium">
+                            {renderOnchainValue(
+                              wallet?.onchainBalance?.CAREL,
+                              !!effectiveStarknetAddress,
+                              "Not linked"
+                            )}
+                          </p>
+                          {!effectiveStarknetAddress && (
+                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read CAREL</p>
+                          )}
+                        </div>
+                        <div className="p-2 rounded-lg bg-surface/50">
+                          <p className="text-xs text-muted-foreground">USDC Starknet Sepolia</p>
+                          <p className="text-sm font-medium">
+                            {renderOnchainValue(
+                              wallet?.onchainBalance?.USDC,
+                              !!effectiveStarknetAddress,
+                              "Not linked"
+                            )}
+                          </p>
+                          {!effectiveStarknetAddress && (
+                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read USDC</p>
+                          )}
+                        </div>
+                        <div className="p-2 rounded-lg bg-surface/50">
+                          <p className="text-xs text-muted-foreground">USDT Starknet Sepolia</p>
+                          <p className="text-sm font-medium">
+                            {renderOnchainValue(
+                              wallet?.onchainBalance?.USDT,
+                              !!effectiveStarknetAddress,
+                              "Not linked"
+                            )}
+                          </p>
+                          {!effectiveStarknetAddress && (
+                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read USDT</p>
+                          )}
+                        </div>
+                        <div className="p-2 rounded-lg bg-surface/50">
+                          <p className="text-xs text-muted-foreground">WBTC Starknet Sepolia</p>
+                          <p className="text-sm font-medium">
+                            {renderOnchainValue(
+                              wallet?.onchainBalance?.WBTC,
+                              !!effectiveStarknetAddress,
+                              "Not linked"
+                            )}
+                          </p>
+                          {!effectiveStarknetAddress && (
+                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read WBTC</p>
+                          )}
+                        </div>
                       </div>
                       {!wallet?.btcAddress && (
                         <div className="flex flex-wrap gap-2">
@@ -899,6 +985,18 @@ export function EnhancedNavigation() {
                       <div className="p-2 rounded-lg bg-surface/50">
                         <p className="text-xs text-muted-foreground">CAREL</p>
                         <p className="text-sm font-medium">{formatAsset(effectivePortfolioBalance.CAREL)}</p>
+                      </div>
+                      <div className="p-2 rounded-lg bg-surface/50">
+                        <p className="text-xs text-muted-foreground">USDC</p>
+                        <p className="text-sm font-medium">{formatAsset(effectivePortfolioBalance.USDC)}</p>
+                      </div>
+                      <div className="p-2 rounded-lg bg-surface/50">
+                        <p className="text-xs text-muted-foreground">USDT</p>
+                        <p className="text-sm font-medium">{formatAsset(effectivePortfolioBalance.USDT)}</p>
+                      </div>
+                      <div className="p-2 rounded-lg bg-surface/50">
+                        <p className="text-xs text-muted-foreground">WBTC</p>
+                        <p className="text-sm font-medium">{formatAsset(effectivePortfolioBalance.WBTC)}</p>
                       </div>
                       </div>
                     </div>

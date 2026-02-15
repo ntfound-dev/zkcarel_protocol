@@ -4,7 +4,7 @@ use serde::Deserialize;
 use starknet::{
     accounts::{Account, ExecutionEncoding, SingleOwnerAccount},
     core::{
-        types::{Call, Felt},
+        types::{BlockId, BlockTag, Call, Felt},
         utils::get_selector_from_name,
     },
     providers::jsonrpc::{HttpTransport, JsonRpcClient},
@@ -115,13 +115,15 @@ impl StarknetPointMinter {
         let chain_id = parse_chain_id(&config.starknet_chain_id)?;
 
         let signer = LocalWallet::from_signing_key(SigningKey::from_secret_scalar(private_key));
-        let account = SingleOwnerAccount::new(
+        let mut account = SingleOwnerAccount::new(
             provider,
             signer,
             account_address,
             chain_id,
             ExecutionEncoding::New,
         );
+        // Force latest block tag to avoid RPCs that reject "pre_confirmed".
+        account.set_block_id(BlockId::Tag(BlockTag::Latest));
 
         let point_token_address = parse_felt(&config.point_token_address)?;
 

@@ -55,9 +55,10 @@ function mergePrices(
   updates: Record<string, number>
 ): Record<string, number> {
   if (!updates || Object.keys(updates).length === 0) return prev
+  const normalizedUpdates = withBtcAliases(updates)
   let changed = false
   const next = { ...prev }
-  for (const [key, value] of Object.entries(updates)) {
+  for (const [key, value] of Object.entries(normalizedUpdates)) {
     const symbol = key.toUpperCase()
     const floor = STABLE_FLOOR_PRICE[symbol]
     const normalized =
@@ -69,6 +70,23 @@ function mergePrices(
     }
   }
   return changed ? next : prev
+}
+
+function withBtcAliases(values: Record<string, number>): Record<string, number> {
+  if (!values || Object.keys(values).length === 0) {
+    return values
+  }
+  const next = { ...values }
+  const btc = Number(next.BTC)
+  const wbtc = Number(next.WBTC)
+  const hasBtc = Number.isFinite(btc) && btc > 0
+  const hasWbtc = Number.isFinite(wbtc) && wbtc > 0
+  if (hasBtc) {
+    next.WBTC = btc
+  } else if (hasWbtc) {
+    next.BTC = wbtc
+  }
+  return next
 }
 
 export function useLivePrices(tokens: string[], options: UseLivePricesOptions = {}): LivePriceState {

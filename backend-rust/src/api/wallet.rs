@@ -94,28 +94,60 @@ pub async fn get_onchain_balances(
     let mut response = OnchainBalanceResponse::default();
 
     if let Some(addr) = starknet_address.as_ref() {
-        if let Some(token) = resolve_starknet_token_address(&state.config, "STRK") {
-            response.strk_l2 = fetch_starknet_erc20_balance(&state.config, addr, &token).await?;
-        }
-        if let Some(token) = resolve_starknet_token_address(&state.config, "CAREL") {
-            if let Ok(value) = fetch_starknet_erc20_balance(&state.config, addr, &token).await {
-                response.carel = value;
+        let strk_token = resolve_starknet_token_address(&state.config, "STRK");
+        let carel_token = resolve_starknet_token_address(&state.config, "CAREL");
+        let usdc_token = resolve_starknet_token_address(&state.config, "USDC");
+        let usdt_token = resolve_starknet_token_address(&state.config, "USDT");
+        let wbtc_token = resolve_starknet_token_address(&state.config, "WBTC");
+
+        let strk_fut = async {
+            match strk_token {
+                Some(token) => fetch_starknet_erc20_balance(&state.config, addr, &token).await,
+                None => Ok(None),
             }
-        }
-        if let Some(token) = resolve_starknet_token_address(&state.config, "USDC") {
-            if let Ok(value) = fetch_starknet_erc20_balance(&state.config, addr, &token).await {
-                response.usdc = value;
+        };
+        let carel_fut = async {
+            match carel_token {
+                Some(token) => fetch_starknet_erc20_balance(&state.config, addr, &token).await,
+                None => Ok(None),
             }
-        }
-        if let Some(token) = resolve_starknet_token_address(&state.config, "USDT") {
-            if let Ok(value) = fetch_starknet_erc20_balance(&state.config, addr, &token).await {
-                response.usdt = value;
+        };
+        let usdc_fut = async {
+            match usdc_token {
+                Some(token) => fetch_starknet_erc20_balance(&state.config, addr, &token).await,
+                None => Ok(None),
             }
-        }
-        if let Some(token) = resolve_starknet_token_address(&state.config, "WBTC") {
-            if let Ok(value) = fetch_starknet_erc20_balance(&state.config, addr, &token).await {
-                response.wbtc = value;
+        };
+        let usdt_fut = async {
+            match usdt_token {
+                Some(token) => fetch_starknet_erc20_balance(&state.config, addr, &token).await,
+                None => Ok(None),
             }
+        };
+        let wbtc_fut = async {
+            match wbtc_token {
+                Some(token) => fetch_starknet_erc20_balance(&state.config, addr, &token).await,
+                None => Ok(None),
+            }
+        };
+
+        let (strk_res, carel_res, usdc_res, usdt_res, wbtc_res) =
+            tokio::join!(strk_fut, carel_fut, usdc_fut, usdt_fut, wbtc_fut);
+
+        if let Ok(value) = strk_res {
+            response.strk_l2 = value;
+        }
+        if let Ok(value) = carel_res {
+            response.carel = value;
+        }
+        if let Ok(value) = usdc_res {
+            response.usdc = value;
+        }
+        if let Ok(value) = usdt_res {
+            response.usdt = value;
+        }
+        if let Ok(value) = wbtc_res {
+            response.wbtc = value;
         }
     }
 
@@ -206,7 +238,45 @@ fn env_address(key: &str) -> Option<String> {
     clean_address(std::env::var(key).ok())
 }
 
-fn resolve_starknet_token_address(config: &Config, symbol: &str) -> Option<String> {
+fn normalize_felt_hex(value: &str) -> String {
+    let trimmed = value.trim().to_ascii_lowercase();
+    let without_prefix = trimmed.strip_prefix("0x").unwrap_or(trimmed.as_str());
+    let normalized = without_prefix.trim_start_matches('0');
+    if normalized.is_empty() {
+        "0".to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn addresses_equal(a: &str, b: &str) -> bool {
+    normalize_felt_hex(a) == normalize_felt_hex(b)
+}
+
+fn known_starknet_token_decimals(config: &Config, token: &str) -> Option<u8> {
+    let token_value = token.trim();
+    if token_value.is_empty() {
+        return None;
+    }
+
+    let known = [
+        ("STRK", 18_u8),
+        ("CAREL", 18_u8),
+        ("USDC", 6_u8),
+        ("USDT", 6_u8),
+        ("WBTC", 8_u8),
+    ];
+    for (symbol, decimals) in known {
+        if let Some(addr) = resolve_starknet_token_address(config, symbol) {
+            if addresses_equal(token_value, &addr) {
+                return Some(decimals);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn resolve_starknet_token_address(config: &Config, symbol: &str) -> Option<String> {
     match symbol.to_ascii_uppercase().as_str() {
         "STRK" => clean_address(config.token_strk_address.clone())
             .or_else(|| env_address("TOKEN_STRK_ADDRESS"))
@@ -256,7 +326,10 @@ pub(crate) async fn fetch_starknet_erc20_balance(
         .get(1)
         .ok_or_else(|| AppError::Internal("Balance high missing".into()))?;
     let raw = u256_from_felts(low, high)?;
-    let decimals = fetch_starknet_decimals(config, token).await.unwrap_or(18);
+    let decimals = match known_starknet_token_decimals(config, token) {
+        Some(value) => value,
+        None => fetch_starknet_decimals(config, token).await.unwrap_or(18),
+    };
     Ok(Some(scale_u128(raw, decimals)))
 }
 
@@ -274,11 +347,12 @@ pub(crate) async fn fetch_starknet_decimals(config: &Config, token: &str) -> Res
     let value = values
         .get(0)
         .ok_or_else(|| AppError::Internal("Decimals missing".into()))?;
-    let parsed = value
-        .to_string()
-        .trim_start_matches("0x")
-        .parse::<u8>()
-        .unwrap_or(18);
+    let raw = value.to_string();
+    let parsed = if let Some(hex) = raw.strip_prefix("0x") {
+        u8::from_str_radix(hex, 16).unwrap_or(18)
+    } else {
+        raw.parse::<u8>().unwrap_or(18)
+    };
     Ok(parsed)
 }
 

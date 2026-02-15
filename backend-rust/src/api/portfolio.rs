@@ -11,10 +11,10 @@ use crate::{
 };
 
 use super::{
-    require_user,
+    resolve_user_scope_addresses,
     wallet::{
         fetch_btc_balance, fetch_evm_erc20_balance, fetch_evm_native_balance,
-        fetch_starknet_erc20_balance,
+        fetch_starknet_erc20_balance, resolve_starknet_token_address,
     },
     AppState,
 };
@@ -87,7 +87,7 @@ struct TokenSeries {
     fallback_price: f64,
 }
 
-const ONCHAIN_BALANCE_TIMEOUT_SECS: u64 = 4;
+const ONCHAIN_BALANCE_TIMEOUT_SECS: u64 = 8;
 
 fn total_value_usd(balances: &[TokenBalance]) -> f64 {
     balances.iter().map(|b| b.value_usd).sum()
@@ -127,6 +127,22 @@ fn clamp_ohlcv_limit(limit: Option<i32>) -> i64 {
     limit.unwrap_or(24).clamp(2, 200) as i64
 }
 
+fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for address in user_addresses {
+        let trimmed = address.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if normalized.iter().any(|existing| existing == &lower) {
+            continue;
+        }
+        normalized.push(lower);
+    }
+    normalized
+}
+
 fn align_timestamp(timestamp: i64, interval: i64) -> i64 {
     if interval <= 0 {
         return timestamp;
@@ -145,31 +161,49 @@ fn tick_prices(tick: &PriceTick) -> (f64, f64, f64, f64, f64) {
 }
 
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
-    let price: Option<f64> = sqlx::query_scalar(
+    let token_upper = token.to_ascii_uppercase();
+    let mut price: Option<f64> = sqlx::query_scalar(
         "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
     )
-    .bind(token)
+    .bind(&token_upper)
     .fetch_optional(state.db.pool())
     .await?;
+    if price.is_none() && token_upper == "WBTC" {
+        price = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+        )
+        .bind("BTC")
+        .fetch_optional(state.db.pool())
+        .await?;
+    }
 
     Ok(price
         .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or_else(|| fallback_price_for(token)))
+        .unwrap_or_else(|| fallback_price_for(&token_upper)))
 }
 
 async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64, f64)> {
-    let rows: Vec<f64> = sqlx::query_scalar(
+    let token_upper = token.to_ascii_uppercase();
+    let mut rows: Vec<f64> = sqlx::query_scalar(
         "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 2",
     )
-    .bind(token)
+    .bind(&token_upper)
     .fetch_all(state.db.pool())
     .await?;
+    if rows.is_empty() && token_upper == "WBTC" {
+        rows = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 2",
+        )
+        .bind("BTC")
+        .fetch_all(state.db.pool())
+        .await?;
+    }
 
     let latest = rows
         .get(0)
         .copied()
         .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or_else(|| fallback_price_for(token));
+        .unwrap_or_else(|| fallback_price_for(&token_upper));
     let prev = rows
         .get(1)
         .copied()
@@ -185,24 +219,29 @@ async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64,
 
 async fn fetch_token_holdings(
     state: &AppState,
-    user_address: &str,
+    user_addresses: &[String],
 ) -> Result<Vec<RawTokenBalance>> {
+    let normalized_addresses = normalize_scope_addresses(user_addresses);
+    if normalized_addresses.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let rows = sqlx::query_as::<_, RawTokenBalance>(
         r#"
         SELECT token, SUM(amount) as amount
         FROM (
             SELECT UPPER(token_out) as token, COALESCE(CAST(amount_out AS FLOAT), 0) as amount
             FROM transactions
-            WHERE user_address = $1 AND token_out IS NOT NULL AND COALESCE(is_private, false) = false
+            WHERE LOWER(user_address) = ANY($1) AND token_out IS NOT NULL AND COALESCE(is_private, false) = false
             UNION ALL
             SELECT UPPER(token_in) as token, -COALESCE(CAST(amount_in AS FLOAT), 0) as amount
             FROM transactions
-            WHERE user_address = $1 AND token_in IS NOT NULL AND COALESCE(is_private, false) = false
+            WHERE LOWER(user_address) = ANY($1) AND token_in IS NOT NULL AND COALESCE(is_private, false) = false
         ) t
         GROUP BY token
         "#,
     )
-    .bind(user_address)
+    .bind(normalized_addresses)
     .fetch_all(state.db.pool())
     .await?;
 
@@ -243,12 +282,12 @@ where
 
 async fn merge_onchain_holdings(
     state: &AppState,
-    user_address: &str,
+    auth_subject: &str,
     holdings: &mut HashMap<String, f64>,
 ) -> Result<()> {
     let linked = state
         .db
-        .list_wallet_addresses(user_address)
+        .list_wallet_addresses(auth_subject)
         .await
         .unwrap_or_default();
     let starknet_address = linked
@@ -273,6 +312,66 @@ async fn merge_onchain_holdings(
                 fetch_optional_balance_with_timeout(
                     "starknet STRK",
                     fetch_starknet_erc20_balance(&state.config, addr, token),
+                )
+                .await
+            }
+            _ => None,
+        }
+    };
+    let starknet_carel_fut = async {
+        match (
+            starknet_address.as_deref(),
+            resolve_starknet_token_address(&state.config, "CAREL"),
+        ) {
+            (Some(addr), Some(token)) => {
+                fetch_optional_balance_with_timeout(
+                    "starknet CAREL",
+                    fetch_starknet_erc20_balance(&state.config, addr, &token),
+                )
+                .await
+            }
+            _ => None,
+        }
+    };
+    let starknet_usdc_fut = async {
+        match (
+            starknet_address.as_deref(),
+            resolve_starknet_token_address(&state.config, "USDC"),
+        ) {
+            (Some(addr), Some(token)) => {
+                fetch_optional_balance_with_timeout(
+                    "starknet USDC",
+                    fetch_starknet_erc20_balance(&state.config, addr, &token),
+                )
+                .await
+            }
+            _ => None,
+        }
+    };
+    let starknet_usdt_fut = async {
+        match (
+            starknet_address.as_deref(),
+            resolve_starknet_token_address(&state.config, "USDT"),
+        ) {
+            (Some(addr), Some(token)) => {
+                fetch_optional_balance_with_timeout(
+                    "starknet USDT",
+                    fetch_starknet_erc20_balance(&state.config, addr, &token),
+                )
+                .await
+            }
+            _ => None,
+        }
+    };
+    let starknet_wbtc_fut = async {
+        match (
+            starknet_address.as_deref(),
+            resolve_starknet_token_address(&state.config, "WBTC"),
+        ) {
+            (Some(addr), Some(token)) => {
+                fetch_optional_balance_with_timeout(
+                    "starknet WBTC",
+                    fetch_starknet_erc20_balance(&state.config, addr, &token),
                 )
                 .await
             }
@@ -319,34 +418,77 @@ async fn merge_onchain_holdings(
         }
     };
 
-    let (starknet_strk, evm_eth, evm_strk, btc_balance) =
-        tokio::join!(starknet_strk_fut, evm_eth_fut, evm_strk_fut, btc_fut);
+    let (
+        starknet_strk,
+        starknet_carel,
+        starknet_usdc,
+        starknet_usdt,
+        starknet_wbtc,
+        evm_eth,
+        evm_strk,
+        btc_balance,
+    ) = tokio::join!(
+        starknet_strk_fut,
+        starknet_carel_fut,
+        starknet_usdc_fut,
+        starknet_usdt_fut,
+        starknet_wbtc_fut,
+        evm_eth_fut,
+        evm_strk_fut,
+        btc_fut
+    );
 
-    if let Some(balance) = evm_eth {
-        override_holding(holdings, "ETH", balance);
+    if evm_address.is_some() {
+        if let Some(balance) = evm_eth {
+            override_holding(holdings, "ETH", balance);
+        }
     }
 
     let strk_total = starknet_strk.unwrap_or(0.0) + evm_strk.unwrap_or(0.0);
-    if strk_total > 0.0 {
+    if (starknet_address.is_some() || evm_address.is_some())
+        && (starknet_strk.is_some() || evm_strk.is_some())
+    {
+        override_holding(holdings, "STRK", strk_total);
+    } else if strk_total > 0.0 {
         override_holding(holdings, "STRK", strk_total);
     }
 
-    if let Some(balance) = btc_balance {
-        override_holding(holdings, "BTC", balance);
+    if btc_address.is_some() {
+        if let Some(balance) = btc_balance {
+            override_holding(holdings, "BTC", balance);
+        }
+    }
+    if starknet_address.is_some() {
+        if let Some(balance) = starknet_carel {
+            override_holding(holdings, "CAREL", balance);
+        }
+        if let Some(balance) = starknet_usdc {
+            override_holding(holdings, "USDC", balance);
+        }
+        if let Some(balance) = starknet_usdt {
+            override_holding(holdings, "USDT", balance);
+        }
+        if let Some(balance) = starknet_wbtc {
+            override_holding(holdings, "WBTC", balance);
+        }
     }
 
     Ok(())
 }
 
-async fn build_balances(state: &AppState, user_address: &str) -> Result<Vec<TokenBalance>> {
-    let rows = fetch_token_holdings(state, user_address).await?;
+async fn build_balances(
+    state: &AppState,
+    auth_subject: &str,
+    user_addresses: &[String],
+) -> Result<Vec<TokenBalance>> {
+    let rows = fetch_token_holdings(state, user_addresses).await?;
     let mut holding_map = HashMap::new();
     for row in rows {
         if row.amount > 0.0 {
             holding_map.insert(row.token, row.amount);
         }
     }
-    merge_onchain_holdings(state, user_address, &mut holding_map).await?;
+    merge_onchain_holdings(state, auth_subject, &mut holding_map).await?;
 
     let mut balances = Vec::new();
 
@@ -370,12 +512,20 @@ async fn build_balances(state: &AppState, user_address: &str) -> Result<Vec<Toke
 
 async fn build_portfolio_ohlcv(
     state: &AppState,
-    user_address: &str,
+    auth_subject: &str,
+    user_addresses: &[String],
     interval: &str,
     limit: i64,
 ) -> Result<Vec<PortfolioOHLCVPoint>> {
-    let holdings = fetch_token_holdings(state, user_address).await?;
-    if holdings.is_empty() {
+    let rows = fetch_token_holdings(state, user_addresses).await?;
+    let mut holding_map = HashMap::new();
+    for row in rows {
+        if row.amount > 0.0 {
+            holding_map.insert(row.token, row.amount);
+        }
+    }
+    merge_onchain_holdings(state, auth_subject, &mut holding_map).await?;
+    if holding_map.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -392,8 +542,7 @@ async fn build_portfolio_ohlcv(
         .unwrap_or_else(|| chrono::Utc::now());
 
     let mut series = Vec::new();
-    for holding in holdings {
-        let token = holding.token.clone();
+    for (token, amount) in holding_map {
         let ticks = state
             .db
             .get_price_history(&token, interval, from, to)
@@ -404,7 +553,7 @@ async fn build_portfolio_ohlcv(
         let fallback = latest_price(state, token.as_str()).await?;
 
         series.push(TokenSeries {
-            amount: holding.amount,
+            amount,
             ticks,
             last_close: None,
             fallback_price: fallback,
@@ -457,8 +606,9 @@ pub async fn get_balance(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<BalanceResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
-    let balances = build_balances(&state, &user_address).await?;
+    let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
+    let auth_subject = user_addresses.first().cloned().unwrap_or_default();
+    let balances = build_balances(&state, &auth_subject, &user_addresses).await?;
 
     let total_value_usd = total_value_usd(&balances);
 
@@ -476,9 +626,10 @@ pub async fn get_history(
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<HistoryQuery>,
 ) -> Result<Json<ApiResponse<HistoryResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
+    let auth_subject = user_addresses.first().cloned().unwrap_or_default();
     let (interval, limit) = period_to_interval(&query.period);
-    let ohlcv = build_portfolio_ohlcv(&state, &user_address, interval, limit).await?;
+    let ohlcv = build_portfolio_ohlcv(&state, &auth_subject, &user_addresses, interval, limit).await?;
     let total_value = ohlcv
         .iter()
         .map(|point| HistoryPoint {
@@ -514,10 +665,11 @@ pub async fn get_portfolio_ohlcv(
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<PortfolioOHLCVQuery>,
 ) -> Result<Json<ApiResponse<PortfolioOHLCVResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
+    let auth_subject = user_addresses.first().cloned().unwrap_or_default();
     let interval = query.interval.clone();
     let limit = clamp_ohlcv_limit(query.limit);
-    let data = build_portfolio_ohlcv(&state, &user_address, &interval, limit).await?;
+    let data = build_portfolio_ohlcv(&state, &auth_subject, &user_addresses, &interval, limit).await?;
 
     Ok(Json(ApiResponse::success(PortfolioOHLCVResponse {
         interval,

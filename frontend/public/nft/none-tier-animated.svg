@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">No NFT Tier Animated</title>
+  <desc id="desc">Neutral cyberpunk card with locked emblem for users without NFT.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#111321"/>
+      <stop offset="100%" stop-color="#070912"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5f657f"/>
+      <stop offset="100%" stop-color="#2e3348"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#cfd5e8"/>
+      <stop offset="100%" stop-color="#6e7491"/>
+    </linearGradient>
+    <radialGradient id="aura" cx="50%" cy="50%" r="55%">
+      <stop offset="0%" stop-color="#949bb5" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#949bb5" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .aura { animation: pulse 3.2s ease-in-out infinite; transform-origin: 512px 450px; }
+      .ring { animation: spin 12s linear infinite; transform-origin: 512px 450px; }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.5; transform: scale(0.92); }
+        50% { opacity: 1; transform: scale(1.08); }
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    </style>
+  </defs>
+
+  <rect width="1024" height="1024" rx="72" fill="url(#bg)"/>
+  <rect x="26" y="26" width="972" height="972" rx="56" fill="none" stroke="url(#frame)" stroke-width="8"/>
+  <polygon points="512,96 820,218 932,512 820,806 512,928 204,806 92,512 204,218" fill="none" stroke="#3b415b" stroke-width="4" opacity="0.8"/>
+  <circle class="aura" cx="512" cy="450" r="280" fill="url(#aura)"/>
+
+  <g class="ring">
+    <polygon points="512,208 690,282 760,450 690,618 512,692 334,618 264,450 334,282" fill="none" stroke="#515873" stroke-width="6"/>
+  </g>
+  <polygon points="512,264 650,320 704,450 650,580 512,636 374,580 320,450 374,320" fill="#14192a" stroke="#6c7391" stroke-width="8"/>
+  <path d="M512 338L586 380V458L512 500L438 458V380Z" fill="url(#steel)"/>
+  <rect x="474" y="502" width="76" height="74" rx="12" fill="#8790ad"/>
+  <circle cx="512" cy="540" r="15" fill="#14192a"/>
+
+  <text x="512" y="810" text-anchor="middle" fill="#d3d8e9" font-family="Verdana, sans-serif" font-size="86" font-weight="700">NONE</text>
+  <text x="512" y="872" text-anchor="middle" fill="#8a90aa" font-family="Verdana, sans-serif" font-size="34">No Active NFT</text>
+</svg>

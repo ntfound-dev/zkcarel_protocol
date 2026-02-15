@@ -2,6 +2,30 @@
 
 Monorepo ini berisi smart contract Cairo (Starknet), backend Rust (Axum + PostgreSQL + Redis), dan frontend Next.js. Semua modul saling terhubung untuk swap, bridge, staking, rewards, privacy (ZK), AI assistant, dan analytics.
 
+**Model Fitur Produk (Current)**
+- 1 user logical dapat mengaitkan 3 address: `Starknet Sepolia` + `ETH Sepolia` + `BTC Testnet`.
+- Pair swap internal Starknet berjalan on-chain real transfer untuk `STRK/CAREL/USDC/USDT/WBTC` (bukan event-only).
+- Backend dipakai untuk quote, verifikasi tx, sinkronisasi points, leaderboard, dan analytics lintas chain.
+- Tier loyalty ditentukan oleh NFT discount aktif on-chain, bukan langsung dari total points.
+- Points user tidak dibatasi (lifetime bisa terus naik), tetapi points current berkurang saat mint NFT.
+
+**NFT Discount Model (Soulbound)**
+| Tier | Point Cost | Discount | Max Use |
+|---|---:|---:|---:|
+| Dasar (None) | Free | 0% | unlimited |
+| Bronze | 5,000 | 5% | 5 |
+| Silver | 15,000 | 10% | 7 |
+| Gold | 50,000 | 25% | 10 |
+| Platinum | 150,000 | 35% | 15 |
+| Onyx | 500,000 | 50% | 20 |
+
+Rules:
+- Soulbound: NFT tidak bisa ditransfer.
+- Unlimited remint: user bisa mint lagi selama points cukup.
+- Upgrade tier dilakukan dengan mint tier lebih tinggi (token lama tidak dipindahkan).
+- NFT tidak diburn saat usage habis; status menjadi inactive sampai mint lagi.
+- Usage berkurang hanya di jalur eksekusi transaksi yang sukses.
+
 **Isi utama**
 - `smartcontract/`: Cairo contracts untuk CAREL Protocol.
 - `backend-rust/`: API + background services + indexer.
@@ -162,6 +186,13 @@ npm run dev
 - Ikuti langkah detail di `smartcontract/DEPLOY_TESTNET.md`.
 - Setelah deploy, isi `.env` backend dengan alamat kontrak terbaru.
 - V2 PrivacyRouter sudah deploy di Sepolia; pastikan `PRIVACY_ROUTER_ADDRESS` terisi di backend.
+- Jika redeploy `DiscountSoulbound`, pastikan kontrak baru ditambahkan sebagai consumer di `PointStorage`:
+```bash
+sncast invoke --network sepolia \
+  --contract-address $POINT_STORAGE_ADDRESS \
+  --function add_consumer \
+  --calldata $DISCOUNT_SOULBOUND_ADDRESS
+```
 
 **Testnet Addresses (Sepolia)**
 Deployer/Admin wallet:
@@ -174,7 +205,7 @@ POINT_STORAGE_ADDRESS=0x0501e74ab48e605ef81348a087d21c95ea5d43694ee1a60d6ca1e918
 PRICE_ORACLE_ADDRESS=0x06d3bed050b11afad71022e9ea4d5401366b9c01ef8387df22de6155e6c6977a
 LIMIT_ORDER_BOOK_ADDRESS=0x0734bbb72aeffc57b4123298237d9ca3081095d8f8a75e8e68a1b0eb02306191
 STAKING_CAREL_ADDRESS=0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb
-DISCOUNT_SOULBOUND_ADDRESS=0x...
+DISCOUNT_SOULBOUND_ADDRESS=0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809
 TREASURY_ADDRESS=0x0351e9882d322ab41239eb925f22d3a598290bda6a3a2e7ce560dcff8a119c7d
 REFERRAL_SYSTEM_ADDRESS=0x040bfc6214d3204c53898c730285d79d6e7cd2cd987e3ecde048b330ed3a2d06
 AI_EXECUTOR_ADDRESS=0x03adfb85bf6b60eed5c21de8303659a14ab62f6162d6d4ba18100b4d7d53b8fe

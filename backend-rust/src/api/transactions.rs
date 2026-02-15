@@ -14,7 +14,7 @@ use crate::{
     utils::ensure_page_limit,
 };
 
-use super::{require_user, AppState};
+use super::{resolve_user_scope_addresses, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct HistoryQuery {
@@ -46,7 +46,7 @@ pub async fn get_history(
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<HistoryQuery>,
 ) -> Result<Json<ApiResponse<PaginatedResponse<Transaction>>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
 
     let (from_date, to_date) = parse_dates(&query);
     let page = query.page.unwrap_or(1);
@@ -56,7 +56,7 @@ pub async fn get_history(
     let service = TransactionHistoryService::new(state.db);
     let history = service
         .get_user_history(
-            &user_address,
+            &user_addresses,
             query.tx_type,
             from_date,
             to_date,
@@ -66,10 +66,10 @@ pub async fn get_history(
         .await?;
 
     if page == 1 {
-        if let Ok(stats) = service.get_user_stats(&user_address).await {
+        if let Ok(stats) = service.get_user_stats(&user_addresses).await {
             tracing::debug!("Transaction stats: {:?}", stats);
         }
-        if let Ok(recent) = service.get_recent_transactions(&user_address).await {
+        if let Ok(recent) = service.get_recent_transactions(&user_addresses).await {
             tracing::debug!("Recent transaction sample count: {}", recent.len());
         }
     }
@@ -94,7 +94,7 @@ pub async fn export_csv(
     headers: HeaderMap,
     Json(query): Json<HistoryQuery>,
 ) -> Result<impl IntoResponse> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
 
     // Menggunakan helper parse_dates
     let (from_date, to_date) = parse_dates(&query);
@@ -110,7 +110,7 @@ pub async fn export_csv(
 
     let service = TransactionHistoryService::new(state.db);
     let csv = service
-        .export_to_csv(&user_address, from_date, to_date)
+        .export_to_csv(&user_addresses, from_date, to_date)
         .await?;
 
     Ok((

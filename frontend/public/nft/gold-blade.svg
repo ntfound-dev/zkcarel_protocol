@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Gold Blade NFT</title>
+  <desc id="desc">Cyberpunk gold blade artwork for gold tier NFT.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#362602"/>
+      <stop offset="100%" stop-color="#110a01"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fff4ae"/>
+      <stop offset="48%" stop-color="#ffcb2f"/>
+      <stop offset="100%" stop-color="#b36a00"/>
+    </linearGradient>
+    <radialGradient id="aura" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#ffd54d" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#ffd54d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="80" fill="url(#bg)"/>
+  <rect x="26" y="26" width="972" height="972" rx="64" fill="none" stroke="#ffd46b" stroke-opacity="0.75" stroke-width="8"/>
+  <circle cx="512" cy="420" r="300" fill="url(#aura)"/>
+
+  <g transform="translate(512 440)">
+    <polygon points="0,-320 72,-155 24,88 0,256 -24,88 -72,-155" fill="url(#gold)"/>
+    <polygon points="-112,110 112,110 152,176 84,222 -84,222 -152,176" fill="#ffd046"/>
+    <polygon points="-45,222 45,222 22,306 -22,306" fill="#da8a09"/>
+    <path d="M0 -206L40 -104L142 -52L40 0L0 102L-40 0L-142 -52L-40 -104Z" fill="#fff2bd" opacity="0.95"/>
+  </g>
+
+  <text x="512" y="810" text-anchor="middle" fill="#ffe998" font-family="Verdana, sans-serif" font-size="84" font-weight="700">GOLD</text>
+  <text x="512" y="874" text-anchor="middle" fill="#ffd46b" font-family="Verdana, sans-serif" font-size="34">Cyberpunk Blade</text>
+</svg>

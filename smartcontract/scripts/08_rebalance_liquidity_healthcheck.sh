@@ -204,6 +204,23 @@ parse_route_expected_from_call() {
   echo "$exp_high * $TWO_POW_128 + $exp_low" | bc
 }
 
+parse_route_dex_id_from_call() {
+  local out="$1"
+  local raw
+  raw="$(parse_response_raw_line "$out")"
+  if [ -z "$raw" ]; then
+    echo ""
+    return 1
+  fi
+  IFS=',' read -r dex_hex _ <<< "$raw"
+  dex_hex="$(trim "$dex_hex")"
+  if [ -z "$dex_hex" ]; then
+    echo ""
+    return 1
+  fi
+  normalize_hex "$dex_hex"
+}
+
 sncast_invoke() {
   local contract_address="$1"
   local function_name="$2"
@@ -268,8 +285,8 @@ default_probe_for() {
   case "$symbol" in
     STRK) echo "1000000000000000000" ;;            # 1 STRK
     CAREL) echo "1000000000000000000" ;;           # 1 CAREL
-    USDC) echo "1000000" ;;                         # 1 USDC
-    USDT) echo "1000000" ;;                         # 1 USDT
+    USDC) echo "100000000" ;;                       # 100 USDC
+    USDT) echo "100000000" ;;                       # 100 USDT
     WBTC) echo "10000000" ;;                        # 0.1 WBTC
     *) echo "0" ;;
   esac
@@ -482,11 +499,24 @@ health_route_pair() {
     health_routes_failed=$((health_routes_failed + 1))
     return 1
   fi
+  local dex_id
+  dex_id="$(parse_route_dex_id_from_call "$out" || true)"
 
   if dec_lte "$expected" "0"; then
     echo "[FAIL] Route zero output $from_symbol->$to_symbol"
     health_routes_failed=$((health_routes_failed + 1))
     return 1
+  fi
+
+  # ORCL route pays out directly from aggregator inventory.
+  if [ "${dex_id,,}" = "0x4f52434c" ]; then
+    local to_liquidity
+    to_liquidity="$(sncast_call_balance "$to_addr" "$SWAP_AGGREGATOR_ADDRESS")"
+    if dec_gt "$expected" "$to_liquidity"; then
+      echo "[FAIL] Route $from_symbol->$to_symbol ORCL output liquidity insufficient (expected_out=$expected > to_liquidity=$to_liquidity)"
+      health_routes_failed=$((health_routes_failed + 1))
+      return 1
+    fi
   fi
 
   health_routes_ok=$((health_routes_ok + 1))

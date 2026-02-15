@@ -8,6 +8,7 @@ pub mod gas_optimizer;
 pub mod limit_order_executor;
 pub mod liquidity_aggregator;
 pub mod merkle_generator;
+pub mod nft_discount;
 pub mod notification_service;
 pub mod onchain;
 pub mod privacy_verifier;

@@ -1,5 +1,6 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize;
+use sqlx::Row;
 
 use crate::{
     constants::{FAUCET_AMOUNT_BTC, FAUCET_AMOUNT_CAREL, FAUCET_AMOUNT_ETH, FAUCET_AMOUNT_STRK},
@@ -42,6 +43,50 @@ fn faucet_amount_from_options(
     }
 }
 
+fn faucet_cooldown_hours(state: &AppState) -> i64 {
+    state
+        .config
+        .faucet_cooldown_hours
+        .unwrap_or(crate::constants::FAUCET_COOLDOWN_HOURS as u64) as i64
+}
+
+fn faucet_carel_unlimited() -> bool {
+    std::env::var("FAUCET_CAREL_UNLIMITED")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "y" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn token_faucet_configured(state: &AppState, token: &str) -> bool {
+    match token {
+        "BTC" => state
+            .config
+            .token_btc_address
+            .as_deref()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false),
+        "ETH" => state
+            .config
+            .token_eth_address
+            .as_deref()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false),
+        "STRK" => state
+            .config
+            .token_strk_address
+            .as_deref()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false),
+        "CAREL" => !state.config.carel_token_address.trim().is_empty(),
+        _ => false,
+    }
+}
+
 /// POST /api/v1/faucet/claim
 pub async fn claim_tokens(
     State(state): State<AppState>,
@@ -81,18 +126,61 @@ pub async fn get_status(
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<FaucetStatusResponse>>> {
     let user_address = require_user(&headers, &state).await?;
-
-    let faucet = FaucetService::new(state.db.clone(), state.config.clone())?;
-
+    let faucet = FaucetService::new(state.db.clone(), state.config.clone()).ok();
+    if faucet.is_none() {
+        tracing::warn!(
+            "Faucet service init failed; using fallback status mode (check backend signer config/private key)."
+        );
+    }
     let mut token_status = Vec::new();
+    let cooldown_hours = faucet_cooldown_hours(&state);
+    let carel_unlimited = faucet_carel_unlimited();
 
     for token in &["BTC", "ETH", "STRK", "CAREL"] {
-        let can_claim = faucet.can_claim(&user_address, token).await?;
-        let next_claim = faucet.get_next_claim_time(&user_address, token).await?;
-        let last_claim_at = faucet
-            .get_last_claim(&user_address, token)
-            .await?
-            .map(|c| c.claimed_at);
+        let (can_claim, next_claim, last_claim_at) = if let Some(faucet_service) = &faucet {
+            let can_claim = faucet_service.can_claim(&user_address, token).await.unwrap_or(false);
+            let next_claim = faucet_service
+                .get_next_claim_time(&user_address, token)
+                .await
+                .ok()
+                .flatten();
+            let last_claim_at = faucet_service
+                .get_last_claim(&user_address, token)
+                .await
+                .ok()
+                .flatten()
+                .map(|c| c.claimed_at);
+            (can_claim, next_claim, last_claim_at)
+        } else {
+            let last_claim_row = sqlx::query(
+                "SELECT claimed_at FROM faucet_claims WHERE user_address = $1 AND token = $2 ORDER BY claimed_at DESC LIMIT 1",
+            )
+            .bind(&user_address)
+            .bind(token)
+            .fetch_optional(state.db.pool())
+            .await
+            .ok()
+            .flatten();
+            let last_claim_at: Option<chrono::DateTime<chrono::Utc>> =
+                last_claim_row.map(|row| row.get("claimed_at"));
+            let next_claim = if *token == "CAREL" && carel_unlimited {
+                None
+            } else {
+                last_claim_at.map(|claimed| claimed + chrono::Duration::hours(cooldown_hours))
+            };
+            let can_claim = if !state.config.is_testnet() || !token_faucet_configured(&state, token) {
+                false
+            } else if *token == "CAREL" && carel_unlimited {
+                true
+            } else {
+                state
+                    .db
+                    .can_claim_faucet(&user_address, token, cooldown_hours)
+                    .await
+                    .unwrap_or(false)
+            };
+            (can_claim, next_claim, last_claim_at)
+        };
 
         token_status.push(TokenStatus {
             token: token.to_string(),

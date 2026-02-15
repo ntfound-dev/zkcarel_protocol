@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react"
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from "react"
 import {
   connectWallet,
   getLinkedWallets,
@@ -37,6 +37,10 @@ interface WalletState {
     STRK_L1: number | null
     ETH: number | null
     BTC: number | null
+    CAREL: number | null
+    USDC: number | null
+    USDT: number | null
+    WBTC: number | null
   }
   btcAddress?: string | null
   btcProvider?: BtcWalletProviderType | null
@@ -74,6 +78,23 @@ const STRK_TOKEN_ADDRESS =
   process.env.NEXT_PUBLIC_STRK_TOKEN_ADDRESS ||
   "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d"
 const STRK_DECIMALS = 18
+const CAREL_TOKEN_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_CAREL_ADDRESS ||
+  "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545"
+const CAREL_DECIMALS = 18
+const USDC_TOKEN_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_USDC_ADDRESS ||
+  "0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8"
+const USDC_DECIMALS = 6
+const USDT_TOKEN_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_USDT_ADDRESS ||
+  "0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5"
+const USDT_DECIMALS = 6
+const WBTC_TOKEN_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
+  process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
+  "0x016f2d46ab5cc2244aeeb195cf76f75e7a316a92b71d56618c1bf1b69ab70998"
+const WBTC_DECIMALS = 8
 const STRK_L1_TOKEN_ADDRESS =
   process.env.NEXT_PUBLIC_STRK_L1_TOKEN_ADDRESS ||
   "0xca14007eff0db1f8135f4c25b34de49ab0d42766"
@@ -132,6 +153,10 @@ function createInitialWalletState(): WalletState {
       STRK_L1: null,
       ETH: null,
       BTC: null,
+      CAREL: null,
+      USDC: null,
+      USDT: null,
+      WBTC: null,
     },
     btcAddress: null,
     btcProvider: null,
@@ -158,6 +183,7 @@ function clearWalletStorage() {
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<WalletState>(() => createInitialWalletState())
+  const onchainRefreshInFlightRef = useRef(false)
 
   const resetWalletSession = useCallback(() => {
     clearWalletStorage()
@@ -201,82 +227,161 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const refreshOnchainBalances = useCallback(async () => {
-    if (!wallet.starknetAddress && !wallet.evmAddress && !wallet.btcAddress) return
+    const effectiveStarknetAddress =
+      wallet.starknetAddress || (wallet.network === "starknet" ? wallet.address : null)
+    if (!effectiveStarknetAddress && !wallet.evmAddress && !wallet.btcAddress) return
+    if (onchainRefreshInFlightRef.current) return
+    onchainRefreshInFlightRef.current = true
 
-    let response: Awaited<ReturnType<typeof getOnchainBalances>> | null = null
-    if (wallet.token) {
-      try {
-        response = await getOnchainBalances({
-          starknet_address: wallet.starknetAddress,
-          evm_address: wallet.evmAddress,
-          btc_address: wallet.btcAddress,
-        })
-      } catch {
-        // fallback to direct wallet reads
+    try {
+      let response: Awaited<ReturnType<typeof getOnchainBalances>> | null = null
+      if (wallet.token) {
+        try {
+          response = await getOnchainBalances({
+            starknet_address: effectiveStarknetAddress,
+            evm_address: wallet.evmAddress,
+            btc_address: wallet.btcAddress,
+          })
+        } catch {
+          // fallback to direct wallet reads
+        }
       }
-    }
 
-    const resolved = {
-      STRK_L2: response?.strk_l2 ?? null,
-      STRK_L1: response?.strk_l1 ?? null,
-      ETH: response?.eth ?? null,
-      BTC: response?.btc ?? null,
-    }
+      const resolved = {
+        STRK_L2: response?.strk_l2 ?? null,
+        STRK_L1: response?.strk_l1 ?? null,
+        ETH: response?.eth ?? null,
+        BTC: response?.btc ?? null,
+        CAREL: response?.carel ?? null,
+        USDC: response?.usdc ?? null,
+        USDT: response?.usdt ?? null,
+        WBTC: response?.wbtc ?? null,
+      }
 
-    if (wallet.starknetAddress && resolved.STRK_L2 === null) {
       const starknet =
-        (wallet.provider && isStarknetWalletProvider(wallet.provider)
-          ? getInjectedStarknet(wallet.provider)
-          : null) ||
-        getInjectedStarknet("braavos") ||
-        getInjectedStarknet("starknet")
-      if (starknet) {
-        const strkL2 = await fetchStarknetBalance(starknet, wallet.starknetAddress)
-        if (typeof strkL2 === "number" && Number.isFinite(strkL2)) {
-          resolved.STRK_L2 = strkL2
+        effectiveStarknetAddress
+          ? (wallet.provider && isStarknetWalletProvider(wallet.provider)
+              ? getInjectedStarknet(wallet.provider)
+              : null) ||
+            getInjectedStarknet("braavos") ||
+            getInjectedStarknet("starknet")
+          : null
+
+      if (effectiveStarknetAddress && starknet) {
+        if (resolved.STRK_L2 === null) {
+          resolved.STRK_L2 = await fetchStarknetTokenBalance(
+            starknet,
+            effectiveStarknetAddress,
+            STRK_TOKEN_ADDRESS,
+            STRK_DECIMALS
+          )
+        }
+        if (resolved.CAREL === null) {
+          resolved.CAREL = await fetchStarknetTokenBalance(
+            starknet,
+            effectiveStarknetAddress,
+            CAREL_TOKEN_ADDRESS,
+            CAREL_DECIMALS
+          )
+        }
+        if (resolved.USDC === null) {
+          resolved.USDC = await fetchStarknetTokenBalance(
+            starknet,
+            effectiveStarknetAddress,
+            USDC_TOKEN_ADDRESS,
+            USDC_DECIMALS
+          )
+        }
+        if (resolved.USDT === null) {
+          resolved.USDT = await fetchStarknetTokenBalance(
+            starknet,
+            effectiveStarknetAddress,
+            USDT_TOKEN_ADDRESS,
+            USDT_DECIMALS
+          )
+        }
+        if (resolved.WBTC === null) {
+          resolved.WBTC = await fetchStarknetTokenBalance(
+            starknet,
+            effectiveStarknetAddress,
+            WBTC_TOKEN_ADDRESS,
+            WBTC_DECIMALS
+          )
         }
       }
-    }
 
-    if (wallet.evmAddress && (resolved.ETH === null || resolved.STRK_L1 === null)) {
-      const evm = getPreferredEvmProvider(wallet.provider)
-      if (evm) {
-        if (resolved.ETH === null) {
-          const ethBalance = await fetchEvmBalance(evm, wallet.evmAddress)
-          if (typeof ethBalance === "number" && Number.isFinite(ethBalance)) {
-            resolved.ETH = ethBalance
+      if (wallet.evmAddress && (resolved.ETH === null || resolved.STRK_L1 === null)) {
+        const evm = getPreferredEvmProvider(wallet.provider)
+        if (evm) {
+          if (resolved.ETH === null) {
+            const ethBalance = await fetchEvmBalance(evm, wallet.evmAddress)
+            if (typeof ethBalance === "number" && Number.isFinite(ethBalance)) {
+              resolved.ETH = ethBalance
+            }
           }
-        }
-        if (resolved.STRK_L1 === null && STRK_L1_TOKEN_ADDRESS) {
-          const strkL1 = await fetchEvmErc20Balance(evm, wallet.evmAddress, STRK_L1_TOKEN_ADDRESS)
-          if (typeof strkL1 === "number" && Number.isFinite(strkL1)) {
-            resolved.STRK_L1 = strkL1
+          if (resolved.STRK_L1 === null && STRK_L1_TOKEN_ADDRESS) {
+            const strkL1 = await fetchEvmErc20Balance(evm, wallet.evmAddress, STRK_L1_TOKEN_ADDRESS)
+            if (typeof strkL1 === "number" && Number.isFinite(strkL1)) {
+              resolved.STRK_L1 = strkL1
+            }
           }
         }
       }
-    }
 
-    setWallet((prev) => ({
-      ...prev,
-      balance: {
-        ...prev.balance,
-        ETH:
-          wallet.evmAddress && resolved.ETH !== null ? resolved.ETH : prev.balance.ETH,
-        STRK:
-          wallet.starknetAddress && resolved.STRK_L2 !== null
-            ? resolved.STRK_L2
-            : prev.balance.STRK,
-        BTC:
-          wallet.btcAddress && resolved.BTC !== null ? resolved.BTC : prev.balance.BTC,
-      },
-      onchainBalance: {
-        STRK_L2: resolved.STRK_L2 ?? prev.onchainBalance.STRK_L2,
-        STRK_L1: resolved.STRK_L1 ?? prev.onchainBalance.STRK_L1,
-        ETH: resolved.ETH ?? prev.onchainBalance.ETH,
-        BTC: resolved.BTC ?? prev.onchainBalance.BTC,
-      },
-    }))
-  }, [wallet.token, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress, wallet.provider])
+      setWallet((prev) => ({
+        ...prev,
+        balance: {
+          ...prev.balance,
+          ETH:
+            wallet.evmAddress && resolved.ETH !== null ? resolved.ETH : prev.balance.ETH,
+          STRK:
+            effectiveStarknetAddress
+              ? resolved.STRK_L2 ?? prev.balance.STRK
+              : prev.balance.STRK,
+          CAREL:
+            effectiveStarknetAddress
+              ? resolved.CAREL ?? prev.balance.CAREL
+              : prev.balance.CAREL,
+          USDC:
+            effectiveStarknetAddress
+              ? resolved.USDC ?? prev.balance.USDC
+              : prev.balance.USDC,
+          USDT:
+            effectiveStarknetAddress
+              ? resolved.USDT ?? prev.balance.USDT
+              : prev.balance.USDT,
+          WBTC:
+            effectiveStarknetAddress
+              ? resolved.WBTC ?? prev.balance.WBTC
+              : prev.balance.WBTC,
+          BTC:
+            wallet.btcAddress && resolved.BTC !== null ? resolved.BTC : prev.balance.BTC,
+        },
+        onchainBalance: {
+          STRK_L2: effectiveStarknetAddress
+            ? resolved.STRK_L2 ?? prev.onchainBalance.STRK_L2
+            : prev.onchainBalance.STRK_L2,
+          STRK_L1: resolved.STRK_L1 ?? prev.onchainBalance.STRK_L1,
+          ETH: resolved.ETH ?? prev.onchainBalance.ETH,
+          BTC: resolved.BTC ?? prev.onchainBalance.BTC,
+          CAREL: effectiveStarknetAddress
+            ? resolved.CAREL ?? prev.onchainBalance.CAREL
+            : prev.onchainBalance.CAREL,
+          USDC: effectiveStarknetAddress
+            ? resolved.USDC ?? prev.onchainBalance.USDC
+            : prev.onchainBalance.USDC,
+          USDT: effectiveStarknetAddress
+            ? resolved.USDT ?? prev.onchainBalance.USDT
+            : prev.onchainBalance.USDT,
+          WBTC: effectiveStarknetAddress
+            ? resolved.WBTC ?? prev.onchainBalance.WBTC
+            : prev.onchainBalance.WBTC,
+        },
+      }))
+    } finally {
+      onchainRefreshInFlightRef.current = false
+    }
+  }, [wallet.token, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress, wallet.provider, wallet.network, wallet.address])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -376,19 +481,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   ])
 
   useEffect(() => {
-    if (!wallet.starknetAddress && !wallet.evmAddress && !wallet.btcAddress) return
+    const effectiveStarknetAddress =
+      wallet.starknetAddress || (wallet.network === "starknet" ? wallet.address : null)
+    if (!effectiveStarknetAddress && !wallet.evmAddress && !wallet.btcAddress) return
 
     void refreshOnchainBalances()
 
     if (typeof window === "undefined") return
     const interval = window.setInterval(() => {
       void refreshOnchainBalances()
-    }, 30000)
+    }, 45000)
 
     return () => {
       window.clearInterval(interval)
     }
-  }, [wallet.token, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress, refreshOnchainBalances])
+  }, [wallet.token, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress, wallet.network, wallet.address, refreshOnchainBalances])
 
   const connect = useCallback(async (provider: WalletProviderType) => {
     const message = `ZkCarel login ${Math.floor(Date.now() / 1000)}`
@@ -403,6 +510,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       STRK_L1: null as number | null,
       ETH: null as number | null,
       BTC: null as number | null,
+      CAREL: null as number | null,
+      USDC: null as number | null,
+      USDT: null as number | null,
+      WBTC: null as number | null,
     }
 
     if (provider === "metamask") {
@@ -602,6 +713,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         STRK_L1: onchain.STRK_L1 ?? prev.onchainBalance.STRK_L1,
         ETH: onchain.ETH ?? prev.onchainBalance.ETH,
         BTC: onchain.BTC ?? prev.onchainBalance.BTC,
+        CAREL: onchain.CAREL ?? prev.onchainBalance.CAREL,
+        USDC: onchain.USDC ?? prev.onchainBalance.USDC,
+        USDT: onchain.USDT ?? prev.onchainBalance.USDT,
+        WBTC: onchain.WBTC ?? prev.onchainBalance.WBTC,
       },
       network,
       starknetAddress: network === "starknet" ? address : prev.starknetAddress,
@@ -1182,9 +1297,17 @@ async function fetchStarknetBalance(
   injected: InjectedStarknet,
   address: string
 ): Promise<number | null> {
+  return fetchStarknetTokenBalance(injected, address, STRK_TOKEN_ADDRESS, STRK_DECIMALS)
+}
+
+async function fetchStarknetTokenBalance(
+  injected: InjectedStarknet,
+  address: string,
+  tokenAddress: string,
+  decimals: number
+): Promise<number | null> {
   const target: any = injected.account || injected
-  if (!target?.getBalance || !address) return null
-  const tokenAddress = STRK_TOKEN_ADDRESS
+  if (!target?.getBalance || !address || !tokenAddress) return null
 
   const attempts = [
     () => target.getBalance(address, "latest", tokenAddress),
@@ -1195,7 +1318,7 @@ async function fetchStarknetBalance(
   for (const attempt of attempts) {
     try {
       const raw = await attempt()
-      const normalized = normalizeTokenBalance(raw, STRK_DECIMALS)
+      const normalized = normalizeTokenBalance(raw, decimals)
       if (normalized !== null) return normalized
     } catch {
       // try next signature

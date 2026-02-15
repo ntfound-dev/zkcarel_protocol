@@ -33,13 +33,16 @@ impl OnchainInvoker {
         let account_address = parse_felt(account_address)?;
         let chain_id = parse_chain_id(&config.starknet_chain_id)?;
 
-        let account = SingleOwnerAccount::new(
+        let mut account = SingleOwnerAccount::new(
             provider,
             signer,
             account_address,
             chain_id,
             ExecutionEncoding::New,
         );
+        // Some public RPC providers don't support "pre_confirmed" yet.
+        // Force latest block tag for nonce/fee simulation compatibility.
+        account.set_block_id(BlockId::Tag(BlockTag::Latest));
 
         Ok(Some(Self { account }))
     }
@@ -98,6 +101,13 @@ impl OnchainReader {
     pub async fn get_transaction(&self, tx_hash: &Felt) -> Result<Transaction> {
         self.provider
             .get_transaction_by_hash(tx_hash)
+            .await
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
+    }
+
+    pub async fn get_storage_at(&self, contract_address: Felt, key: Felt) -> Result<Felt> {
+        self.provider
+            .get_storage_at(contract_address, key, BlockId::Tag(BlockTag::Latest))
             .await
             .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
     }

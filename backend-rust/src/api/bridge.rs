@@ -16,6 +16,7 @@ use crate::{
         AtomiqClient, AtomiqQuote, GardenClient, GardenQuote, LayerSwapClient, LayerSwapQuote,
     },
     models::{ApiResponse, BridgeQuoteRequest, BridgeQuoteResponse},
+    services::nft_discount::consume_nft_usage_if_active,
     services::RouteOptimizer,
 };
 use starknet_core::types::{Call, ExecutionResult, Felt, TransactionFinalityStatus};
@@ -414,6 +415,24 @@ pub async fn execute_bridge(
     Json(req): Json<ExecuteBridgeRequest>,
 ) -> Result<Json<ApiResponse<ExecuteBridgeResponse>>> {
     let user_address = require_user(&headers, &state).await?;
+    let discount_usage_user = if parse_felt(&user_address).is_ok() {
+        Some(user_address.clone())
+    } else {
+        state
+            .db
+            .list_wallet_addresses(&user_address)
+            .await
+            .ok()
+            .and_then(|wallets| {
+                wallets
+                    .into_iter()
+                    .find(|wallet| {
+                        wallet.chain.eq_ignore_ascii_case("starknet")
+                            && parse_felt(wallet.wallet_address.trim()).is_ok()
+                    })
+                    .map(|wallet| wallet.wallet_address)
+            })
+    };
     let from_chain_normalized = req.from_chain.trim().to_ascii_lowercase();
 
     let mut recipient = req.recipient.clone();
@@ -526,6 +545,18 @@ pub async fn execute_bridge(
     if should_hide {
         state.db.mark_transaction_private(&tx_hash).await?;
     }
+    if let Some(discount_user) = discount_usage_user.as_deref() {
+        if let Err(err) =
+            consume_nft_usage_if_active(&state.config, discount_user, "bridge").await
+        {
+            tracing::warn!(
+                "Failed to consume NFT discount usage after bridge success: user={} tx_hash={} err={}",
+                discount_user,
+                tx_hash,
+                err
+            );
+        }
+    }
 
     let is_direct_user_settlement =
         from_chain_normalized == "ethereum" || from_chain_normalized == "starknet";
@@ -585,9 +616,7 @@ pub async fn execute_bridge(
             fee: best_route.fee,
             estimated_time_minutes: 15,
         };
-        if let Ok(id) = client.execute_bridge(&quote, &recipient).await {
-            bridge_id = id;
-        }
+        bridge_id = client.execute_bridge(&quote, &recipient).await?;
     } else if best_route.provider.as_str() == BRIDGE_ATOMIQ {
         let client = AtomiqClient::new(
             state.config.atomiq_api_key.clone().unwrap_or_default(),
@@ -602,9 +631,7 @@ pub async fn execute_bridge(
             fee: best_route.fee,
             estimated_time_minutes: 20,
         };
-        if let Ok(id) = client.execute_bridge(&quote, &recipient).await {
-            bridge_id = id;
-        }
+        bridge_id = client.execute_bridge(&quote, &recipient).await?;
     } else if best_route.provider.as_str() == BRIDGE_GARDEN {
         let client = GardenClient::new(
             state.config.garden_api_key.clone().unwrap_or_default(),
@@ -619,9 +646,7 @@ pub async fn execute_bridge(
             fee: best_route.fee,
             estimated_time_minutes: 30,
         };
-        if let Ok(id) = client.execute_bridge(&quote, &recipient).await {
-            bridge_id = id;
-        }
+        bridge_id = client.execute_bridge(&quote, &recipient).await?;
     }
 
     if let Err(err) = invoke_bridge_aggregator(

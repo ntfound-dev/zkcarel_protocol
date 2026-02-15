@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">No NFT Tier Card</title>
+  <desc id="desc">Muted cyberpunk card for users without active NFT tier.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1d2030"/>
+      <stop offset="100%" stop-color="#0a0c14"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#7b819d" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#7b819d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="80" fill="url(#bg)"/>
+  <rect x="32" y="32" width="960" height="960" rx="64" fill="none" stroke="#8f95ad" stroke-opacity="0.5" stroke-width="6" stroke-dasharray="14 14"/>
+  <circle cx="512" cy="440" r="236" fill="url(#glow)"/>
+
+  <g transform="translate(512 430)">
+    <circle r="170" fill="#111522" stroke="#a6acc0" stroke-width="8"/>
+    <path d="M0 -120L34 -32L122 0L34 32L0 120L-34 32L-122 0L-34 -32Z" fill="#b7bdd1"/>
+    <path d="M-136 -136L136 136" stroke="#9097af" stroke-width="18" stroke-linecap="round"/>
+  </g>
+
+  <text x="512" y="770" text-anchor="middle" fill="#d2d7e8" font-family="Verdana, sans-serif" font-size="84" font-weight="700">NO NFT</text>
+  <text x="512" y="835" text-anchor="middle" fill="#8f95ad" font-family="Verdana, sans-serif" font-size="36">None Tier</text>
+</svg>

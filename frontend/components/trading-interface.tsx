@@ -227,6 +227,28 @@ const normalizeTokenAmountDisplay = (raw: string | number, symbol: string) => {
   return trimDecimalZeros(parsed.toFixed(Math.max(0, maxDecimals)))
 }
 
+const parseLiquidityMaxFromQuoteError = (message: string, expectedSymbol: string): number | null => {
+  if (!message) return null
+  const expected = expectedSymbol.trim().toUpperCase()
+  if (!expected) return null
+  const patterns = [
+    /maks sekitar\s+([0-9]+(?:[.,][0-9]+)?)\s+([a-z0-9]+)/i,
+    /max(?:imum)?\s+around\s+([0-9]+(?:[.,][0-9]+)?)\s+([a-z0-9]+)/i,
+  ]
+  for (const pattern of patterns) {
+    const match = message.match(pattern)
+    if (!match) continue
+    const amountRaw = (match[1] || "").replace(",", ".")
+    const symbolRaw = (match[2] || "").trim().toUpperCase()
+    if (!amountRaw || symbolRaw !== expected) continue
+    const parsed = Number.parseFloat(amountRaw)
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed
+    }
+  }
+  return null
+}
+
 interface TokenSelectorProps {
   selectedToken: TokenWithBalance
   onSelect: (token: TokenWithBalance) => void
@@ -410,8 +432,22 @@ export function TradingInterface() {
       if (symbol === "ETH" && chain === "ethereum" && wallet.evmAddress) {
         return wallet.onchainBalance.ETH ?? backendBalance
       }
-      if (symbol === "STRK" && chain === "starknet" && wallet.starknetAddress) {
-        return wallet.onchainBalance.STRK_L2 ?? backendBalance
+      if (chain === "starknet") {
+        if (symbol === "STRK") {
+          return wallet.onchainBalance.STRK_L2 ?? backendBalance
+        }
+        if (symbol === "CAREL") {
+          return wallet.onchainBalance.CAREL ?? backendBalance
+        }
+        if (symbol === "USDC") {
+          return wallet.onchainBalance.USDC ?? backendBalance
+        }
+        if (symbol === "USDT") {
+          return wallet.onchainBalance.USDT ?? backendBalance
+        }
+        if (symbol === "WBTC" || symbol === "BTC") {
+          return wallet.onchainBalance.WBTC ?? backendBalance
+        }
       }
       if (symbol === "BTC" && chain === "bitcoin" && wallet.btcAddress) {
         return wallet.onchainBalance.BTC ?? backendBalance
@@ -423,19 +459,72 @@ export function TradingInterface() {
       wallet.btcAddress,
       wallet.evmAddress,
       wallet.onchainBalance.BTC,
+      wallet.onchainBalance.CAREL,
       wallet.onchainBalance.ETH,
       wallet.onchainBalance.STRK_L2,
-      wallet.starknetAddress,
+      wallet.onchainBalance.USDC,
+      wallet.onchainBalance.USDT,
+      wallet.onchainBalance.WBTC,
     ]
+  )
+
+  const resolveTokenPrice = React.useCallback(
+    (symbol: string) => {
+      const upper = symbol.toUpperCase()
+      const direct = Number(livePrices[upper])
+      const directValid = Number.isFinite(direct) && direct > 0
+      const btc = Number(livePrices.BTC)
+      const btcValid = Number.isFinite(btc) && btc > 0
+      const wbtc = Number(livePrices.WBTC)
+      const wbtcValid = Number.isFinite(wbtc) && wbtc > 0
+
+      if (upper === "WBTC") {
+        if (directValid && btcValid) {
+          const ratio = direct / btc
+          if (ratio < 0.5 || ratio > 2) {
+            return btc
+          }
+          return direct
+        }
+        if (btcValid) {
+          return btc
+        }
+        if (wbtcValid) {
+          return wbtc
+        }
+      }
+
+      if (upper === "BTC") {
+        if (directValid && wbtcValid) {
+          const ratio = wbtc / direct
+          if (ratio < 0.5 || ratio > 2) {
+            return wbtc
+          }
+          return direct
+        }
+        if (directValid) {
+          return direct
+        }
+        if (wbtcValid) {
+          return wbtc
+        }
+      }
+
+      if (directValid) {
+        return direct
+      }
+      return 0
+    },
+    [livePrices]
   )
 
   const tokens = React.useMemo<TokenWithBalance[]>(() => {
     return tokenCatalog.map((token) => ({
       ...token,
       balance: resolveTokenBalance(token),
-      price: livePrices[token.symbol] ?? token.price,
+      price: resolveTokenPrice(token.symbol),
     }))
-  }, [resolveTokenBalance, livePrices])
+  }, [resolveTokenBalance, resolveTokenPrice])
 
   const [fromTokenSymbol, setFromTokenSymbol] = React.useState("ETH")
   const [toTokenSymbol, setToTokenSymbol] = React.useState("STRK")
@@ -461,6 +550,7 @@ export function TradingInterface() {
   const [quote, setQuote] = React.useState<QuoteState | null>(null)
   const [isQuoteLoading, setIsQuoteLoading] = React.useState(false)
   const [quoteError, setQuoteError] = React.useState<string | null>(null)
+  const [liquidityMaxFromQuote, setLiquidityMaxFromQuote] = React.useState<number | null>(null)
   const quoteCacheRef = React.useRef<Map<string, QuoteCacheEntry>>(new Map())
   const [activeNft, setActiveNft] = React.useState<NFTItem | null>(null)
   
@@ -616,6 +706,7 @@ export function TradingInterface() {
       setToAmount("")
       setQuote(null)
       setQuoteError(null)
+      setLiquidityMaxFromQuote(null)
       return
     }
     const slippageValue = Number(customSlippage || slippage || "0.5")
@@ -642,6 +733,9 @@ export function TradingInterface() {
           setToAmount(cached.toAmount)
           setQuote(cached.quote)
           setQuoteError(cached.quoteError)
+          setLiquidityMaxFromQuote(
+            parseLiquidityMaxFromQuoteError(cached.quoteError || "", fromSymbol)
+          )
           setIsQuoteLoading(false)
         }
         return
@@ -666,6 +760,7 @@ export function TradingInterface() {
 
       try {
         if (isCrossChain) {
+          setLiquidityMaxFromQuote(null)
           if (fromChain === "starknet" && toChain === "ethereum") {
             setQuote(null)
             setToAmount("")
@@ -738,6 +833,9 @@ export function TradingInterface() {
           setToAmount(displayToAmount)
           setQuote(bridgeQuote)
           setQuoteError(bridgeQuoteError)
+          setLiquidityMaxFromQuote(
+            parseLiquidityMaxFromQuoteError(bridgeQuoteError || "", fromSymbol)
+          )
           saveQuoteToCache(bridgeQuote, displayToAmount, bridgeQuoteError)
         } else {
           const response = await getSwapQuote({
@@ -748,34 +846,6 @@ export function TradingInterface() {
             mode: tradeMode,
           })
           if (cancelled) return
-          const backendToAmountRaw = Number(response.to_amount || 0)
-          const slippageFactor =
-            Number.isFinite(slippageValue) && slippageValue >= 0
-              ? Math.max(0, 1 - slippageValue / 100)
-              : 1
-          const liveReferenceToAmount = convertAmountByUsdPrice(
-            amountValue * 0.997 * slippageFactor,
-            fromPrice,
-            toPrice
-          )
-          const hasLiveReference =
-            Number.isFinite(liveReferenceToAmount ?? NaN) && (liveReferenceToAmount ?? 0) > 0
-          const backendDeviatesTooMuch =
-            hasLiveReference &&
-            (!Number.isFinite(backendToAmountRaw) ||
-              backendToAmountRaw <= 0 ||
-              backendToAmountRaw > (liveReferenceToAmount as number) * 1.35 ||
-              backendToAmountRaw < (liveReferenceToAmount as number) * 0.65)
-          const normalizedByLivePrice = Boolean(backendDeviatesTooMuch)
-          const normalizedToAmount = normalizedByLivePrice
-            ? normalizeTokenAmountDisplay(liveReferenceToAmount as number, toSymbol)
-            : normalizeTokenAmountDisplay(response.to_amount, toSymbol)
-          const protocolFee = Number(response.fee || 0)
-          const mevFee = mevProtection ? amountValue * MEV_FEE_RATE : 0
-          const fallbackPriceImpact = `${Math.max(
-            0,
-            (1 - 0.997 * slippageFactor) * 100
-          ).toFixed(2)}%`
           const onchainCalls =
             Array.isArray(response.onchain_calls) && response.onchain_calls.length > 0
               ? response.onchain_calls
@@ -799,6 +869,35 @@ export function TradingInterface() {
                       call.calldata.every((item) => typeof item === "string" && item.trim().length > 0)
                   )
               : undefined
+          const hasPreparedOnchainCalls = Array.isArray(onchainCalls) && onchainCalls.length > 0
+          const backendToAmountRaw = Number(response.to_amount || 0)
+          const slippageFactor =
+            Number.isFinite(slippageValue) && slippageValue >= 0
+              ? Math.max(0, 1 - slippageValue / 100)
+              : 1
+          const liveReferenceToAmount = convertAmountByUsdPrice(
+            amountValue * 0.997 * slippageFactor,
+            fromPrice,
+            toPrice
+          )
+          const hasLiveReference =
+            Number.isFinite(liveReferenceToAmount ?? NaN) && (liveReferenceToAmount ?? 0) > 0
+          const backendDeviatesTooMuch =
+            hasLiveReference &&
+            (!Number.isFinite(backendToAmountRaw) ||
+              backendToAmountRaw <= 0 ||
+              backendToAmountRaw > (liveReferenceToAmount as number) * 1.35 ||
+              backendToAmountRaw < (liveReferenceToAmount as number) * 0.65)
+          const normalizedByLivePrice = !hasPreparedOnchainCalls && Boolean(backendDeviatesTooMuch)
+          const normalizedToAmount = normalizedByLivePrice
+            ? normalizeTokenAmountDisplay(liveReferenceToAmount as number, toSymbol)
+            : normalizeTokenAmountDisplay(response.to_amount, toSymbol)
+          const protocolFee = Number(response.fee || 0)
+          const mevFee = mevProtection ? amountValue * MEV_FEE_RATE : 0
+          const fallbackPriceImpact = `${Math.max(
+            0,
+            (1 - 0.997 * slippageFactor) * 100
+          ).toFixed(2)}%`
           const swapQuote: QuoteState = {
             type: "swap",
             toAmount: normalizedToAmount,
@@ -814,11 +913,14 @@ export function TradingInterface() {
           setToAmount(swapQuote.toAmount)
           setQuote(swapQuote)
           setQuoteError(null)
+          setLiquidityMaxFromQuote(null)
           saveQuoteToCache(swapQuote, swapQuote.toAmount, null)
         }
       } catch (error) {
         if (cancelled) return
-        setQuoteError(error instanceof Error ? error.message : "Failed to fetch quote")
+        const message = error instanceof Error ? error.message : "Failed to fetch quote"
+        setQuoteError(message)
+        setLiquidityMaxFromQuote(parseLiquidityMaxFromQuoteError(message, fromSymbol))
         setToAmount("")
         setQuote(null)
       } finally {
@@ -859,14 +961,40 @@ export function TradingInterface() {
   const fromValueUSD = Number.parseFloat(fromAmount || "0") * fromToken.price
   const hasQuote = Boolean(quote)
   const bridgeTokenMismatch = isCrossChain && fromToken.symbol !== toToken.symbol
-  const feeAmount = hasQuote ? quote?.fee ?? 0 : null
+  const rawFeeAmount = hasQuote ? quote?.fee ?? 0 : null
   const feeUnit = quote?.feeUnit || (quote?.type === "bridge" ? "token" : "usd")
+  const discountRate = hasNftDiscount ? Math.min(Math.max(discountPercent, 0), 100) / 100 : 0
+  const rawProtocolFee = quote?.protocolFee
+  const rawMevFee = quote?.mevFee
+  const rawNetworkFee = quote?.networkFee
+  const protocolFeeEffective =
+    rawProtocolFee === undefined
+      ? undefined
+      : rawProtocolFee * (1 - discountRate)
+  const mevFeeEffective =
+    rawMevFee === undefined
+      ? undefined
+      : rawMevFee * (1 - discountRate)
+  const feeAmount =
+    hasQuote
+      ? (protocolFeeEffective ?? 0) + (mevFeeEffective ?? 0) + (rawNetworkFee ?? 0)
+      : null
   const feeUsdAmount =
     feeAmount === null
       ? null
       : feeUnit === "token"
       ? feeAmount * (fromToken.price || 0)
       : feeAmount
+  const rawFeeUsdAmount =
+    rawFeeAmount === null
+      ? null
+      : feeUnit === "token"
+      ? rawFeeAmount * (fromToken.price || 0)
+      : rawFeeAmount
+  const feeSavingsUsd =
+    rawFeeUsdAmount === null || feeUsdAmount === null
+      ? 0
+      : Math.max(0, rawFeeUsdAmount - feeUsdAmount)
   const feeDisplayLabel =
     feeAmount === null
       ? "—"
@@ -876,21 +1004,21 @@ export function TradingInterface() {
         }`
       : `$${(feeAmount ?? 0).toFixed(2)}`
   const protocolFeeDisplay =
-    quote?.protocolFee === undefined
+    protocolFeeEffective === undefined
       ? "—"
       : feeUnit === "token"
-      ? `${formatTokenAmount(quote.protocolFee, 6)} ${fromToken.symbol}`
-      : `$${quote.protocolFee.toFixed(2)}`
+      ? `${formatTokenAmount(protocolFeeEffective, 6)} ${fromToken.symbol}`
+      : `$${protocolFeeEffective.toFixed(2)}`
   const networkFeeDisplay =
     quote?.networkFee === undefined || quote.networkFee <= 0
       ? "—"
       : `${formatTokenAmount(quote.networkFee, 6)} ${fromToken.symbol}`
   const mevFeeDisplay =
-    quote?.mevFee === undefined || quote.mevFee <= 0
+    mevFeeEffective === undefined || mevFeeEffective <= 0
       ? "—"
       : feeUnit === "token"
-      ? `${formatTokenAmount(quote.mevFee, 6)} ${fromToken.symbol}`
-      : `$${quote.mevFee.toFixed(2)}`
+      ? `${formatTokenAmount(mevFeeEffective, 6)} ${fromToken.symbol}`
+      : `$${mevFeeEffective.toFixed(2)}`
   const mevFeePercent = mevProtection ? "1.0" : "0.0"
   const pointsEarned = hasQuote ? Math.floor(fromValueUSD * 10) : null
   const estimatedTime = hasQuote ? quote?.estimatedTime || "—" : "—"
@@ -912,28 +1040,79 @@ export function TradingInterface() {
   const isStarknetPairSwap = !isCrossChain && fromChain === "starknet" && toChain === "starknet"
   const fromAmountValue = Number.parseFloat(fromAmount || "0")
   const hasPositiveAmount = Number.isFinite(fromAmountValue) && fromAmountValue > 0
+  const shouldRequireLiveStarknetBalance =
+    sourceChain === "starknet" &&
+    ["STRK", "CAREL", "USDC", "USDT", "WBTC", "BTC"].includes(fromToken.symbol.toUpperCase())
+  const fromTokenLiveBalance = (() => {
+    const symbol = fromToken.symbol.toUpperCase()
+    if (!shouldRequireLiveStarknetBalance) return null
+    if (symbol === "STRK") return wallet.onchainBalance.STRK_L2
+    if (symbol === "CAREL") return wallet.onchainBalance.CAREL
+    if (symbol === "USDC") return wallet.onchainBalance.USDC
+    if (symbol === "USDT") return wallet.onchainBalance.USDT
+    if (symbol === "WBTC" || symbol === "BTC") return wallet.onchainBalance.WBTC
+    return null
+  })()
+  const onchainBalanceUnavailable =
+    shouldRequireLiveStarknetBalance &&
+    (fromTokenLiveBalance === null || fromTokenLiveBalance === undefined)
   const needsStarknetGasReserve =
     fromToken.symbol.toUpperCase() === "STRK" && sourceChain === "starknet"
+  const effectiveFromBalance =
+    shouldRequireLiveStarknetBalance && typeof fromTokenLiveBalance === "number"
+      ? fromTokenLiveBalance
+      : fromToken.balance || 0
   const maxSpendableFromBalance = Math.max(
     0,
-    (fromToken.balance || 0) - (needsStarknetGasReserve ? STARKNET_STRK_GAS_RESERVE : 0)
+    effectiveFromBalance - (needsStarknetGasReserve ? STARKNET_STRK_GAS_RESERVE : 0)
   )
+  const maxSpendableFromLiquidity =
+    typeof liquidityMaxFromQuote === "number" && Number.isFinite(liquidityMaxFromQuote)
+      ? Math.max(0, liquidityMaxFromQuote)
+      : null
+  const maxExecutableFromAllLimits =
+    maxSpendableFromLiquidity === null
+      ? maxSpendableFromBalance
+      : Math.max(0, Math.min(maxSpendableFromBalance, maxSpendableFromLiquidity))
   const hasInsufficientBalance = hasPositiveAmount && fromAmountValue > maxSpendableFromBalance
+  const hasInsufficientLiquidityCap =
+    hasPositiveAmount &&
+    maxSpendableFromLiquidity !== null &&
+    fromAmountValue > maxSpendableFromLiquidity + 1e-12
+  React.useEffect(() => {
+    if (onchainBalanceUnavailable) return
+    const parsed = Number.parseFloat(fromAmount || "0")
+    if (!Number.isFinite(parsed) || parsed <= 0) return
+    if (parsed <= maxExecutableFromAllLimits + 1e-12) return
+    const clamped = sanitizeDecimalInput(
+      String(Math.max(0, maxExecutableFromAllLimits)),
+      resolveTokenDecimals(fromToken.symbol)
+    )
+    if (clamped !== fromAmount) {
+      setFromAmount(clamped)
+    }
+  }, [fromAmount, fromToken.symbol, maxExecutableFromAllLimits, onchainBalanceUnavailable])
   const resolvedReceiveAddress = (receiveAddress || preferredReceiveAddress).trim()
   const requiresBtcTxHash = isCrossChain && sourceChain === "bitcoin"
   const isBtcTxHashValid = !requiresBtcTxHash || /^[0-9a-fA-F]{64}$/.test((btcBridgeTxHash || "").trim().replace(/^0x/i, ""))
   const hasValidQuote = hasQuote && !quoteError
   const hasPreparedOnchainSwapCalls =
     quote?.type === "swap" && Array.isArray(quote.onchainCalls) && quote.onchainCalls.length > 0
+  const hasFallbackPositiveBalance =
+    Number.isFinite(fromToken.balance) && fromToken.balance > 0
   const executeDisabledReason =
     !wallet.isConnected
       ? "Connect wallet dulu."
       : !hasPositiveAmount
       ? "Masukkan amount yang valid."
+      : onchainBalanceUnavailable && !hasFallbackPositiveBalance
+      ? `Saldo on-chain ${fromToken.symbol} belum terbaca. Tunggu refresh saldo dulu.`
       : hasInsufficientBalance
       ? `Amount melebihi saldo. Maks ${formatTokenAmount(maxSpendableFromBalance, 6)} ${fromToken.symbol}${
           needsStarknetGasReserve ? " (sudah sisakan gas)" : ""
         }.`
+      : hasInsufficientLiquidityCap
+      ? `Likuiditas route saat ini membatasi amount. Maks ${formatTokenAmount(maxExecutableFromAllLimits, 6)} ${fromToken.symbol}.`
       : isStarknetPairSwap && isSwapContractEventOnly
       ? "Swap real token belum aktif: kontrak saat ini event-only (hanya event + gas)."
       : !hasValidQuote
@@ -1292,7 +1471,7 @@ export function TradingInterface() {
             amount={fromAmount}
             onAmountChange={setFromAmount}
             hideBalance={balanceHidden}
-            maxTradeBalance={maxSpendableFromBalance}
+            maxTradeBalance={maxExecutableFromAllLimits}
           />
 
           {fromToken.symbol === "BTC" && !wallet.btcAddress && (
@@ -1343,6 +1522,21 @@ export function TradingInterface() {
           <SimpleRouteVisualization fromToken={fromToken} toToken={toToken} isCrossChain={isCrossChain} />
           {!isQuoteLoading && quoteError && (
             <p className="mt-2 text-[11px] text-destructive break-words">{quoteError}</p>
+          )}
+          {!isQuoteLoading && quoteError && maxSpendableFromLiquidity !== null && (
+            <button
+              onClick={() =>
+                setFromAmount(
+                  sanitizeDecimalInput(
+                    String(maxExecutableFromAllLimits),
+                    resolveTokenDecimals(fromToken.symbol)
+                  )
+                )
+              }
+              className="mt-2 text-[11px] text-primary hover:text-primary/80 underline underline-offset-2"
+            >
+              Pakai max aman: {formatTokenAmount(maxExecutableFromAllLimits, 6)} {fromToken.symbol}
+            </button>
           )}
           {!isCrossChain && quote?.type === "swap" && quote.normalizedByLivePrice && !quoteError && (
             <p className="mt-2 text-[11px] text-warning">
@@ -1552,6 +1746,12 @@ export function TradingInterface() {
                       {feeDisplayLabel}
                     </span>
                   </div>
+                  {hasNftDiscount && feeSavingsUsd > 0 && (
+                    <div className="flex items-center justify-between text-success">
+                      <span className="text-xs">Fee saved (NFT)</span>
+                      <span className="text-xs">-${feeSavingsUsd.toFixed(2)}</span>
+                    </div>
+                  )}
                 </>
               )}
             </div>

@@ -25,6 +25,22 @@ fn cooldown_hours_from_config(config: &Config) -> i64 {
         .unwrap_or(FAUCET_COOLDOWN_HOURS as u64) as i64
 }
 
+fn is_carel_token(token: &str) -> bool {
+    token.trim().eq_ignore_ascii_case("CAREL")
+}
+
+fn is_faucet_carel_unlimited() -> bool {
+    std::env::var("FAUCET_CAREL_UNLIMITED")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "y" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
 fn amount_for_token(token: &str, config: &Config) -> Result<f64> {
     let amount = match token {
         "BTC" => config.faucet_btc_amount.unwrap_or(FAUCET_AMOUNT_BTC),
@@ -134,6 +150,9 @@ impl FaucetService {
         if self.resolve_token_address(token).is_err() {
             return Ok(false);
         }
+        if is_carel_token(token) && is_faucet_carel_unlimited() {
+            return Ok(true);
+        }
         let cooldown_hours = cooldown_hours_from_config(&self.config);
         self.db
             .can_claim_faucet(user_address, token, cooldown_hours)
@@ -145,6 +164,9 @@ impl FaucetService {
         user_address: &str,
         token: &str,
     ) -> Result<Option<DateTime<Utc>>> {
+        if is_carel_token(token) && is_faucet_carel_unlimited() {
+            return Ok(None);
+        }
         let last_claim = sqlx::query(
             "SELECT claimed_at FROM faucet_claims WHERE user_address = $1 AND token = $2 ORDER BY claimed_at DESC LIMIT 1"
         )
