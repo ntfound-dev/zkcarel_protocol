@@ -63,9 +63,15 @@ pub struct Config {
 
     // External APIs
     pub openai_api_key: Option<String>,
+    pub gemini_api_key: Option<String>,
+    pub gemini_api_url: String,
+    pub gemini_model: String,
     pub twitter_bearer_token: Option<String>,
     pub telegram_bot_token: Option<String>,
     pub discord_bot_token: Option<String>,
+    pub social_tasks_json: Option<String>,
+    pub admin_manual_key: Option<String>,
+    pub dev_wallet_address: Option<String>,
     pub layerswap_api_key: Option<String>,
     pub layerswap_api_url: String,
     pub atomiq_api_key: Option<String>,
@@ -85,6 +91,11 @@ pub struct Config {
     // Rate Limiting
     pub rate_limit_public: u32,
     pub rate_limit_authenticated: u32,
+    pub ai_rate_limit_window_seconds: u64,
+    pub ai_rate_limit_global_per_window: u32,
+    pub ai_rate_limit_level_1_per_window: u32,
+    pub ai_rate_limit_level_2_per_window: u32,
+    pub ai_rate_limit_level_3_per_window: u32,
 
     // CORS
     pub cors_allowed_origins: String,
@@ -168,9 +179,22 @@ impl Config {
                 .parse()?,
 
             openai_api_key: env::var("OPENAI_API_KEY").ok(),
+            gemini_api_key: env::var("GEMINI_API_KEY")
+                .ok()
+                .or_else(|| env::var("GOOGLE_GEMINI_API_KEY").ok()),
+            gemini_api_url: env::var("GEMINI_API_URL").unwrap_or_else(|_| {
+                "https://generativelanguage.googleapis.com/v1beta".to_string()
+            }),
+            gemini_model: env::var("GEMINI_MODEL")
+                .unwrap_or_else(|_| "gemini-2.0-flash".to_string()),
             twitter_bearer_token: env::var("TWITTER_BEARER_TOKEN").ok(),
             telegram_bot_token: env::var("TELEGRAM_BOT_TOKEN").ok(),
             discord_bot_token: env::var("DISCORD_BOT_TOKEN").ok(),
+            social_tasks_json: env::var("SOCIAL_TASKS_JSON").ok(),
+            admin_manual_key: env::var("ADMIN_MANUAL_KEY").ok(),
+            dev_wallet_address: env::var("DEV_WALLET_ADDRESS")
+                .ok()
+                .or_else(|| env::var("DEV_WALLET").ok()),
             layerswap_api_key: env::var("LAYERSWAP_API_KEY").ok(),
             layerswap_api_url: env::var("LAYERSWAP_API_URL")
                 .unwrap_or_else(|_| "https://api.layerswap.io/api/v2".to_string()),
@@ -193,6 +217,21 @@ impl Config {
                 .parse()?,
             rate_limit_authenticated: env::var("RATE_LIMIT_AUTHENTICATED")
                 .unwrap_or_else(|_| "300".to_string())
+                .parse()?,
+            ai_rate_limit_window_seconds: env::var("AI_RATE_LIMIT_WINDOW_SECONDS")
+                .unwrap_or_else(|_| "60".to_string())
+                .parse()?,
+            ai_rate_limit_global_per_window: env::var("AI_RATE_LIMIT_GLOBAL_PER_WINDOW")
+                .unwrap_or_else(|_| "40".to_string())
+                .parse()?,
+            ai_rate_limit_level_1_per_window: env::var("AI_RATE_LIMIT_LEVEL_1_PER_WINDOW")
+                .unwrap_or_else(|_| "20".to_string())
+                .parse()?,
+            ai_rate_limit_level_2_per_window: env::var("AI_RATE_LIMIT_LEVEL_2_PER_WINDOW")
+                .unwrap_or_else(|_| "10".to_string())
+                .parse()?,
+            ai_rate_limit_level_3_per_window: env::var("AI_RATE_LIMIT_LEVEL_3_PER_WINDOW")
+                .unwrap_or_else(|_| "8".to_string())
                 .parse()?,
 
             cors_allowed_origins: env::var("CORS_ALLOWED_ORIGINS")
@@ -289,12 +328,23 @@ impl Config {
         if self.rate_limit_public == 0 || self.rate_limit_authenticated == 0 {
             tracing::warn!("Rate limit values should be > 0");
         }
+        if self.ai_rate_limit_window_seconds == 0
+            || self.ai_rate_limit_global_per_window == 0
+            || self.ai_rate_limit_level_1_per_window == 0
+            || self.ai_rate_limit_level_2_per_window == 0
+            || self.ai_rate_limit_level_3_per_window == 0
+        {
+            tracing::warn!("AI rate limit values should be > 0");
+        }
 
         if self.cors_allowed_origins.trim().is_empty() {
             tracing::warn!("CORS_ALLOWED_ORIGINS is empty; requests may be blocked");
         }
 
         let _ = &self.openai_api_key;
+        let _ = &self.gemini_api_key;
+        let _ = &self.gemini_api_url;
+        let _ = &self.gemini_model;
         let _ = &self.twitter_bearer_token;
         let _ = &self.telegram_bot_token;
         let _ = &self.discord_bot_token;

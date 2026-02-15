@@ -22,7 +22,7 @@ pub const CONTRACT_LIMIT_ORDER: &str = "0x00000000000000000000000000000000000010
 pub const POINTS_PER_USD_SWAP: f64 = 10.0;
 pub const POINTS_MIN_USD_SWAP: f64 = 1.0;
 pub const POINTS_MIN_USD_SWAP_TESTNET: f64 = 0.01;
-pub const POINTS_PER_USD_LIMIT_ORDER: f64 = 10.0;
+pub const POINTS_PER_USD_LIMIT_ORDER: f64 = 12.0;
 pub const POINTS_MIN_USD_LIMIT_ORDER: f64 = 1.0;
 pub const POINTS_PER_USD_BRIDGE_ETH: f64 = 15.0;
 pub const POINTS_PER_USD_BRIDGE_BTC: f64 = 25.0;
@@ -30,17 +30,36 @@ pub const POINTS_MIN_USD_BRIDGE_ETH: f64 = 10.0;
 pub const POINTS_MIN_USD_BRIDGE_BTC: f64 = 100.0;
 pub const POINTS_PER_USD_STAKE: f64 = 3.0;
 pub const POINTS_MIN_STAKE_CAREL: f64 = 100.0;
+pub const POINTS_MIN_STAKE_STRK: f64 = 10.0;
+pub const POINTS_MIN_STAKE_STABLECOIN: f64 = 100.0;
+pub const POINTS_MIN_STAKE_BTC: f64 = 0.001;
+pub const POINTS_MIN_STAKE_LP: f64 = 1.0;
 pub const POINTS_PER_USD_BRIDGE: f64 = POINTS_PER_USD_BRIDGE_ETH; // backward compatibility
-pub const POINTS_TWITTER_FOLLOW: f64 = 50.0;
-pub const POINTS_TELEGRAM_JOIN: f64 = 30.0;
-pub const POINTS_DISCORD_JOIN: f64 = 30.0;
-pub const POINTS_TWITTER_RETWEET: f64 = 25.0;
+pub const POINTS_TWITTER_FOLLOW: f64 = 5.0;
+pub const POINTS_TWITTER_LIKE: f64 = 2.0;
+pub const POINTS_TWITTER_RETWEET: f64 = 3.0;
+pub const POINTS_TWITTER_COMMENT: f64 = 10.0;
+pub const POINTS_TELEGRAM_JOIN_CHANNEL: f64 = 5.0;
+pub const POINTS_TELEGRAM_JOIN_GROUP: f64 = 5.0;
+pub const POINTS_DISCORD_JOIN: f64 = 5.0;
+pub const POINTS_DISCORD_VERIFY: f64 = 10.0;
+pub const POINTS_DISCORD_ROLE: f64 = 5.0;
+// Backward-compat aliases for older clients.
+pub const POINTS_TELEGRAM_JOIN: f64 = POINTS_TELEGRAM_JOIN_CHANNEL;
 
 // Staking multipliers
-pub const MULTIPLIER_TIER_1: f64 = 1.0; // < 10k CAREL
-pub const MULTIPLIER_TIER_2: f64 = 1.25; // 10k - 50k CAREL
-pub const MULTIPLIER_TIER_3: f64 = 1.5; // 50k - 100k CAREL
-pub const MULTIPLIER_TIER_4: f64 = 2.0; // 100k+ CAREL
+pub const MULTIPLIER_TIER_1: f64 = 1.0; // < 100 CAREL (no tier boost)
+pub const MULTIPLIER_TIER_2: f64 = 2.0; // 100 - <1k CAREL
+pub const MULTIPLIER_TIER_3: f64 = 3.0; // 1k - <10k CAREL
+pub const MULTIPLIER_TIER_4: f64 = 5.0; // 10k+ CAREL
+
+// Staking points multipliers by product
+pub const POINTS_MULTIPLIER_STAKE_CAREL_TIER_1: f64 = 2.0;
+pub const POINTS_MULTIPLIER_STAKE_CAREL_TIER_2: f64 = 3.0;
+pub const POINTS_MULTIPLIER_STAKE_CAREL_TIER_3: f64 = 5.0;
+pub const POINTS_MULTIPLIER_STAKE_BTC: f64 = 1.5;
+pub const POINTS_MULTIPLIER_STAKE_STABLECOIN: f64 = 1.0;
+pub const POINTS_MULTIPLIER_STAKE_LP: f64 = 5.0;
 
 // NFT discount tiers
 pub const NFT_TIER_1_DISCOUNT: f64 = 5.0; // Bronze

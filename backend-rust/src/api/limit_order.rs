@@ -11,6 +11,7 @@ use crate::{
     crypto::hash,
     error::Result,
     models::{ApiResponse, CreateLimitOrderRequest, LimitOrder, PaginatedResponse},
+    services::nft_discount::consume_nft_usage_if_active,
 };
 
 use super::{require_starknet_user, AppState};
@@ -175,6 +176,15 @@ pub async fn create_order(
     };
 
     state.db.create_limit_order(&order).await?;
+    if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "limit_order_create").await
+    {
+        tracing::warn!(
+            "Failed to consume NFT discount usage after limit order create: user={} order_id={} err={}",
+            user_address,
+            order_id,
+            err
+        );
+    }
     let notification_service = NotificationService::new(state.db.clone(), state.config.clone());
     let _ = notification_service
         .send_notification(

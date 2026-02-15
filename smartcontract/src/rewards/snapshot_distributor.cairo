@@ -32,10 +32,6 @@ pub trait ICarelToken<TContractState> {
     /// @param recipient Recipient address.
     /// @param amount Amount to mint.
     fn mint(ref self: TContractState, recipient: ContractAddress, amount: u256);
-    /// @notice Burns tokens held by the caller.
-    /// @dev Used to burn a portion of claim tax.
-    /// @param amount Amount to burn.
-    fn burn(ref self: TContractState, amount: u256);
 }
 
 /// @title Snapshot Distributor Interface
@@ -102,7 +98,7 @@ pub mod SnapshotDistributor {
     use core::poseidon::PoseidonTrait;
     use core::hash::{HashStateTrait, HashStateExTrait};
     use starknet::storage::*;
-    use starknet::{ContractAddress, get_caller_address, get_contract_address};
+    use starknet::{ContractAddress, get_caller_address};
     use core::traits::TryInto;
     use super::{IStakingDispatcher, IStakingDispatcherTrait, ICarelTokenDispatcher, ICarelTokenDispatcherTrait, BatchClaim};
     use core::num::traits::Zero;
@@ -208,20 +204,20 @@ pub mod SnapshotDistributor {
             // Mark claimed before external calls to prevent reentrancy
             self.claimed.entry((epoch, user)).write(true);
 
-            // Calculate 5% total tax (500/10000)
+            // Calculate 5% total tax (500/10000): 2.5% management + 2.5% dev
             let total_tax = (amount * 500) / 10000;
-            let burn_tax = total_tax / 10; // 10% of tax
-            let tax_after_burn = total_tax - burn_tax;
+            let management_tax = total_tax / 2;
+            let dev_tax = total_tax - management_tax;
             let net_reward = amount - total_tax;
 
             // Execute minting via ICarelTokenDispatcher
             let token_disp = ICarelTokenDispatcher { contract_address: self.token_address.read() };
             token_disp.mint(user, net_reward);
-            token_disp.mint(self.dev_wallet.read(), tax_after_burn / 2);
-            token_disp.mint(self.treasury_wallet.read(), tax_after_burn / 2);
-            if burn_tax > 0 {
-                token_disp.mint(get_contract_address(), burn_tax);
-                token_disp.burn(burn_tax);
+            if management_tax > 0 {
+                token_disp.mint(self.treasury_wallet.read(), management_tax);
+            }
+            if dev_tax > 0 {
+                token_disp.mint(self.dev_wallet.read(), dev_tax);
             }
 
             // Emit event
@@ -263,19 +259,19 @@ pub mod SnapshotDistributor {
 
                 self.claimed.entry((epoch, claim.user)).write(true);
 
-                // Calculate 5% total tax (500/10000)
+                // Calculate 5% total tax (500/10000): 2.5% management + 2.5% dev
                 let total_tax = (claim.amount * 500) / 10000;
-                let burn_tax = total_tax / 10; // 10% of tax
-                let tax_after_burn = total_tax - burn_tax;
+                let management_tax = total_tax / 2;
+                let dev_tax = total_tax - management_tax;
                 let net_reward = claim.amount - total_tax;
 
                 let token_disp = ICarelTokenDispatcher { contract_address: self.token_address.read() };
                 token_disp.mint(claim.user, net_reward);
-                token_disp.mint(self.dev_wallet.read(), tax_after_burn / 2);
-                token_disp.mint(self.treasury_wallet.read(), tax_after_burn / 2);
-                if burn_tax > 0 {
-                    token_disp.mint(get_contract_address(), burn_tax);
-                    token_disp.burn(burn_tax);
+                if management_tax > 0 {
+                    token_disp.mint(self.treasury_wallet.read(), management_tax);
+                }
+                if dev_tax > 0 {
+                    token_disp.mint(self.dev_wallet.read(), dev_tax);
                 }
 
                 self.emit(Event::RewardClaimed(RewardClaimed { user: claim.user, epoch, net_amount: net_reward }));

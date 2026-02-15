@@ -318,7 +318,23 @@ pub(crate) async fn fetch_starknet_erc20_balance(
         entry_point_selector: selector,
         calldata: vec![owner_felt],
     };
-    let values = reader.call(call).await?;
+    let values = match reader.call(call).await {
+        Ok(v) => v,
+        Err(AppError::BlockchainRPC(msg))
+            if msg.contains("JsonRpcResponse")
+                || msg.contains("unknown block tag 'pre_confirmed'")
+                || msg.contains("Invalid Params") =>
+        {
+            tracing::debug!(
+                "Transient Starknet balance read issue: owner={} token={} err={}",
+                owner,
+                token,
+                msg
+            );
+            return Ok(None);
+        }
+        Err(err) => return Err(err),
+    };
     let low = values
         .get(0)
         .ok_or_else(|| AppError::Internal("Balance low missing".into()))?;

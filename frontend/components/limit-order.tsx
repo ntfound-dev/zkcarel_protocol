@@ -16,17 +16,37 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ChevronDown, TrendingUp, TrendingDown, Info, Expand, X, Check, AlertCircle } from "lucide-react"
+import {
+  ChevronDown,
+  TrendingUp,
+  TrendingDown,
+  Info,
+  Expand,
+  X,
+  Check,
+  AlertCircle,
+  Gift,
+  Sparkles,
+} from "lucide-react"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
-import { cancelLimitOrder, createLimitOrder, getMarketDepth, getPortfolioBalance, getTokenOHLCV, listLimitOrders } from "@/lib/api"
+import {
+  cancelLimitOrder,
+  createLimitOrder,
+  getMarketDepth,
+  getOwnedNfts,
+  getPortfolioBalance,
+  getRewardsPoints,
+  getTokenOHLCV,
+  listLimitOrders,
+  type NFTItem,
+} from "@/lib/api"
 import { decimalToU256Parts, invokeStarknetCallFromWallet, toHexFelt } from "@/lib/onchain-trade"
 import { useLivePrices } from "@/hooks/use-live-prices"
 import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 
 const tokenCatalog = [
   { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 0, change: 0 },
-  { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 0, change: 0 },
   { symbol: "STRK", name: "StarkNet", icon: "◈", price: 0, change: 0 },
   { symbol: "CAREL", name: "ZkCarel", icon: "◐", price: 0, change: 0 },
   { symbol: "USDT", name: "Tether", icon: "₮", price: 0, change: 0 },
@@ -64,6 +84,14 @@ type UiOrder = {
   expiry: string
   status: "active" | "filled" | "cancelled"
   createdAt: string
+}
+
+type ChartCandle = {
+  timestamp: number
+  open: number
+  high: number
+  low: number
+  close: number
 }
 
 const stableSymbols = new Set(["USDT", "USDC"])
@@ -118,11 +146,15 @@ const expiryToSeconds = (expiry: string) => {
 }
 
 const generateClientOrderId = () => {
-  const bytes = new Uint8Array(32)
+  // Starknet felt must be < 251 bits, so use 31 random bytes.
+  const bytes = new Uint8Array(31)
   crypto.getRandomValues(bytes)
   const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")
   return `0x${hex}`
 }
+
+const CANDLE_BULL = "#00d48a"
+const CANDLE_BEAR = "#ff5a6f"
 
 export function LimitOrder() {
   const notifications = useNotifications()
@@ -133,8 +165,12 @@ export function LimitOrder() {
   )
   const [tokens, setTokens] = React.useState<TokenItem[]>(tokenCatalog)
   const [selectedToken, setSelectedToken] = React.useState(tokens[0])
-  const [payToken, setPayToken] = React.useState(tokens[4])
-  const [receiveToken, setReceiveToken] = React.useState(tokens[4])
+  const [payToken, setPayToken] = React.useState(
+    tokenCatalog.find((token) => token.symbol === "USDT") ?? tokenCatalog[tokenCatalog.length - 1]
+  )
+  const [receiveToken, setReceiveToken] = React.useState(
+    tokenCatalog.find((token) => token.symbol === "USDT") ?? tokenCatalog[tokenCatalog.length - 1]
+  )
   const [orderType, setOrderType] = React.useState<"buy" | "sell">("buy")
   const [amount, setAmount] = React.useState("")
   const [price, setPrice] = React.useState("")
@@ -145,7 +181,9 @@ export function LimitOrder() {
   const [showConfirmDialog, setShowConfirmDialog] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [submitSuccess, setSubmitSuccess] = React.useState(false)
-  const [chartPoints, setChartPoints] = React.useState<number[]>([])
+  const [chartCandles, setChartCandles] = React.useState<ChartCandle[]>([])
+  const [activeNftDiscount, setActiveNftDiscount] = React.useState<NFTItem | null>(null)
+  const [stakePointsMultiplier, setStakePointsMultiplier] = React.useState(1)
   const [orderBook, setOrderBook] = React.useState<{ bids: Array<{ price: number; amount: number }>; asks: Array<{ price: number; amount: number }> }>({
     bids: [],
     asks: [],
@@ -198,16 +236,64 @@ export function LimitOrder() {
   }, [livePrices, liveChanges])
 
   React.useEffect(() => {
+    const fallbackStable = tokens.find((token) => stableSymbols.has(token.symbol)) || tokens[0]
     const nextSelected = tokens.find((token) => token.symbol === selectedToken.symbol) || tokens[0]
-    const nextPay = tokens.find((token) => token.symbol === payToken.symbol) || tokens[4]
-    const nextReceive = tokens.find((token) => token.symbol === receiveToken.symbol) || tokens[4]
+    const nextPay = tokens.find((token) => token.symbol === payToken.symbol) || fallbackStable
+    const nextReceive =
+      tokens.find((token) => token.symbol === receiveToken.symbol) || fallbackStable
     setSelectedToken(nextSelected)
     setPayToken(nextPay)
     setReceiveToken(nextReceive)
   }, [tokens])
 
+  React.useEffect(() => {
+    let active = true
+    if (!wallet.isConnected) {
+      setActiveNftDiscount(null)
+      setStakePointsMultiplier(1)
+      return
+    }
+
+    const loadRewardsContext = async (force = false) => {
+      try {
+        const [nfts, rewards] = await Promise.all([
+          getOwnedNfts({ force }),
+          getRewardsPoints({ force }),
+        ])
+        if (!active) return
+        const now = Math.floor(Date.now() / 1000)
+        const usable = nfts
+          .filter((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
+          .sort((a, b) => (b.discount || 0) - (a.discount || 0))[0]
+        setActiveNftDiscount(usable || null)
+        const parsedMultiplier = Number(rewards.multiplier)
+        setStakePointsMultiplier(
+          Number.isFinite(parsedMultiplier) && parsedMultiplier > 0 ? parsedMultiplier : 1
+        )
+      } catch {
+        if (!active) return
+        setActiveNftDiscount(null)
+        setStakePointsMultiplier(1)
+      }
+    }
+
+    void loadRewardsContext()
+    const timer = window.setInterval(() => {
+      void loadRewardsContext(true)
+    }, 20_000)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [wallet.isConnected, wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
+
   const intervalForPeriod = (period: string) => {
     switch (period) {
+      case "5M":
+        return { interval: "5m", limit: 72 }
+      case "15M":
+        return { interval: "15m", limit: 96 }
       case "1H":
         return { interval: "1h", limit: 24 }
       case "24H":
@@ -216,6 +302,8 @@ export function LimitOrder() {
         return { interval: "1d", limit: 7 }
       case "30D":
         return { interval: "1d", limit: 30 }
+      case "1Y":
+        return { interval: "1d", limit: 365 }
       default:
         return { interval: "1h", limit: 24 }
     }
@@ -226,26 +314,60 @@ export function LimitOrder() {
     const { interval, limit } = intervalForPeriod(chartPeriod)
     ;(async () => {
       try {
-        const response = await getTokenOHLCV({
-          token: selectedToken.symbol,
-          interval,
-          limit,
-        })
+        let response
+        try {
+          response = await getTokenOHLCV({
+            token: selectedToken.symbol,
+            interval,
+            limit,
+            source: "coingecko",
+          })
+        } catch {
+          response = await getTokenOHLCV({
+            token: selectedToken.symbol,
+            interval,
+            limit,
+          })
+        }
         if (!active) return
-        const closes = response.data.map((candle) => Number(candle.close)).filter((value) => Number.isFinite(value))
-        if (closes.length >= 2) {
-          const latest = closes[closes.length - 1]
-          const prev = closes[closes.length - 2]
+        const candles = response.data
+          .map((candle) => {
+            const open = Number(candle.open)
+            const high = Number(candle.high)
+            const low = Number(candle.low)
+            const close = Number(candle.close)
+            const parsedTs = new Date(candle.timestamp).getTime()
+            return {
+              timestamp: Number.isFinite(parsedTs) ? parsedTs : Date.now(),
+              open,
+              high,
+              low,
+              close,
+            } as ChartCandle
+          })
+          .filter(
+            (candle) =>
+              Number.isFinite(candle.open) &&
+              Number.isFinite(candle.high) &&
+              Number.isFinite(candle.low) &&
+              Number.isFinite(candle.close) &&
+              candle.high > 0 &&
+              candle.low > 0
+          )
+        if (candles.length >= 2) {
+          const latest = candles[candles.length - 1].close
+          const prev = candles[candles.length - 2].close
           const change = prev > 0 ? ((latest - prev) / prev) * 100 : 0
           setTokens((prevTokens) =>
             prevTokens.map((token) =>
               token.symbol === selectedToken.symbol ? { ...token, price: latest, change } : token
             )
           )
-          setChartPoints(closes)
+          setChartCandles(candles)
         }
       } catch {
-        // keep existing chart
+        if (!active) return
+        setChartCandles([])
       }
     })()
 
@@ -330,13 +452,20 @@ export function LimitOrder() {
 
   const marketPrice = selectedToken.price
   const hasMarketPrice = marketPrice > 0
-  const chartHigh = chartPoints.length > 0 ? Math.max(...chartPoints) : null
-  const chartLow = chartPoints.length > 0 ? Math.min(...chartPoints) : null
+  const chartHigh =
+    chartCandles.length > 0 ? Math.max(...chartCandles.map((candle) => candle.high)) : null
+  const chartLow =
+    chartCandles.length > 0 ? Math.min(...chartCandles.map((candle) => candle.low)) : null
   const currentPrice = Number.parseFloat(price) || 0
-  const priceChange = hasMarketPrice
+  const targetPriceChange = hasMarketPrice
     ? ((currentPrice - marketPrice) / marketPrice * 100).toFixed(2)
     : null
-  const priceChangeValue = priceChange === null ? null : Number.parseFloat(priceChange)
+  const targetPriceChangeValue =
+    targetPriceChange === null ? null : Number.parseFloat(targetPriceChange)
+  const marketChangeValue =
+    Number.isFinite(selectedToken.change) && Math.abs(selectedToken.change) < 90
+      ? selectedToken.change
+      : null
   const bids = orderBook.bids
   const asks = orderBook.asks
 
@@ -348,16 +477,45 @@ export function LimitOrder() {
   }
 
   const estimatedTotal = currentPrice * (Number.parseFloat(amount) || 0)
+  const amountValue = Number.parseFloat(amount) || 0
+  const estimatedUsdValue =
+    orderType === "buy"
+      ? amountValue
+      : amountValue * (Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : marketPrice)
+  const activeDiscountPercent = activeNftDiscount?.discount ?? 0
+  const discountRate = activeDiscountPercent > 0 ? Math.min(activeDiscountPercent, 100) / 100 : 0
+  const normalizedStakeMultiplier =
+    Number.isFinite(stakePointsMultiplier) && stakePointsMultiplier > 0 ? stakePointsMultiplier : 1
+  const nftPointsMultiplier = 1 + discountRate
+  const effectivePointsMultiplier = normalizedStakeMultiplier * nftPointsMultiplier
+  const rawLimitFeeUsd = Math.max(0, estimatedUsdValue) * 0.002
+  const limitFeeUsd = rawLimitFeeUsd * (1 - discountRate)
+  const feeSavedUsd = Math.max(0, rawLimitFeeUsd - limitFeeUsd)
+  const basePoints = Math.max(0, estimatedUsdValue) * 12
+  const estimatedPoints =
+    basePoints > 0 ? Math.floor(basePoints * effectivePointsMultiplier) : 0
+  const isBtcBuyComingSoon = orderType === "buy" && selectedToken.symbol === "BTC"
 
   const handleSubmitOrder = () => {
     setShowConfirmDialog(true)
   }
 
   const confirmOrder = async () => {
+    if (isBtcBuyComingSoon) {
+      notifications.addNotification({
+        type: "info",
+        title: "Coming Soon",
+        message: "Limit Order Buy BTC masih dalam tahap finalisasi integrasi.",
+      })
+      return
+    }
     setIsSubmitting(true)
     try {
       const fromToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
       const toToken = orderType === "buy" ? selectedToken.symbol : receiveToken.symbol
+      if (fromToken.toUpperCase() === toToken.toUpperCase()) {
+        throw new Error("Token asal dan tujuan tidak boleh sama.")
+      }
       const fromTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[fromToken.toUpperCase()]
       const toTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[toToken.toUpperCase()]
       if (!fromTokenAddress || !toTokenAddress) {
@@ -541,27 +699,27 @@ export function LimitOrder() {
                     </p>
                     <p className={cn(
                       "text-sm flex items-center gap-1",
-                      priceChange === null
+                      marketChangeValue === null
                         ? "text-muted-foreground"
-                        : (priceChangeValue ?? 0) >= 0
+                        : marketChangeValue >= 0
                         ? "text-success"
                         : "text-destructive"
                     )}>
-                      {priceChange === null ? (
+                      {marketChangeValue === null ? (
                         "—"
-                      ) : (priceChangeValue ?? 0) >= 0 ? (
+                      ) : marketChangeValue >= 0 ? (
                         <TrendingUp className="h-3 w-3" />
                       ) : (
                         <TrendingDown className="h-3 w-3" />
                       )}
-                      {priceChange === null ? "" : `${(priceChangeValue ?? 0) >= 0 ? "+" : ""}${priceChange}%`}
+                      {marketChangeValue === null ? "" : `${marketChangeValue >= 0 ? "+" : ""}${marketChangeValue.toFixed(2)}%`}
                     </p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <div className="flex gap-2">
-                    {["1H", "24H", "7D", "30D"].map((period) => (
+                    {["5M", "15M", "1H", "24H", "7D", "30D"].map((period) => (
                       <button
                         key={period}
                         onClick={() => setChartPeriod(period)}
@@ -595,21 +753,57 @@ export function LimitOrder() {
                       <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0" />
                     </linearGradient>
                   </defs>
-                  {chartPoints.length > 1 ? (
-                    <path
-                      d={chartPoints.map((value, idx) => {
-                        const x = (idx / (chartPoints.length - 1)) * 800
-                        const maxVal = Math.max(...chartPoints)
-                        const minVal = Math.min(...chartPoints)
+                  {chartCandles.length > 1 ? (
+                    <>
+                      {(() => {
+                        const maxVal = Math.max(...chartCandles.map((candle) => candle.high))
+                        const minVal = Math.min(...chartCandles.map((candle) => candle.low))
                         const range = maxVal - minVal || 1
-                        const y = 200 - ((value - minVal) / range) * 160 - 20
-                        return `${idx === 0 ? "M" : "L"} ${x} ${y}`
-                      }).join(" ")}
-                      fill="none"
-                      stroke="hsl(var(--primary))"
-                      strokeWidth="2"
-                      vectorEffect="non-scaling-stroke"
-                    />
+                        const chartHeight = 200
+                        const paddingTop = 8
+                        const paddingBottom = 8
+                        const drawableHeight = chartHeight - paddingTop - paddingBottom
+                        const yFor = (price: number) =>
+                          chartHeight -
+                          paddingBottom -
+                          ((price - minVal) / range) * drawableHeight
+                        const candleStep = 800 / chartCandles.length
+                        const candleWidth = Math.max(2, candleStep * 0.55)
+
+                        return chartCandles.map((candle, idx) => {
+                          const x = idx * candleStep + candleStep / 2
+                          const openY = yFor(candle.open)
+                          const closeY = yFor(candle.close)
+                          const highY = yFor(candle.high)
+                          const lowY = yFor(candle.low)
+                          const bodyTop = Math.min(openY, closeY)
+                          const bodyHeight = Math.max(Math.abs(openY - closeY), 1)
+                          const isBullish = candle.close >= candle.open
+                          const color = isBullish ? CANDLE_BULL : CANDLE_BEAR
+
+                          return (
+                            <g key={`${candle.timestamp}-${idx}`}>
+                              <line
+                                x1={x}
+                                y1={highY}
+                                x2={x}
+                                y2={lowY}
+                                stroke={color}
+                                strokeWidth="1"
+                              />
+                              <rect
+                                x={x - candleWidth / 2}
+                                y={bodyTop}
+                                width={candleWidth}
+                                height={bodyHeight}
+                                fill={color}
+                                opacity="0.95"
+                              />
+                            </g>
+                          )
+                        })
+                      })()}
+                    </>
                   ) : null}
                   {/* Price line indicator */}
                   {currentPrice > 0 && marketPrice > 0 && (
@@ -635,7 +829,7 @@ export function LimitOrder() {
                     Target: ${currentPrice.toLocaleString()}
                   </div>
                 )}
-                {chartPoints.length <= 1 && (
+                {chartCandles.length <= 1 && (
                   <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
                     No price data
                   </div>
@@ -675,6 +869,44 @@ export function LimitOrder() {
                   )}
                 </div>
               </div>
+
+              <div className="mt-4 p-3 rounded-lg bg-surface/40 border border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs text-muted-foreground">Order Aktif</p>
+                  <span className="text-xs text-muted-foreground">{orders.length}</span>
+                </div>
+                {orders.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Tidak ada order aktif</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {orders.slice(0, 4).map((order) => (
+                      <div
+                        key={`mini-${order.id}`}
+                        className="flex items-center justify-between text-xs gap-2"
+                      >
+                        <span className="text-foreground">
+                          {order.type === "buy" ? "BELI" : "JUAL"} {order.amount} {order.token}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">
+                            ${Number(order.price).toLocaleString()}
+                          </span>
+                          {order.status === "active" ? (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => cancelOrder(order.id)}
+                              className="h-5 w-5 text-muted-foreground hover:text-destructive"
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Order Form */}
@@ -704,7 +936,7 @@ export function LimitOrder() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent className="glass-strong border-border w-full">
-                        {tokens.filter(t => t.symbol !== "USDT" && t.symbol !== "USDC").map((token) => (
+                        {tokens.map((token) => (
                           <DropdownMenuItem
                             key={token.symbol}
                             onClick={() => setSelectedToken(token)}
@@ -745,9 +977,13 @@ export function LimitOrder() {
                     {currentPrice > 0 && (
                       <p className={cn(
                         "text-xs mt-2",
-                        (priceChangeValue ?? 0) < 0 ? "text-success" : "text-muted-foreground"
+                        (targetPriceChangeValue ?? 0) < 0
+                          ? "text-success"
+                          : "text-muted-foreground"
                       )}>
-                        {(priceChangeValue ?? 0) < 0 ? priceChange : `+${priceChange}`}% dari market
+                        {(targetPriceChangeValue ?? 0) < 0
+                          ? targetPriceChange
+                          : `+${targetPriceChange}`}% dari market
                       </p>
                     )}
                   </div>
@@ -857,13 +1093,61 @@ export function LimitOrder() {
                     </div>
                   </div>
 
+                  {isBtcBuyComingSoon && (
+                    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-400/30">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="h-4 w-4 text-amber-300 flex-shrink-0 mt-0.5" />
+                        <p className="text-xs text-foreground">
+                          Buy BTC via Limit Order masih <span className="font-semibold">Coming Soon</span>.
+                          Silakan gunakan pair token lain sementara.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {(estimatedUsdValue > 0 || activeDiscountPercent > 0) && (
+                    <div className="space-y-2 p-3 rounded-lg bg-surface/50 border border-border">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground">Protocol Fee (0.20%)</span>
+                        <span className="text-sm text-foreground">${limitFeeUsd.toFixed(2)}</span>
+                      </div>
+                      {activeDiscountPercent > 0 && (
+                        <div className="flex items-center justify-between text-success">
+                          <span className="text-sm flex items-center gap-1">
+                            <Sparkles className="h-3 w-3" />
+                            NFT Discount
+                          </span>
+                          <span className="text-sm">-{activeDiscountPercent}%</span>
+                        </div>
+                      )}
+                      {feeSavedUsd > 0 && (
+                        <div className="flex items-center justify-between text-success">
+                          <span className="text-xs">Fee saved</span>
+                          <span className="text-xs">-${feeSavedUsd.toFixed(2)}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between border-t border-border pt-2">
+                        <span className="text-sm font-medium text-foreground flex items-center gap-2">
+                          <Gift className="h-4 w-4 text-accent" />
+                          Estimated Points
+                        </span>
+                        <span className="text-sm font-bold text-accent">
+                          {estimatedPoints > 0 ? `+${estimatedPoints}` : "—"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Points diberikan saat order berhasil terisi (filled).
+                      </p>
+                    </div>
+                  )}
+
                   {/* Submit Button */}
                   <Button 
                     onClick={handleSubmitOrder}
-                    disabled={!price || !amount}
+                    disabled={!price || !amount || isBtcBuyComingSoon}
                     className="w-full py-6 bg-success hover:bg-success/90 text-success-foreground font-bold"
                   >
-                    Buat Order Beli
+                    {isBtcBuyComingSoon ? "Coming Soon (BTC Buy)" : "Buat Order Beli"}
                   </Button>
                 </TabsContent>
 
@@ -882,7 +1166,7 @@ export function LimitOrder() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent className="glass-strong border-border w-full">
-                        {tokens.filter(t => t.symbol !== "USDT" && t.symbol !== "USDC").map((token) => (
+                        {tokens.map((token) => (
                           <DropdownMenuItem
                             key={token.symbol}
                             onClick={() => setSelectedToken(token)}
@@ -1011,6 +1295,42 @@ export function LimitOrder() {
                     </div>
                   )}
 
+                  {(estimatedUsdValue > 0 || activeDiscountPercent > 0) && (
+                    <div className="space-y-2 p-3 rounded-lg bg-surface/50 border border-border">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground">Protocol Fee (0.20%)</span>
+                        <span className="text-sm text-foreground">${limitFeeUsd.toFixed(2)}</span>
+                      </div>
+                      {activeDiscountPercent > 0 && (
+                        <div className="flex items-center justify-between text-success">
+                          <span className="text-sm flex items-center gap-1">
+                            <Sparkles className="h-3 w-3" />
+                            NFT Discount
+                          </span>
+                          <span className="text-sm">-{activeDiscountPercent}%</span>
+                        </div>
+                      )}
+                      {feeSavedUsd > 0 && (
+                        <div className="flex items-center justify-between text-success">
+                          <span className="text-xs">Fee saved</span>
+                          <span className="text-xs">-${feeSavedUsd.toFixed(2)}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between border-t border-border pt-2">
+                        <span className="text-sm font-medium text-foreground flex items-center gap-2">
+                          <Gift className="h-4 w-4 text-accent" />
+                          Estimated Points
+                        </span>
+                        <span className="text-sm font-bold text-accent">
+                          {estimatedPoints > 0 ? `+${estimatedPoints}` : "—"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Points diberikan saat order berhasil terisi (filled).
+                      </p>
+                    </div>
+                  )}
+
                   {/* Submit Button */}
                   <Button 
                     onClick={handleSubmitOrder}
@@ -1024,58 +1344,6 @@ export function LimitOrder() {
             </div>
           </div>
 
-          {/* Active Orders */}
-          <div className="mt-8 p-6 rounded-2xl glass-strong border border-border">
-            <h3 className="text-lg font-bold text-foreground mb-4">Order Aktif</h3>
-            {orders.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">Tidak ada order aktif</div>
-            ) : (
-              <div className="space-y-3">
-                {orders.map((order) => (
-                  <div key={order.id} className="flex items-center justify-between p-4 rounded-xl bg-surface/50 border border-border">
-                    <div className="flex items-center gap-4">
-                      <div className={cn(
-                        "px-3 py-1 rounded-full text-xs font-medium",
-                        order.type === "buy" ? "bg-success/20 text-success" : "bg-destructive/20 text-destructive"
-                      )}>
-                        {order.type === "buy" ? "BELI" : "JUAL"}
-                      </div>
-                      <div>
-                        <p className="font-medium text-foreground">{order.amount} {order.token}</p>
-                        <p className="text-xs text-muted-foreground">@ ${Number(order.price).toLocaleString()}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <p className="text-xs text-muted-foreground">{order.createdAt}</p>
-                        <p className="text-xs text-muted-foreground">
-                          Exp: {expiryOptions.find(e => e.value === order.expiry)?.label || formatDateTime(order.expiry)}
-                        </p>
-                      </div>
-                      {order.status === "active" ? (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => cancelOrder(order.id)}
-                          className="text-muted-foreground hover:text-destructive"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      ) : order.status === "filled" ? (
-                        <span className="text-xs text-success flex items-center gap-1">
-                          <Check className="h-3 w-3" /> Filled
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground flex items-center gap-1">
-                          <X className="h-3 w-3" /> Cancelled
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       </section>
 
@@ -1096,31 +1364,67 @@ export function LimitOrder() {
                   <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0" />
                 </linearGradient>
               </defs>
-              {chartPoints.length > 1 ? (
-                <path
-                  d={chartPoints.map((value, idx) => {
-                    const x = (idx / (chartPoints.length - 1)) * 800
-                    const maxVal = Math.max(...chartPoints)
-                    const minVal = Math.min(...chartPoints)
+              {chartCandles.length > 1 ? (
+                <>
+                  {(() => {
+                    const maxVal = Math.max(...chartCandles.map((candle) => candle.high))
+                    const minVal = Math.min(...chartCandles.map((candle) => candle.low))
                     const range = maxVal - minVal || 1
-                    const y = 300 - ((value - minVal) / range) * 240 - 30
-                    return `${idx === 0 ? "M" : "L"} ${x} ${y}`
-                  }).join(" ")}
-                  fill="none"
-                  stroke="hsl(var(--primary))"
-                  strokeWidth="2"
-                  vectorEffect="non-scaling-stroke"
-                />
+                    const chartHeight = 300
+                    const paddingTop = 10
+                    const paddingBottom = 10
+                    const drawableHeight = chartHeight - paddingTop - paddingBottom
+                    const yFor = (price: number) =>
+                      chartHeight -
+                      paddingBottom -
+                      ((price - minVal) / range) * drawableHeight
+                    const candleStep = 800 / chartCandles.length
+                    const candleWidth = Math.max(2, candleStep * 0.55)
+
+                    return chartCandles.map((candle, idx) => {
+                      const x = idx * candleStep + candleStep / 2
+                      const openY = yFor(candle.open)
+                      const closeY = yFor(candle.close)
+                      const highY = yFor(candle.high)
+                      const lowY = yFor(candle.low)
+                      const bodyTop = Math.min(openY, closeY)
+                      const bodyHeight = Math.max(Math.abs(openY - closeY), 1)
+                      const isBullish = candle.close >= candle.open
+                      const color = isBullish ? CANDLE_BULL : CANDLE_BEAR
+
+                      return (
+                        <g key={`${candle.timestamp}-${idx}`}>
+                          <line
+                            x1={x}
+                            y1={highY}
+                            x2={x}
+                            y2={lowY}
+                            stroke={color}
+                            strokeWidth="1"
+                          />
+                          <rect
+                            x={x - candleWidth / 2}
+                            y={bodyTop}
+                            width={candleWidth}
+                            height={bodyHeight}
+                            fill={color}
+                            opacity="0.95"
+                          />
+                        </g>
+                      )
+                    })
+                  })()}
+                </>
               ) : null}
             </svg>
-            {chartPoints.length <= 1 && (
+            {chartCandles.length <= 1 && (
               <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
                 No price data
               </div>
             )}
           </div>
           <div className="flex justify-center gap-2">
-            {["1H", "24H", "7D", "30D", "1Y"].map((period) => (
+            {["5M", "15M", "1H", "24H", "7D", "30D", "1Y"].map((period) => (
               <button
                 key={period}
                 onClick={() => setChartPeriod(period)}

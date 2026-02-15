@@ -5,10 +5,14 @@ use crate::{
     config::Config,
     constants::{
         EPOCH_DURATION_SECONDS, MULTIPLIER_TIER_1, MULTIPLIER_TIER_2, MULTIPLIER_TIER_3,
-        MULTIPLIER_TIER_4, POINTS_MIN_STAKE_CAREL, POINTS_MIN_USD_BRIDGE_BTC,
+        MULTIPLIER_TIER_4, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_CAREL, POINTS_MIN_STAKE_LP,
+        POINTS_MIN_STAKE_STABLECOIN, POINTS_MIN_STAKE_STRK, POINTS_MIN_USD_BRIDGE_BTC,
         POINTS_MIN_USD_BRIDGE_ETH, POINTS_MIN_USD_LIMIT_ORDER, POINTS_MIN_USD_SWAP,
         POINTS_MIN_USD_SWAP_TESTNET, POINTS_PER_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_ETH,
         POINTS_PER_USD_LIMIT_ORDER, POINTS_PER_USD_STAKE, POINTS_PER_USD_SWAP,
+        POINTS_MULTIPLIER_STAKE_BTC, POINTS_MULTIPLIER_STAKE_CAREL_TIER_1,
+        POINTS_MULTIPLIER_STAKE_CAREL_TIER_2, POINTS_MULTIPLIER_STAKE_CAREL_TIER_3,
+        POINTS_MULTIPLIER_STAKE_LP, POINTS_MULTIPLIER_STAKE_STABLECOIN,
         POINT_CALCULATOR_INTERVAL_SECS,
     },
     db::Database,
@@ -29,8 +33,9 @@ pub struct PointCalculator {
     onchain: Option<OnchainInvoker>,
 }
 
-const REFERRAL_MIN_POINTS: i64 = 100;
-const REFERRAL_BONUS_BPS: i64 = 1000; // 10%
+const REFERRAL_MIN_USD_VOLUME: i64 = 20;
+const REFERRAL_REFERRER_BONUS_BPS: i64 = 1000; // 10%
+const REFERRAL_REFEREE_BONUS_BPS: i64 = 1000; // 10%
 
 impl PointCalculator {
     pub fn new(db: Database, config: Config) -> Self {
@@ -238,14 +243,25 @@ impl PointCalculator {
 
     async fn calculate_stake_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
         let amount = tx.amount_in.and_then(|v| v.to_f64()).unwrap_or(0.0);
-        if amount < POINTS_MIN_STAKE_CAREL {
-            return Ok(0.0);
-        }
         let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
-        if usd_value <= 0.0 {
+        if amount <= 0.0 || usd_value <= 0.0 {
             return Ok(0.0);
         }
-        self.apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_STAKE)
+
+        let token = tx
+            .token_in
+            .as_deref()
+            .unwrap_or("CAREL")
+            .to_ascii_uppercase();
+        let multiplier = stake_points_multiplier_for(&token, amount);
+        if multiplier <= 0.0 {
+            return Ok(0.0);
+        }
+
+        self.apply_nft_discount_bonus(
+            &tx.user_address,
+            usd_value * POINTS_PER_USD_STAKE * multiplier,
+        )
             .await
     }
 
@@ -427,23 +443,99 @@ impl PointCalculator {
             return Ok(());
         }
 
-        let min_points = Decimal::from_i64(REFERRAL_MIN_POINTS).unwrap_or(Decimal::ZERO);
-        if new_total < min_points {
+        // Referral bonus aktif hanya untuk referee yang sudah punya volume transaksi kumulatif >= $20.
+        let total_referee_volume_usd: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(ABS(COALESCE(usd_value, 0))), 0)
+             FROM transactions
+             WHERE LOWER(user_address) = LOWER($1)",
+        )
+        .bind(referee_address)
+        .fetch_optional(self.db.pool())
+        .await?
+        .unwrap_or(Decimal::ZERO);
+
+        let min_volume = Decimal::from_i64(REFERRAL_MIN_USD_VOLUME).unwrap_or(Decimal::ZERO);
+        if total_referee_volume_usd < min_volume {
             return Ok(());
         }
 
         let delta = new_total - prev_total;
-        let bonus = delta * Decimal::from_i64(REFERRAL_BONUS_BPS).unwrap_or(Decimal::ZERO)
+        let referrer_bonus = delta
+            * Decimal::from_i64(REFERRAL_REFERRER_BONUS_BPS).unwrap_or(Decimal::ZERO)
             / Decimal::new(10000, 0);
-        if bonus <= Decimal::ZERO {
+        let referee_bonus = delta
+            * Decimal::from_i64(REFERRAL_REFEREE_BONUS_BPS).unwrap_or(Decimal::ZERO)
+            / Decimal::new(10000, 0);
+        if referrer_bonus <= Decimal::ZERO && referee_bonus <= Decimal::ZERO {
             return Ok(());
         }
 
-        self.db.add_referral_points(&referrer, epoch, bonus).await?;
-        self.apply_multipliers(&referrer, epoch).await?;
+        // 1) Bonus untuk referee (user yang diundang).
+        if referee_bonus > Decimal::ZERO {
+            self.db
+                .add_referral_points(referee_address, epoch, referee_bonus)
+                .await?;
+            self.apply_multipliers(referee_address, epoch).await?;
+
+            let updated_referee_total: Decimal = sqlx::query_scalar(
+                "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2",
+            )
+            .bind(referee_address)
+            .bind(epoch)
+            .fetch_optional(self.db.pool())
+            .await?
+            .unwrap_or(Decimal::ZERO);
+
+            if let Err(err) = self
+                .sync_points_total_onchain(epoch, referee_address, updated_referee_total)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to sync referee total points onchain: referee={}, epoch={}, error={}",
+                    referee_address,
+                    epoch,
+                    err
+                );
+            }
+        }
+
+        // 2) Bonus untuk referrer.
+        if referrer_bonus > Decimal::ZERO {
+            self.db
+                .add_referral_points(&referrer, epoch, referrer_bonus)
+                .await?;
+            self.apply_multipliers(&referrer, epoch).await?;
+
+            let updated_referrer_total: Decimal = sqlx::query_scalar(
+                "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2",
+            )
+            .bind(&referrer)
+            .bind(epoch)
+            .fetch_optional(self.db.pool())
+            .await?
+            .unwrap_or(Decimal::ZERO);
+
+            if let Err(err) = self
+                .sync_points_total_onchain(epoch, &referrer, updated_referrer_total)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to sync referrer total points onchain: referrer={}, epoch={}, error={}",
+                    referrer,
+                    epoch,
+                    err
+                );
+            }
+        }
+
+        let referee_total_for_referral_sync = if referee_bonus > Decimal::ZERO {
+            new_total + referee_bonus
+        } else {
+            new_total
+        };
 
         if let Err(err) = self
-            .sync_referral_onchain(epoch, referee_address, new_total)
+            .sync_referral_onchain(epoch, referee_address, referee_total_for_referral_sync)
             .await
         {
             tracing::warn!(
@@ -592,12 +684,61 @@ fn nft_factor_for_discount(discount_rate: f64) -> f64 {
     1.0 + (discount_rate.max(0.0) / 100.0)
 }
 
+fn is_lp_stake_symbol(token: &str) -> bool {
+    token.starts_with("LP")
+}
+
+fn stake_points_multiplier_for(token: &str, amount: f64) -> f64 {
+    match token {
+        "CAREL" => {
+            if amount < POINTS_MIN_STAKE_CAREL {
+                0.0
+            } else if amount < 1_000.0 {
+                POINTS_MULTIPLIER_STAKE_CAREL_TIER_1
+            } else if amount < 10_000.0 {
+                POINTS_MULTIPLIER_STAKE_CAREL_TIER_2
+            } else {
+                POINTS_MULTIPLIER_STAKE_CAREL_TIER_3
+            }
+        }
+        "BTC" | "WBTC" => {
+            if amount < POINTS_MIN_STAKE_BTC {
+                0.0
+            } else {
+                POINTS_MULTIPLIER_STAKE_BTC
+            }
+        }
+        "USDT" | "USDC" => {
+            if amount < POINTS_MIN_STAKE_STABLECOIN {
+                0.0
+            } else {
+                POINTS_MULTIPLIER_STAKE_STABLECOIN
+            }
+        }
+        "STRK" => {
+            if amount < POINTS_MIN_STAKE_STRK {
+                0.0
+            } else {
+                POINTS_MULTIPLIER_STAKE_STABLECOIN
+            }
+        }
+        _ if is_lp_stake_symbol(token) => {
+            if amount < POINTS_MIN_STAKE_LP {
+                0.0
+            } else {
+                POINTS_MULTIPLIER_STAKE_LP
+            }
+        }
+        _ => 0.0,
+    }
+}
+
 fn staking_multiplier_for(stake_amount: f64) -> f64 {
-    if stake_amount < 10_000.0 {
+    if stake_amount < POINTS_MIN_STAKE_CAREL {
         MULTIPLIER_TIER_1
-    } else if stake_amount < 50_000.0 {
+    } else if stake_amount < 1_000.0 {
         MULTIPLIER_TIER_2
-    } else if stake_amount < 100_000.0 {
+    } else if stake_amount < 10_000.0 {
         MULTIPLIER_TIER_3
     } else {
         MULTIPLIER_TIER_4
@@ -612,9 +753,38 @@ mod tests {
     fn staking_multiplier_for_tier_boundaries() {
         // Memastikan multiplier berubah sesuai batas tier
         assert_eq!(staking_multiplier_for(0.0), MULTIPLIER_TIER_1);
-        assert_eq!(staking_multiplier_for(10_000.0), MULTIPLIER_TIER_2);
-        assert_eq!(staking_multiplier_for(50_000.0), MULTIPLIER_TIER_3);
-        assert_eq!(staking_multiplier_for(100_000.0), MULTIPLIER_TIER_4);
+        assert_eq!(staking_multiplier_for(100.0), MULTIPLIER_TIER_2);
+        assert_eq!(staking_multiplier_for(1_000.0), MULTIPLIER_TIER_3);
+        assert_eq!(staking_multiplier_for(10_000.0), MULTIPLIER_TIER_4);
+    }
+
+    #[test]
+    fn stake_points_multiplier_matches_product_rules() {
+        assert_eq!(stake_points_multiplier_for("CAREL", 99.0), 0.0);
+        assert_eq!(
+            stake_points_multiplier_for("CAREL", 100.0),
+            POINTS_MULTIPLIER_STAKE_CAREL_TIER_1
+        );
+        assert_eq!(
+            stake_points_multiplier_for("CAREL", 1_000.0),
+            POINTS_MULTIPLIER_STAKE_CAREL_TIER_2
+        );
+        assert_eq!(
+            stake_points_multiplier_for("CAREL", 10_000.0),
+            POINTS_MULTIPLIER_STAKE_CAREL_TIER_3
+        );
+        assert_eq!(
+            stake_points_multiplier_for("WBTC", 0.001),
+            POINTS_MULTIPLIER_STAKE_BTC
+        );
+        assert_eq!(
+            stake_points_multiplier_for("USDT", 100.0),
+            POINTS_MULTIPLIER_STAKE_STABLECOIN
+        );
+        assert_eq!(
+            stake_points_multiplier_for("LP_CAREL_STRK", 1.0),
+            POINTS_MULTIPLIER_STAKE_LP
+        );
     }
 
     #[test]

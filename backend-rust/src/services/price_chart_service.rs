@@ -8,7 +8,7 @@ use crate::{
     models::PriceTick,
 };
 
-use chrono::{DateTime, Timelike, Utc};
+use chrono::{DateTime, TimeZone, Timelike, Utc};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -135,8 +135,7 @@ impl PriceChartService {
 
     async fn fetch_price_from_coingecko(&self, token: &str) -> Result<Decimal> {
         let coin_id = self
-            .config
-            .coingecko_id_for(token)
+            .coingecko_id_or_default(token)
             .ok_or_else(|| AppError::NotFound(format!("Missing CoinGecko id for {}", token)))?;
 
         let base_url = self.config.coingecko_api_url.trim_end_matches('/');
@@ -177,6 +176,101 @@ impl PriceChartService {
 
         Decimal::from_f64(usd_price)
             .ok_or_else(|| AppError::Internal("Failed to convert price".into()))
+    }
+
+    pub async fn get_ohlcv_from_coingecko(
+        &self,
+        token: &str,
+        interval: &str,
+        limit: i32,
+    ) -> Result<Vec<PriceTick>> {
+        let symbol = token.to_ascii_uppercase();
+        let max_len = limit.max(1) as usize;
+        let coin_id = match self.coingecko_id_or_default(&symbol) {
+            Some(value) => value,
+            None => {
+                // Token seperti CAREL belum punya listing CoinGecko:
+                // fallback ke candle lokal dari DB agar endpoint chart tetap hidup.
+                let local = self.get_latest_candles(&symbol, interval, limit).await?;
+                if !local.is_empty() {
+                    return Ok(local);
+                }
+                if symbol == "CAREL" {
+                    return Ok(self.synthetic_flat_ohlcv(&symbol, interval, max_len, Decimal::ONE));
+                }
+                return Err(AppError::NotFound(format!("Missing CoinGecko id for {}", token)));
+            }
+        };
+        let days = Self::coingecko_days_for(interval, limit);
+
+        let base_url = self.config.coingecko_api_url.trim_end_matches('/');
+        let endpoint = format!("{}/coins/{}/ohlc", base_url, coin_id);
+        let mut url = reqwest::Url::parse(&endpoint)
+            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+        url.query_pairs_mut()
+            .append_pair("vs_currency", "usd")
+            .append_pair("days", days);
+
+        let client = reqwest::Client::new();
+        let mut request = client.get(url);
+        if let Some(key) = &self.config.coingecko_api_key {
+            if !key.trim().is_empty() {
+                request = request.header("x-cg-demo-api-key", key.trim());
+            }
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+        let rows: Vec<Vec<f64>> = response
+            .json()
+            .await
+            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+
+        let mut candles = Vec::with_capacity(rows.len());
+        for row in rows {
+            if row.len() < 5 {
+                continue;
+            }
+            let ts_ms = row[0] as i64;
+            let Some(timestamp) = Utc.timestamp_millis_opt(ts_ms).single() else {
+                continue;
+            };
+            let open = Decimal::from_f64(row[1]).unwrap_or(Decimal::ZERO);
+            let high = Decimal::from_f64(row[2]).unwrap_or(open);
+            let low = Decimal::from_f64(row[3]).unwrap_or(open);
+            let close = Decimal::from_f64(row[4]).unwrap_or(open);
+            candles.push(PriceTick {
+                token: symbol.clone(),
+                timestamp,
+                open,
+                high,
+                low,
+                close,
+                volume: Decimal::ZERO,
+            });
+        }
+
+        if candles.is_empty() {
+            let local = self.get_latest_candles(&symbol, interval, limit).await?;
+            if !local.is_empty() {
+                return Ok(local);
+            }
+            if symbol == "CAREL" {
+                return Ok(self.synthetic_flat_ohlcv(&symbol, interval, max_len, Decimal::ONE));
+            }
+            return Err(AppError::NotFound(format!(
+                "CoinGecko OHLCV unavailable for {}",
+                token
+            )));
+        }
+
+        if candles.len() > max_len {
+            candles = candles[candles.len() - max_len..].to_vec();
+        }
+
+        Ok(candles)
     }
 
     async fn update_ohlcv_candles(
@@ -410,6 +504,94 @@ impl PriceChartService {
         }
 
         Ok(out)
+    }
+
+    fn coingecko_id_or_default(&self, token: &str) -> Option<String> {
+        if let Some(mapped) = self.config.coingecko_id_for(token) {
+            let trimmed = mapped.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        match token.to_ascii_uppercase().as_str() {
+            "BTC" | "WBTC" => Some("bitcoin".to_string()),
+            "ETH" => Some("ethereum".to_string()),
+            "STRK" => Some("starknet".to_string()),
+            "USDT" => Some("tether".to_string()),
+            "USDC" => Some("usd-coin".to_string()),
+            _ => None,
+        }
+    }
+
+    fn coingecko_days_for(interval: &str, limit: i32) -> &'static str {
+        let capped_limit = limit.max(1);
+        match interval {
+            "1m" | "5m" | "15m" | "1h" => {
+                if capped_limit <= 24 {
+                    "1"
+                } else if capped_limit <= 168 {
+                    "7"
+                } else {
+                    "30"
+                }
+            }
+            "4h" => {
+                if capped_limit <= 42 {
+                    "7"
+                } else {
+                    "30"
+                }
+            }
+            "1d" => {
+                if capped_limit <= 7 {
+                    "7"
+                } else if capped_limit <= 30 {
+                    "30"
+                } else if capped_limit <= 90 {
+                    "90"
+                } else {
+                    "365"
+                }
+            }
+            _ => "30",
+        }
+    }
+
+    fn synthetic_flat_ohlcv(
+        &self,
+        symbol: &str,
+        interval: &str,
+        len: usize,
+        price: Decimal,
+    ) -> Vec<PriceTick> {
+        let step_secs = match interval {
+            "1m" => 60,
+            "5m" => 300,
+            "15m" => 900,
+            "1h" => 3600,
+            "4h" => 14_400,
+            "1d" => 86_400,
+            _ => 3600,
+        };
+        let now = Utc::now().timestamp();
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len {
+            let back = (len - 1 - i) as i64;
+            let ts = now - (back * step_secs);
+            let Some(timestamp) = Utc.timestamp_opt(ts, 0).single() else {
+                continue;
+            };
+            out.push(PriceTick {
+                token: symbol.to_string(),
+                timestamp,
+                open: price,
+                high: price,
+                low: price,
+                close: price,
+                volume: Decimal::ZERO,
+            });
+        }
+        out
     }
 }
 

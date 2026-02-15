@@ -6,8 +6,19 @@ import { Gift, Diamond, Trophy, Sparkles, ArrowRight, Check, Shield } from "luci
 import { Button } from "@/components/ui/button"
 import { useWallet } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
-import { claimRewards, convertRewards, getOwnedNfts, getPortfolioAnalytics, getRewardsPoints, mintNft, syncRewardsPointsOnchain, verifySocialTask, type NFTItem } from "@/lib/api"
+import {
+  getOwnedNfts,
+  getRewardsPoints,
+  getSocialTasks,
+  mintNft,
+  syncRewardsPointsOnchain,
+  verifySocialTask,
+  type NFTItem,
+  type SocialTaskItem,
+} from "@/lib/api"
 import { invokeStarknetCallFromWallet } from "@/lib/onchain-trade"
+
+type SocialTaskUi = SocialTaskItem & { placeholder: string }
 
 const tierDefinitions = [
   { 
@@ -139,36 +150,83 @@ const nftTiers = [
   },
 ]
 
-const socialTasks = [
+const defaultSocialTasks: SocialTaskUi[] = [
   {
     id: "twitter_follow",
-    title: "Follow ZkCarel on X",
-    description: "Follow @zkcarel and paste your profile link or handle.",
+    title: "X: Follow",
+    description: "Follow @zkcarel and paste your profile link or handle. (+5 pts)",
+    points: 5,
+    provider: "twitter",
     placeholder: "https://x.com/your_handle",
   },
   {
-    id: "twitter_retweet",
-    title: "Retweet Announcement",
-    description: "Retweet the latest announcement and paste the tweet URL.",
+    id: "twitter_like",
+    title: "X: Like",
+    description: "Like announcement tweet and paste the tweet URL. (+2 pts)",
+    points: 2,
+    provider: "twitter",
     placeholder: "https://x.com/zkcarel/status/...",
   },
   {
-    id: "telegram_join",
-    title: "Join Telegram",
-    description: "Join our Telegram community and paste your username.",
+    id: "twitter_retweet",
+    title: "X: Retweet",
+    description: "Retweet announcement tweet and paste the tweet URL. (+3 pts)",
+    points: 3,
+    provider: "twitter",
+    placeholder: "https://x.com/zkcarel/status/...",
+  },
+  {
+    id: "twitter_comment",
+    title: "X: Comment",
+    description: "Comment on announcement tweet and paste the tweet URL. (+10 pts)",
+    points: 10,
+    provider: "twitter",
+    placeholder: "https://x.com/zkcarel/status/...",
+  },
+  {
+    id: "telegram_join_channel",
+    title: "Telegram: Join Channel",
+    description: "Join official channel and paste your Telegram username. (+5 pts)",
+    points: 5,
+    provider: "telegram",
+    placeholder: "@username",
+  },
+  {
+    id: "telegram_join_group",
+    title: "Telegram: Join Group",
+    description: "Join official group and paste your Telegram username. (+5 pts)",
+    points: 5,
+    provider: "telegram",
     placeholder: "@username",
   },
   {
     id: "discord_join",
-    title: "Join Discord",
-    description: "Join our Discord server and paste your Discord tag.",
+    title: "Discord: Join",
+    description: "Join our Discord server and paste your Discord tag. (+5 pts)",
+    points: 5,
+    provider: "discord",
+    placeholder: "username#1234",
+  },
+  {
+    id: "discord_verify",
+    title: "Discord: Verify",
+    description: "Complete verification and paste your Discord tag/proof. (+10 pts)",
+    points: 10,
+    provider: "discord",
+    placeholder: "username#1234",
+  },
+  {
+    id: "discord_role",
+    title: "Discord: Get Role",
+    description: "Get community role and paste your Discord tag/proof. (+5 pts)",
+    points: 5,
+    provider: "discord",
     placeholder: "username#1234",
   },
 ]
 
 type TierInfo = typeof tierDefinitions[number] & { achieved: boolean }
 
-const MONTHLY_POOL_CAREL = (1_000_000_000 * 0.4) / 36
 const STARKNET_DISCOUNT_SOULBOUND_ADDRESS =
   process.env.NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS ||
   process.env.NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS ||
@@ -414,18 +472,17 @@ export function RewardsHub() {
   const [everPoints, setEverPoints] = React.useState(0)
   const [estimatedCAREL, setEstimatedCAREL] = React.useState(0)
   const [ownedNfts, setOwnedNfts] = React.useState<NFTItem[]>([])
-  const [isConverting, setIsConverting] = React.useState(false)
   const [isMintingTier, setIsMintingTier] = React.useState<number | null>(null)
   const [taskInputs, setTaskInputs] = React.useState<Record<string, string>>({})
   const [taskStatus, setTaskStatus] = React.useState<Record<string, { status: "idle" | "verifying" | "success" | "error"; message?: string; points?: number }>>({})
+  const [socialTasks, setSocialTasks] = React.useState<SocialTaskUi[]>(defaultSocialTasks)
   const [currentEpoch, setCurrentEpoch] = React.useState<number | null>(null)
   const [convertEpoch, setConvertEpoch] = React.useState("")
   const [convertDistribution, setConvertDistribution] = React.useState("")
   const [showAdvancedConvert, setShowAdvancedConvert] = React.useState(false)
-  const monthlyPoolLabel = React.useMemo(
-    () => MONTHLY_POOL_CAREL.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-    []
-  )
+  const [distributionLabel, setDistributionLabel] = React.useState("Distribution pool")
+  const [distributionPoolLabel, setDistributionPoolLabel] = React.useState("—")
+  const [claimFeeLabel, setClaimFeeLabel] = React.useState("Claim fee: 5%")
   const starknetProviderHint = React.useMemo<"starknet" | "argentx" | "braavos">(() => {
     if (wallet.provider === "argentx" || wallet.provider === "braavos") {
       return wallet.provider
@@ -478,8 +535,25 @@ export function RewardsHub() {
         if (!active) return
         setUsablePoints(Math.round(rewards.total_points))
         setEverPoints(Math.round(rewards.total_points))
+        if (typeof rewards.estimated_reward_carel === "number" && Number.isFinite(rewards.estimated_reward_carel)) {
+          setEstimatedCAREL(rewards.estimated_reward_carel)
+        }
         setCurrentEpoch(rewards.current_epoch)
         setConvertEpoch((prev) => (prev ? prev : String(rewards.current_epoch)))
+        const rawPool = rewards.distribution_pool_carel
+        if (typeof rawPool === "number" && Number.isFinite(rawPool)) {
+          setDistributionPoolLabel(
+            rawPool.toLocaleString(undefined, { maximumFractionDigits: 2 })
+          )
+        } else {
+          setDistributionPoolLabel("—")
+        }
+        setDistributionLabel(rewards.distribution_label || "Distribution pool")
+        const feeTotal =
+          typeof rewards.claim_fee_percent === "number" && Number.isFinite(rewards.claim_fee_percent)
+            ? rewards.claim_fee_percent
+            : 5
+        setClaimFeeLabel(`Claim fee: ${feeTotal}%`)
       } catch {
         // keep existing values
       }
@@ -498,17 +572,26 @@ export function RewardsHub() {
 
   React.useEffect(() => {
     let active = true
-    ;(async () => {
+    const loadSocialTasks = async () => {
       try {
-        const analytics = await getPortfolioAnalytics()
-        if (!active) return
-        const estimated = Number(analytics.rewards.estimated_carel)
-        setEstimatedCAREL(Number.isFinite(estimated) ? estimated : 0)
+        const remoteTasks = await getSocialTasks()
+        if (!active || !Array.isArray(remoteTasks) || remoteTasks.length === 0) return
+        const merged: SocialTaskUi[] = remoteTasks.map((task) => ({
+          ...task,
+          placeholder:
+            task.provider === "telegram"
+              ? "@username"
+              : task.provider === "discord"
+              ? "username#1234"
+              : "https://x.com/zkcarel/status/...",
+          description: task.description || `Complete ${task.title} (+${task.points} pts)`,
+        }))
+        setSocialTasks(merged)
       } catch {
-        // keep existing values
+        setSocialTasks(defaultSocialTasks)
       }
-    })()
-
+    }
+    void loadSocialTasks()
     return () => {
       active = false
     }
@@ -634,83 +717,19 @@ export function RewardsHub() {
   }
 
   const handleConvert = async () => {
-    if (usablePoints <= 0) return
-    try {
-      setIsConverting(true)
-      notifications.addNotification({
-        type: "info",
-        title: "Convert pending",
-        message: "Konversi points ke CAREL sedang diproses...",
-      })
-      const payload: { points?: number; epoch?: number; total_distribution_carel?: number } = {
-        points: usablePoints,
-      }
-      if (showAdvancedConvert) {
-        const epochValue = Number(convertEpoch)
-        if (convertEpoch.trim() !== "") {
-          if (!Number.isFinite(epochValue) || epochValue < 0) {
-            notifications.addNotification({
-              type: "error",
-              title: "Invalid epoch",
-              message: "Epoch harus angka >= 0.",
-            })
-            setIsConverting(false)
-            return
-          }
-          payload.epoch = Math.floor(epochValue)
-        }
-        const distValue = Number(convertDistribution)
-        if (convertDistribution.trim() !== "" && (!Number.isFinite(distValue) || distValue < 0)) {
-          notifications.addNotification({
-            type: "error",
-            title: "Invalid distribution",
-            message: "Total distribution harus angka positif.",
-          })
-          setIsConverting(false)
-          return
-        }
-        if (Number.isFinite(distValue) && convertDistribution.trim() !== "") {
-          payload.total_distribution_carel = distValue
-        }
-      }
-      const result = await convertRewards(payload)
-      notifications.addNotification({
-        type: "success",
-        title: "Convert success",
-        message: `Converted ${result.points_converted} points to ${result.amount_carel} CAREL`,
-      })
-      setUsablePoints(0)
-    } catch (error) {
-      notifications.addNotification({
-        type: "error",
-        title: "Convert failed",
-        message: error instanceof Error ? error.message : "Gagal convert points.",
-      })
-    } finally {
-      setIsConverting(false)
-    }
+    notifications.addNotification({
+      type: "info",
+      title: "Coming Soon",
+      message: "Fitur Convert Points ke CAREL akan segera tersedia.",
+    })
   }
 
   const handleClaim = async () => {
-    try {
-      notifications.addNotification({
-        type: "info",
-        title: "Claim pending",
-        message: "Claim rewards sedang diproses...",
-      })
-      const result = await claimRewards()
-      notifications.addNotification({
-        type: "success",
-        title: "Claimed",
-        message: `Claimed ${result.amount_carel} CAREL.`,
-      })
-    } catch (error) {
-      notifications.addNotification({
-        type: "error",
-        title: "Claim failed",
-        message: error instanceof Error ? error.message : "Tidak ada rewards untuk diklaim.",
-      })
-    }
+    notifications.addNotification({
+      type: "info",
+      title: "Coming Soon",
+      message: "Fitur Claim Rewards akan segera tersedia.",
+    })
   }
 
   const handleVerifyTask = async (taskId: string) => {
@@ -788,8 +807,12 @@ export function RewardsHub() {
               </div>
               <p className="text-2xl font-bold text-secondary">{usablePoints.toLocaleString()}</p>
               <p className="text-xs text-muted-foreground">Use for NFTs or conversion</p>
-              <p className="text-xs text-muted-foreground">Monthly pool: {monthlyPoolLabel} CAREL</p>
+              <p className="text-xs text-muted-foreground">{distributionLabel}: {distributionPoolLabel} CAREL</p>
+              <p className="text-xs text-muted-foreground">{claimFeeLabel}</p>
               <p className="text-xs text-accent mt-1">Estimated reward: ≈ {estimatedCAREL.toFixed(2)} CAREL</p>
+              <p className="text-xs text-muted-foreground">
+                Estimation uses global epoch points and your linked-wallet points aggregate.
+              </p>
             </div>
 
             <div className="p-3 rounded-lg bg-accent/10 border border-accent/20">
@@ -834,17 +857,17 @@ export function RewardsHub() {
               )}
               <Button
                 onClick={handleConvert}
-                disabled={usablePoints <= 0 || isConverting}
+                disabled={usablePoints <= 0}
                 className="w-full bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
               >
-                {isConverting ? "Converting..." : "Convert to CAREL"} <ArrowRight className="h-4 w-4 ml-2" />
+                Convert to CAREL (Coming Soon) <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
               <Button
                 onClick={handleClaim}
                 variant="outline"
                 className="w-full bg-transparent"
               >
-                Claim Rewards
+                Claim Rewards (Coming Soon)
               </Button>
             </div>
           </div>

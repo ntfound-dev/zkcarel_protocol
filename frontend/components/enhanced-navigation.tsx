@@ -5,7 +5,15 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { useWallet, type WalletProviderType, type BtcWalletProviderType } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
-import { claimFaucet, getFaucetStatus, getTransactionsHistory, type Transaction } from "@/lib/api"
+import {
+  claimFaucet,
+  getFaucetStatus,
+  getProfile,
+  getTransactionsHistory,
+  setDisplayName,
+  type Transaction,
+} from "@/lib/api"
+import { invokeStarknetCallFromWallet } from "@/lib/onchain-trade"
 import {
   BTC_TESTNET_EXPLORER_BASE_URL,
   ETHERSCAN_SEPOLIA_BASE_URL,
@@ -44,6 +52,14 @@ import {
 } from "lucide-react"
 
 const STARKNET_FAUCET_URL = "https://starknet-faucet.vercel.app/"
+const CAREL_TOKEN_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_CAREL_ADDRESS ||
+  "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545"
+const DEV_WALLET_ADDRESS =
+  process.env.NEXT_PUBLIC_DEV_WALLET_ADDRESS ||
+  process.env.NEXT_PUBLIC_TREASURY_ADDRESS ||
+  ""
+const ONE_CAREL_WEI_HEX = "0xde0b6b3a7640000" // 1e18
 
 const walletProviders = WALLET_PROVIDERS as { id: WalletProviderType; name: string; icon: string }[]
 const starknetWalletProviders = STARKNET_WALLET_PROVIDERS as {
@@ -118,6 +134,7 @@ export function EnhancedNavigation() {
   const [txHistoryLoading, setTxHistoryLoading] = React.useState(false)
   const [walletConnectPending, setWalletConnectPending] = React.useState(false)
   const [btcConnectPending, setBtcConnectPending] = React.useState(false)
+  const [displayName, setDisplayNameState] = React.useState<string | null>(null)
   const [manualBtcAddress, setManualBtcAddress] = React.useState("")
   const [btcManualLinkPending, setBtcManualLinkPending] = React.useState(false)
   const seenBtcOptionalNoticeRef = React.useRef<Set<string>>(new Set())
@@ -380,6 +397,27 @@ export function EnhancedNavigation() {
     wallet.balance?.WBTC,
   ])
 
+  React.useEffect(() => {
+    if (!wallet.isConnected) {
+      setDisplayNameState(null)
+      return
+    }
+    let active = true
+    ;(async () => {
+      try {
+        const profile = await getProfile()
+        if (!active) return
+        setDisplayNameState(profile.display_name || null)
+      } catch {
+        if (!active) return
+        setDisplayNameState(null)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [wallet.isConnected, wallet.token, wallet.address])
+
   // --- Handlers ---
   const handleWalletConnect = async (provider: WalletProviderType) => {
     if (walletConnectPending) return
@@ -429,6 +467,105 @@ export function EnhancedNavigation() {
       }
     } finally {
       setBtcConnectPending(false)
+    }
+  }
+
+  const handleSetDisplayName = async () => {
+    if (!wallet.isConnected) {
+      notifications.addNotification({
+        type: "error",
+        title: "Wallet not connected",
+        message: "Connect wallet dulu sebelum ganti nama.",
+      })
+      return
+    }
+
+    const initial = displayName || ""
+    const input = window.prompt(
+      "Masukkan display name baru (3-24 karakter, huruf/angka/_/-). Perubahan kedua dan seterusnya bayar 1 CAREL on-chain.",
+      initial
+    )
+    const nextName = (input || "").trim()
+    if (!nextName) return
+
+    try {
+      const saved = await setDisplayName({ display_name: nextName })
+      setDisplayNameState(saved.display_name || nextName)
+      notifications.addNotification({
+        type: "success",
+        title: "Display name updated",
+        message: `Nama berhasil disimpan: ${saved.display_name || nextName}`,
+      })
+      return
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal update nama."
+      const needsPayment =
+        /requires 1 CAREL|rename_onchain_tx_hash|payment to DEV wallet/i.test(message)
+      if (!needsPayment) {
+        notifications.addNotification({
+          type: "error",
+          title: "Update failed",
+          message,
+        })
+        return
+      }
+    }
+
+    if (!DEV_WALLET_ADDRESS || !CAREL_TOKEN_ADDRESS) {
+      notifications.addNotification({
+        type: "error",
+        title: "Config missing",
+        message:
+          "NEXT_PUBLIC_DEV_WALLET_ADDRESS / NEXT_PUBLIC_TOKEN_CAREL_ADDRESS belum diisi.",
+      })
+      return
+    }
+
+    const providerHint =
+      wallet.provider === "argentx" || wallet.provider === "braavos"
+        ? wallet.provider
+        : "starknet"
+
+    try {
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: "Konfirmasi transfer 1 CAREL untuk ganti nama.",
+      })
+      const txHash = await invokeStarknetCallFromWallet(
+        {
+          contractAddress: CAREL_TOKEN_ADDRESS,
+          entrypoint: "transfer",
+          calldata: [DEV_WALLET_ADDRESS, ONE_CAREL_WEI_HEX, "0x0"],
+        },
+        providerHint
+      )
+      notifications.addNotification({
+        type: "info",
+        title: "Rename fee pending",
+        message: `Transfer 1 CAREL submitted (${txHash.slice(0, 10)}...).`,
+        txHash,
+        txNetwork: "starknet",
+      })
+
+      const saved = await setDisplayName({
+        display_name: nextName,
+        rename_onchain_tx_hash: txHash,
+      })
+      setDisplayNameState(saved.display_name || nextName)
+      notifications.addNotification({
+        type: "success",
+        title: "Display name updated",
+        message: `Nama berhasil diubah: ${saved.display_name || nextName}`,
+        txHash,
+        txNetwork: "starknet",
+      })
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Rename failed",
+        message: error instanceof Error ? error.message : "Gagal ganti nama.",
+      })
     }
   }
 
@@ -1127,6 +1264,9 @@ export function EnhancedNavigation() {
                       {wallet?.isConnected && (
                         <p className="text-xs text-muted-foreground font-mono">{shortenAddress(wallet.address)}</p>
                       )}
+                      {wallet?.isConnected && displayName && (
+                        <p className="text-xs text-primary mt-0.5">{displayName}</p>
+                      )}
                     </div>
                   </div>
                 </DropdownMenuLabel>
@@ -1157,6 +1297,14 @@ export function EnhancedNavigation() {
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleSetDisplayName}
+                  disabled={!wallet?.isConnected}
+                  className={!wallet?.isConnected ? "opacity-50 cursor-not-allowed" : ""}
+                >
+                  <User className="h-4 w-4 mr-2" />
+                  {displayName ? "Change Display Name" : "Set Display Name"}
+                </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link href="#settings" className="flex items-center gap-2">
                     <Settings className="h-4 w-4" />

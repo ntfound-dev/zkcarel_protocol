@@ -19,6 +19,7 @@ pub struct OHLCVQuery {
     pub from: Option<String>,
     pub to: Option<String>,
     pub limit: Option<i32>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,13 +66,32 @@ pub async fn get_ohlcv(
     let to = parse_rfc3339_or(query.to.as_deref(), chrono::Utc::now());
     let from_default = to - chrono::Duration::hours(24);
     let from = parse_rfc3339_or(query.from.as_deref(), from_default);
+    let source = query
+        .source
+        .as_deref()
+        .unwrap_or("auto")
+        .trim()
+        .to_ascii_lowercase();
 
-    let data = if let Some(limit) = query.limit {
+    let data = if source == "coingecko" {
         service
-            .get_latest_candles(&token, &query.interval, limit)
+            .get_ohlcv_from_coingecko(&token, &query.interval, query.limit.unwrap_or(120))
             .await?
     } else {
-        service.get_ohlcv(&token, &query.interval, from, to).await?
+        let data = if let Some(limit) = query.limit {
+            service
+                .get_latest_candles(&token, &query.interval, limit)
+                .await?
+        } else {
+            service.get_ohlcv(&token, &query.interval, from, to).await?
+        };
+        if data.is_empty() {
+            service
+                .get_ohlcv_from_coingecko(&token, &query.interval, query.limit.unwrap_or(120))
+                .await?
+        } else {
+            data
+        }
     };
 
     Ok(Json(ApiResponse::success(OHLCVResponse {

@@ -8,7 +8,16 @@ import { useTheme } from "@/components/theme-provider"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
 import { useLivePrices } from "@/hooks/use-live-prices"
-import { executeBridge, executeSwap, getBridgeQuote, getOwnedNfts, getPortfolioBalance, getSwapQuote, type NFTItem } from "@/lib/api"
+import {
+  executeBridge,
+  executeSwap,
+  getBridgeQuote,
+  getOwnedNfts,
+  getPortfolioBalance,
+  getRewardsPoints,
+  getSwapQuote,
+  type NFTItem,
+} from "@/lib/api"
 import {
   bigintWeiToUnitNumber,
   decimalToU256Parts,
@@ -191,6 +200,13 @@ const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
     minimumFractionDigits: 0,
     maximumFractionDigits: maxFractionDigits,
   })
+}
+
+const formatMultiplier = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return "1x"
+  const rounded = Math.round(value)
+  if (Math.abs(value - rounded) < 0.01) return `${rounded}x`
+  return `${value.toFixed(2)}x`
 }
 
 const stableKeyNumber = (value: number, fractionDigits = 8) => {
@@ -553,6 +569,7 @@ export function TradingInterface() {
   const [liquidityMaxFromQuote, setLiquidityMaxFromQuote] = React.useState<number | null>(null)
   const quoteCacheRef = React.useRef<Map<string, QuoteCacheEntry>>(new Map())
   const [activeNft, setActiveNft] = React.useState<NFTItem | null>(null)
+  const [stakePointsMultiplier, setStakePointsMultiplier] = React.useState(1)
   
   // Privacy mode - ONLY for hiding balance in this module
   const [balanceHidden, setBalanceHidden] = React.useState(false)
@@ -699,6 +716,36 @@ export function TradingInterface() {
       active = false
     }
   }, [wallet.isConnected])
+
+  React.useEffect(() => {
+    let active = true
+    if (!wallet.isConnected) {
+      setStakePointsMultiplier(1)
+      return
+    }
+
+    const loadMultiplier = async (force = false) => {
+      try {
+        const rewards = await getRewardsPoints({ force })
+        if (!active) return
+        const parsed = Number(rewards.multiplier)
+        setStakePointsMultiplier(Number.isFinite(parsed) && parsed > 0 ? parsed : 1)
+      } catch {
+        if (!active) return
+        setStakePointsMultiplier(1)
+      }
+    }
+
+    void loadMultiplier()
+    const timer = window.setInterval(() => {
+      void loadMultiplier(true)
+    }, 20_000)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [wallet.isConnected, wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
 
   React.useEffect(() => {
     const amountValue = Number.parseFloat(fromAmount || "0")
@@ -1020,7 +1067,16 @@ export function TradingInterface() {
       ? `${formatTokenAmount(mevFeeEffective, 6)} ${fromToken.symbol}`
       : `$${mevFeeEffective.toFixed(2)}`
   const mevFeePercent = mevProtection ? "1.0" : "0.0"
-  const pointsEarned = hasQuote ? Math.floor(fromValueUSD * 10) : null
+  const basePointsEarned = hasQuote ? Math.max(0, Math.floor(fromValueUSD * 10)) : null
+  const nftPointsMultiplier = hasNftDiscount ? 1 + discountRate : 1
+  const normalizedStakeMultiplier =
+    Number.isFinite(stakePointsMultiplier) && stakePointsMultiplier > 0 ? stakePointsMultiplier : 1
+  const effectivePointsMultiplier = normalizedStakeMultiplier * nftPointsMultiplier
+  const pointsEarned =
+    basePointsEarned === null
+      ? null
+      : Math.max(0, Math.floor(basePointsEarned * effectivePointsMultiplier))
+  const showPointsMultiplier = normalizedStakeMultiplier > 1 || nftPointsMultiplier > 1
   const estimatedTime = hasQuote ? quote?.estimatedTime || "—" : "—"
   
   // Price Impact calculation
@@ -1758,10 +1814,19 @@ export function TradingInterface() {
 
             {/* Points Estimate */}
             <div className="flex items-center justify-between p-3 rounded-lg bg-accent/10 border border-accent/20">
-              <span className="text-sm text-foreground flex items-center gap-2">
-                <Gift className="h-4 w-4 text-accent" />
-                Estimated Points
-              </span>
+              <div>
+                <span className="text-sm text-foreground flex items-center gap-2">
+                  <Gift className="h-4 w-4 text-accent" />
+                  Estimated Points
+                </span>
+                {basePointsEarned !== null && (
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Base +{basePointsEarned}
+                    {normalizedStakeMultiplier > 1 ? ` × Stake ${formatMultiplier(normalizedStakeMultiplier)}` : ""}
+                    {nftPointsMultiplier > 1 ? ` × NFT ${formatMultiplier(nftPointsMultiplier)}` : ""}
+                  </p>
+                )}
+              </div>
               <span className="text-sm font-bold text-accent">{pointsEarned === null ? "—" : `+${pointsEarned}`}</span>
             </div>
           </CollapsibleContent>
@@ -1777,6 +1842,23 @@ export function TradingInterface() {
               </span>
               <span className="text-xs text-muted-foreground">{discountPercent}% off fees</span>
             </div>
+          </div>
+        )}
+        {showPointsMultiplier && (
+          <div className="mt-3 p-3 rounded-xl bg-secondary/10 border border-secondary/20">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground flex items-center gap-2">
+                <Gift className="h-4 w-4 text-secondary" />
+                Points Multiplier Active
+              </span>
+              <span className="text-xs text-secondary font-semibold">
+                {formatMultiplier(effectivePointsMultiplier)}
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Stake: {formatMultiplier(normalizedStakeMultiplier)}
+              {nftPointsMultiplier > 1 ? ` • NFT: ${formatMultiplier(nftPointsMultiplier)}` : ""}
+            </p>
           </div>
         )}
 

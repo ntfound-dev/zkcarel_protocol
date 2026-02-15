@@ -1,5 +1,11 @@
-use crate::{config::Config, constants::EPOCH_DURATION_SECONDS, db::Database, error::Result};
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use crate::{
+    config::Config,
+    constants::EPOCH_DURATION_SECONDS,
+    db::Database,
+    error::Result,
+    tokenomics::rewards_distribution_pool_for_environment,
+};
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -147,6 +153,38 @@ fn parse_intent_from_command(command: &str) -> Intent {
                 "amount": amount,
             }),
         }
+    } else if contains_any_keyword(&command_lower, &["bridge", "jembatan"]) {
+        let (from, to, amount) = parse_swap_parameters(&command_lower);
+        Intent {
+            action: "bridge".to_string(),
+            parameters: serde_json::json!({
+                "from": from,
+                "to": to,
+                "amount": amount,
+            }),
+        }
+    } else if contains_any_keyword(
+        &command_lower,
+        &[
+            "portfolio management",
+            "manage portfolio",
+            "rebalance",
+            "allocation",
+            "alokasi",
+        ],
+    ) {
+        Intent {
+            action: "portfolio_management".to_string(),
+            parameters: serde_json::json!({}),
+        }
+    } else if contains_any_keyword(
+        &command_lower,
+        &["alert", "alerts", "notifikasi", "reminder", "peringatan"],
+    ) {
+        Intent {
+            action: "alerts".to_string(),
+            parameters: serde_json::json!({}),
+        }
     } else if contains_any_keyword(
         &command_lower,
         &["balance", "saldo", "portfolio", "aset", "asset", "how much"],
@@ -189,7 +227,69 @@ fn parse_intent_from_command(command: &str) -> Intent {
     }
 }
 
-/// AI Service - Integrates with OpenAI for AI assistant features
+#[derive(Debug, Serialize)]
+struct GeminiGenerateRequest {
+    contents: Vec<GeminiContent>,
+    #[serde(rename = "generationConfig")]
+    generation_config: GeminiGenerationConfig,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiGenerationConfig {
+    temperature: f64,
+    #[serde(rename = "maxOutputTokens")]
+    max_output_tokens: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiContent {
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiPart {
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiGenerateResponse {
+    candidates: Option<Vec<GeminiCandidate>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiCandidate {
+    content: Option<GeminiResponseContent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiResponseContent {
+    parts: Option<Vec<GeminiResponsePart>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiResponsePart {
+    text: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AIGuardScope {
+    ReadOnly,
+    SwapBridge,
+    PortfolioAlert,
+    Unknown,
+}
+
+pub fn classify_command_scope(command: &str) -> AIGuardScope {
+    let intent = parse_intent_from_command(command);
+    match intent.action.as_str() {
+        "check_balance" | "check_points" | "market_analysis" => AIGuardScope::ReadOnly,
+        "swap" | "bridge" => AIGuardScope::SwapBridge,
+        "portfolio_management" | "alerts" => AIGuardScope::PortfolioAlert,
+        _ => AIGuardScope::Unknown,
+    }
+}
+
+/// AI Service - keyword intent + Gemini (if configured)
 pub struct AIService {
     db: Database,
     config: Config,
@@ -200,19 +300,29 @@ impl AIService {
         Self { db, config }
     }
 
-    /// Execute AI command
-    pub async fn execute_command(&self, user_address: &str, command: &str) -> Result<AIResponse> {
-        let _openai_enabled = self.config.openai_api_key.is_some();
+    /// Execute AI command.
+    /// Flow:
+    /// 1) intent routing (deterministic)
+    /// 2) optional Gemini rewrite (if GEMINI_API_KEY is set)
+    pub async fn execute_command(
+        &self,
+        user_address: &str,
+        command: &str,
+        level: u8,
+    ) -> Result<AIResponse> {
         // Parse user intent
         let intent = self.parse_intent(command).await?;
 
         // Execute based on intent
-        let response = match intent.action.as_str() {
+        let mut response = match intent.action.as_str() {
             "swap" => self.execute_swap_command(&intent).await?,
+            "bridge" => self.execute_bridge_command(&intent).await?,
             "check_balance" => self.execute_balance_command(user_address).await?,
             "check_points" => self.execute_points_command(user_address).await?,
             "stake" => self.execute_stake_command(&intent).await?,
             "market_analysis" => self.execute_market_analysis(&intent).await?,
+            "portfolio_management" => self.execute_portfolio_management_command(user_address).await?,
+            "alerts" => self.execute_alerts_command().await?,
             _ => AIResponse {
                 message:
                     "I'm not sure what you want to do. Try asking about swaps, balances, or points."
@@ -222,12 +332,109 @@ impl AIService {
             },
         };
 
+        if let Some(gemini_text) = self
+            .generate_with_gemini(user_address, command, level, &intent, &response)
+            .await
+        {
+            response.message = gemini_text;
+        }
+
         Ok(response)
     }
 
     /// Parse user intent using OpenAI (placeholder: keyword matching)
     async fn parse_intent(&self, command: &str) -> Result<Intent> {
         Ok(parse_intent_from_command(command))
+    }
+
+    async fn generate_with_gemini(
+        &self,
+        user_address: &str,
+        command: &str,
+        level: u8,
+        intent: &Intent,
+        fallback: &AIResponse,
+    ) -> Option<String> {
+        let api_key = self
+            .config
+            .gemini_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let api_url = self.config.gemini_api_url.trim_end_matches('/');
+        let model = self.config.gemini_model.trim();
+        if api_url.is_empty() || model.is_empty() {
+            return None;
+        }
+
+        let level_policy = match level {
+            1 => "Level 1: free, only basic query + price check. No auto execution.",
+            2 => "Level 2: user already pays 1 CAREL on-chain. You may assist auto swap/bridge flow.",
+            3 => "Level 3: user already pays 2 CAREL on-chain. You may assist portfolio management and alerts.",
+            _ => "Unknown level. Keep response safe and concise.",
+        };
+
+        let prompt = format!(
+            "You are ZkCarel AI assistant.\n\
+             Language: Indonesian, concise, practical.\n\
+             {level_policy}\n\
+             User: {user_address}\n\
+             Intent: {}\n\
+             User command: {command}\n\
+             Fallback answer: {}\n\
+             Return plain text only (max 120 words).",
+            intent.action, fallback.message
+        );
+
+        let request = GeminiGenerateRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart { text: prompt }],
+            }],
+            generation_config: GeminiGenerationConfig {
+                temperature: 0.2,
+                max_output_tokens: 256,
+            },
+        };
+
+        let url = format!("{api_url}/models/{model}:generateContent?key={api_key}");
+        let client = reqwest::Client::new();
+        let response = match client
+            .post(url)
+            .json(&request)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("Gemini request failed: {}", err);
+                return None;
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::warn!("Gemini returned {}: {}", status, body);
+            return None;
+        }
+
+        let payload: GeminiGenerateResponse = match response.json().await {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("Gemini response parse failed: {}", err);
+                return None;
+            }
+        };
+
+        payload
+            .candidates
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|candidate| candidate.content)
+            .flat_map(|content| content.parts.unwrap_or_default())
+            .filter_map(|part| part.text.map(|text| text.trim().to_string()))
+            .find(|text| !text.is_empty())
     }
 
     async fn execute_swap_command(&self, intent: &Intent) -> Result<AIResponse> {
@@ -261,6 +468,45 @@ impl AIService {
                 amount, from, to
             ),
             actions: vec!["get_swap_quote".to_string()],
+            data: Some(serde_json::json!({
+                "from_token": from,
+                "to_token": to,
+                "amount": amount,
+            })),
+        })
+    }
+
+    async fn execute_bridge_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let from = intent
+            .parameters
+            .get("from")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let to = intent
+            .parameters
+            .get("to")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let amount = intent
+            .parameters
+            .get("amount")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+
+        if from.is_empty() || to.is_empty() || amount == 0.0 || from == to {
+            return Ok(AIResponse {
+                message: "Saya butuh detail bridge dengan format: bridge <amount> <FROM> to <TO>. Contoh: bridge 100 USDT to STRK".to_string(),
+                actions: vec![],
+                data: None,
+            });
+        }
+
+        Ok(AIResponse {
+            message: format!(
+                "Saya bantu bridge {} {} ke {}. Saya cek rute dan fee terbaik dulu.",
+                amount, from, to
+            ),
+            actions: vec!["get_bridge_quote".to_string()],
             data: Some(serde_json::json!({
                 "from_token": from,
                 "to_token": to,
@@ -325,6 +571,7 @@ impl AIService {
         let estimated_carel = estimate_carel_from_points(
             Decimal::from_f64_retain(total).unwrap_or(Decimal::ZERO),
             total_points_epoch,
+            rewards_distribution_pool_for_environment(&self.config.environment),
         )
         .to_f64()
         .unwrap_or(0.0);
@@ -382,6 +629,32 @@ impl AIService {
             message,
             actions: vec!["show_chart".to_string()],
             data: None,
+        })
+    }
+
+    async fn execute_portfolio_management_command(&self, user_address: &str) -> Result<AIResponse> {
+        let assets = self.fetch_portfolio_assets(user_address).await?;
+        let total_usd: f64 = assets.iter().map(|asset| asset.value_usd).sum();
+        Ok(AIResponse {
+            message: format!(
+                "Saya siapkan ringkasan manajemen portfolio {}. Total nilai saat ini sekitar ${:.2}.",
+                user_address, total_usd
+            ),
+            actions: vec!["open_portfolio_manager".to_string(), "set_rebalance_plan".to_string()],
+            data: Some(serde_json::json!({
+                "total_usd": total_usd,
+                "assets": assets,
+            })),
+        })
+    }
+
+    async fn execute_alerts_command(&self) -> Result<AIResponse> {
+        Ok(AIResponse {
+            message: "Fitur alert siap. Tentukan token, kondisi harga, dan channel notifikasi yang Anda mau.".to_string(),
+            actions: vec!["configure_alerts".to_string()],
+            data: Some(serde_json::json!({
+                "supported_triggers": ["price_above", "price_below", "volatility_spike"]
+            })),
         })
     }
 
@@ -461,19 +734,15 @@ struct PortfolioAssetRow {
     amount: f64,
 }
 
-fn monthly_ecosystem_pool_carel() -> Decimal {
-    let total_supply = Decimal::from_i64(1_000_000_000).unwrap();
-    let bps = Decimal::from_i64(4000).unwrap();
-    let denom = Decimal::from_i64(10000).unwrap();
-    let months = Decimal::from_i64(36).unwrap();
-    total_supply * bps / denom / months
-}
-
-fn estimate_carel_from_points(points: Decimal, total_points: Decimal) -> Decimal {
+fn estimate_carel_from_points(
+    points: Decimal,
+    total_points: Decimal,
+    distribution_pool: Decimal,
+) -> Decimal {
     if total_points.is_zero() {
         return Decimal::ZERO;
     }
-    (points / total_points) * monthly_ecosystem_pool_carel()
+    (points / total_points) * distribution_pool
 }
 
 #[cfg(test)]
@@ -524,5 +793,23 @@ mod tests {
         // Memastikan angka dengan koma tetap bisa diparse
         let amount = extract_amount_from_text("swap 1,5 strk to carel");
         assert!((amount - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn classify_command_scope_enforces_read_only() {
+        let scope = classify_command_scope("cek saldo portfolio saya");
+        assert_eq!(scope, AIGuardScope::ReadOnly);
+    }
+
+    #[test]
+    fn classify_command_scope_enforces_swap_bridge() {
+        let scope = classify_command_scope("bridge 100 usdt to strk");
+        assert_eq!(scope, AIGuardScope::SwapBridge);
+    }
+
+    #[test]
+    fn classify_command_scope_enforces_portfolio_alert() {
+        let scope = classify_command_scope("buat alert harga btc");
+        assert_eq!(scope, AIGuardScope::PortfolioAlert);
     }
 }

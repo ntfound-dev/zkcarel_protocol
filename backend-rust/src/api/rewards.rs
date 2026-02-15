@@ -8,6 +8,11 @@ use crate::services::onchain::{
 };
 use crate::services::MerkleGenerator;
 use crate::{constants::EPOCH_DURATION_SECONDS, error::Result, models::ApiResponse};
+use crate::tokenomics::{
+    bps_to_percent, claim_fee_multiplier, distribution_mode_for_environment,
+    rewards_distribution_pool_for_environment, CLAIM_FEE_BPS, CLAIM_FEE_DEV_BPS,
+    CLAIM_FEE_MANAGEMENT_BPS, BPS_DENOM,
+};
 
 use super::{require_user, resolve_user_scope_addresses, AppState};
 use crate::error::AppError;
@@ -25,6 +30,8 @@ const ONCHAIN_READ_TIMEOUT_MS: u64 = 2_500;
 pub struct PointsResponse {
     pub current_epoch: i64,
     pub total_points: f64,
+    pub global_epoch_points: f64,
+    pub estimated_reward_carel: f64,
     pub swap_points: f64,
     pub bridge_points: f64,
     pub stake_points: f64,
@@ -34,6 +41,13 @@ pub struct PointsResponse {
     pub nft_boost: bool,
     pub onchain_points: Option<f64>,
     pub onchain_starknet_address: Option<String>,
+    pub distribution_mode: String,
+    pub distribution_label: String,
+    pub distribution_pool_carel: f64,
+    pub claim_fee_percent: f64,
+    pub claim_fee_management_percent: f64,
+    pub claim_fee_dev_percent: f64,
+    pub claim_net_percent: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,14 +79,6 @@ pub struct SyncOnchainPointsResponse {
     pub onchain_points_after: f64,
     pub synced_delta: f64,
     pub sync_tx_hash: Option<String>,
-}
-
-fn monthly_ecosystem_pool_carel() -> Decimal {
-    let total_supply = Decimal::from_i64(1_000_000_000).unwrap();
-    let bps = Decimal::from_i64(4000).unwrap();
-    let denom = Decimal::from_i64(10000).unwrap();
-    let months = Decimal::from_i64(36).unwrap();
-    total_supply * bps / denom / months
 }
 
 fn calculate_epoch_reward(
@@ -169,39 +175,11 @@ async fn aggregate_points_for_scope(
     Ok(row)
 }
 
-async fn fetch_treasury_distribution_onchain(state: &AppState) -> Result<Option<Decimal>> {
-    let Some(treasury_address) = state.config.treasury_address.as_deref() else {
-        return Ok(None);
-    };
-    if treasury_address.trim().is_empty() || treasury_address.starts_with("0x0000") {
-        return Ok(None);
-    }
-
-    let reader = OnchainReader::from_config(&state.config)?;
-    let call = FunctionCall {
-        contract_address: parse_felt(treasury_address)?,
-        entry_point_selector: get_selector_from_name("get_treasury_balance")
-            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?,
-        calldata: vec![],
-    };
-    let result = reader.call(call).await?;
-    if result.len() < 2 {
-        return Ok(None);
-    }
-    let balance = u256_from_felts(&result[0], &result[1])?;
-    let balance_dec = Decimal::from_u128(balance).unwrap_or(Decimal::ZERO);
-    let denom = Decimal::from_u128(ONE_CAREL_WEI).unwrap_or(Decimal::ONE);
-    Ok(Some(balance_dec / denom))
-}
-
 async fn resolve_total_distribution(state: &AppState, requested: Option<f64>) -> Result<Decimal> {
     if let Some(val) = requested {
         return Ok(Decimal::from_f64_retain(val).unwrap_or(Decimal::ZERO));
     }
-    if let Some(onchain) = fetch_treasury_distribution_onchain(state).await? {
-        return Ok(onchain);
-    }
-    Ok(monthly_ecosystem_pool_carel())
+    Ok(rewards_distribution_pool_for_environment(&state.config.environment))
 }
 
 fn configured_point_storage_contract(state: &AppState) -> Option<&str> {
@@ -279,20 +257,51 @@ pub async fn get_points(
                     onchain_starknet_address = Some(starknet_user);
                 }
                 Err(err) => {
-                    tracing::warn!(
-                        "Failed to read on-chain points for rewards panel: user={} epoch={} err={}",
-                        starknet_user,
-                        current_epoch,
-                        err
-                    );
+                    let err_text = err.to_string();
+                    if err_text.contains("JsonRpcResponse")
+                        || err_text.contains("unknown block tag 'pre_confirmed'")
+                    {
+                        tracing::debug!(
+                            "Transient on-chain points read issue: user={} epoch={} err={}",
+                            starknet_user,
+                            current_epoch,
+                            err_text
+                        );
+                    } else {
+                        tracing::warn!(
+                            "Failed to read on-chain points for rewards panel: user={} epoch={} err={}",
+                            starknet_user,
+                            current_epoch,
+                            err_text
+                        );
+                    }
                 }
             }
         }
     }
 
+    let distribution_mode = distribution_mode_for_environment(&state.config.environment);
+    let distribution_pool = rewards_distribution_pool_for_environment(&state.config.environment);
+    let global_epoch_points: Decimal =
+        sqlx::query_scalar("SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1")
+            .bind(current_epoch)
+            .fetch_one(state.db.pool())
+            .await?;
+    let estimated_reward_carel = (calculate_epoch_reward(
+        points.total_points,
+        global_epoch_points,
+        distribution_pool,
+    ) * claim_fee_multiplier())
+        .to_f64()
+        .unwrap_or(0.0);
+    let claim_net_percent =
+        bps_to_percent(BPS_DENOM - CLAIM_FEE_BPS);
+
     let response = PointsResponse {
         current_epoch,
         total_points: points.total_points.to_string().parse().unwrap_or(0.0),
+        global_epoch_points: global_epoch_points.to_string().parse().unwrap_or(0.0),
+        estimated_reward_carel,
         swap_points: points.swap_points.to_string().parse().unwrap_or(0.0),
         bridge_points: points.bridge_points.to_string().parse().unwrap_or(0.0),
         stake_points: points.stake_points.to_string().parse().unwrap_or(0.0),
@@ -302,6 +311,13 @@ pub async fn get_points(
         nft_boost: points.nft_boost,
         onchain_points,
         onchain_starknet_address,
+        distribution_mode: distribution_mode.as_str().to_string(),
+        distribution_label: distribution_mode.label().to_string(),
+        distribution_pool_carel: distribution_pool.to_f64().unwrap_or(0.0),
+        claim_fee_percent: bps_to_percent(CLAIM_FEE_BPS),
+        claim_fee_management_percent: bps_to_percent(CLAIM_FEE_MANAGEMENT_BPS),
+        claim_fee_dev_percent: bps_to_percent(CLAIM_FEE_DEV_BPS),
+        claim_net_percent,
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -445,7 +461,7 @@ pub async fn claim_rewards(
     let total_distribution = resolve_total_distribution(&state, None).await?;
     let carel_amount_dec =
         calculate_epoch_reward(points.total_points, total_points_epoch, total_distribution);
-    let net_carel_dec = carel_amount_dec * Decimal::new(95, 2); // 95% after tax
+    let net_carel_dec = carel_amount_dec * claim_fee_multiplier();
     let carel_amount = net_carel_dec.to_f64().unwrap_or(0.0);
     let total_points: f64 = points.total_points.to_string().parse().unwrap_or(0.0);
 
@@ -627,7 +643,9 @@ async fn claim_rewards_onchain(
     )?;
     let tx_hash = invoker.invoke(call).await?;
 
-    let net_wei = amount_wei.saturating_mul(95).saturating_div(100);
+    let net_wei = amount_wei
+        .saturating_mul((BPS_DENOM - CLAIM_FEE_BPS) as u128)
+        .saturating_div(BPS_DENOM as u128);
     let net_amount = wei_to_carel_amount(net_wei);
 
     Ok(Some((tx_hash.to_string(), net_amount)))

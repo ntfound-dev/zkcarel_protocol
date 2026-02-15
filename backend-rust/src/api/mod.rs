@@ -2,6 +2,7 @@
 
 // Re-export your API endpoint modules here (sesuaikan kalau ada/tdk ada)
 pub mod ai;
+pub mod admin;
 pub mod analytics;
 pub mod anonymous_credentials;
 pub mod auth;

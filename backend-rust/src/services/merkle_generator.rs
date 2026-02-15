@@ -1,22 +1,11 @@
 use crate::{config::Config, db::Database, error::Result};
+use crate::tokenomics::rewards_distribution_pool_for_environment;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use sqlx::Row;
 use starknet_crypto::{poseidon_hash_many, Felt};
 
 const ONE_CAREL_WEI: i128 = 1_000_000_000_000_000_000;
-const TOTAL_SUPPLY_CAREL: i64 = 1_000_000_000;
-const ECOSYSTEM_BPS: i64 = 4000;
-const BPS_DENOM: i64 = 10000;
-const ECOSYSTEM_MONTHS: i64 = 36;
-
-fn monthly_ecosystem_pool() -> Decimal {
-    let total_supply = Decimal::from_i64(TOTAL_SUPPLY_CAREL).unwrap();
-    let bps = Decimal::from_i64(ECOSYSTEM_BPS).unwrap();
-    let denom = Decimal::from_i64(BPS_DENOM).unwrap();
-    let months = Decimal::from_i64(ECOSYSTEM_MONTHS).unwrap();
-    total_supply * bps / denom / months
-}
 
 fn carel_to_wei(carel_amount: Decimal) -> u128 {
     let wei = carel_amount * Decimal::from_i128(ONE_CAREL_WEI).unwrap();
@@ -118,7 +107,7 @@ impl MerkleGenerator {
 
     /// Generate merkle tree for epoch rewards
     pub async fn generate_for_epoch(&self, epoch: i64) -> Result<MerkleTree> {
-        self.generate_for_epoch_with_distribution(epoch, monthly_ecosystem_pool())
+        self.generate_for_epoch_with_distribution(epoch, self.default_distribution_pool())
             .await
     }
 
@@ -191,7 +180,7 @@ impl MerkleGenerator {
         self.calculate_reward_amount_wei_with_distribution(
             user_points,
             total_points,
-            monthly_ecosystem_pool(),
+            self.default_distribution_pool(),
         )
     }
 
@@ -251,6 +240,10 @@ impl MerkleGenerator {
 
     pub fn verify_proof(&self, root: Felt, leaf: Felt, proof: &[Felt]) -> bool {
         verify_merkle_proof(root, leaf, proof)
+    }
+
+    fn default_distribution_pool(&self) -> Decimal {
+        rewards_distribution_pool_for_environment(&self.config.environment)
     }
 
     pub async fn save_merkle_root(&self, epoch: i64, root: Felt) -> Result<()> {

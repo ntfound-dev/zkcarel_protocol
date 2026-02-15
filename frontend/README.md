@@ -39,6 +39,8 @@ NEXT_PUBLIC_TOKEN_BTC_ADDRESS=0x...
 NEXT_PUBLIC_TOKEN_WBTC_ADDRESS=0x...
 NEXT_PUBLIC_TOKEN_USDC_ADDRESS=0x...
 NEXT_PUBLIC_TOKEN_USDT_ADDRESS=0x...
+NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS=0x...
+NEXT_PUBLIC_DEV_WALLET_ADDRESS=0x...
 ```
 Catatan:
 - Jika `NEXT_PUBLIC_BACKEND_WS_URL` tidak diisi, WebSocket memakai `NEXT_PUBLIC_BACKEND_URL` dan otomatis mengganti `http` -> `ws`.
@@ -57,6 +59,8 @@ Catatan:
 - `NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS` dipakai untuk submit transaksi bridge langsung dari wallet Starknet.
 - `NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS` dan `NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS` dipakai untuk bridge langsung ETH Sepolia -> Starknet via StarkGate (MetaMask sign tx ke kontrak StarkGate).
 - `NEXT_PUBLIC_TOKEN_*_ADDRESS` dipakai sebagai mapping token saat membangun calldata on-chain.
+- `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` dipakai untuk mint NFT discount langsung on-chain dari wallet.
+- `NEXT_PUBLIC_DEV_WALLET_ADDRESS` dipakai untuk rename display-name berbayar (transfer 1 CAREL on-chain).
 
 ## Build Production
 ```bash
@@ -81,6 +85,12 @@ Buka `http://localhost:3000`.
 
 ### Docker Compose
 ```bash
+cd ..
+docker compose up --build frontend
+```
+Atau jalankan full stack dari root:
+```bash
+cd ..
 docker compose up --build
 ```
 
@@ -103,5 +113,14 @@ public/           # Static assets
 - Network enforcement: wallet di-validate ke `Starknet Sepolia`, `Ethereum Sepolia (11155111)`, dan `Bitcoin native testnet` (alamat testnet).
 - AI Tier 2/3 membutuhkan `action_id` on-chain. Frontend bisa membuat `action_id` via wallet kalau `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` diisi.
 - Jika `signature_verification` pada AI executor aktif, backend harus mengisi `AI_SIGNATURE_VERIFIER_ADDRESS` agar endpoint prepare signature berjalan.
+- AI level model di UI:
+  - Level 1: FREE (basic queries, price check)
+  - Level 2: 1 CAREL (auto swap/bridge execution)
+  - Level 3: 2 CAREL (portfolio management, alerts)
+- Fee level 2/3 dibayar saat submit action on-chain; kontrak executor menangani burn CAREL.
 - Privacy Router tersedia lewat menu (More → Privacy Router) untuk submit proof V2/V1.
 - Beberapa field angka dari backend dapat berupa `number` atau `string` (contoh: analytics/limit order/OHLCV). UI harus memperlakukan sebagai nilai numerik.
+- Display name:
+  - first set gratis,
+  - rename berikutnya frontend akan minta wallet sign transfer `1 CAREL` ke dev wallet lalu kirim `rename_onchain_tx_hash` ke backend.
+- Social tasks list dimuat dinamis dari backend (`GET /api/v1/social/tasks`), jadi penambahan task bisa dilakukan dari config backend tanpa ubah komponen UI.

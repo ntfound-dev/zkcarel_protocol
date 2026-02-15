@@ -143,6 +143,8 @@ export interface ExecuteBridgeResponse {
 export interface RewardsPointsResponse {
   current_epoch: number
   total_points: number
+  global_epoch_points?: number
+  estimated_reward_carel?: number
   swap_points: number
   bridge_points: number
   stake_points: number
@@ -152,6 +154,13 @@ export interface RewardsPointsResponse {
   nft_boost: boolean
   onchain_points?: number
   onchain_starknet_address?: string
+  distribution_mode?: string
+  distribution_label?: string
+  distribution_pool_carel?: number
+  claim_fee_percent?: number
+  claim_fee_management_percent?: number
+  claim_fee_dev_percent?: number
+  claim_net_percent?: number
 }
 
 export interface RewardsOnchainSyncResponse {
@@ -353,6 +362,20 @@ export interface SocialVerifyResponse {
   verified: boolean
   points_earned: number
   message: string
+}
+
+export interface SocialTaskItem {
+  id: string
+  title: string
+  description: string
+  points: number
+  provider: "twitter" | "telegram" | "discord" | string
+}
+
+export interface ProfileResponse {
+  address: string
+  display_name?: string | null
+  referrer?: string | null
 }
 
 export interface FaucetTokenStatus {
@@ -983,9 +1006,15 @@ export async function convertRewards(payload: { points?: number; epoch?: number;
   )
 }
 
-export async function getTokenOHLCV(params: { token: string; interval: string; limit?: number }) {
+export async function getTokenOHLCV(params: {
+  token: string
+  interval: string
+  limit?: number
+  source?: "auto" | "coingecko"
+}) {
   const search = new URLSearchParams({ interval: params.interval })
   if (params.limit) search.set("limit", String(params.limit))
+  if (params.source && params.source !== "auto") search.set("source", params.source)
   return apiFetch<{ token: string; interval: string; data: Array<{ timestamp: string; open: NumericLike; high: NumericLike; low: NumericLike; close: NumericLike; volume: NumericLike }> }>(
     `/api/v1/chart/${params.token}/ohlcv?${search.toString()}`
   )
@@ -1003,6 +1032,30 @@ export async function verifySocialTask(payload: { task_type: string; proof: stri
     method: "POST",
     body: JSON.stringify(payload),
     context: "Verify social task",
+    suppressErrorNotification: true,
+  })
+}
+
+export async function getSocialTasks() {
+  return apiFetch<SocialTaskItem[]>("/api/v1/social/tasks", {
+    context: "Load social tasks",
+  })
+}
+
+export async function getProfile() {
+  return apiFetch<ProfileResponse>("/api/v1/profile/me", {
+    context: "Get profile",
+  })
+}
+
+export async function setDisplayName(payload: {
+  display_name: string
+  rename_onchain_tx_hash?: string
+}) {
+  return apiFetch<ProfileResponse>("/api/v1/profile/display-name", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+    context: "Set display name",
     suppressErrorNotification: true,
   })
 }

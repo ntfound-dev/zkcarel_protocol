@@ -10,9 +10,27 @@ import { useWallet } from "@/hooks/use-wallet"
 import { invokeStarknetCallFromWallet, toHexFelt } from "@/lib/onchain-trade"
 
 const aiTiers = [
-  { id: 1, name: "Basic", cost: 0, costLabel: "Free", description: "General assistance" },
-  { id: 2, name: "Intermediate", cost: 10, costLabel: "10 CAREL", description: "Market analysis" },
-  { id: 3, name: "Expert", cost: 50, costLabel: "50 CAREL", description: "Advanced strategies" },
+  {
+    id: 1,
+    name: "Level 1",
+    cost: 0,
+    costLabel: "FREE",
+    description: "Basic queries, price check",
+  },
+  {
+    id: 2,
+    name: "Level 2",
+    cost: 1,
+    costLabel: "1 CAREL",
+    description: "Auto swap/bridge execution",
+  },
+  {
+    id: 3,
+    name: "Level 3",
+    cost: 2,
+    costLabel: "2 CAREL",
+    description: "Portfolio management, alerts",
+  },
 ]
 
 const sampleMessages = [
@@ -26,6 +44,7 @@ const quickPrompts = [
   "cek saldo saya",
   "point saya berapa",
   "swap 25 STRK to CAREL",
+  "bridge 10 USDT ke STRK",
 ]
 
 const STARKNET_AI_EXECUTOR_ADDRESS =
@@ -326,7 +345,9 @@ export function FloatingAIAssistant() {
           </div>
           <div>
             <p className="text-sm font-medium text-foreground">ZK AI Assistant</p>
-            <p className="text-xs text-muted-foreground">Tier {selectedTier}: {aiTiers[selectedTier - 1].name}</p>
+            <p className="text-xs text-muted-foreground">
+              {aiTiers[selectedTier - 1].name} • {aiTiers[selectedTier - 1].costLabel}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -367,6 +388,9 @@ export function FloatingAIAssistant() {
                     )
                   })}
                 </div>
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  {aiTiers[selectedTier - 1].description}
+                </p>
                 {selectedTier >= 2 && (
                   <div className="mt-2">
                     <label className="text-[11px] text-muted-foreground block mb-1">

@@ -14,12 +14,24 @@ import { TrendingUp, Coins, Info, Clock, Check, AlertCircle, Wallet } from "luci
 import { useWallet } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useLivePrices } from "@/hooks/use-live-prices"
-import { getStakePools, getStakePositions, stakeDeposit, stakeWithdraw } from "@/lib/api"
-import { decimalToU256Parts, invokeStarknetCallFromWallet } from "@/lib/onchain-trade"
+import {
+  getOwnedNfts,
+  getStakePools,
+  getStakePositions,
+  stakeDeposit,
+  stakeWithdraw,
+  type NFTItem,
+} from "@/lib/api"
+import {
+  decimalToU256Parts,
+  invokeStarknetCallFromWallet,
+  invokeStarknetCallsFromWallet,
+} from "@/lib/onchain-trade"
 
 const poolMeta: Record<string, { name: string; icon: string; type: string; gradient: string }> = {
   USDT: { name: "Tether", icon: "₮", type: "Stablecoin", gradient: "from-green-400 to-emerald-600" },
   USDC: { name: "USD Coin", icon: "⭕", type: "Stablecoin", gradient: "from-blue-400 to-cyan-600" },
+  WBTC: { name: "Wrapped Bitcoin", icon: "₿", type: "Crypto", gradient: "from-orange-400 to-amber-600" },
   BTC: { name: "Bitcoin", icon: "₿", type: "Crypto", gradient: "from-orange-400 to-amber-600" },
   ETH: { name: "Ethereum", icon: "Ξ", type: "Crypto", gradient: "from-purple-400 to-indigo-600" },
   STRK: { name: "StarkNet", icon: "◈", type: "Crypto", gradient: "from-pink-400 to-rose-600" },
@@ -30,6 +42,39 @@ const STARKNET_STAKING_CAREL_ADDRESS =
   process.env.NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS ||
   process.env.NEXT_PUBLIC_STAKING_CAREL_ADDRESS ||
   ""
+const STARKNET_STAKING_STABLECOIN_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS ||
+  process.env.NEXT_PUBLIC_STAKING_STABLECOIN_ADDRESS ||
+  ""
+const STARKNET_STAKING_BTC_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS ||
+  process.env.NEXT_PUBLIC_STAKING_BTC_ADDRESS ||
+  ""
+const TOKEN_CAREL_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_CAREL_ADDRESS ||
+  "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545"
+const TOKEN_USDC_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_USDC_ADDRESS ||
+  "0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8"
+const TOKEN_USDT_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_USDT_ADDRESS ||
+  "0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5"
+const TOKEN_WBTC_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
+  process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
+  "0x016f2d46ab5cc2244aeeb195cf76f75e7a316a92b71d56618c1bf1b69ab70998"
+const TOKEN_STRK_ADDRESS =
+  process.env.NEXT_PUBLIC_TOKEN_STRK_ADDRESS ||
+  "0x04718f5a0Fc34cC1AF16A1cdee98fFB20C31f5cD61D6Ab07201858f4287c938D"
+
+const POOL_DECIMALS: Record<string, number> = {
+  CAREL: 18,
+  USDC: 6,
+  USDT: 6,
+  WBTC: 8,
+  STRK: 18,
+  BTC: 8,
+}
 
 const formatCompact = (value: number) => {
   try {
@@ -42,12 +87,18 @@ const formatCompact = (value: number) => {
   }
 }
 
+const apyDisplayFor = (pool: StakingPool) => {
+  if (pool.symbol === "CAREL") return "8% - 15%"
+  return `${pool.apy}%`
+}
+
 interface StakingPool {
   symbol: string
   name: string
   icon: string
   type: string
   apy: string
+  apyDisplay?: string
   tvl: string
   tvlValue: number
   spotPrice: number
@@ -77,6 +128,7 @@ export function StakeEarn() {
   const [stakeSuccess, setStakeSuccess] = React.useState(false)
   const [pools, setPools] = React.useState<StakingPool[]>([])
   const [positions, setPositions] = React.useState<StakingPosition[]>([])
+  const [activeNftDiscount, setActiveNftDiscount] = React.useState<NFTItem | null>(null)
   const { prices: tokenPrices } = useLivePrices(Object.keys(poolMeta), {
     fallbackPrices: { CAREL: 1, USDC: 1, USDT: 1 },
   })
@@ -98,6 +150,39 @@ export function StakeEarn() {
 
   React.useEffect(() => {
     let active = true
+    if (!wallet.isConnected) {
+      setActiveNftDiscount(null)
+      return
+    }
+
+    const loadNftDiscount = async (force = false) => {
+      try {
+        const nfts = await getOwnedNfts({ force })
+        if (!active) return
+        const now = Math.floor(Date.now() / 1000)
+        const usable = nfts
+          .filter((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
+          .sort((a, b) => (b.discount || 0) - (a.discount || 0))[0]
+        setActiveNftDiscount(usable || null)
+      } catch {
+        if (!active) return
+        setActiveNftDiscount(null)
+      }
+    }
+
+    void loadNftDiscount()
+    const timer = window.setInterval(() => {
+      void loadNftDiscount(true)
+    }, 20_000)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [wallet.isConnected, wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
+
+  React.useEffect(() => {
+    let active = true
     ;(async () => {
       try {
         const response = await getStakePools()
@@ -109,14 +194,29 @@ export function StakeEarn() {
             type: "Crypto",
             gradient: "from-slate-400 to-slate-600",
           }
-          const userBalance = wallet.balance[pool.token.toUpperCase()] || 0
+          const symbol = pool.token.toUpperCase()
+          const userBalance =
+            symbol === "CAREL"
+              ? wallet.onchainBalance.CAREL ?? wallet.balance[symbol] ?? 0
+              : symbol === "USDC"
+              ? wallet.onchainBalance.USDC ?? wallet.balance[symbol] ?? 0
+              : symbol === "USDT"
+              ? wallet.onchainBalance.USDT ?? wallet.balance[symbol] ?? 0
+              : symbol === "WBTC"
+              ? wallet.onchainBalance.WBTC ?? wallet.balance[symbol] ?? 0
+              : symbol === "BTC"
+              ? wallet.onchainBalance.BTC ?? wallet.balance[symbol] ?? 0
+              : symbol === "STRK"
+              ? wallet.onchainBalance.STRK_L2 ?? wallet.balance[symbol] ?? 0
+              : wallet.balance[symbol] ?? 0
           const tvlUsd = Number.isFinite(pool.tvl_usd) ? pool.tvl_usd : pool.total_staked
           return {
-            symbol: pool.token,
+            symbol,
             name: meta.name,
             icon: meta.icon,
             type: meta.type,
             apy: pool.apy.toFixed(2),
+            apyDisplay: symbol === "CAREL" ? "8% - 15%" : `${pool.apy.toFixed(2)}%`,
             tvl: formatCompact(tvlUsd),
             tvlValue: tvlUsd,
             spotPrice: 0,
@@ -137,7 +237,15 @@ export function StakeEarn() {
     return () => {
       active = false
     }
-  }, [wallet.balance])
+  }, [
+    wallet.balance,
+    wallet.onchainBalance.BTC,
+    wallet.onchainBalance.CAREL,
+    wallet.onchainBalance.STRK_L2,
+    wallet.onchainBalance.USDC,
+    wallet.onchainBalance.USDT,
+    wallet.onchainBalance.WBTC,
+  ])
 
   const refreshPositions = React.useCallback(async () => {
     try {
@@ -178,6 +286,14 @@ export function StakeEarn() {
   }, [pools, refreshPositions])
 
   const handleStake = (pool: StakingPool) => {
+    if (pool.symbol === "BTC") {
+      notifications.addNotification({
+        type: "info",
+        title: "Coming Soon",
+        message: "Native BTC staking akan diaktifkan via Garden API.",
+      })
+      return
+    }
     setSelectedPool(pool)
     setStakeAmount("")
     setStakeSuccess(false)
@@ -192,32 +308,133 @@ export function StakeEarn() {
   }
 
   const submitOnchainStakeTx = React.useCallback(
-    async (entrypoint: "stake" | "unstake", amount: string) => {
-      if (!STARKNET_STAKING_CAREL_ADDRESS) {
-        throw new Error(
-          "NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS belum diisi. Set alamat kontrak staking di frontend/.env.local."
+    async (poolSymbol: string, entrypoint: "stake" | "unstake", amount: string) => {
+      const symbol = poolSymbol.toUpperCase()
+      if (symbol === "BTC") {
+        throw new Error("Native BTC staking akan diaktifkan via Garden API.")
+      }
+
+      const decimals = POOL_DECIMALS[symbol] ?? 18
+      const [amountLow, amountHigh] = decimalToU256Parts(amount, decimals)
+      const isStake = entrypoint === "stake"
+
+      if (symbol === "CAREL") {
+        if (!STARKNET_STAKING_CAREL_ADDRESS) {
+          throw new Error(
+            "NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS belum diisi. Set alamat kontrak staking CAREL di frontend/.env.local."
+          )
+        }
+        if (isStake) {
+          return invokeStarknetCallsFromWallet(
+            [
+              {
+                contractAddress: TOKEN_CAREL_ADDRESS,
+                entrypoint: "approve",
+                calldata: [STARKNET_STAKING_CAREL_ADDRESS, amountLow, amountHigh],
+              },
+              {
+                contractAddress: STARKNET_STAKING_CAREL_ADDRESS,
+                entrypoint: "stake",
+                calldata: [amountLow, amountHigh],
+              },
+            ],
+            starknetProviderHint
+          )
+        }
+        return invokeStarknetCallFromWallet(
+          {
+            contractAddress: STARKNET_STAKING_CAREL_ADDRESS,
+            entrypoint,
+            calldata: [amountLow, amountHigh],
+          },
+          starknetProviderHint
         )
       }
-      const [amountLow, amountHigh] = decimalToU256Parts(amount, 18)
-      return invokeStarknetCallFromWallet(
-        {
-          contractAddress: STARKNET_STAKING_CAREL_ADDRESS,
-          entrypoint,
-          calldata: [amountLow, amountHigh],
-        },
-        starknetProviderHint
-      )
+
+      if (symbol === "USDC" || symbol === "USDT" || symbol === "STRK") {
+        if (!STARKNET_STAKING_STABLECOIN_ADDRESS) {
+          throw new Error(
+            "NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS belum diisi untuk staking stablecoin."
+          )
+        }
+        const tokenAddress =
+          symbol === "USDC"
+            ? TOKEN_USDC_ADDRESS
+            : symbol === "USDT"
+            ? TOKEN_USDT_ADDRESS
+            : TOKEN_STRK_ADDRESS
+        if (isStake) {
+          return invokeStarknetCallsFromWallet(
+            [
+              {
+                contractAddress: tokenAddress,
+                entrypoint: "approve",
+                calldata: [STARKNET_STAKING_STABLECOIN_ADDRESS, amountLow, amountHigh],
+              },
+              {
+                contractAddress: STARKNET_STAKING_STABLECOIN_ADDRESS,
+                entrypoint: "stake",
+                calldata: [tokenAddress, amountLow, amountHigh],
+              },
+            ],
+            starknetProviderHint
+          )
+        }
+        return invokeStarknetCallFromWallet(
+          {
+            contractAddress: STARKNET_STAKING_STABLECOIN_ADDRESS,
+            entrypoint,
+            calldata: [tokenAddress, amountLow, amountHigh],
+          },
+          starknetProviderHint
+        )
+      }
+
+      if (symbol === "WBTC") {
+        if (!STARKNET_STAKING_BTC_ADDRESS) {
+          throw new Error(
+            "NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS belum diisi untuk staking WBTC."
+          )
+        }
+        if (isStake) {
+          return invokeStarknetCallsFromWallet(
+            [
+              {
+                contractAddress: TOKEN_WBTC_ADDRESS,
+                entrypoint: "approve",
+                calldata: [STARKNET_STAKING_BTC_ADDRESS, amountLow, amountHigh],
+              },
+              {
+                contractAddress: STARKNET_STAKING_BTC_ADDRESS,
+                entrypoint: "stake",
+                calldata: [TOKEN_WBTC_ADDRESS, amountLow, amountHigh],
+              },
+            ],
+            starknetProviderHint
+          )
+        }
+        return invokeStarknetCallFromWallet(
+          {
+            contractAddress: STARKNET_STAKING_BTC_ADDRESS,
+            entrypoint,
+            calldata: [TOKEN_WBTC_ADDRESS, amountLow, amountHigh],
+          },
+          starknetProviderHint
+        )
+      }
+
+      throw new Error(`Pool ${symbol} belum didukung untuk on-chain staking.`)
     },
     [starknetProviderHint]
   )
 
   const confirmStake = async () => {
     if (!selectedPool) return
-    if (selectedPool.symbol !== "CAREL") {
+    if (selectedPool.symbol === "BTC") {
       notifications.addNotification({
-        type: "error",
-        title: "Pool belum didukung",
-        message: "On-chain staking saat ini hanya mendukung pool CAREL.",
+        type: "info",
+        title: "Coming Soon",
+        message: "Native BTC staking akan diaktifkan via Garden API.",
       })
       return
     }
@@ -229,7 +446,7 @@ export function StakeEarn() {
         title: "Wallet signature required",
         message: "Confirm staking transaction in your Starknet wallet.",
       })
-      const onchainTxHash = await submitOnchainStakeTx("stake", stakeAmount)
+      const onchainTxHash = await submitOnchainStakeTx(selectedPool.symbol, "stake", stakeAmount)
       notifications.addNotification({
         type: "info",
         title: "Staking pending",
@@ -277,7 +494,7 @@ export function StakeEarn() {
         title: "Wallet signature required",
         message: "Confirm unstake transaction in your Starknet wallet.",
       })
-      const onchainTxHash = await submitOnchainStakeTx("unstake", target.amount.toString())
+      const onchainTxHash = await submitOnchainStakeTx(target.pool.symbol, "unstake", target.amount.toString())
       notifications.addNotification({
         type: "info",
         title: "Unstake pending",
@@ -320,6 +537,19 @@ export function StakeEarn() {
     const price = tokenPrices[p.pool.symbol] ?? 0
     return acc + (p.rewards * price)
   }, 0)
+
+  const currentCarelStake = positions
+    .filter((p) => p.pool.symbol === "CAREL")
+    .reduce((acc, p) => acc + p.amount, 0)
+  const pointsMultiplier =
+    currentCarelStake >= 10_000 ? 5 : currentCarelStake >= 1_000 ? 3 : currentCarelStake >= 100 ? 2 : 1
+  const activeDiscountPercent = activeNftDiscount?.discount ?? 0
+  const activeDiscountMaxUsage = activeNftDiscount?.max_usage
+  const activeDiscountUsed = activeNftDiscount?.used_in_period ?? 0
+  const activeDiscountRemainingUsage =
+    typeof activeDiscountMaxUsage === "number"
+      ? Math.max(0, activeDiscountMaxUsage - activeDiscountUsed)
+      : null
 
   const totalValueLocked = displayPools.reduce((acc, pool) => acc + pool.tvlValue, 0)
 
@@ -400,6 +630,27 @@ export function StakeEarn() {
               <p className="text-xs text-muted-foreground mt-1">
                 Staking menggunakan token testnet. Rewards mengikuti kontrak testnet dan dapat berubah sesuai kondisi pool.
               </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Native BTC staking route sedang disiapkan via Garden API.
+              </p>
+              <p className="text-xs text-foreground mt-2">
+                Active points multiplier (swap/bridge/limit): <span className="text-primary font-semibold">{pointsMultiplier}x</span>
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                CAREL stake Anda: {currentCarelStake.toLocaleString(undefined, { maximumFractionDigits: 4 })} CAREL
+              </p>
+              <p className="text-xs text-foreground mt-2">
+                NFT discount saat staking:{" "}
+                <span className={cn("font-semibold", activeDiscountPercent > 0 ? "text-success" : "text-muted-foreground")}>
+                  {activeDiscountPercent > 0 ? `${activeDiscountPercent}% aktif` : "tidak aktif"}
+                </span>
+              </p>
+              {activeDiscountPercent > 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Usage terpakai periode ini: {activeDiscountUsed}
+                  {typeof activeDiscountRemainingUsage === "number" ? ` • sisa ${activeDiscountRemainingUsage}` : ""}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -435,6 +686,7 @@ export function StakeEarn() {
                     ))}
                 </div>
               </div>
+
             </>
           )}
         </div>
@@ -488,7 +740,7 @@ export function StakeEarn() {
                     <div className="flex items-center gap-6">
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">APY</p>
-                        <p className="text-lg font-bold text-success">{position.pool.apy}%</p>
+                        <p className="text-lg font-bold text-success">{position.pool.apyDisplay ?? apyDisplayFor(position.pool)}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">Rewards</p>
@@ -564,7 +816,7 @@ export function StakeEarn() {
                     <div className="p-4 rounded-xl bg-surface/50 border border-border">
                       <div className="flex justify-between mb-2">
                         <span className="text-sm text-muted-foreground">APY</span>
-                        <span className="text-lg font-bold text-success">{selectedPool.apy}%</span>
+                        <span className="text-lg font-bold text-success">{selectedPool.apyDisplay ?? apyDisplayFor(selectedPool)}</span>
                       </div>
                       <div className="flex justify-between mb-2">
                         <span className="text-sm text-muted-foreground">Lock Period</span>
@@ -614,6 +866,14 @@ export function StakeEarn() {
                       </div>
                     )}
 
+                    <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
+                      <p className="text-xs text-foreground">
+                        {activeDiscountPercent > 0
+                          ? `NFT discount ${activeDiscountPercent}% aktif. Usage berkurang hanya setelah transaksi stake/unstake sukses on-chain.`
+                          : "NFT discount tidak aktif. Mint NFT tier untuk mengaktifkan discount usage."}
+                      </p>
+                    </div>
+
                     <div className="p-3 rounded-lg bg-secondary/10 border border-secondary/20">
                       <div className="flex items-start gap-2">
                         <AlertCircle className="h-4 w-4 text-secondary flex-shrink-0 mt-0.5" />
@@ -646,7 +906,7 @@ export function StakeEarn() {
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm text-muted-foreground">APY</span>
-                          <span className="text-sm font-medium text-success">{selectedPool.apy}%</span>
+                          <span className="text-sm font-medium text-success">{selectedPool.apyDisplay ?? apyDisplayFor(selectedPool)}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm text-muted-foreground">Lock Period</span>
@@ -710,7 +970,7 @@ function StakingCard({ pool, onStake }: { pool: StakingPool; onStake: () => void
         </div>
         <div className="text-right">
           <p className="text-xs text-muted-foreground">APY</p>
-          <p className="text-2xl font-bold text-success">{pool.apy}%</p>
+          <p className="text-2xl font-bold text-success">{pool.apyDisplay ?? apyDisplayFor(pool)}</p>
         </div>
       </div>
 

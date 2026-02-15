@@ -1,13 +1,19 @@
 use super::{require_starknet_user, require_user, AppState};
 use crate::indexer::starknet_client::StarknetClient;
 use crate::services::onchain::{parse_felt, OnchainInvoker};
-use crate::{error::Result, models::ApiResponse, services::ai_service::AIService};
+use crate::{
+    error::{AppError, Result},
+    models::ApiResponse,
+    services::ai_service::{classify_command_scope, AIGuardScope, AIService},
+};
 use axum::extract::Query;
 use axum::{extract::State, http::HeaderMap, Json};
+use r2d2_redis::redis::Commands;
 use serde::{Deserialize, Serialize};
 use starknet_core::types::{Call, Felt as CoreFelt};
 use starknet_core::utils::get_selector_from_name;
 use starknet_crypto::{poseidon_hash_many, Felt as CryptoFelt};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_SIGNATURE_WINDOW_SECONDS: u64 = 30;
 const MIN_SIGNATURE_WINDOW_SECONDS: u64 = 10;
@@ -65,12 +71,125 @@ fn build_command(command: &str, context: &Option<String>) -> String {
     }
 }
 
-fn confidence_score(has_api_key: bool) -> f64 {
-    if has_api_key {
+fn confidence_score(has_llm_provider: bool) -> f64 {
+    if has_llm_provider {
         0.9
     } else {
         0.6
     }
+}
+
+fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
+    let scope = classify_command_scope(command);
+    match level {
+        1 => {
+            if scope != AIGuardScope::ReadOnly {
+                return Err(AppError::BadRequest(
+                    "Level 1 hanya untuk read-only query: price/balance/points/market."
+                        .to_string(),
+                ));
+            }
+        }
+        2 => {
+            if scope != AIGuardScope::SwapBridge {
+                return Err(AppError::BadRequest(
+                    "Level 2 hanya untuk auto swap/bridge execution.".to_string(),
+                ));
+            }
+        }
+        3 => {
+            if scope != AIGuardScope::PortfolioAlert {
+                return Err(AppError::BadRequest(
+                    "Level 3 hanya untuk portfolio management dan alerts.".to_string(),
+                ));
+            }
+        }
+        _ => {
+            return Err(AppError::BadRequest("Invalid AI level".to_string()));
+        }
+    }
+    Ok(())
+}
+
+fn ai_level_limit(state: &AppState, level: u8) -> u32 {
+    match level {
+        1 => state.config.ai_rate_limit_level_1_per_window,
+        2 => state.config.ai_rate_limit_level_2_per_window,
+        3 => state.config.ai_rate_limit_level_3_per_window,
+        _ => 1,
+    }
+}
+
+fn time_bucket(window_seconds: u64) -> u64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let window = window_seconds.max(1);
+    now / window
+}
+
+fn enforce_ai_rate_limit(
+    state: &AppState,
+    user_address: &str,
+    level: u8,
+    onchain: bool,
+) -> Result<()> {
+    let mode = if onchain { "onchain" } else { "offchain" };
+    let window_seconds = state.config.ai_rate_limit_window_seconds.max(10);
+    let level_limit = ai_level_limit(state, level).max(1) as i64;
+    let global_limit = state.config.ai_rate_limit_global_per_window.max(1) as i64;
+    let bucket = time_bucket(window_seconds);
+    let normalized_user = user_address.trim().to_ascii_lowercase();
+
+    let level_key = format!("ai:rl:l{}:{}:{}:{}", level, mode, normalized_user, bucket);
+    let global_key = format!("ai:rl:all:{}:{}", normalized_user, bucket);
+
+    let mut conn = match state.redis.get() {
+        Ok(conn) => conn,
+        Err(err) => {
+            tracing::warn!("AI rate limiter skipped (redis unavailable): {}", err);
+            return Ok(());
+        }
+    };
+
+    let level_count: i64 = match conn.incr(&level_key, 1_i64) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!("AI rate limiter skipped (level incr failed): {}", err);
+            return Ok(());
+        }
+    };
+    if level_count == 1 {
+        let _: std::result::Result<bool, r2d2_redis::redis::RedisError> =
+            conn.expire(&level_key, window_seconds as usize);
+    }
+
+    let global_count: i64 = match conn.incr(&global_key, 1_i64) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!("AI rate limiter skipped (global incr failed): {}", err);
+            return Ok(());
+        }
+    };
+    if global_count == 1 {
+        let _: std::result::Result<bool, r2d2_redis::redis::RedisError> =
+            conn.expire(&global_key, window_seconds as usize);
+    }
+
+    if level_count > level_limit || global_count > global_limit {
+        tracing::warn!(
+            "AI rate limit exceeded user={} level={} mode={} level_count={} global_count={}",
+            user_address,
+            level,
+            mode,
+            level_count,
+            global_count
+        );
+        return Err(AppError::RateLimitExceeded);
+    }
+
+    Ok(())
 }
 
 /// POST /api/v1/ai/execute
@@ -81,7 +200,7 @@ pub async fn execute_command(
 ) -> Result<Json<ApiResponse<AICommandResponse>>> {
     let user_address = require_user(&headers, &state).await?;
     let config = state.config.clone();
-    let service = AIService::new(state.db, config.clone());
+    let service = AIService::new(state.db.clone(), config.clone());
 
     let command = build_command(&req.command, &req.context);
     let level = req.level.unwrap_or(1);
@@ -97,6 +216,7 @@ pub async fn execute_command(
             "Invalid AI level".into(),
         ));
     }
+    ensure_ai_level_scope(level, &command)?;
 
     if level >= 2 {
         let Some(action_id) = req.action_id else {
@@ -106,9 +226,11 @@ pub async fn execute_command(
         };
         ensure_onchain_action(&config, &user_address, action_id).await?;
     }
+    enforce_ai_rate_limit(&state, &user_address, level, level >= 2)?;
 
-    let ai_response = service.execute_command(&user_address, &command).await?;
-    let confidence = confidence_score(config.openai_api_key.is_some());
+    let ai_response = service.execute_command(&user_address, &command, level).await?;
+    let confidence =
+        confidence_score(config.gemini_api_key.is_some() || config.openai_api_key.is_some());
 
     let response = AICommandResponse {
         response: ai_response.message,

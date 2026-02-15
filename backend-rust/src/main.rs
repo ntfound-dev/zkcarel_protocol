@@ -18,6 +18,7 @@ mod indexer;
 mod integrations;
 mod models;
 mod services;
+mod tokenomics;
 mod utils;
 mod websocket;
 
@@ -211,7 +212,13 @@ fn build_router(state: api::AppState) -> Router {
         .route("/api/v1/referral/stats", get(api::referral::get_stats))
         .route("/api/v1/referral/history", get(api::referral::get_history))
         // Social Tasks
+        .route("/api/v1/social/tasks", get(api::social::get_tasks))
         .route("/api/v1/social/verify", post(api::social::verify_task))
+        // Admin (manual maintenance)
+        .route(
+            "/api/v1/admin/points/reset",
+            post(api::admin::reset_points),
+        )
         // Privacy
         .route(
             "/api/v1/privacy/submit",
