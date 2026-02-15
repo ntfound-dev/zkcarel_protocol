@@ -89,6 +89,32 @@ Rules:
   - Redis: `localhost:6379`
 - Backend env source default: `backend-rust/.env` (dengan override `DATABASE_URL` dan `REDIS_URL` ke service container).
 
+## Run Tanpa Docker (Native Local)
+Jalankan service langsung dari terminal:
+
+1. Start database + redis lokal
+```bash
+sudo service postgresql start
+sudo service redis-server start
+```
+
+2. Jalankan backend
+```bash
+cd backend-rust
+cargo run
+```
+
+3. Jalankan frontend (terminal baru)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Default akses:
+- Frontend: `http://localhost:3000`
+- Backend API: `http://localhost:8080` (mengikuti `backend-rust/.env`)
+
 ## Technical Docs
 - Backend technical/API/config: `backend-rust/README.md`
 - Frontend technical/env/integration: `frontend/README.md`

@@ -27,5 +27,6 @@ Thumbs.db
 *.temp
 
 # Misc
-readme.MD
+!README.md
+!readme.md
 ../bak/

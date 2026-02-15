@@ -3,5 +3,6 @@ target
 snfoundry_trace/
 coverage/
 profile/
-readme.MD
+!README.md
+!readme.md
 bak
