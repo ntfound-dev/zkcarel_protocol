@@ -905,10 +905,18 @@ export function TradingInterface() {
         if (!active) return
         const now = Math.floor(Date.now() / 1000)
         const usable = nfts.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
-        setActiveNft(usable || null)
+        setActiveNft((prev) => {
+          if (usable) return usable
+          if (prev && !prev.used && (!prev.expiry || prev.expiry > now)) return prev
+          return null
+        })
       } catch {
         if (!active) return
-        setActiveNft(null)
+        const now = Math.floor(Date.now() / 1000)
+        setActiveNft((prev) => {
+          if (prev && !prev.used && (!prev.expiry || prev.expiry > now)) return prev
+          return null
+        })
       }
     })()
 
@@ -1042,8 +1050,9 @@ export function TradingInterface() {
           const estimatedReceiveRaw = Number(response.estimated_receive || 0)
           const bridgeToSwapAmount = estimatedReceiveRaw * (1 - 0.003)
           const slippageFactor = 1 - slippageValue / 100
+          const shouldProjectCrossTokenAmount = fromSymbol !== toSymbol && toChain === "starknet"
           const bridgeConvertedAmount =
-            fromSymbol !== toSymbol
+            shouldProjectCrossTokenAmount
               ? convertAmountByUsdPrice(
                   bridgeToSwapAmount * (Number.isFinite(slippageFactor) && slippageFactor > 0 ? slippageFactor : 1),
                   fromPrice,
@@ -1051,7 +1060,7 @@ export function TradingInterface() {
                 )
               : null
           const displayToAmount =
-            fromSymbol !== toSymbol
+            shouldProjectCrossTokenAmount
               ? Number.isFinite(bridgeConvertedAmount ?? NaN)
                 ? normalizeTokenAmountDisplay(bridgeConvertedAmount as number, toSymbol)
                 : ""
@@ -1059,7 +1068,7 @@ export function TradingInterface() {
           const estimatedTimeLabel = normalizeEstimatedTimeLabel({
             raw: response.estimated_time,
             provider: response.bridge_provider,
-            includeSwapLeg: fromSymbol !== toSymbol,
+            includeSwapLeg: shouldProjectCrossTokenAmount,
           })
           const bridgeQuote: QuoteState = {
             type: "bridge",
@@ -1075,7 +1084,7 @@ export function TradingInterface() {
             bridgeConvertedAmount: bridgeConvertedAmount ?? undefined,
           }
           const bridgeQuoteError =
-            fromSymbol !== toSymbol && !displayToAmount
+            shouldProjectCrossTokenAmount && !displayToAmount
               ? "Cross-token estimate is not available yet (destination live price not loaded)."
               : null
           setToAmount(displayToAmount)
@@ -1707,7 +1716,11 @@ export function TradingInterface() {
             if (nftState.status === "fulfilled") {
               const now = Math.floor(Date.now() / 1000)
               const usable = nftState.value.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
-              setActiveNft(usable || null)
+              setActiveNft((prev) => {
+                if (usable) return usable
+                if (prev && !prev.used && (!prev.expiry || prev.expiry > now)) return prev
+                return null
+              })
             }
             if (rewardsState.status === "fulfilled") {
               const parsedMultiplier = Number(rewardsState.value.multiplier)
@@ -2132,7 +2145,11 @@ export function TradingInterface() {
       if (nftState.status === "fulfilled") {
         const now = Math.floor(Date.now() / 1000)
         const usable = nftState.value.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
-        setActiveNft(usable || null)
+        setActiveNft((prev) => {
+          if (usable) return usable
+          if (prev && !prev.used && (!prev.expiry || prev.expiry > now)) return prev
+          return null
+        })
       }
       if (rewardsState.status === "fulfilled") {
         const parsedMultiplier = Number(rewardsState.value.multiplier)

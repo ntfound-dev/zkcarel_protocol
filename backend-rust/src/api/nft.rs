@@ -444,6 +444,21 @@ pub async fn get_owned_nfts(
 
     match get_owned_nfts_uncached(&state, contract, &user_address).await {
         Ok(nfts) => {
+            if nfts.is_empty() {
+                if let Some(stale) = get_cached_owned_nfts(
+                    &cache_key,
+                    Duration::from_secs(OWNED_NFT_CACHE_STALE_SECS),
+                )
+                .await
+                {
+                    tracing::debug!(
+                        "nft_owned returning stale cache due empty refresh user={} contract={}",
+                        user_address,
+                        contract
+                    );
+                    return Ok(Json(ApiResponse::success(stale)));
+                }
+            }
             cache_owned_nfts(cache_key, nfts.clone()).await;
             Ok(Json(ApiResponse::success(nfts)))
         }

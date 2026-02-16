@@ -24,10 +24,63 @@ use starknet_core::types::{
     TransactionFinalityStatus,
 };
 use starknet_core::utils::get_selector_from_name;
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::Instant;
 use tokio::time::{sleep, timeout, Duration};
 
 const ORACLE_ROUTE_DEX_ID_HEX: &str = "0x4f52434c"; // 'ORCL'
 const ONCHAIN_DISCOUNT_TIMEOUT_MS: u64 = 2_500;
+const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 30;
+const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 600;
+const NFT_DISCOUNT_CACHE_MAX_ENTRIES: usize = 100_000;
+
+#[derive(Clone, Copy)]
+struct CachedNftDiscount {
+    fetched_at: Instant,
+    discount: f64,
+}
+
+static NFT_DISCOUNT_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedNftDiscount>>> =
+    OnceLock::new();
+
+fn nft_discount_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedNftDiscount>> {
+    NFT_DISCOUNT_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn nft_discount_cache_key(contract: &str, user: &str) -> String {
+    format!(
+        "{}|{}",
+        contract.trim().to_ascii_lowercase(),
+        user.trim().to_ascii_lowercase()
+    )
+}
+
+async fn get_cached_nft_discount(key: &str, max_age: Duration) -> Option<f64> {
+    let cache = nft_discount_cache();
+    let guard = cache.read().await;
+    let entry = guard.get(key)?;
+    if entry.fetched_at.elapsed() <= max_age {
+        return Some(entry.discount);
+    }
+    None
+}
+
+async fn cache_nft_discount(key: &str, discount: f64) {
+    let cache = nft_discount_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedNftDiscount {
+            fetched_at: Instant::now(),
+            discount,
+        },
+    );
+    if guard.len() > NFT_DISCOUNT_CACHE_MAX_ENTRIES {
+        let stale_after = Duration::from_secs(NFT_DISCOUNT_CACHE_STALE_SECS);
+        guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyVerificationPayload {
@@ -97,6 +150,12 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
     let Some(contract) = discount_contract_address(state) else {
         return 0.0;
     };
+    let cache_key = nft_discount_cache_key(contract, user_address);
+    if let Some(cached) =
+        get_cached_nft_discount(&cache_key, Duration::from_secs(NFT_DISCOUNT_CACHE_TTL_SECS)).await
+    {
+        return cached.clamp(0.0, 100.0);
+    }
 
     let reader = match OnchainReader::from_config(&state.config) {
         Ok(reader) => reader,
@@ -105,6 +164,19 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
                 "Failed to initialize on-chain reader for NFT discount in swap: {}",
                 err
             );
+            if let Some(stale) = get_cached_nft_discount(
+                &cache_key,
+                Duration::from_secs(NFT_DISCOUNT_CACHE_STALE_SECS),
+            )
+            .await
+            {
+                tracing::debug!(
+                    "Using stale NFT discount cache in swap for user={} discount={}",
+                    user_address,
+                    stale
+                );
+                return stale.clamp(0.0, 100.0);
+            }
             return 0.0;
         }
     };
@@ -161,6 +233,19 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
                 user_address,
                 err
             );
+            if let Some(stale) = get_cached_nft_discount(
+                &cache_key,
+                Duration::from_secs(NFT_DISCOUNT_CACHE_STALE_SECS),
+            )
+            .await
+            {
+                tracing::debug!(
+                    "Using stale NFT discount cache in swap for user={} discount={}",
+                    user_address,
+                    stale
+                );
+                return stale.clamp(0.0, 100.0);
+            }
             return 0.0;
         }
         Err(_) => {
@@ -168,6 +253,19 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
                 "Timeout on-chain NFT discount check in swap for user={}",
                 user_address
             );
+            if let Some(stale) = get_cached_nft_discount(
+                &cache_key,
+                Duration::from_secs(NFT_DISCOUNT_CACHE_STALE_SECS),
+            )
+            .await
+            {
+                tracing::debug!(
+                    "Using stale NFT discount cache in swap for user={} discount={}",
+                    user_address,
+                    stale
+                );
+                return stale.clamp(0.0, 100.0);
+            }
             return 0.0;
         }
     };
@@ -178,11 +276,14 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
 
     let is_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
     if !is_active {
+        cache_nft_discount(&cache_key, 0.0).await;
         return 0.0;
     }
 
     let discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
-    discount.clamp(0.0, 100.0)
+    let normalized = discount.clamp(0.0, 100.0);
+    cache_nft_discount(&cache_key, normalized).await;
+    normalized
 }
 
 fn normalize_usd_volume(usd_in: f64, usd_out: f64) -> f64 {

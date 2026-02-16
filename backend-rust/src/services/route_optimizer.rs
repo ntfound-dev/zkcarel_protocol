@@ -22,13 +22,58 @@ fn normalize_chain(value: &str) -> String {
 fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     match (from, to) {
         ("bitcoin", "starknet") => vec![BRIDGE_GARDEN.to_string()],
+        ("starknet", "bitcoin") => vec![BRIDGE_GARDEN.to_string()],
+        ("bitcoin", "ethereum") => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
+        ("ethereum", "bitcoin") => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
         ("ethereum", "starknet") => vec![
             BRIDGE_STARKGATE.to_string(),
-            BRIDGE_ATOMIQ.to_string(),
             BRIDGE_GARDEN.to_string(),
+            BRIDGE_ATOMIQ.to_string(),
         ],
-        ("starknet", "ethereum") => vec![BRIDGE_STARKGATE.to_string()],
-        _ => vec![BRIDGE_ATOMIQ.to_string()],
+        ("starknet", "ethereum") => vec![
+            BRIDGE_STARKGATE.to_string(),
+            BRIDGE_GARDEN.to_string(),
+            BRIDGE_ATOMIQ.to_string(),
+        ],
+        _ => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
+    }
+}
+
+fn normalize_token_symbol(token: &str) -> String {
+    token.trim().to_ascii_uppercase()
+}
+
+fn garden_destination_token(to_chain: &str, source_token: &str) -> String {
+    let source = normalize_token_symbol(source_token);
+    match to_chain {
+        "bitcoin" => "BTC".to_string(),
+        "starknet" => {
+            if source == "BTC" || source == "WBTC" {
+                "WBTC".to_string()
+            } else {
+                source
+            }
+        }
+        "ethereum" => {
+            if source == "BTC" || source == "WBTC" {
+                "WBTC".to_string()
+            } else {
+                source
+            }
+        }
+        _ => source,
+    }
+}
+
+fn garden_supports_route(from: &str, to: &str, token: &str) -> bool {
+    let token = normalize_token_symbol(token);
+    match (from, to) {
+        ("bitcoin", "starknet") | ("starknet", "bitcoin") => token == "BTC" || token == "WBTC",
+        ("bitcoin", "ethereum") | ("ethereum", "bitcoin") => {
+            token == "BTC" || token == "WBTC" || token == "ETH"
+        }
+        ("ethereum", "starknet") | ("starknet", "ethereum") => token == "BTC" || token == "WBTC",
+        _ => false,
     }
 }
 
@@ -184,6 +229,13 @@ impl RouteOptimizer {
         token: &str,
         amount: f64,
     ) -> Result<BridgeRoute> {
+        if provider == BRIDGE_GARDEN && !garden_supports_route(from_chain, to_chain, token) {
+            return Err(crate::error::AppError::BadRequest(format!(
+                "Garden does not support {} -> {} for token {}",
+                from_chain, to_chain, token
+            )));
+        }
+
         let route = match provider {
             BRIDGE_LAYERSWAP => {
                 let client = LayerSwapClient::new(
@@ -236,8 +288,9 @@ impl RouteOptimizer {
                     self.config.garden_api_key.clone().unwrap_or_default(),
                     self.config.garden_api_url.clone(),
                 );
+                let to_token = garden_destination_token(to_chain, token);
                 let quote = client
-                    .get_quote(from_chain, to_chain, token, token, amount)
+                    .get_quote(from_chain, to_chain, token, &to_token, amount)
                     .await?;
                 BridgeRoute {
                     provider: provider.to_string(),
@@ -306,6 +359,25 @@ mod tests {
         let providers = bridge_providers_for("bitcoin", "starknet");
         assert!(providers.contains(&BRIDGE_GARDEN.to_string()));
         assert_eq!(providers.len(), 1);
+    }
+
+    #[test]
+    fn bridge_providers_for_ethereum_to_bitcoin_prefers_garden() {
+        let providers = bridge_providers_for("ethereum", "bitcoin");
+        assert_eq!(providers.first().map(String::as_str), Some(BRIDGE_GARDEN));
+        assert!(providers.contains(&BRIDGE_ATOMIQ.to_string()));
+    }
+
+    #[test]
+    fn garden_destination_token_for_bitcoin_is_btc() {
+        assert_eq!(garden_destination_token("bitcoin", "ETH"), "BTC");
+        assert_eq!(garden_destination_token("bitcoin", "WBTC"), "BTC");
+    }
+
+    #[test]
+    fn garden_supports_eth_to_btc_but_not_eth_to_starknet() {
+        assert!(garden_supports_route("ethereum", "bitcoin", "ETH"));
+        assert!(!garden_supports_route("ethereum", "starknet", "ETH"));
     }
 
     #[test]
