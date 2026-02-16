@@ -35,7 +35,7 @@ const poolMeta: Record<string, { name: string; icon: string; type: string; gradi
   BTC: { name: "Bitcoin", icon: "₿", type: "Crypto", gradient: "from-orange-400 to-amber-600" },
   ETH: { name: "Ethereum", icon: "Ξ", type: "Crypto", gradient: "from-purple-400 to-indigo-600" },
   STRK: { name: "StarkNet", icon: "◈", type: "Crypto", gradient: "from-pink-400 to-rose-600" },
-  CAREL: { name: "ZkCarel", icon: "◐", type: "Crypto", gradient: "from-violet-400 to-purple-600" },
+  CAREL: { name: "Carel Protocol", icon: "◐", type: "Crypto", gradient: "from-violet-400 to-purple-600" },
 }
 
 const STARKNET_STAKING_CAREL_ADDRESS =
@@ -62,7 +62,7 @@ const TOKEN_USDT_ADDRESS =
 const TOKEN_WBTC_ADDRESS =
   process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
   process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
-  "0x016f2d46ab5cc2244aeeb195cf76f75e7a316a92b71d56618c1bf1b69ab70998"
+  "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5"
 const TOKEN_STRK_ADDRESS =
   process.env.NEXT_PUBLIC_TOKEN_STRK_ADDRESS ||
   "0x04718f5a0Fc34cC1AF16A1cdee98fFB20C31f5cD61D6Ab07201858f4287c938D"
@@ -221,7 +221,7 @@ export function StakeEarn() {
             tvlValue: tvlUsd,
             spotPrice: 0,
             minStake: pool.min_stake.toString(),
-            lockPeriod: pool.lock_period ? `${pool.lock_period} hari` : "Flexible",
+            lockPeriod: pool.lock_period ? `${pool.lock_period} days` : "Flexible",
             reward: pool.token,
             gradient: meta.gradient,
             userBalance,
@@ -290,7 +290,7 @@ export function StakeEarn() {
       notifications.addNotification({
         type: "info",
         title: "Coming Soon",
-        message: "Native BTC staking akan diaktifkan via Garden API.",
+        message: "Native BTC staking will be enabled via Garden API.",
       })
       return
     }
@@ -311,7 +311,7 @@ export function StakeEarn() {
     async (poolSymbol: string, entrypoint: "stake" | "unstake", amount: string) => {
       const symbol = poolSymbol.toUpperCase()
       if (symbol === "BTC") {
-        throw new Error("Native BTC staking akan diaktifkan via Garden API.")
+        throw new Error("Native BTC staking will be enabled via Garden API.")
       }
 
       const decimals = POOL_DECIMALS[symbol] ?? 18
@@ -321,7 +321,7 @@ export function StakeEarn() {
       if (symbol === "CAREL") {
         if (!STARKNET_STAKING_CAREL_ADDRESS) {
           throw new Error(
-            "NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS belum diisi. Set alamat kontrak staking CAREL di frontend/.env.local."
+            "NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS is not set. Configure CAREL staking contract address in frontend/.env.local."
           )
         }
         if (isStake) {
@@ -354,7 +354,7 @@ export function StakeEarn() {
       if (symbol === "USDC" || symbol === "USDT" || symbol === "STRK") {
         if (!STARKNET_STAKING_STABLECOIN_ADDRESS) {
           throw new Error(
-            "NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS belum diisi untuk staking stablecoin."
+            "NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS is not set for stablecoin staking."
           )
         }
         const tokenAddress =
@@ -393,7 +393,7 @@ export function StakeEarn() {
       if (symbol === "WBTC") {
         if (!STARKNET_STAKING_BTC_ADDRESS) {
           throw new Error(
-            "NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS belum diisi untuk staking WBTC."
+            "NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS is not set for WBTC staking."
           )
         }
         if (isStake) {
@@ -423,7 +423,7 @@ export function StakeEarn() {
         )
       }
 
-      throw new Error(`Pool ${symbol} belum didukung untuk on-chain staking.`)
+      throw new Error(`Pool ${symbol} is not supported for on-chain staking.`)
     },
     [starknetProviderHint]
   )
@@ -434,7 +434,7 @@ export function StakeEarn() {
       notifications.addNotification({
         type: "info",
         title: "Coming Soon",
-        message: "Native BTC staking akan diaktifkan via Garden API.",
+        message: "Native BTC staking will be enabled via Garden API.",
       })
       return
     }
@@ -464,16 +464,16 @@ export function StakeEarn() {
       setStakeSuccess(true)
       notifications.addNotification({
         type: "success",
-        title: "Staking berhasil",
-        message: `Stake ${stakeAmount} ${selectedPool.symbol} berhasil`,
+        title: "Staking successful",
+        message: `Stake   completed successfully`,
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
     } catch (error) {
       notifications.addNotification({
         type: "error",
-        title: "Staking gagal",
-        message: error instanceof Error ? error.message : "Gagal melakukan staking",
+        title: "Staking failed",
+        message: error instanceof Error ? error.message : "Unable to complete staking",
       })
     } finally {
       setIsStaking(false)
@@ -511,8 +511,8 @@ export function StakeEarn() {
       await refreshPositions()
       notifications.addNotification({
         type: "success",
-        title: "Unstake diproses",
-        message: `${target.amount} ${target.pool.symbol} sedang diproses`,
+        title: "Unstake processing",
+        message: `${target.amount} ${target.pool.symbol} is being processed`,
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
@@ -522,8 +522,8 @@ export function StakeEarn() {
       )
       notifications.addNotification({
         type: "error",
-        title: "Unstake gagal",
-        message: error instanceof Error ? error.message : "Gagal melakukan unstake",
+        title: "Unstake failed",
+        message: error instanceof Error ? error.message : "Unable to complete unstake",
       })
     }
   }
@@ -563,7 +563,7 @@ export function StakeEarn() {
             <span className="text-sm font-medium text-primary">Testnet Active</span>
           </div>
           <h2 className="text-3xl font-bold text-foreground mb-2">Stake & Earn</h2>
-          <p className="text-muted-foreground">Dapatkan passive income dari aset crypto Anda</p>
+          <p className="text-muted-foreground">Earn passive income from your crypto assets</p>
         </div>
 
         {/* Stats */}
@@ -586,7 +586,7 @@ export function StakeEarn() {
               <div className="w-10 h-10 rounded-full bg-secondary/20 flex items-center justify-center">
                 <Coins className="h-5 w-5 text-secondary" />
               </div>
-              <p className="text-sm text-muted-foreground">Posisi Aktif</p>
+              <p className="text-sm text-muted-foreground">Active Positions</p>
             </div>
             <p className="text-2xl font-bold text-foreground">
               {activePositions > 0 ? activePositions.toLocaleString() : "—"}
@@ -599,12 +599,12 @@ export function StakeEarn() {
               <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
                 <Wallet className="h-5 w-5 text-accent" />
               </div>
-              <p className="text-sm text-muted-foreground">Total Staked Anda</p>
+              <p className="text-sm text-muted-foreground">Your Total Staked</p>
             </div>
             <p className="text-2xl font-bold text-foreground">
               {totalStaked > 0 ? `$${totalStaked.toLocaleString()}` : "—"}
             </p>
-            <p className="text-xs text-muted-foreground mt-1">{positions.length} posisi aktif</p>
+            <p className="text-xs text-muted-foreground mt-1">{positions.length} active positions</p>
           </div>
 
           <div className="p-6 rounded-xl glass border border-border">
@@ -617,7 +617,7 @@ export function StakeEarn() {
             <p className="text-2xl font-bold text-success">
               {totalRewards > 0 ? `$${totalRewards.toFixed(2)}` : "—"}
             </p>
-            <p className="text-xs text-muted-foreground mt-1">Siap diklaim</p>
+            <p className="text-xs text-muted-foreground mt-1">Ready to claim</p>
           </div>
         </div>
 
@@ -626,29 +626,29 @@ export function StakeEarn() {
           <div className="flex items-start gap-3">
             <Info className="h-5 w-5 text-secondary flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-foreground">Mode Testnet</p>
+              <p className="text-sm font-medium text-foreground">Testnet Mode</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Staking menggunakan token testnet. Rewards mengikuti kontrak testnet dan dapat berubah sesuai kondisi pool.
+                Staking uses testnet tokens. Rewards follow testnet contracts and may change based on pool conditions.
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Native BTC staking route sedang disiapkan via Garden API.
+                Native BTC staking route is being prepared via Garden API.
               </p>
               <p className="text-xs text-foreground mt-2">
                 Active points multiplier (swap/bridge/limit): <span className="text-primary font-semibold">{pointsMultiplier}x</span>
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                CAREL stake Anda: {currentCarelStake.toLocaleString(undefined, { maximumFractionDigits: 4 })} CAREL
+                Your CAREL stake: {currentCarelStake.toLocaleString(undefined, { maximumFractionDigits: 4 })} CAREL
               </p>
               <p className="text-xs text-foreground mt-2">
-                NFT discount saat staking:{" "}
+                NFT discount while staking:{" "}
                 <span className={cn("font-semibold", activeDiscountPercent > 0 ? "text-success" : "text-muted-foreground")}>
-                  {activeDiscountPercent > 0 ? `${activeDiscountPercent}% aktif` : "tidak aktif"}
+                  {activeDiscountPercent > 0 ? `% active` : "inactive"}
                 </span>
               </p>
               {activeDiscountPercent > 0 && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  Usage terpakai periode ini: {activeDiscountUsed}
-                  {typeof activeDiscountRemainingUsage === "number" ? ` • sisa ${activeDiscountRemainingUsage}` : ""}
+                  Usage in current period: {activeDiscountUsed}
+                  {typeof activeDiscountRemainingUsage === "number" ? ` • remaining ${activeDiscountRemainingUsage}` : ""}
                 </p>
               )}
             </div>
@@ -693,16 +693,16 @@ export function StakeEarn() {
 
         {/* Your Staking Positions */}
         <div className="mt-12 p-6 rounded-2xl glass-strong border border-border">
-          <h3 className="text-lg font-bold text-foreground mb-4">Posisi Staking Anda</h3>
+          <h3 className="text-lg font-bold text-foreground mb-4">Your Staking Positions</h3>
           
           {positions.length === 0 ? (
             <div className="text-center py-12">
               <div className="w-16 h-16 rounded-full bg-muted/20 flex items-center justify-center mx-auto mb-4">
                 <Clock className="h-8 w-8 text-muted-foreground" />
               </div>
-              <p className="text-muted-foreground">Belum ada posisi staking</p>
+              <p className="text-muted-foreground">No staking positions yet</p>
               <p className="text-sm text-muted-foreground mt-2">
-                Stake token Anda untuk mulai mendapatkan rewards
+                Stake your tokens to start earning rewards
               </p>
             </div>
           ) : (
@@ -726,7 +726,7 @@ export function StakeEarn() {
                             position.status === "unlocking" ? "bg-secondary/20 text-secondary" :
                             "bg-muted/20 text-muted-foreground"
                           )}>
-                            {position.status === "active" ? "Aktif" : 
+                            {position.status === "active" ? "Active" : 
                              position.status === "unlocking" ? "Unlocking..." : "Pending"}
                           </span>
                         </div>
@@ -792,22 +792,22 @@ export function StakeEarn() {
               <div className="w-16 h-16 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-4">
                 <Check className="h-8 w-8 text-success" />
               </div>
-              <p className="text-lg font-medium text-foreground">Staking Berhasil!</p>
+              <p className="text-lg font-medium text-foreground">Staking Successful!</p>
               <p className="text-sm text-muted-foreground mt-2">
-                {stakeAmount} {selectedPool?.symbol} telah di-stake
+                {stakeAmount} {selectedPool?.symbol} has been staked
               </p>
               <Button
                 onClick={() => setStakeDialogOpen(false)}
                 className="mt-4"
               >
-                Tutup
+                Close
               </Button>
             </div>
           ) : (
             <Tabs defaultValue="stake">
               <TabsList className="grid w-full grid-cols-2 mb-4">
                 <TabsTrigger value="stake">Stake</TabsTrigger>
-                <TabsTrigger value="info">Info Pool</TabsTrigger>
+                <TabsTrigger value="info">Pool Info</TabsTrigger>
               </TabsList>
 
               <TabsContent value="stake" className="space-y-4">
@@ -830,9 +830,9 @@ export function StakeEarn() {
 
                     <div>
                       <div className="flex justify-between mb-2">
-                        <label className="text-sm font-medium text-foreground">Jumlah</label>
+                        <label className="text-sm font-medium text-foreground">Amount</label>
                         <span className="text-xs text-muted-foreground">
-                          Saldo: {selectedPool.userBalance.toLocaleString()} {selectedPool.symbol}
+                          Balance: {selectedPool.userBalance.toLocaleString()} {selectedPool.symbol}
                         </span>
                       </div>
                       <input
@@ -858,7 +858,7 @@ export function StakeEarn() {
                     {Number.parseFloat(stakeAmount) > 0 && (
                       <div className="p-3 rounded-lg bg-success/10 border border-success/20">
                         <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Estimasi Reward/Bulan</span>
+                          <span className="text-muted-foreground">Estimated Reward/Month</span>
                           <span className="font-medium text-success">
                             {(Number.parseFloat(stakeAmount) * Number.parseFloat(selectedPool.apy) / 100 / 12).toFixed(4)} {selectedPool.symbol}
                           </span>
@@ -869,8 +869,8 @@ export function StakeEarn() {
                     <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
                       <p className="text-xs text-foreground">
                         {activeDiscountPercent > 0
-                          ? `NFT discount ${activeDiscountPercent}% aktif. Usage berkurang hanya setelah transaksi stake/unstake sukses on-chain.`
-                          : "NFT discount tidak aktif. Mint NFT tier untuk mengaktifkan discount usage."}
+                          ? `NFT discount ${activeDiscountPercent}% is active. Usage decreases only after successful on-chain stake/unstake transactions.`
+                          : "NFT discount is inactive. Mint an NFT tier to activate discount usage."}
                       </p>
                     </div>
 
@@ -878,7 +878,7 @@ export function StakeEarn() {
                       <div className="flex items-start gap-2">
                         <AlertCircle className="h-4 w-4 text-secondary flex-shrink-0 mt-0.5" />
                         <p className="text-xs text-foreground">
-                          Token testnet. Rewards mengikuti kontrak testnet.
+                          Testnet token. Rewards follow testnet contracts.
                         </p>
                       </div>
                     </div>
@@ -888,7 +888,7 @@ export function StakeEarn() {
                       disabled={!stakeAmount || Number.parseFloat(stakeAmount) < Number.parseFloat(selectedPool.minStake) || isStaking}
                       className="w-full bg-primary hover:bg-primary/90"
                     >
-                      {isStaking ? "Memproses..." : `Stake ${selectedPool.symbol}`}
+                      {isStaking ? "Processing..." : `Stake ${selectedPool.symbol}`}
                     </Button>
                   </>
                 )}
@@ -898,7 +898,7 @@ export function StakeEarn() {
                 {selectedPool && (
                   <div className="space-y-4">
                     <div className="p-4 rounded-xl bg-surface/50 border border-border">
-                      <h4 className="font-medium text-foreground mb-3">Detail Pool</h4>
+                      <h4 className="font-medium text-foreground mb-3">Pool Details</h4>
                       <div className="space-y-2">
                         <div className="flex justify-between">
                           <span className="text-sm text-muted-foreground">Total Staked</span>
@@ -924,23 +924,23 @@ export function StakeEarn() {
                     </div>
 
                     <div className="p-4 rounded-xl bg-surface/50 border border-border">
-                      <h4 className="font-medium text-foreground mb-3">Cara Kerja</h4>
+                      <h4 className="font-medium text-foreground mb-3">How It Works</h4>
                       <ul className="space-y-2 text-sm text-muted-foreground">
                         <li className="flex items-start gap-2">
                           <span className="text-primary">1.</span>
-                          Stake token Anda ke pool
+                          Stake your tokens in the pool
                         </li>
                         <li className="flex items-start gap-2">
                           <span className="text-primary">2.</span>
-                          Rewards terakumulasi setiap blok
+                          Rewards accumulate every block
                         </li>
                         <li className="flex items-start gap-2">
                           <span className="text-primary">3.</span>
-                          Klaim rewards kapan saja
+                          Claim rewards anytime
                         </li>
                         <li className="flex items-start gap-2">
                           <span className="text-primary">4.</span>
-                          Unstake setelah lock period selesai
+                          Unstake after lock period is complete
                         </li>
                       </ul>
                     </div>
@@ -996,7 +996,7 @@ function StakingCard({ pool, onStake }: { pool: StakingPool; onStake: () => void
           <p className="text-sm font-medium text-foreground">{pool.lockPeriod}</p>
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">Saldo Anda</p>
+          <p className="text-xs text-muted-foreground">Your Balance</p>
           <p className="text-sm font-medium text-foreground">{pool.userBalance.toLocaleString()}</p>
         </div>
       </div>

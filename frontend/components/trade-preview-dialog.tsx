@@ -24,6 +24,7 @@ type TradePreviewDialogProps = {
   estimatedTime: string
   pointsEarned: number | null
   receiveAddress: string
+  requiresBtcDepositSigning?: boolean
   onCancel: () => void
   onConfirm: () => void
 }
@@ -43,6 +44,7 @@ export function TradePreviewDialog({
   estimatedTime,
   pointsEarned,
   receiveAddress,
+  requiresBtcDepositSigning = false,
   onCancel,
   onConfirm,
 }: TradePreviewDialogProps) {
@@ -118,6 +120,14 @@ export function TradePreviewDialog({
             <p className="text-sm font-mono text-foreground break-all">{receiveAddress}</p>
           </div>
 
+          {requiresBtcDepositSigning && (
+            <div className="p-3 rounded-lg bg-primary/10 border border-primary/30">
+              <p className="text-xs text-foreground">
+                After confirmation, the app will create a Garden order, then open UniSat/Xverse popup to sign and send BTC deposit on-chain.
+              </p>
+            </div>
+          )}
+
           <div className="flex gap-3">
             <Button
               variant="outline"
@@ -130,7 +140,7 @@ export function TradePreviewDialog({
               className="flex-1 bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
               onClick={onConfirm}
             >
-              Confirm & Sign
+              {requiresBtcDepositSigning ? "Confirm & Sign BTC" : "Confirm & Sign"}
             </Button>
           </div>
         </div>

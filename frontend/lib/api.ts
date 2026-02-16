@@ -138,6 +138,54 @@ export interface ExecuteBridgeResponse {
   amount: string
   estimated_receive: string
   estimated_time: string
+  deposit_address?: string
+  deposit_amount?: string
+}
+
+export interface BridgeStatusResponse {
+  bridge_id: string
+  status: string
+  is_completed: boolean
+  version?: string
+  source_initiate_tx_hash?: string
+  source_redeem_tx_hash?: string
+  destination_initiate_tx_hash?: string
+  destination_redeem_tx_hash?: string
+}
+
+export interface GardenStringMetricResponse {
+  status: "Ok" | "Error"
+  result: string
+  error?: string | null
+}
+
+export interface GardenListResponse<T = unknown> {
+  status: "Ok" | "Error"
+  result: T[]
+  error?: string | null
+}
+
+export interface GardenObjectResponse<T = unknown> {
+  status: "Ok" | "Error"
+  result: T
+  error?: string | null
+}
+
+export interface GardenLiquidityResponse {
+  status: "Ok" | "Error"
+  result: Array<{
+    solver_id: string
+    liquidity: unknown[]
+  }>
+  error?: string | null
+}
+
+export interface GardenOrdersPage {
+  data: unknown[]
+  page: number
+  total_pages: number
+  total_items: number
+  per_page: number
 }
 
 export interface RewardsPointsResponse {
@@ -258,6 +306,14 @@ export interface PrepareAiActionResponse {
 
 export interface PrivacySubmitResponse {
   tx_hash: string
+}
+
+export type PrivacyVerificationPayload = {
+  verifier?: string
+  nullifier?: string
+  commitment?: string
+  proof?: string[]
+  public_inputs?: string[]
 }
 
 export type PrivacyActionPayload = {
@@ -837,6 +893,7 @@ export async function executeSwap(payload: {
   recipient?: string
   onchain_tx_hash?: string
   hide_balance?: boolean
+  privacy?: PrivacyVerificationPayload
   mode: string
 }) {
   return apiFetch<ExecuteSwapResponse>("/api/v1/swap/execute", {
@@ -870,9 +927,10 @@ export async function executeBridge(payload: {
   amount: string
   recipient: string
   xverse_user_id?: string
-  onchain_tx_hash: string
+  onchain_tx_hash?: string
   mode?: string
   hide_balance?: boolean
+  privacy?: PrivacyVerificationPayload
 }) {
   return apiFetch<ExecuteBridgeResponse>("/api/v1/bridge/execute", {
     method: "POST",
@@ -880,6 +938,111 @@ export async function executeBridge(payload: {
     context: "Bridge execute",
     suppressErrorNotification: true,
   })
+}
+
+export async function getBridgeStatus(bridgeId: string) {
+  return apiFetch<BridgeStatusResponse>(`/api/v1/bridge/status/${encodeURIComponent(bridgeId)}`, {
+    suppressErrorNotification: true,
+  })
+}
+
+export async function getGardenVolume(params?: {
+  source_chain?: string
+  destination_chain?: string
+  address?: string
+  from?: number
+  to?: number
+}) {
+  const search = new URLSearchParams()
+  if (params?.source_chain) search.set("source_chain", params.source_chain)
+  if (params?.destination_chain) search.set("destination_chain", params.destination_chain)
+  if (params?.address) search.set("address", params.address)
+  if (typeof params?.from === "number") search.set("from", String(params.from))
+  if (typeof params?.to === "number") search.set("to", String(params.to))
+  const query = search.toString()
+  return apiFetch<GardenStringMetricResponse>(`/api/v1/garden/volume${query ? `?${query}` : ""}`)
+}
+
+export async function getGardenFees(params?: {
+  source_chain?: string
+  destination_chain?: string
+  address?: string
+  from?: number
+  to?: number
+}) {
+  const search = new URLSearchParams()
+  if (params?.source_chain) search.set("source_chain", params.source_chain)
+  if (params?.destination_chain) search.set("destination_chain", params.destination_chain)
+  if (params?.address) search.set("address", params.address)
+  if (typeof params?.from === "number") search.set("from", String(params.from))
+  if (typeof params?.to === "number") search.set("to", String(params.to))
+  const query = search.toString()
+  return apiFetch<GardenStringMetricResponse>(`/api/v1/garden/fees${query ? `?${query}` : ""}`)
+}
+
+export async function getGardenSupportedChains(params?: { from?: string }) {
+  const search = new URLSearchParams()
+  if (params?.from) search.set("from", params.from)
+  const query = search.toString()
+  return apiFetch<GardenListResponse>(`/api/v1/garden/chains${query ? `?${query}` : ""}`)
+}
+
+export async function getGardenSupportedAssets(params?: { from?: string }) {
+  const search = new URLSearchParams()
+  if (params?.from) search.set("from", params.from)
+  const query = search.toString()
+  return apiFetch<GardenListResponse>(`/api/v1/garden/assets${query ? `?${query}` : ""}`)
+}
+
+export async function getGardenAvailableLiquidity() {
+  return apiFetch<GardenLiquidityResponse>("/api/v1/garden/liquidity")
+}
+
+export async function getGardenOrders(params?: {
+  address?: string
+  tx_hash?: string
+  from_chain?: string
+  to_chain?: string
+  from_owner?: string
+  to_owner?: string
+  solver_id?: string
+  integrator?: string
+  page?: number
+  per_page?: number
+  status?: string
+}) {
+  const search = new URLSearchParams()
+  if (params?.address) search.set("address", params.address)
+  if (params?.tx_hash) search.set("tx_hash", params.tx_hash)
+  if (params?.from_chain) search.set("from_chain", params.from_chain)
+  if (params?.to_chain) search.set("to_chain", params.to_chain)
+  if (params?.from_owner) search.set("from_owner", params.from_owner)
+  if (params?.to_owner) search.set("to_owner", params.to_owner)
+  if (params?.solver_id) search.set("solver_id", params.solver_id)
+  if (params?.integrator) search.set("integrator", params.integrator)
+  if (typeof params?.page === "number") search.set("page", String(params.page))
+  if (typeof params?.per_page === "number") search.set("per_page", String(params.per_page))
+  if (params?.status) search.set("status", params.status)
+  const query = search.toString()
+  return apiFetch<GardenObjectResponse<GardenOrdersPage>>(`/api/v1/garden/orders${query ? `?${query}` : ""}`)
+}
+
+export async function getGardenOrderById(orderId: string) {
+  return apiFetch<GardenObjectResponse>(`/api/v1/garden/orders/${encodeURIComponent(orderId)}`)
+}
+
+export async function getGardenOrderInstantRefundHash(orderId: string) {
+  return apiFetch<GardenStringMetricResponse>(
+    `/api/v1/garden/orders/${encodeURIComponent(orderId)}/instant-refund-hash`
+  )
+}
+
+export async function getGardenSchema(name: string) {
+  return apiFetch<GardenObjectResponse>(`/api/v1/garden/schemas/${encodeURIComponent(name)}`)
+}
+
+export async function getGardenAppEarnings() {
+  return apiFetch<GardenListResponse>("/api/v1/garden/apps/earnings")
 }
 
 export async function listLimitOrders(page = 1, limit = 10, status?: string) {
@@ -1138,7 +1301,7 @@ export async function getOnchainBalances(payload: {
     body: JSON.stringify(normalizedPayload),
     context: "Onchain balances",
     suppressErrorNotification: true,
-    timeoutMs: 25000,
+    timeoutMs: 9000,
   })
     .then((data) => {
       onchainBalancesCache.set(cacheKey, {

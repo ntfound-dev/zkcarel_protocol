@@ -248,6 +248,11 @@ bash scripts/02_init_tokenomics.sh
 ```bash
 bash scripts/04_deploy_adapters.sh
 ```
+Optional Garaga verifier mode before deploy adapters:
+- `GARAGA_VERIFICATION_MODE=0` legacy `verify_proof(proof, public_inputs)` (default)
+- `GARAGA_VERIFICATION_MODE=1` `verify_ultra_starknet_honk_proof(full_proof_with_hints)`
+- `GARAGA_VERIFICATION_MODE=2` `verify_groth16_proof_bn254(full_proof_with_hints)`
+- `GARAGA_VERIFICATION_MODE=3` `verify_groth16_proof_bls12_381(full_proof_with_hints)`
 7. Deploy price oracle and set token configs
 ```bash
 bash scripts/05_deploy_price_oracle.sh

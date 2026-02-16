@@ -32,7 +32,9 @@ impl LayerSwapClient {
         let source_asset = map_layerswap_asset(token);
         let destination_asset = map_layerswap_asset(token);
         let mut url = Url::parse(&format!("{}/quote", self.api_url.trim_end_matches('/')))
-            .map_err(|e| crate::error::AppError::Internal(format!("Invalid LayerSwap URL: {}", e)))?;
+            .map_err(|e| {
+                crate::error::AppError::Internal(format!("Invalid LayerSwap URL: {}", e))
+            })?;
         url.query_pairs_mut()
             .append_pair("source_network", source_network)
             .append_pair("destination_network", destination_network)
@@ -47,7 +49,10 @@ impl LayerSwapClient {
             .send()
             .await
             .map_err(|e| {
-                crate::error::AppError::ExternalAPI(format!("LayerSwap quote request failed: {}", e))
+                crate::error::AppError::ExternalAPI(format!(
+                    "LayerSwap quote request failed: {}",
+                    e
+                ))
             })?;
 
         if !response.status().is_success() {

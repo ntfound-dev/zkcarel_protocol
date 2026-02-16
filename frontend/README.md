@@ -26,7 +26,9 @@ NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL=https://rpc.sepolia.org
 NEXT_PUBLIC_ETHERSCAN_SEPOLIA_URL=https://sepolia.etherscan.io
 NEXT_PUBLIC_STARKNET_EXPLORER_URL=https://sepolia.voyager.online
 NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL=https://sepolia.starkscan.co
-NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL=https://mempool.space/testnet
+NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL=https://mempool.space/testnet4
+NEXT_PUBLIC_BTC_TESTNET_FAUCET_URL=https://testnet4.info/
+NEXT_PUBLIC_BTC_VAULT_ADDRESS=tb1qxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS=0x...
 NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY=0
 NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS=0x...
@@ -51,6 +53,7 @@ Catatan:
 - `NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL` dipakai saat wallet EVM perlu auto-switch / add network ke Sepolia.
 - `NEXT_PUBLIC_STARKNET_EXPLORER_URL` opsional. Jika diisi, dipakai sebagai explorer utama Starknet (contoh Voyager) untuk link tx di UI.
 - `NEXT_PUBLIC_ETHERSCAN_SEPOLIA_URL`, `NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL`, `NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL` dipakai untuk link explorer testnet.
+- Flow BTC native via Garden bersifat order-first: klik execute untuk membuat order, lalu kirim BTC ke `deposit_address` yang dikembalikan backend (`result.to`). Tidak perlu input txid BTC di form sebelum order dibuat.
 - `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` dipakai untuk submit transaksi swap langsung dari wallet Starknet.
 - Flow swap Starknet sekarang memakai calldata dari backend (`onchain_calls`) dan wallet men-submit multicall `approve + execute_swap` ke kontrak swap real.
 - Jika backend mengembalikan error aggregator belum siap (DEX router/oracle belum aktif), UI tidak akan mengizinkan execute swap.
@@ -109,7 +112,7 @@ public/           # Static assets
 - Session wallet juga disimpan (`wallet_address`, `wallet_provider`) agar reconnect otomatis saat reload.
 - WebSocket notifications menggunakan query `?token=`.
 - Wallet: frontend memakai injected Starknet wallet (Argent X/Braavos). Jika tidak ada, pengguna perlu connect wallet untuk mengakses fitur on-chain.
-- Wallet SDK: memakai `@starknet-io/get-starknet` untuk Starknet, MetaMask (EVM) via `window.ethereum`, dan `sats-connect` untuk koneksi native Xverse (BTC testnet).
+- Wallet SDK: memakai `@starknet-io/get-starknet` untuk Starknet, MetaMask (EVM) via `window.ethereum`, serta wallet BTC native testnet (UniSat/Xverse).
 - Network enforcement: wallet di-validate ke `Starknet Sepolia`, `Ethereum Sepolia (11155111)`, dan `Bitcoin native testnet` (alamat testnet).
 - AI Tier 2/3 membutuhkan `action_id` on-chain. Frontend bisa membuat `action_id` via wallet kalau `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` diisi.
 - Jika `signature_verification` pada AI executor aktif, backend harus mengisi `AI_SIGNATURE_VERIFIER_ADDRESS` agar endpoint prepare signature berjalan.

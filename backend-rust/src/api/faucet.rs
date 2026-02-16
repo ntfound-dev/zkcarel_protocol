@@ -138,7 +138,10 @@ pub async fn get_status(
 
     for token in &["BTC", "ETH", "STRK", "CAREL"] {
         let (can_claim, next_claim, last_claim_at) = if let Some(faucet_service) = &faucet {
-            let can_claim = faucet_service.can_claim(&user_address, token).await.unwrap_or(false);
+            let can_claim = faucet_service
+                .can_claim(&user_address, token)
+                .await
+                .unwrap_or(false);
             let next_claim = faucet_service
                 .get_next_claim_time(&user_address, token)
                 .await
@@ -168,7 +171,8 @@ pub async fn get_status(
             } else {
                 last_claim_at.map(|claimed| claimed + chrono::Duration::hours(cooldown_hours))
             };
-            let can_claim = if !state.config.is_testnet() || !token_faucet_configured(&state, token) {
+            let can_claim = if !state.config.is_testnet() || !token_faucet_configured(&state, token)
+            {
                 false
             } else if *token == "CAREL" && carel_unlimited {
                 true

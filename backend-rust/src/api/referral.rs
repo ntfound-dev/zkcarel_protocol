@@ -102,27 +102,54 @@ pub async fn get_stats(
 
     // Perbaikan: Gunakan query_as untuk menghindari keharusan DATABASE_URL saat compile
     let stats_result: CountResult =
-        sqlx::query_as("SELECT COUNT(*) as total FROM users WHERE referrer = $1")
+        sqlx::query_as("SELECT COUNT(*) as total FROM users WHERE LOWER(referrer) = LOWER($1)")
             .bind(&user_address)
             .fetch_one(state.db.pool())
             .await?;
 
     let active_result: CountResult = sqlx::query_as(
-        "SELECT COUNT(*) as total FROM users WHERE referrer = $1 AND last_active > NOW() - INTERVAL '30 days'"
+        "SELECT COUNT(*) as total FROM users WHERE LOWER(referrer) = LOWER($1) AND last_active > NOW() - INTERVAL '30 days'"
     )
     .bind(&user_address)
     .fetch_one(state.db.pool())
     .await?;
 
     let total_volume: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(usd_value), 0)::FLOAT FROM transactions WHERE user_address IN (SELECT address FROM users WHERE referrer = $1)"
+        r#"
+        WITH referred_users AS (
+            SELECT address
+            FROM users
+            WHERE LOWER(referrer) = LOWER($1)
+        ),
+        referred_wallets AS (
+            SELECT LOWER(address) as wallet
+            FROM referred_users
+            UNION
+            SELECT LOWER(uw.wallet_address) as wallet
+            FROM user_wallet_addresses uw
+            JOIN referred_users ru
+              ON LOWER(ru.address) = LOWER(uw.user_address)
+        )
+        SELECT COALESCE(SUM(usd_value), 0)::FLOAT
+        FROM transactions
+        WHERE LOWER(user_address) IN (SELECT wallet FROM referred_wallets)
+        "#,
     )
     .bind(&user_address)
     .fetch_one(state.db.pool())
     .await?;
 
     let total_rewards: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(referral_points), 0)::FLOAT FROM points WHERE user_address = $1",
+        r#"
+        SELECT COALESCE(SUM(referral_points), 0)::FLOAT
+        FROM points
+        WHERE LOWER(user_address) = LOWER($1)
+           OR LOWER(user_address) IN (
+                SELECT LOWER(wallet_address)
+                FROM user_wallet_addresses
+                WHERE LOWER(user_address) = LOWER($1)
+           )
+        "#,
     )
     .bind(&user_address)
     .fetch_one(state.db.pool())
@@ -168,8 +195,19 @@ pub async fn get_history(
             CASE WHEN t.processed THEN 'completed' ELSE 'pending' END as status,
             t.timestamp
         FROM transactions t
-        WHERE t.user_address IN (
-            SELECT address FROM users WHERE referrer = $1
+        WHERE LOWER(t.user_address) IN (
+            WITH referred_users AS (
+                SELECT address
+                FROM users
+                WHERE LOWER(referrer) = LOWER($1)
+            )
+            SELECT LOWER(address)
+            FROM referred_users
+            UNION
+            SELECT LOWER(uw.wallet_address)
+            FROM user_wallet_addresses uw
+            JOIN referred_users ru
+              ON LOWER(ru.address) = LOWER(uw.user_address)
         )
         ORDER BY t.timestamp DESC
         LIMIT $2 OFFSET $3
@@ -182,7 +220,24 @@ pub async fn get_history(
     .await?;
 
     let total_res: CountResult = sqlx::query_as(
-        "SELECT COUNT(*) as total FROM transactions WHERE user_address IN (SELECT address FROM users WHERE referrer = $1)"
+        r#"
+        SELECT COUNT(*) as total
+        FROM transactions t
+        WHERE LOWER(t.user_address) IN (
+            WITH referred_users AS (
+                SELECT address
+                FROM users
+                WHERE LOWER(referrer) = LOWER($1)
+            )
+            SELECT LOWER(address)
+            FROM referred_users
+            UNION
+            SELECT LOWER(uw.wallet_address)
+            FROM user_wallet_addresses uw
+            JOIN referred_users ru
+              ON LOWER(ru.address) = LOWER(uw.user_address)
+        )
+        "#,
     )
     .bind(&user_address)
     .fetch_one(state.db.pool())

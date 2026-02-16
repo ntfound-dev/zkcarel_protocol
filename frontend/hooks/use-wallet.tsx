@@ -10,6 +10,7 @@ import {
 } from "@/lib/api"
 import { emitEvent, onEvent } from "@/lib/events"
 import {
+  BTC_TESTNET_EXPLORER_BASE_URL,
   EVM_SEPOLIA_CHAIN_ID,
   EVM_SEPOLIA_CHAIN_ID_HEX,
   STARKNET_SEPOLIA_CHAIN_ID_TEXT,
@@ -55,6 +56,7 @@ interface WalletContextType extends WalletState {
   connect: (provider: WalletProviderType) => Promise<void>
   connectBtcWallet: (provider: BtcWalletProviderType) => Promise<void>
   linkBtcAddress: (address: string) => Promise<void>
+  sendBtcTransaction: (toAddress: string, amountSats: number) => Promise<string>
   connectWithSumo: (sumoToken: string, address?: string) => Promise<boolean>
   refreshPortfolio: () => Promise<void>
   refreshOnchainBalances: () => Promise<void>
@@ -93,7 +95,7 @@ const USDT_DECIMALS = 6
 const WBTC_TOKEN_ADDRESS =
   process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
   process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
-  "0x016f2d46ab5cc2244aeeb195cf76f75e7a316a92b71d56618c1bf1b69ab70998"
+  "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5"
 const WBTC_DECIMALS = 8
 const STRK_L1_TOKEN_ADDRESS =
   process.env.NEXT_PUBLIC_STRK_L1_TOKEN_ADDRESS ||
@@ -113,7 +115,7 @@ const STORAGE_KEYS = {
 }
 
 const XVERSE_PROVIDER_ID = "XverseProviders.BitcoinProvider"
-const XVERSE_CONNECT_MESSAGE = "ZkCarel wants to connect your Bitcoin testnet wallet."
+const XVERSE_CONNECT_MESSAGE = "Carel Protocol wants to connect your Bitcoin testnet wallet."
 
 function normalizeReferralCode(raw?: string | null): string | null {
   if (!raw) return null
@@ -300,13 +302,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             USDT_DECIMALS
           )
         }
-        if (resolved.WBTC === null) {
-          resolved.WBTC = await fetchStarknetTokenBalance(
+        // Backend can temporarily return 0/null during RPC hiccups.
+        // For WBTC, verify via direct Starknet wallet read and keep the higher value.
+        if (resolved.WBTC === null || resolved.WBTC <= 0) {
+          const walletWbtcBalance = await fetchStarknetTokenBalance(
             starknet,
             effectiveStarknetAddress,
             WBTC_TOKEN_ADDRESS,
             WBTC_DECIMALS
           )
+          if (typeof walletWbtcBalance === "number" && Number.isFinite(walletWbtcBalance)) {
+            if (resolved.WBTC === null) {
+              resolved.WBTC = walletWbtcBalance
+            } else {
+              resolved.WBTC = Math.max(resolved.WBTC, walletWbtcBalance)
+            }
+          }
         }
       }
 
@@ -326,6 +337,54 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             }
           }
         }
+      }
+
+      // Combine direct extension + public mempool-aware balance.
+      // We take the lower value when both exist to avoid stale extension reads
+      // after a fresh outgoing BTC transaction.
+      if (wallet.btcAddress) {
+        let directBtcBalance: number | null = null
+        const injectedBtc =
+          getInjectedBtc(wallet.btcProvider || "unisat") ||
+          getInjectedBtc("unisat") ||
+          getInjectedBtc("xverse") ||
+          getInjectedBtc("braavos_btc")
+        if (injectedBtc) {
+          directBtcBalance = await fetchBtcBalance(injectedBtc, wallet.btcAddress)
+          if (typeof directBtcBalance === "number" && Number.isFinite(directBtcBalance)) {
+            resolved.BTC = directBtcBalance
+          }
+        }
+        const publicBtcBalance = await fetchBtcBalanceFromPublicApis(wallet.btcAddress)
+        if (
+          typeof directBtcBalance === "number" &&
+          Number.isFinite(directBtcBalance) &&
+          typeof publicBtcBalance === "number" &&
+          Number.isFinite(publicBtcBalance)
+        ) {
+          resolved.BTC = Math.min(directBtcBalance, publicBtcBalance)
+        } else if (
+          (resolved.BTC === null || !Number.isFinite(resolved.BTC)) &&
+          typeof publicBtcBalance === "number" &&
+          Number.isFinite(publicBtcBalance)
+        ) {
+          resolved.BTC = publicBtcBalance
+        }
+        if (resolved.BTC === null) {
+          resolved.BTC = 0
+        }
+      }
+
+      if (effectiveStarknetAddress) {
+        if (resolved.STRK_L2 === null) resolved.STRK_L2 = 0
+        if (resolved.CAREL === null) resolved.CAREL = 0
+        if (resolved.USDC === null) resolved.USDC = 0
+        if (resolved.USDT === null) resolved.USDT = 0
+        if (resolved.WBTC === null) resolved.WBTC = 0
+      }
+      if (wallet.evmAddress) {
+        if (resolved.ETH === null) resolved.ETH = 0
+        if (resolved.STRK_L1 === null) resolved.STRK_L1 = 0
       }
 
       setWallet((prev) => ({
@@ -381,7 +440,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } finally {
       onchainRefreshInFlightRef.current = false
     }
-  }, [wallet.token, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress, wallet.provider, wallet.network, wallet.address])
+  }, [wallet.token, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress, wallet.btcProvider, wallet.provider, wallet.network, wallet.address])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -465,7 +524,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         linkWalletAddress({
           chain: "bitcoin",
           address: wallet.btcAddress,
-          provider: wallet.btcProvider || "xverse",
+          provider: wallet.btcProvider || "unisat",
         })
       )
     }
@@ -498,7 +557,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [wallet.token, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress, wallet.network, wallet.address, refreshOnchainBalances])
 
   const connect = useCallback(async (provider: WalletProviderType) => {
-    const message = `ZkCarel login ${Math.floor(Date.now() / 1000)}`
+    const message = `Carel Protocol login ${Math.floor(Date.now() / 1000)}`
     let address = ""
     let signature = ""
     let chainId = 1
@@ -772,55 +831,95 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return !!token
   }, [])
 
-  const connectBtcWallet = useCallback(async (provider: BtcWalletProviderType) => {
-    if (provider === "xverse") {
-      const { address: btcAddress, balance: btcBalance } = await connectBtcWalletViaXverse()
-      setWallet((prev) => ({
-        ...prev,
-        btcAddress,
-        btcProvider: provider,
-        balance: {
-          ...prev.balance,
-          BTC: typeof btcBalance === "number" ? btcBalance : prev.balance.BTC,
-        },
-        onchainBalance: {
-          ...prev.onchainBalance,
-          BTC: typeof btcBalance === "number" ? btcBalance : prev.onchainBalance.BTC,
-        },
-      }))
+  const ensureBtcAuthSession = useCallback(
+    async (btcAddress: string, injected: InjectedBtc | null): Promise<{ token: string; address: string }> => {
+      if (wallet.token && wallet.address) {
+        return { token: wallet.token, address: wallet.address }
+      }
+
+      const message = `Carel Protocol BTC login ${Math.floor(Date.now() / 1000)}`
+      const signature = await requestBtcAuthSignature(injected, message)
+      const referralCode = readPendingReferralCode()
+      const auth = await connectWallet({
+        address: btcAddress,
+        signature,
+        message,
+        chain_id: 0,
+        wallet_type: "bitcoin",
+        referral_code: referralCode,
+      })
+      const canonicalAddress = auth.user.address || btcAddress
+
       if (typeof window !== "undefined") {
-        window.localStorage.setItem(STORAGE_KEYS.btcAddress, btcAddress)
+        window.localStorage.setItem(STORAGE_KEYS.token, auth.token)
+        window.localStorage.setItem(STORAGE_KEYS.address, canonicalAddress)
+        window.localStorage.setItem(STORAGE_KEYS.provider, "")
+        window.localStorage.setItem(STORAGE_KEYS.network, "bitcoin")
+        window.localStorage.removeItem(STORAGE_KEYS.referralCode)
       }
-      if (wallet.token) {
-        try {
-          await linkWalletAddress({ chain: "bitcoin", address: btcAddress, provider })
-        } catch {
-          // keep local linked BTC even if backend link fails
-        }
+
+      return {
+        token: auth.token,
+        address: canonicalAddress,
       }
-      return
+    },
+    [wallet.address, wallet.token]
+  )
+
+  const connectBtcWallet = useCallback(async (provider: BtcWalletProviderType) => {
+    let btcAddress = ""
+    let btcBalance: number | null = null
+    let injected: InjectedBtc | null = null
+
+    if (provider === "xverse") {
+      const result = await connectBtcWalletViaXverse()
+      btcAddress = result.address
+      btcBalance = result.balance
+      injected = getInjectedBtc("xverse")
+    } else {
+      injected = getInjectedBtc(provider)
+      if (!injected) {
+        throw new Error(
+          "BTC wallet extension not detected. Install UniSat or Xverse (optional jika hanya pakai ETH/STRK)."
+        )
+      }
+      const accounts = await requestBtcAccounts(injected)
+      btcAddress = accounts?.[0] || ""
+      if (!btcAddress) {
+        throw new Error("BTC wallet not connected")
+      }
+      if (provider === "unisat") {
+        await ensureUniSatTestnet4(injected)
+      }
+      const btcNetwork = detectBtcAddressNetwork(btcAddress)
+      if (btcNetwork !== "testnet") {
+        throw new Error("BTC wallet must be on Bitcoin testnet (native).")
+      }
+      btcBalance = await fetchBtcBalance(injected, btcAddress)
+      if (btcBalance === null) {
+        btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
+      }
+      if (btcBalance === null) {
+        btcBalance = 0
+      }
     }
 
-    const injected = getInjectedBtc(provider)
-    if (!injected) {
-      throw new Error(
-        "BTC wallet extension not detected. Install Xverse wallet (optional jika hanya pakai ETH/STRK)."
-      )
+    let activeToken = wallet.token || null
+    let activeAddress = wallet.address || btcAddress
+    try {
+      const session = await ensureBtcAuthSession(btcAddress, injected)
+      activeToken = session.token
+      activeAddress = session.address
+    } catch (error) {
+      console.warn("BTC auth fallback to local-only session:", error)
     }
 
-    const accounts = await requestBtcAccounts(injected)
-    const btcAddress = accounts?.[0] || null
-    if (!btcAddress) {
-      throw new Error("BTC wallet not connected")
-    }
-    const btcNetwork = detectBtcAddressNetwork(btcAddress)
-    if (btcNetwork !== "testnet") {
-      throw new Error("BTC wallet must be on Bitcoin testnet (native).")
-    }
-
-    const btcBalance = await fetchBtcBalance(injected, btcAddress)
     setWallet((prev) => ({
       ...prev,
+      isConnected: prev.isConnected || Boolean(activeToken),
+      address: activeAddress,
+      token: activeToken,
+      network: prev.isConnected ? prev.network : "bitcoin",
       btcAddress,
       btcProvider: provider,
       balance: {
@@ -832,17 +931,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         BTC: typeof btcBalance === "number" ? btcBalance : prev.onchainBalance.BTC,
       },
     }))
+
     if (typeof window !== "undefined") {
       window.localStorage.setItem(STORAGE_KEYS.btcAddress, btcAddress)
+      if (activeToken) {
+        window.localStorage.setItem(STORAGE_KEYS.token, activeToken)
+        window.localStorage.setItem(STORAGE_KEYS.address, activeAddress)
+        window.localStorage.setItem(STORAGE_KEYS.network, "bitcoin")
+      }
     }
-    if (wallet.token) {
+
+    if (activeToken) {
       try {
         await linkWalletAddress({ chain: "bitcoin", address: btcAddress, provider })
       } catch {
         // keep local linked BTC even if backend link fails
       }
     }
-  }, [wallet.token])
+  }, [ensureBtcAuthSession, wallet.address, wallet.token])
 
   const linkBtcAddress = useCallback(async (address: string) => {
     const btcAddress = address.trim()
@@ -861,10 +967,30 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       getInjectedBtc("unisat")
     if (injected) {
       btcBalance = await fetchBtcBalance(injected, btcAddress)
+      if (btcBalance === null) {
+        btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
+      }
+      if (btcBalance === null) {
+        btcBalance = 0
+      }
+    }
+
+    let activeToken = wallet.token || null
+    let activeAddress = wallet.address || btcAddress
+    try {
+      const session = await ensureBtcAuthSession(btcAddress, injected)
+      activeToken = session.token
+      activeAddress = session.address
+    } catch (error) {
+      console.warn("Manual BTC auth fallback to local-only session:", error)
     }
 
     setWallet((prev) => ({
       ...prev,
+      isConnected: prev.isConnected || Boolean(activeToken),
+      address: activeAddress,
+      token: activeToken,
+      network: prev.isConnected ? prev.network : "bitcoin",
       btcAddress,
       balance: {
         ...prev.balance,
@@ -878,15 +1004,126 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (typeof window !== "undefined") {
       window.localStorage.setItem(STORAGE_KEYS.btcAddress, btcAddress)
+      if (activeToken) {
+        window.localStorage.setItem(STORAGE_KEYS.token, activeToken)
+        window.localStorage.setItem(STORAGE_KEYS.address, activeAddress)
+        window.localStorage.setItem(STORAGE_KEYS.network, "bitcoin")
+      }
     }
-    if (wallet.token) {
+    if (activeToken) {
       try {
         await linkWalletAddress({ chain: "bitcoin", address: btcAddress, provider: "manual" })
       } catch {
         // keep local linked BTC even if backend link fails
       }
     }
-  }, [wallet.token])
+  }, [ensureBtcAuthSession, wallet.address, wallet.token])
+
+  const sendBtcTransaction = useCallback(
+    async (toAddress: string, amountSats: number): Promise<string> => {
+      if (!wallet.btcAddress) {
+        throw new Error("Connect BTC wallet first before sending.")
+      }
+      const destination = normalizeBtcAddress(toAddress)
+      if (!destination) {
+        throw new Error("Invalid BTC destination address.")
+      }
+      if (detectBtcAddressNetwork(destination) !== "testnet") {
+        throw new Error("Destination BTC address must be Bitcoin testnet.")
+      }
+      if (!Number.isFinite(amountSats) || amountSats <= 0) {
+        throw new Error("BTC amount must be greater than 0 sat.")
+      }
+      const roundedSats = Math.floor(amountSats)
+      if (roundedSats <= 0) {
+        throw new Error("BTC amount must be at least 1 sat.")
+      }
+
+      const activeProvider = wallet.btcProvider || "unisat"
+      let xverseError: unknown = null
+      if (activeProvider === "xverse") {
+        try {
+          const txHash = await sendBtcTransferViaXverse(destination, roundedSats)
+          const sentAmount = roundedSats / 100_000_000
+          setWallet((prev) => {
+            const baseBalance =
+              typeof prev.onchainBalance.BTC === "number" && Number.isFinite(prev.onchainBalance.BTC)
+                ? prev.onchainBalance.BTC
+                : prev.balance.BTC
+            const nextBalance = Math.max(0, (baseBalance || 0) - sentAmount)
+            return {
+              ...prev,
+              balance: {
+                ...prev.balance,
+                BTC: nextBalance,
+              },
+              onchainBalance: {
+                ...prev.onchainBalance,
+                BTC: nextBalance,
+              },
+            }
+          })
+          if (typeof window !== "undefined") {
+            window.setTimeout(() => {
+              void refreshOnchainBalances()
+            }, 1200)
+          }
+          return txHash
+        } catch (error) {
+          xverseError = error
+        }
+      }
+
+      const injected =
+        getInjectedBtc(activeProvider) ||
+        getInjectedBtc("unisat") ||
+        getInjectedBtc("xverse") ||
+        getInjectedBtc("braavos_btc")
+      if (!injected) {
+        if (xverseError) {
+          throw normalizeWalletError(xverseError, "Failed to send BTC from Xverse wallet.")
+        }
+        throw new Error("BTC wallet extension not detected. Install UniSat or Xverse.")
+      }
+      if (activeProvider === "unisat") {
+        await ensureUniSatTestnet4(injected)
+      }
+      try {
+        const txHash = await sendBtcTransferWithInjectedWallet(injected, destination, roundedSats)
+        const sentAmount = roundedSats / 100_000_000
+        setWallet((prev) => {
+          const baseBalance =
+            typeof prev.onchainBalance.BTC === "number" && Number.isFinite(prev.onchainBalance.BTC)
+              ? prev.onchainBalance.BTC
+              : prev.balance.BTC
+          const nextBalance = Math.max(0, (baseBalance || 0) - sentAmount)
+          return {
+            ...prev,
+            balance: {
+              ...prev.balance,
+              BTC: nextBalance,
+            },
+            onchainBalance: {
+              ...prev.onchainBalance,
+              BTC: nextBalance,
+            },
+          }
+        })
+        if (typeof window !== "undefined") {
+          window.setTimeout(() => {
+            void refreshOnchainBalances()
+          }, 1200)
+        }
+        return txHash
+      } catch (error) {
+        if (xverseError) {
+          throw normalizeWalletError(xverseError, "Failed to send BTC from Xverse wallet.")
+        }
+        throw normalizeWalletError(error, "Failed to send BTC from wallet.")
+      }
+    },
+    [refreshOnchainBalances, wallet.btcAddress, wallet.btcProvider]
+  )
 
   const disconnect = useCallback(() => {
     resetWalletSession()
@@ -904,6 +1141,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         connect,
         connectBtcWallet,
         linkBtcAddress,
+        sendBtcTransaction,
         connectWithSumo,
         refreshPortfolio,
         refreshOnchainBalances,
@@ -1009,7 +1247,13 @@ type InjectedBtc = {
   request?: (payload: { method: string; params?: unknown[] }) => Promise<any>
   getAccounts?: () => Promise<string[]>
   requestAccounts?: () => Promise<string[]>
+  signMessage?: (message: string, type?: string) => Promise<any>
+  sendBitcoin?: (address: string, amount: number) => Promise<any>
   getBalance?: (address?: string) => Promise<any>
+  getBalanceV2?: () => Promise<any>
+  getChain?: () => Promise<any>
+  switchChain?: (chain: string) => Promise<any>
+  disconnect?: () => Promise<void>
 }
 
 function isInjectedBtc(candidate: unknown): candidate is InjectedBtc {
@@ -1095,7 +1339,12 @@ function getInjectedBtc(provider: BtcWalletProviderType): InjectedBtc | null {
     )
   }
   if (provider === "unisat") {
-    return pickInjectedBtc(anyWindow.unisat, genericBtc)
+    return pickInjectedBtc(
+      anyWindow.unisat_wallet,
+      anyWindow.unisatWallet,
+      anyWindow.unisat,
+      genericBtc
+    )
   }
   return genericBtc
 }
@@ -1209,7 +1458,7 @@ async function signStarknetMessage(
   const shortMessage = toShortString(message)
   const typedData = {
     domain: {
-      name: "ZkCarel",
+      name: "Carel Protocol",
       version: "1",
       chainId: chainIdOverride || injected.chainId || STARKNET_SEPOLIA_CHAIN_ID_TEXT,
     },
@@ -1682,14 +1931,14 @@ function scaleBigIntBalance(value: bigint, decimals: number): number | null {
 
 async function requestBtcAccounts(injected: InjectedBtc): Promise<string[] | null> {
   const attempts = [
-    () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet" }] }),
-    () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet" }] }),
-    () => injected.request?.({ method: "getAccounts", params: ["testnet"] }),
-    () => injected.request?.({ method: "requestAccounts", params: ["testnet"] }),
-    () => injected.request?.({ method: "getAccounts" }),
-    () => injected.request?.({ method: "requestAccounts" }),
-    () => injected.getAccounts?.(),
     () => injected.requestAccounts?.(),
+    () => injected.request?.({ method: "requestAccounts" }),
+    () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet" }] }),
+    () => injected.request?.({ method: "requestAccounts", params: ["testnet"] }),
+    () => injected.getAccounts?.(),
+    () => injected.request?.({ method: "getAccounts" }),
+    () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet" }] }),
+    () => injected.request?.({ method: "getAccounts", params: ["testnet"] }),
   ]
 
   for (const attempt of attempts) {
@@ -1704,6 +1953,126 @@ async function requestBtcAccounts(injected: InjectedBtc): Promise<string[] | nul
     }
   }
   return null
+}
+
+function normalizeBtcAuthSignature(raw: unknown): string {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim()
+    if (trimmed) {
+      if (trimmed.startsWith("0x")) {
+        const body = trimmed
+          .slice(2)
+          .replace(/[^0-9a-f]/gi, "")
+          .toLowerCase()
+        if (body.length >= 64) {
+          return `0x${body}`
+        }
+        return `0x${(body + "0".repeat(64)).slice(0, 64)}`
+      }
+      const hex = Array.from(new TextEncoder().encode(trimmed))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("")
+      if (hex.length >= 64) {
+        return `0x${hex.slice(0, 64)}`
+      }
+      return `0x${(hex + "0".repeat(64)).slice(0, 64)}`
+    }
+  }
+  return `0x${"b".repeat(64)}`
+}
+
+async function requestBtcAuthSignature(
+  injected: InjectedBtc | null,
+  message: string
+): Promise<string> {
+  if (!injected) {
+    return `0x${"b".repeat(64)}`
+  }
+  const attempts = [
+    () => injected.signMessage?.(message),
+    () => injected.signMessage?.(message, "ecdsa"),
+    () => injected.request?.({ method: "signMessage", params: [message] }),
+    () => injected.request?.({ method: "signMessage", params: [message, "ecdsa"] }),
+    () => injected.request?.({ method: "signMessage", params: [{ message }] }),
+    () => injected.request?.({ method: "personal_sign", params: [message] }),
+  ]
+  for (const attempt of attempts) {
+    try {
+      const result = await attempt()
+      return normalizeBtcAuthSignature(result)
+    } catch {
+      // try next
+    }
+  }
+  return `0x${"b".repeat(64)}`
+}
+
+type BtcChainInfo = {
+  enum?: string
+  name?: string
+  network?: string
+}
+
+function normalizeBtcChainInfo(raw: unknown): BtcChainInfo | null {
+  if (!raw || typeof raw !== "object") return null
+  const record = raw as Record<string, unknown>
+  const enumValue = typeof record.enum === "string" ? record.enum : undefined
+  const nameValue = typeof record.name === "string" ? record.name : undefined
+  const networkValue = typeof record.network === "string" ? record.network : undefined
+  if (!enumValue && !nameValue && !networkValue) return null
+  return {
+    enum: enumValue,
+    name: nameValue,
+    network: networkValue,
+  }
+}
+
+async function getBtcChainInfo(injected: InjectedBtc): Promise<BtcChainInfo | null> {
+  const attempts = [
+    () => injected.getChain?.(),
+    () => injected.request?.({ method: "getChain" }),
+  ]
+  for (const attempt of attempts) {
+    try {
+      const raw = await attempt()
+      const normalized = normalizeBtcChainInfo(raw)
+      if (normalized) return normalized
+    } catch {
+      // try next
+    }
+  }
+  return null
+}
+
+async function switchBtcChain(injected: InjectedBtc, chainEnum: string): Promise<BtcChainInfo | null> {
+  const attempts = [
+    () => injected.switchChain?.(chainEnum),
+    () => injected.request?.({ method: "switchChain", params: [chainEnum] }),
+  ]
+  for (const attempt of attempts) {
+    try {
+      const raw = await attempt()
+      const normalized = normalizeBtcChainInfo(raw)
+      if (normalized) return normalized
+    } catch {
+      // try next
+    }
+  }
+  return null
+}
+
+async function ensureUniSatTestnet4(injected: InjectedBtc): Promise<void> {
+  const current = await getBtcChainInfo(injected)
+  if (current?.enum === "BITCOIN_TESTNET4") return
+
+  await switchBtcChain(injected, "BITCOIN_TESTNET4")
+
+  const afterSwitch = await getBtcChainInfo(injected)
+  if (afterSwitch?.enum && afterSwitch.enum !== "BITCOIN_TESTNET4") {
+    throw new Error(
+      "UniSat wallet must be on Bitcoin Testnet4. Please switch network to BITCOIN_TESTNET4 in UniSat."
+    )
+  }
 }
 
 type SatsConnectResultLike<T> =
@@ -1730,7 +2099,7 @@ function normalizeXverseConnectError(error: unknown): Error {
     const message = error.message.trim()
     if (/provider.*not found|not installed|extension/i.test(message)) {
       return new Error(
-        "BTC wallet extension not detected. Install Xverse wallet (optional jika hanya pakai ETH/STRK)."
+        "BTC wallet extension not detected. Install UniSat or Xverse (optional jika hanya pakai ETH/STRK)."
       )
     }
     if (/reject|cancel/i.test(message)) {
@@ -1770,13 +2139,123 @@ function isXverseTestnetNetwork(name: unknown): boolean {
   )
 }
 
+function normalizeBtcTxHash(raw: unknown): string | null {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+    const compact = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed
+    if (/^[0-9a-fA-F]{64}$/.test(compact)) {
+      return compact.toLowerCase()
+    }
+    return null
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const nested = normalizeBtcTxHash(item)
+      if (nested) return nested
+    }
+    return null
+  }
+  if (raw && typeof raw === "object") {
+    const record = raw as Record<string, unknown>
+    const keys = [
+      "txid",
+      "txId",
+      "tx_hash",
+      "txHash",
+      "transaction_hash",
+      "transactionHash",
+      "hash",
+      "result",
+      "data",
+    ]
+    for (const key of keys) {
+      if (!(key in record)) continue
+      const nested = normalizeBtcTxHash(record[key])
+      if (nested) return nested
+    }
+  }
+  return null
+}
+
+async function sendBtcTransferWithInjectedWallet(
+  injected: InjectedBtc,
+  toAddress: string,
+  amountSats: number
+): Promise<string> {
+  const recipients = [{ address: toAddress, amount: amountSats }]
+  const attempts = [
+    () => injected.sendBitcoin?.(toAddress, amountSats),
+    () => injected.request?.({ method: "sendBitcoin", params: [toAddress, amountSats] }),
+    () =>
+      injected.request?.({
+        method: "sendBitcoin",
+        params: [{ address: toAddress, amount: amountSats }],
+      }),
+    () =>
+      injected.request?.({
+        method: "sendTransfer",
+        params: [{ recipients }],
+      }),
+    () =>
+      injected.request?.({
+        method: "sendTransfer",
+        params: [recipients],
+      }),
+  ]
+
+  let lastError: unknown = null
+  for (const attempt of attempts) {
+    try {
+      const result = await attempt()
+      const txHash = normalizeBtcTxHash(result)
+      if (txHash) return txHash
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw normalizeWalletError(lastError, "Failed to send BTC transaction from wallet.")
+}
+
+async function sendBtcTransferViaXverse(toAddress: string, amountSats: number): Promise<string> {
+  const sats = await import("sats-connect")
+  const providerId = sats.DefaultAdaptersInfo?.xverse?.id || XVERSE_PROVIDER_ID
+  if (!sats.isProviderInstalled(providerId)) {
+    throw new Error(
+      "BTC wallet extension not detected. Install UniSat or Xverse (optional jika hanya pakai ETH/STRK)."
+    )
+  }
+  const request = sats.request as (
+    method: string,
+    params: unknown,
+    providerId?: string
+  ) => Promise<SatsConnectResultLike<unknown>>
+  const response = await request(
+    "sendTransfer",
+    {
+      recipients: [{ address: toAddress, amount: amountSats }],
+    },
+    providerId
+  )
+  const result = unwrapSatsConnectResult<Record<string, unknown>>(
+    response,
+    "Failed to send BTC from Xverse wallet."
+  )
+  const txHash = normalizeBtcTxHash(result)
+  if (!txHash) {
+    throw new Error("Xverse did not return a BTC transaction hash.")
+  }
+  return txHash
+}
+
 async function connectBtcWalletViaXverse(): Promise<{ address: string; balance: number | null }> {
   try {
     const sats = await import("sats-connect")
     const providerId = sats.DefaultAdaptersInfo?.xverse?.id || XVERSE_PROVIDER_ID
     if (!sats.isProviderInstalled(providerId)) {
       throw new Error(
-        "BTC wallet extension not detected. Install Xverse wallet (optional jika hanya pakai ETH/STRK)."
+        "BTC wallet extension not detected. Install UniSat or Xverse (optional jika hanya pakai ETH/STRK)."
       )
     }
     const request = sats.request as (
@@ -1913,6 +2392,8 @@ function normalizeBtcAddress(value: string): string | null {
 
 async function fetchBtcBalance(injected: InjectedBtc, address: string): Promise<number | null> {
   const attempts = [
+    () => injected.getBalanceV2?.(),
+    () => injected.request?.({ method: "getBalanceV2" }),
     () => injected.getBalance?.(address),
     () => injected.getBalance?.(),
     () => injected.request?.({ method: "getBalance", params: [address] }),
@@ -1931,20 +2412,105 @@ async function fetchBtcBalance(injected: InjectedBtc, address: string): Promise<
   return null
 }
 
+async function fetchBtcBalanceFromPublicApis(address: string): Promise<number | null> {
+  const normalizedAddress = address.trim()
+  if (!normalizedAddress) return null
+
+  const base = BTC_TESTNET_EXPLORER_BASE_URL.trim().replace(/\/+$/, "")
+  const candidates = [
+    `${base}/api/address/${normalizedAddress}`,
+    `https://mempool.space/testnet/api/address/${normalizedAddress}`,
+    `https://blockstream.info/testnet/api/address/${normalizedAddress}`,
+  ]
+  const seen = new Set<string>()
+
+  for (const url of candidates) {
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      })
+      if (!response.ok) continue
+      const payload = await response.json()
+      const parsed = parseExplorerAddressBalance(payload)
+      if (parsed !== null) return parsed
+    } catch {
+      // try next endpoint
+    }
+  }
+
+  return null
+}
+
+function parseExplorerAddressBalance(payload: any): number | null {
+  if (!payload || typeof payload !== "object") return null
+  const chainFunded = Number(payload?.chain_stats?.funded_txo_sum)
+  const chainSpent = Number(payload?.chain_stats?.spent_txo_sum)
+  const mempoolFunded = Number(payload?.mempool_stats?.funded_txo_sum)
+  const mempoolSpent = Number(payload?.mempool_stats?.spent_txo_sum)
+
+  if (Number.isFinite(chainFunded) && Number.isFinite(chainSpent)) {
+    const confirmedSats = Math.max(0, chainFunded - chainSpent)
+    const pendingSats =
+      Number.isFinite(mempoolFunded) && Number.isFinite(mempoolSpent)
+        ? mempoolFunded - mempoolSpent
+        : 0
+    const totalSats = Math.max(0, confirmedSats + pendingSats)
+    return totalSats / 100_000_000
+  }
+
+  const fallback = Number(
+    payload?.balance ?? payload?.sats ?? payload?.confirmed ?? payload?.total ?? payload?.amount
+  )
+  if (!Number.isFinite(fallback)) return null
+  return fallback / 100_000_000
+}
+
 function normalizeBtcBalance(raw: any): number | null {
   if (raw === null || raw === undefined) return null
-  const candidate =
-    typeof raw === "number"
-      ? raw
-      : typeof raw === "string"
-      ? Number(raw)
-      : typeof raw === "object"
-      ? Number(raw.total ?? raw.confirmed ?? raw.balance ?? raw.amount ?? raw.satoshi)
-      : NaN
-  if (!Number.isFinite(candidate)) return null
-  // Heuristic: values larger than 1e6 are likely satoshis.
-  if (candidate > 1_000_000) return candidate / 100_000_000
-  return candidate
+  const normalizeScaled = (value: number): number | null => {
+    if (!Number.isFinite(value) || value < 0) return null
+    return value
+  }
+
+  if (typeof raw === "number" || typeof raw === "string") {
+    const candidate = Number(raw)
+    if (!Number.isFinite(candidate)) return null
+    if (Number.isInteger(candidate) && candidate > 100) {
+      return normalizeScaled(candidate / 100_000_000)
+    }
+    return normalizeScaled(candidate)
+  }
+
+  if (typeof raw === "object") {
+    const totalCandidate = Number(raw.total ?? raw.balance ?? raw.amount ?? raw.finalizedBalance)
+    const confirmedCandidate = Number(raw.confirmed ?? raw.confirmedBalance)
+    const unconfirmedCandidate = Number(
+      raw.unconfirmed ?? raw.unconfirmedBalance ?? raw.pending ?? raw.pendingBalance
+    )
+    const candidate =
+      Number.isFinite(confirmedCandidate) && Number.isFinite(unconfirmedCandidate)
+        ? confirmedCandidate + unconfirmedCandidate
+        : Number.isFinite(totalCandidate)
+        ? totalCandidate
+        : Number(raw.satoshi ?? raw.satoshis)
+    if (!Number.isFinite(candidate)) return null
+    const keys = new Set(Object.keys(raw))
+    const looksLikeSatoshiPayload =
+      keys.has("satoshi") ||
+      keys.has("satoshis") ||
+      keys.has("confirmed") ||
+      keys.has("unconfirmed") ||
+      Number.isInteger(candidate)
+    if (looksLikeSatoshiPayload) {
+      return normalizeScaled(candidate / 100_000_000)
+    }
+    return normalizeScaled(candidate)
+  }
+
+  return null
 }
 
 function normalizeTokenBalance(raw: any, decimals: number): number | null {

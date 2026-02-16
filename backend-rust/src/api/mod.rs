@@ -1,8 +1,8 @@
 // src/api/mod.rs
 
 // Re-export your API endpoint modules here (sesuaikan kalau ada/tdk ada)
-pub mod ai;
 pub mod admin;
+pub mod ai;
 pub mod analytics;
 pub mod anonymous_credentials;
 pub mod auth;
@@ -11,6 +11,7 @@ pub mod charts;
 pub mod dark_pool;
 pub mod deposit;
 pub mod faucet;
+pub mod garden;
 pub mod health;
 pub mod leaderboard;
 pub mod limit_order;
@@ -33,18 +34,60 @@ pub mod webhooks;
 
 use crate::error::{AppError, Result};
 use axum::http::{header::AUTHORIZATION, HeaderMap};
+use redis::aio::ConnectionManager;
+use std::{collections::HashMap, sync::OnceLock, time::Instant};
 use tokio::time::{timeout, Duration};
 
 // AppState definition
 use crate::config::Config;
 use crate::db::Database;
-use r2d2::Pool;
-use r2d2_redis::RedisConnectionManager;
+
+const USER_TOUCH_TIMEOUT_MS: u64 = 1200;
+const USER_TOUCH_MIN_INTERVAL_SECS: u64 = 30;
+const USER_TOUCH_CACHE_MAX_ENTRIES: usize = 200_000;
+const USER_TOUCH_CACHE_RETENTION_SECS: u64 = 600;
+
+static USER_TOUCH_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, Instant>>> = OnceLock::new();
+
+fn user_touch_cache() -> &'static tokio::sync::RwLock<HashMap<String, Instant>> {
+    USER_TOUCH_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+async fn should_touch_user(address: &str) -> bool {
+    let cache = user_touch_cache();
+    let now = Instant::now();
+    let min_interval = Duration::from_secs(USER_TOUCH_MIN_INTERVAL_SECS);
+
+    {
+        let guard = cache.read().await;
+        if let Some(last_seen) = guard.get(address) {
+            if now.duration_since(*last_seen) < min_interval {
+                return false;
+            }
+        }
+    }
+
+    let mut guard = cache.write().await;
+    if let Some(last_seen) = guard.get(address) {
+        if now.duration_since(*last_seen) < min_interval {
+            return false;
+        }
+    }
+
+    guard.insert(address.to_string(), now);
+
+    if guard.len() > USER_TOUCH_CACHE_MAX_ENTRIES {
+        let retention = Duration::from_secs(USER_TOUCH_CACHE_RETENTION_SECS);
+        guard.retain(|_, ts| now.duration_since(*ts) < retention);
+    }
+
+    true
+}
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
-    pub redis: Pool<RedisConnectionManager>,
+    pub redis: ConnectionManager,
     pub config: Config,
 }
 
@@ -60,25 +103,21 @@ pub async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<Strin
         .ok_or_else(|| AppError::AuthError("Invalid Authorization scheme".to_string()))?;
 
     let user_address = auth::extract_user_from_token(token, &state.config.jwt_secret).await?;
-    // Do not block API path when DB is temporarily slow.
-    match timeout(Duration::from_millis(800), state.db.create_user(&user_address)).await {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => tracing::warn!("require_user create_user failed for {}: {}", user_address, err),
-        Err(_) => tracing::warn!("require_user create_user timed out for {}", user_address),
-    }
-    match timeout(
-        Duration::from_millis(800),
-        state.db.update_last_active(&user_address),
-    )
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => tracing::warn!(
-            "require_user update_last_active failed for {}: {}",
-            user_address,
-            err
-        ),
-        Err(_) => tracing::warn!("require_user update_last_active timed out for {}", user_address),
+    if should_touch_user(&user_address).await {
+        match timeout(
+            Duration::from_millis(USER_TOUCH_TIMEOUT_MS),
+            state.db.touch_user(&user_address),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::warn!(
+                "require_user touch_user failed for {}: {}",
+                user_address,
+                err
+            ),
+            Err(_) => tracing::warn!("require_user touch_user timed out for {}", user_address),
+        }
     }
     Ok(user_address)
 }

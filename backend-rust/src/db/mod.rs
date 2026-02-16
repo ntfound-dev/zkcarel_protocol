@@ -22,6 +22,8 @@ mod tests {
             database_url: database_url.to_string(),
             database_max_connections: 1,
             redis_url: "redis://localhost:6379".to_string(),
+            point_calculator_batch_size: 100,
+            point_calculator_max_batches_per_tick: 1,
             starknet_rpc_url: "http://localhost:5050".to_string(),
             starknet_chain_id: "SN_MAIN".to_string(),
             ethereum_rpc_url: "http://localhost:8545".to_string(),
@@ -47,7 +49,6 @@ mod tests {
             token_eth_address: None,
             token_btc_address: None,
             token_strk_l1_address: None,
-            faucet_wallet_private_key: None,
             faucet_btc_amount: None,
             faucet_strk_amount: None,
             faucet_carel_amount: None,
@@ -103,6 +104,37 @@ mod tests {
         let result = Database::new(&config).await;
         assert!(result.is_err());
     }
+
+    #[test]
+    fn normalize_wallet_address_is_case_insensitive_per_chain() {
+        let btc =
+            normalize_wallet_address_value("bitcoin", "TB1QDK7PD4347C9KR9Z60GCAXPPGF7ZWXNC2KUKSAV");
+        assert_eq!(btc, "tb1qdk7pd4347c9kr9z60gcaxppgf7zwxnc2kuksav");
+
+        let evm = normalize_wallet_address_value("evm", "0xAbCdEF1234");
+        assert_eq!(evm, "0xabcdef1234");
+
+        let starknet = normalize_wallet_address_value("starknet", "0X00AaBb");
+        assert_eq!(starknet, "0xaabb");
+    }
+
+    #[test]
+    fn normalize_starknet_wallet_address_removes_leading_zeroes() {
+        assert_eq!(
+            normalize_wallet_address_value(
+                "starknet",
+                "0x0469de079832d5da0591fc5f8fd2957f70b908d62c5d0dcb057d030cfc827705"
+            ),
+            "0x469de079832d5da0591fc5f8fd2957f70b908d62c5d0dcb057d030cfc827705"
+        );
+        assert_eq!(normalize_wallet_address_value("starknet", "0x0000"), "0x0");
+    }
+
+    #[test]
+    fn normalize_wallet_chain_lowercases_value() {
+        assert_eq!(normalize_wallet_chain_value("BitCoin "), "bitcoin");
+        assert_eq!(normalize_wallet_chain_value(" EVM"), "evm");
+    }
 }
 
 impl Database {
@@ -141,19 +173,27 @@ impl Database {
         Ok(())
     }
 
+    pub async fn touch_user(&self, address: &str) -> Result<()> {
+        ensure_varchar_max("users.address", address, 66)?;
+
+        sqlx::query(
+            "INSERT INTO users (address, last_active)
+             VALUES ($1, NOW())
+             ON CONFLICT (address)
+             DO UPDATE SET last_active = NOW()",
+        )
+        .bind(address)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn get_user(&self, address: &str) -> Result<Option<User>> {
         let row = sqlx::query_as::<_, User>("SELECT * FROM users WHERE address = $1")
             .bind(address)
             .fetch_optional(&self.pool)
             .await?;
         Ok(row)
-    }
-
-    pub async fn get_or_create_user(&self, address: &str) -> Result<User> {
-        self.create_user(address).await?;
-        self.get_user(address)
-            .await?
-            .ok_or_else(|| AppError::NotFound("User not found".to_string()))
     }
 
     pub async fn find_user_by_sumo_subject(&self, sumo_subject: &str) -> Result<Option<String>> {
@@ -277,14 +317,60 @@ impl Database {
         wallet_address: &str,
         provider: Option<&str>,
     ) -> Result<()> {
+        let chain = normalize_wallet_chain_value(chain);
+        let wallet_address = normalize_wallet_address_value(&chain, wallet_address);
+
         ensure_varchar_max("user_wallet_addresses.user_address", user_address, 66)?;
-        ensure_varchar_max("user_wallet_addresses.chain", chain, 16)?;
-        ensure_varchar_max("user_wallet_addresses.wallet_address", wallet_address, 128)?;
+        ensure_varchar_max("user_wallet_addresses.chain", &chain, 16)?;
+        ensure_varchar_max("user_wallet_addresses.wallet_address", &wallet_address, 128)?;
         if let Some(provider) = provider {
             ensure_varchar_max("user_wallet_addresses.provider", provider, 32)?;
         }
 
-        sqlx::query(
+        let existing_owner: Option<String> = if chain == "starknet" {
+            sqlx::query_scalar(
+                r#"
+                SELECT user_address
+                FROM user_wallet_addresses
+                WHERE chain = $1
+                  AND (
+                    CASE
+                      WHEN wallet_address ~* '^0x'
+                        THEN '0x' || COALESCE(NULLIF(LTRIM(LOWER(SUBSTRING(wallet_address FROM 3)), '0'), ''), '0')
+                      ELSE LOWER(wallet_address)
+                    END
+                  ) = $2
+                ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(&chain)
+            .bind(&wallet_address)
+            .fetch_optional(&self.pool)
+            .await?
+        } else {
+            sqlx::query_scalar(
+                "SELECT user_address
+                 FROM user_wallet_addresses
+                 WHERE chain = $1 AND LOWER(wallet_address) = LOWER($2)
+                 ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                 LIMIT 1",
+            )
+            .bind(&chain)
+            .bind(&wallet_address)
+            .fetch_optional(&self.pool)
+            .await?
+        };
+
+        if let Some(owner) = existing_owner {
+            if !owner.eq_ignore_ascii_case(user_address) {
+                return Err(AppError::BadRequest(
+                    "Wallet address already linked to another user".to_string(),
+                ));
+            }
+        }
+
+        let exec_result = sqlx::query(
             r#"
             INSERT INTO user_wallet_addresses (user_address, chain, wallet_address, provider)
             VALUES ($1, $2, $3, $4)
@@ -295,11 +381,22 @@ impl Database {
             "#,
         )
         .bind(user_address)
-        .bind(chain)
-        .bind(wallet_address)
+        .bind(&chain)
+        .bind(&wallet_address)
         .bind(provider)
         .execute(&self.pool)
-        .await?;
+        .await;
+
+        if let Err(err) = exec_result {
+            if let Some(db_err) = err.as_database_error() {
+                if db_err.code().as_deref() == Some("23505") {
+                    return Err(AppError::BadRequest(
+                        "Wallet address already linked to another user".to_string(),
+                    ));
+                }
+            }
+            return Err(AppError::Database(err));
+        }
 
         Ok(())
     }
@@ -309,19 +406,54 @@ impl Database {
         wallet_address: &str,
         chain: Option<&str>,
     ) -> Result<Option<String>> {
-        ensure_varchar_max("user_wallet_addresses.wallet_address", wallet_address, 128)?;
+        let normalized_chain = chain.map(normalize_wallet_chain_value);
+        let normalized_wallet_address = normalize_wallet_address_value(
+            normalized_chain.as_deref().unwrap_or("unknown"),
+            wallet_address,
+        );
+
+        ensure_varchar_max(
+            "user_wallet_addresses.wallet_address",
+            &normalized_wallet_address,
+            128,
+        )?;
         if let Some(chain) = chain {
-            ensure_varchar_max("user_wallet_addresses.chain", chain, 16)?;
-            let row: Option<String> = sqlx::query_scalar(
-                "SELECT user_address
-                 FROM user_wallet_addresses
-                 WHERE LOWER(wallet_address) = LOWER($1) AND chain = $2
-                 LIMIT 1",
-            )
-            .bind(wallet_address)
-            .bind(chain)
-            .fetch_optional(&self.pool)
-            .await?;
+            let chain = normalize_wallet_chain_value(chain);
+            ensure_varchar_max("user_wallet_addresses.chain", &chain, 16)?;
+            let row: Option<String> = if chain == "starknet" {
+                sqlx::query_scalar(
+                    r#"
+                    SELECT user_address
+                    FROM user_wallet_addresses
+                    WHERE chain = $1
+                      AND (
+                        CASE
+                          WHEN wallet_address ~* '^0x'
+                            THEN '0x' || COALESCE(NULLIF(LTRIM(LOWER(SUBSTRING(wallet_address FROM 3)), '0'), ''), '0')
+                          ELSE LOWER(wallet_address)
+                        END
+                      ) = $2
+                    ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                    LIMIT 1
+                    "#,
+                )
+                .bind(&chain)
+                .bind(&normalized_wallet_address)
+                .fetch_optional(&self.pool)
+                .await?
+            } else {
+                sqlx::query_scalar(
+                    "SELECT user_address
+                     FROM user_wallet_addresses
+                     WHERE LOWER(wallet_address) = LOWER($1) AND chain = $2
+                     ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                     LIMIT 1",
+                )
+                .bind(&normalized_wallet_address)
+                .bind(&chain)
+                .fetch_optional(&self.pool)
+                .await?
+            };
             return Ok(row);
         }
 
@@ -332,7 +464,7 @@ impl Database {
              ORDER BY updated_at DESC
              LIMIT 1",
         )
-        .bind(wallet_address)
+        .bind(&normalized_wallet_address)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
@@ -472,12 +604,30 @@ impl Database {
         ensure_varchar_max("transactions.tx_hash", &tx.tx_hash, 66)?;
         ensure_varchar_max("transactions.user_address", &tx.user_address, 66)?;
         ensure_varchar_max("transactions.tx_type", &tx.tx_type, 20)?;
+        if tx.user_address.trim().is_empty() {
+            return Err(AppError::BadRequest(
+                "transactions.user_address cannot be empty".to_string(),
+            ));
+        }
         if let Some(token_in) = tx.token_in.as_deref() {
             ensure_varchar_max("transactions.token_in", token_in, 66)?;
         }
         if let Some(token_out) = tx.token_out.as_deref() {
             ensure_varchar_max("transactions.token_out", token_out, 66)?;
         }
+
+        let mut db_tx = self.pool.begin().await?;
+
+        // Ensure FK target exists for indexed on-chain addresses that have not touched auth flows yet.
+        sqlx::query(
+            "INSERT INTO users (address, last_active)
+             VALUES ($1, NOW())
+             ON CONFLICT (address)
+             DO UPDATE SET last_active = NOW()",
+        )
+        .bind(&tx.user_address)
+        .execute(&mut *db_tx)
+        .await?;
 
         sqlx::query(
             r#"
@@ -501,8 +651,10 @@ impl Database {
         .bind(tx.fee_paid)
         .bind(tx.points_earned)
         .bind(tx.timestamp)
-        .execute(&self.pool)
+        .execute(&mut *db_tx)
         .await?;
+
+        db_tx.commit().await?;
         Ok(())
     }
 
@@ -538,6 +690,47 @@ fn ensure_varchar_max(field: &str, value: &str, max_len: usize) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn normalize_wallet_chain_value(chain: &str) -> String {
+    chain.trim().to_ascii_lowercase()
+}
+
+fn normalize_wallet_address_value(chain: &str, wallet_address: &str) -> String {
+    let trimmed = wallet_address.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let chain_lower = chain.trim().to_ascii_lowercase();
+    if chain_lower == "bitcoin" || chain_lower == "btc" {
+        return trimmed.to_ascii_lowercase();
+    }
+    if chain_lower == "starknet" || chain_lower == "strk" {
+        return normalize_starknet_wallet_address(trimmed);
+    }
+    // Starknet/EVM hex addresses are case-insensitive in practice.
+    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+        return format!("0x{}", trimmed[2..].to_ascii_lowercase());
+    }
+    trimmed.to_ascii_lowercase()
+}
+
+fn normalize_starknet_wallet_address(wallet_address: &str) -> String {
+    let trimmed = wallet_address.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let without_prefix = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase();
+    let normalized = without_prefix.trim_start_matches('0');
+    if normalized.is_empty() {
+        "0x0".to_string()
+    } else {
+        format!("0x{}", normalized)
+    }
 }
 
 // ==================== FAUCET QUERIES ====================

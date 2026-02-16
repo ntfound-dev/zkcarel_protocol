@@ -11,7 +11,7 @@ const tokens = [
   { symbol: "STRK", name: "Starknet", icon: "◈" },
   { symbol: "USDC", name: "USD Coin", icon: "⭕" },
   { symbol: "USDT", name: "Tether", icon: "₮" },
-  { symbol: "CAREL", name: "ZkCarel", icon: "◇" },
+  { symbol: "CAREL", name: "Carel Protocol", icon: "◇" },
 ]
 
 const formatPrice = (value?: number) => {

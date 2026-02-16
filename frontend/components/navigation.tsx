@@ -31,7 +31,7 @@ const secondaryItems = [
 const faucetTokens = [
   { symbol: "BTC", name: "Bitcoin", amount: "0.001" },
   { symbol: "STRK", name: "StarkNet", amount: "10" },
-  { symbol: "CAREL", name: "ZkCarel", amount: "100" },
+  { symbol: "CAREL", name: "Carel Protocol", amount: "100" },
 ]
 
 export function Navigation() {
@@ -68,7 +68,7 @@ export function Navigation() {
             </span>
           </div>
           <span className="font-sans text-xl font-bold tracking-wider text-foreground group-hover:text-primary transition-colors">
-            ZkCarel
+            Carel Protocol
           </span>
         </Link>
 

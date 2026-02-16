@@ -15,7 +15,7 @@ export const STARKNET_EXPLORER_SEPOLIA_BASE_URL =
   "https://sepolia.voyager.online"
 export const STARKSCAN_SEPOLIA_BASE_URL = STARKNET_EXPLORER_SEPOLIA_BASE_URL
 export const BTC_TESTNET_EXPLORER_BASE_URL =
-  process.env.NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL || "https://mempool.space/testnet"
+  process.env.NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL || "https://mempool.space/testnet4"
 
 export function normalizeStarknetChainValue(chainId?: string): string {
   if (!chainId) return ""

@@ -198,15 +198,18 @@ impl PriceChartService {
                 if symbol == "CAREL" {
                     return Ok(self.synthetic_flat_ohlcv(&symbol, interval, max_len, Decimal::ONE));
                 }
-                return Err(AppError::NotFound(format!("Missing CoinGecko id for {}", token)));
+                return Err(AppError::NotFound(format!(
+                    "Missing CoinGecko id for {}",
+                    token
+                )));
             }
         };
         let days = Self::coingecko_days_for(interval, limit);
 
         let base_url = self.config.coingecko_api_url.trim_end_matches('/');
         let endpoint = format!("{}/coins/{}/ohlc", base_url, coin_id);
-        let mut url = reqwest::Url::parse(&endpoint)
-            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+        let mut url =
+            reqwest::Url::parse(&endpoint).map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
         url.query_pairs_mut()
             .append_pair("vs_currency", "usd")
             .append_pair("days", days);

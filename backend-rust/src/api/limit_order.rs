@@ -176,7 +176,8 @@ pub async fn create_order(
     };
 
     state.db.create_limit_order(&order).await?;
-    if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "limit_order_create").await
+    if let Err(err) =
+        consume_nft_usage_if_active(&state.config, &user_address, "limit_order_create").await
     {
         tracing::warn!(
             "Failed to consume NFT discount usage after limit order create: user={} order_id={} err={}",

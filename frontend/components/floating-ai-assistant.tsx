@@ -40,12 +40,26 @@ const sampleMessages = [
   },
 ]
 
-const quickPrompts = [
-  "cek saldo saya",
-  "point saya berapa",
-  "swap 25 STRK to CAREL",
-  "bridge 10 USDT ke STRK",
-]
+const quickPromptsByTier: Record<number, string[]> = {
+  1: [
+    "check my balance",
+    "how many points do I have?",
+    "show STRK price",
+    "beginner tutorial",
+  ],
+  2: [
+    "swap 25 STRK to CAREL",
+    "bridge 10 USDT to STRK",
+    "check my balance",
+    "beginner tutorial",
+  ],
+  3: [
+    "rebalance my portfolio",
+    "create price alerts for STRK",
+    "check my balance",
+    "beginner tutorial",
+  ],
+}
 
 const STARKNET_AI_EXECUTOR_ADDRESS =
   process.env.NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS ||
@@ -87,6 +101,11 @@ function findNewPendingAction(after: number[], before: number[]): number | null 
   return after.length > 0 ? after[after.length - 1] : null
 }
 
+function pickLatestPendingAction(pending: number[]): number | null {
+  if (pending.length === 0) return null
+  return Math.max(...pending)
+}
+
 interface Message {
   role: "user" | "assistant"
   content: string
@@ -105,10 +124,12 @@ export function FloatingAIAssistant() {
   const [pendingActions, setPendingActions] = React.useState<number[]>([])
   const [isLoadingActions, setIsLoadingActions] = React.useState(false)
   const [isCreatingAction, setIsCreatingAction] = React.useState(false)
+  const [isAutoPreparingAction, setIsAutoPreparingAction] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
   const requiresActionId = selectedTier >= 2
   const parsedActionId = Number(actionId)
   const hasValidActionId = !requiresActionId || (Number.isFinite(parsedActionId) && parsedActionId > 0)
+  const quickPrompts = quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -118,21 +139,75 @@ export function FloatingAIAssistant() {
     scrollToBottom()
   }, [messages])
 
+  const loadPendingActions = async (silent = false): Promise<number[]> => {
+    const response = await getAiPendingActions(0, 50)
+    const pending = response.pending || []
+    setPendingActions(pending)
+    if (!silent && pending.length === 0) {
+      notifications.addNotification({
+        type: "info",
+        title: "AI Actions",
+        message: "No pending on-chain action found for this account.",
+      })
+    }
+    return pending
+  }
+
+  const resolveActionId = async (): Promise<number> => {
+    if (!requiresActionId) return 0
+    if (hasValidActionId) return Math.floor(parsedActionId)
+
+    setIsAutoPreparingAction(true)
+    try {
+      const pending = await loadPendingActions(true)
+      const latest = pickLatestPendingAction(pending)
+      if (latest && latest > 0) {
+        setActionId(String(latest))
+        notifications.addNotification({
+          type: "success",
+          title: "Action ready",
+          message: `Using pending action_id ${latest}.`,
+        })
+        return latest
+      }
+
+      const created = await createOnchainActionId()
+      if (created && created > 0) {
+        return created
+      }
+
+      throw new Error(
+        "No valid on-chain action_id found. Click 'Auto Setup On-Chain', sign once in wallet, then retry."
+      )
+    } finally {
+      setIsAutoPreparingAction(false)
+    }
+  }
+
   const handleSend = async () => {
     const command = input.trim()
     if (!command || isSending) return
 
-    let actionIdValue: number | undefined = undefined
+    let actionIdValue: number | undefined
     if (selectedTier >= 2) {
-      if (!hasValidActionId) {
+      try {
+        actionIdValue = await resolveActionId()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to resolve on-chain action."
         notifications.addNotification({
           type: "error",
           title: "AI Tier requires action_id",
-          message: "Masukkan action_id on-chain untuk Tier 2/3.",
+          message,
         })
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `I need a valid on-chain action for Tier ${selectedTier}. Use Auto Setup On-Chain, sign in wallet, then send the command again.`,
+          },
+        ])
         return
       }
-      actionIdValue = Math.floor(parsedActionId)
     }
 
     setMessages((prev) => [...prev, { role: "user", content: command }])
@@ -148,18 +223,18 @@ export function FloatingAIAssistant() {
       })
       setMessages((prev) => [...prev, { role: "assistant", content: response.response }])
     } catch (error) {
+      const message = error instanceof Error ? error.message : "AI request failed."
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content:
-            "Maaf, AI sedang tidak tersedia. Coba lagi beberapa saat atau cek koneksi backend.",
+          content: `I couldn't execute that command: ${message}`,
         },
       ])
       notifications.addNotification({
         type: "error",
         title: "AI Assistant",
-        message: error instanceof Error ? error.message : "Gagal memanggil AI",
+        message,
       })
     } finally {
       setIsSending(false)
@@ -169,37 +244,29 @@ export function FloatingAIAssistant() {
   const fetchPendingActions = async () => {
     setIsLoadingActions(true)
     try {
-      const response = await getAiPendingActions(0, 10)
-      setPendingActions(response.pending || [])
-      if ((response.pending || []).length === 0) {
-        notifications.addNotification({
-          type: "info",
-          title: "AI Actions",
-          message: "Tidak ada pending action untuk akun ini.",
-        })
-      }
+      await loadPendingActions(false)
     } catch (error) {
       notifications.addNotification({
         type: "error",
         title: "AI Actions",
-        message: error instanceof Error ? error.message : "Gagal mengambil pending actions.",
+        message: error instanceof Error ? error.message : "Failed to load pending actions.",
       })
     } finally {
       setIsLoadingActions(false)
     }
   }
 
-  const createOnchainActionId = async () => {
-    if (!requiresActionId) return
-    if (isCreatingAction) return
+  const createOnchainActionId = async (): Promise<number | null> => {
+    if (!requiresActionId) return null
+    if (isCreatingAction) return null
     if (!STARKNET_AI_EXECUTOR_ADDRESS) {
       notifications.addNotification({
         type: "error",
-        title: "AI executor belum diisi",
+        title: "AI executor not configured",
         message:
-          "Set NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS di frontend/.env.local lalu restart frontend.",
+          "Set NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS in frontend/.env.local then restart frontend.",
       })
-      return
+      return null
     }
 
     setIsCreatingAction(true)
@@ -262,7 +329,7 @@ export function FloatingAIAssistant() {
         notifications.addNotification({
           type: "info",
           title: "Retrying with refreshed window",
-          message: "Signature window diperbarui. Konfirmasi transaksi sekali lagi.",
+          message: "Signature window refreshed. Confirm the transaction one more time.",
           txHash: retryPrepared.tx_hash,
           txNetwork: "starknet",
         })
@@ -273,7 +340,7 @@ export function FloatingAIAssistant() {
       notifications.addNotification({
         type: "info",
         title: "AI action submitted",
-        message: "Menunggu action_id muncul di pending list...",
+        message: "Waiting for action_id to appear in pending list...",
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
@@ -290,12 +357,12 @@ export function FloatingAIAssistant() {
             setActionId(String(discovered))
             notifications.addNotification({
               type: "success",
-              title: "action_id siap",
-              message: `action_id ${discovered} sudah siap untuk Tier ${selectedTier}.`,
+              title: "Action ready",
+              message: `action_id ${discovered} is ready for Tier ${selectedTier}.`,
               txHash: onchainTxHash,
               txNetwork: "starknet",
             })
-            return
+            return discovered
           }
         } catch {
           // continue polling
@@ -303,19 +370,33 @@ export function FloatingAIAssistant() {
       }
 
       setPendingActions(latestPending)
+      const latest = pickLatestPendingAction(latestPending)
+      if (latest && latest > 0) {
+        setActionId(String(latest))
+        notifications.addNotification({
+          type: "success",
+          title: "Action ready",
+          message: `Using latest pending action_id ${latest}.`,
+          txHash: onchainTxHash,
+          txNetwork: "starknet",
+        })
+        return latest
+      }
       notifications.addNotification({
         type: "info",
-        title: "action_id belum terbaca",
-        message: "Klik Fetch pending action_id, lalu pilih ID terbaru.",
+        title: "Action not detected yet",
+        message: "Click 'Fetch pending action_id' and select the newest ID.",
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
+      return null
     } catch (error) {
       notifications.addNotification({
         type: "error",
-        title: "Gagal submit action on-chain",
-        message: error instanceof Error ? error.message : "Transaksi submit_action gagal",
+        title: "Failed to submit on-chain action",
+        message: error instanceof Error ? error.message : "submit_action transaction failed",
       })
+      return null
     } finally {
       setIsCreatingAction(false)
     }
@@ -391,6 +472,9 @@ export function FloatingAIAssistant() {
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   {aiTiers[selectedTier - 1].description}
                 </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Beginner mode: use quick prompts, then confirm only when wallet asks.
+                </p>
                 {selectedTier >= 2 && (
                   <div className="mt-2">
                     <label className="text-[11px] text-muted-foreground block mb-1">
@@ -400,22 +484,55 @@ export function FloatingAIAssistant() {
                       type="number"
                       value={actionId}
                       onChange={(e) => setActionId(e.target.value)}
-                      placeholder="e.g. 12"
+                      placeholder="Optional: leave empty and use Auto Setup"
                       className="w-full px-2 py-1.5 rounded-md bg-surface border border-border text-foreground text-xs placeholder:text-muted-foreground focus:border-primary focus:outline-none transition-all"
                       min={1}
                     />
                     <div className="flex items-center justify-between mt-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          onClick={async () => {
+                            setIsAutoPreparingAction(true)
+                            try {
+                              const pending = await loadPendingActions(true)
+                              const latest = pickLatestPendingAction(pending)
+                              if (latest && latest > 0) {
+                                setActionId(String(latest))
+                                notifications.addNotification({
+                                  type: "success",
+                                  title: "Action ready",
+                                  message: `Using pending action_id ${latest}.`,
+                                })
+                              } else {
+                                const created = await createOnchainActionId()
+                                if (!created) {
+                                  notifications.addNotification({
+                                    type: "info",
+                                    title: "No action available",
+                                    message:
+                                      "No pending action found yet. Please sign one on-chain action first.",
+                                  })
+                                }
+                              }
+                            } finally {
+                              setIsAutoPreparingAction(false)
+                            }
+                          }}
+                          disabled={isCreatingAction || isLoadingActions || isAutoPreparingAction}
+                          className="text-[11px] text-primary hover:underline disabled:opacity-50"
+                        >
+                          {isAutoPreparingAction ? "Preparing..." : "Auto Setup On-Chain"}
+                        </button>
                         <button
                           onClick={fetchPendingActions}
-                          disabled={isLoadingActions || isCreatingAction}
+                          disabled={isLoadingActions || isCreatingAction || isAutoPreparingAction}
                           className="text-[11px] text-primary hover:underline disabled:opacity-50"
                         >
                           {isLoadingActions ? "Loading..." : "Fetch pending action_id"}
                         </button>
                         <button
                           onClick={createOnchainActionId}
-                          disabled={isCreatingAction || isLoadingActions}
+                          disabled={isCreatingAction || isLoadingActions || isAutoPreparingAction}
                           className="text-[11px] text-primary hover:underline disabled:opacity-50"
                         >
                           {isCreatingAction ? "Submitting..." : "Create on-chain action_id"}
@@ -442,6 +559,12 @@ export function FloatingAIAssistant() {
                     )}
                   </div>
                 )}
+                <div className="mt-2 rounded-md border border-border/60 bg-surface/40 p-2 text-[10px] text-muted-foreground leading-relaxed">
+                  <p className="text-foreground font-medium mb-1">Beginner Tutorial</p>
+                  <p>Level 1: Ask balance, points, market only.</p>
+                  <p>Level 2: Click <span className="text-primary">Auto Setup On-Chain</span>, sign wallet once, then send swap/bridge command.</p>
+                  <p>Level 3: Same setup as Level 2, then use portfolio/alert commands.</p>
+                </div>
               </div>
               
               {/* Messages */}
@@ -499,7 +622,7 @@ export function FloatingAIAssistant() {
               <Button 
                 onClick={handleSend}
                 size="sm"
-                disabled={isSending || !input.trim() || !hasValidActionId}
+                disabled={isSending || !input.trim() || isCreatingAction || isAutoPreparingAction}
                 className="bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
               >
                 {isSending ? (
@@ -511,7 +634,7 @@ export function FloatingAIAssistant() {
             </div>
             {requiresActionId && !hasValidActionId && (
               <p className="mt-1 text-[10px] text-muted-foreground">
-                Tier 2/3 perlu action_id on-chain yang valid.
+                No worries: click "Auto Setup On-Chain". Action ID can be filled automatically.
               </p>
             )}
           </div>

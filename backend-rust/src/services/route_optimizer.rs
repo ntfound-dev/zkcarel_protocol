@@ -5,13 +5,23 @@ use crate::{
     integrations::bridge::{AtomiqClient, GardenClient, LayerSwapClient},
 };
 
+fn normalize_chain(value: &str) -> String {
+    let lower = value.trim().to_ascii_lowercase();
+    if lower.contains("starknet") || lower == "strk" {
+        return "starknet".to_string();
+    }
+    if lower.contains("bitcoin") || lower == "btc" {
+        return "bitcoin".to_string();
+    }
+    if lower.contains("ethereum") || lower == "eth" || lower == "evm" {
+        return "ethereum".to_string();
+    }
+    lower
+}
+
 fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     match (from, to) {
-        ("bitcoin", "starknet") => vec![
-            BRIDGE_LAYERSWAP.to_string(),
-            BRIDGE_ATOMIQ.to_string(),
-            BRIDGE_GARDEN.to_string(),
-        ],
+        ("bitcoin", "starknet") => vec![BRIDGE_GARDEN.to_string()],
         ("ethereum", "starknet") => vec![
             BRIDGE_STARKGATE.to_string(),
             BRIDGE_ATOMIQ.to_string(),
@@ -32,7 +42,9 @@ fn is_active_config_value(raw: &str) -> bool {
 }
 
 fn has_non_empty(value: Option<&String>) -> bool {
-    value.map(|item| is_active_config_value(item)).unwrap_or(false)
+    value
+        .map(|item| is_active_config_value(item))
+        .unwrap_or(false)
 }
 
 fn bridge_score(route: &BridgeRoute, is_testnet: bool) -> f64 {
@@ -67,28 +79,75 @@ impl RouteOptimizer {
         token: &str,
         amount: f64,
     ) -> Result<BridgeRoute> {
-        let providers = self.get_bridge_providers(from_chain, to_chain);
+        let from_chain_normalized = normalize_chain(from_chain);
+        let to_chain_normalized = normalize_chain(to_chain);
+        let expected_providers = bridge_providers_for(&from_chain_normalized, &to_chain_normalized);
+        let providers = self.get_bridge_providers(&from_chain_normalized, &to_chain_normalized);
+
+        if providers.is_empty() {
+            let fallback = if expected_providers.is_empty() {
+                "none".to_string()
+            } else {
+                expected_providers.join(", ")
+            };
+            return Err(crate::error::AppError::BadRequest(format!(
+                "No bridge provider configured for route {} -> {} (expected: {})",
+                from_chain_normalized, to_chain_normalized, fallback
+            )));
+        }
 
         let mut best_route: Option<BridgeRoute> = None;
         let mut best_score = 0.0;
+        let mut provider_errors: Vec<String> = Vec::new();
 
         for provider in providers {
-            if let Ok(route) = self
-                .get_bridge_quote(&provider, from_chain, to_chain, token, amount)
+            match self
+                .get_bridge_quote(
+                    &provider,
+                    &from_chain_normalized,
+                    &to_chain_normalized,
+                    token,
+                    amount,
+                )
                 .await
             {
-                let score = self.calculate_bridge_score(&route);
+                Ok(route) => {
+                    let score = self.calculate_bridge_score(&route);
 
-                if best_route.is_none() || score > best_score {
-                    best_route = Some(route);
-                    best_score = score;
+                    if best_route.is_none() || score > best_score {
+                        best_route = Some(route);
+                        best_score = score;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "Bridge quote failed: provider={} from={} to={} token={} amount={} error={}",
+                        provider,
+                        from_chain_normalized,
+                        to_chain_normalized,
+                        token,
+                        amount,
+                        err
+                    );
+                    provider_errors.push(format!("{}: {}", provider, err));
                 }
             }
         }
 
-        best_route.ok_or_else(|| {
-            crate::error::AppError::NotFound("No bridge route available".to_string())
-        })
+        if let Some(route) = best_route {
+            return Ok(route);
+        }
+
+        if provider_errors.is_empty() {
+            return Err(crate::error::AppError::NotFound(
+                "No bridge route available".to_string(),
+            ));
+        }
+
+        Err(crate::error::AppError::BadRequest(format!(
+            "No bridge route available. {}",
+            provider_errors.join(" | ")
+        )))
     }
 
     fn get_bridge_providers(&self, from: &str, to: &str) -> Vec<String> {
@@ -178,7 +237,7 @@ impl RouteOptimizer {
                     self.config.garden_api_url.clone(),
                 );
                 let quote = client
-                    .get_quote(from_chain, to_chain, token, amount)
+                    .get_quote(from_chain, to_chain, token, token, amount)
                     .await?;
                 BridgeRoute {
                     provider: provider.to_string(),
@@ -243,10 +302,10 @@ mod tests {
 
     #[test]
     fn bridge_providers_for_bitcoin_to_starknet() {
-        // Memastikan provider LayerSwap ada untuk BTC -> Starknet
+        // BTC native -> Starknet dikunci ke Garden agar sesuai order lifecycle API Garden.
         let providers = bridge_providers_for("bitcoin", "starknet");
-        assert!(providers.contains(&BRIDGE_LAYERSWAP.to_string()));
         assert!(providers.contains(&BRIDGE_GARDEN.to_string()));
+        assert_eq!(providers.len(), 1);
     }
 
     #[test]

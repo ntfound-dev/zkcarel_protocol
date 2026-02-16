@@ -239,7 +239,8 @@ pub async fn get_user_rank(
 ) -> Result<Json<ApiResponse<UserRankResponse>>> {
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
-    let (canonical_address, scope_addresses) = resolve_leaderboard_identity(&state, &address).await?;
+    let (canonical_address, scope_addresses) =
+        resolve_leaderboard_identity(&state, &address).await?;
     let user_total: f64 = sqlx::query_scalar::<_, f64>(
         "SELECT COALESCE(SUM(total_points), 0)::FLOAT
          FROM points
@@ -248,8 +249,7 @@ pub async fn get_user_rank(
     .bind(scope_addresses)
     .bind(current_epoch)
     .fetch_one(state.db.pool())
-    .await?
-    ;
+    .await?;
 
     let rank_result: RankResult = sqlx::query_as(
         r#"
@@ -281,9 +281,8 @@ pub async fn get_user_rank(
     .fetch_one(state.db.pool())
     .await?;
 
-    let total_users_res: CountResult =
-        sqlx::query_as(
-            r#"
+    let total_users_res: CountResult = sqlx::query_as(
+        r#"
             SELECT COUNT(*) as count
             FROM (
                 SELECT COALESCE(uw.user_address, p.user_address) as identity
@@ -294,10 +293,10 @@ pub async fn get_user_rank(
                 GROUP BY COALESCE(uw.user_address, p.user_address)
             ) s
             "#,
-        )
-        .bind(current_epoch)
-        .fetch_one(state.db.pool())
-        .await?;
+    )
+    .bind(current_epoch)
+    .fetch_one(state.db.pool())
+    .await?;
 
     let total_users = if total_users_res.count == 0 {
         1
@@ -362,7 +361,8 @@ pub async fn get_user_categories(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> Result<Json<ApiResponse<UserRankCategoriesResponse>>> {
-    let (canonical_address, scope_addresses) = resolve_leaderboard_identity(&state, &address).await?;
+    let (canonical_address, scope_addresses) =
+        resolve_leaderboard_identity(&state, &address).await?;
 
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
@@ -374,8 +374,7 @@ pub async fn get_user_categories(
     .bind(scope_addresses.clone())
     .bind(current_epoch)
     .fetch_one(state.db.pool())
-    .await?
-    ;
+    .await?;
 
     let points_rank: RankResult = sqlx::query_as(
         r#"
@@ -479,34 +478,66 @@ pub async fn get_user_categories(
     .fetch_one(state.db.pool())
     .await?;
 
-    let referral_count: i64 =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE LOWER(referrer) = LOWER($1)")
-            .bind(&canonical_address)
-            .fetch_one(state.db.pool())
-            .await?;
+    let referral_count: i64 = sqlx::query_scalar::<_, i64>(
+        r#"
+        WITH referral_counts AS (
+            SELECT
+                COALESCE(uw.user_address, u.referrer) as identity,
+                COUNT(*) as referral_count
+            FROM users u
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(u.referrer)
+            WHERE u.referrer IS NOT NULL
+            GROUP BY COALESCE(uw.user_address, u.referrer)
+        )
+        SELECT COALESCE(
+            (
+                SELECT rc.referral_count
+                FROM referral_counts rc
+                WHERE LOWER(rc.identity) = LOWER($1)
+                LIMIT 1
+            ),
+            0
+        )
+        "#,
+    )
+    .bind(&canonical_address)
+    .fetch_one(state.db.pool())
+    .await?;
 
     let referral_rank: RankResult = sqlx::query_as(
         r#"
         WITH referral_counts AS (
-            SELECT u.address, COALESCE(r.referral_count, 0) as referral_count
+            SELECT
+                COALESCE(uw.user_address, u.referrer) as identity,
+                COUNT(*) as referral_count
             FROM users u
-            LEFT JOIN (
-                SELECT referrer, COUNT(*) as referral_count
-                FROM users
-                WHERE referrer IS NOT NULL
-                GROUP BY referrer
-            ) r ON u.address = r.referrer
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(u.referrer)
+            WHERE u.referrer IS NOT NULL
+            GROUP BY COALESCE(uw.user_address, u.referrer)
+        ),
+        user_referral AS (
+            SELECT COALESCE(
+                (
+                    SELECT rc.referral_count
+                    FROM referral_counts rc
+                    WHERE LOWER(rc.identity) = LOWER($1)
+                    LIMIT 1
+                ),
+                0
+            ) as referral_count
+        ),
+        all_users AS (
+            SELECT address as identity
+            FROM users
         )
         SELECT COUNT(*) + 1 as rank
-        FROM referral_counts rc
-        WHERE rc.referral_count > COALESCE(
-            (
-                SELECT COUNT(*)
-                FROM users
-                WHERE LOWER(referrer) = LOWER($1)
-            ),
-            0
-        )
+        FROM all_users au
+        LEFT JOIN referral_counts rc
+          ON LOWER(rc.identity) = LOWER(au.identity)
+        CROSS JOIN user_referral ur
+        WHERE COALESCE(rc.referral_count, 0) > ur.referral_count
         "#,
     )
     .bind(&canonical_address)
@@ -613,21 +644,29 @@ async fn get_volume_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
 
 async fn get_referrals_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
-        "SELECT 
-            ROW_NUMBER() OVER (ORDER BY referral_count DESC) as rank,
-            COALESCE(referrer, '') as user_address,
-            COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(u.address, 6))) as display_name,
-            CAST(referral_count AS FLOAT) as value,
+        r#"
+        WITH referral_counts AS (
+            SELECT
+                COALESCE(uw.user_address, u.referrer) as identity,
+                COUNT(*) as referral_count
+            FROM users u
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(u.referrer)
+            WHERE u.referrer IS NOT NULL
+            GROUP BY COALESCE(uw.user_address, u.referrer)
+        )
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY rc.referral_count DESC, rc.identity ASC) as rank,
+            rc.identity as user_address,
+            COALESCE(NULLIF(TRIM(owner.display_name), ''), CONCAT('user_', RIGHT(rc.identity, 6))) as display_name,
+            CAST(rc.referral_count AS FLOAT) as value,
             NULL as change_24h
-         FROM (
-            SELECT referrer, COUNT(*) as referral_count
-            FROM users
-            WHERE referrer IS NOT NULL
-            GROUP BY referrer
-         ) r
-         JOIN users u ON r.referrer = u.address
-         ORDER BY referral_count DESC
-         LIMIT 100"
+        FROM referral_counts rc
+        LEFT JOIN users owner
+          ON LOWER(owner.address) = LOWER(rc.identity)
+        ORDER BY rc.referral_count DESC, rc.identity ASC
+        LIMIT 100
+        "#,
     )
     .fetch_all(state.db.pool())
     .await?;

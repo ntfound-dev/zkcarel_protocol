@@ -8,7 +8,7 @@ use crate::{
 };
 use axum::extract::Query;
 use axum::{extract::State, http::HeaderMap, Json};
-use r2d2_redis::redis::Commands;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use starknet_core::types::{Call, Felt as CoreFelt};
 use starknet_core::utils::get_selector_from_name;
@@ -85,22 +85,26 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
         1 => {
             if scope != AIGuardScope::ReadOnly {
                 return Err(AppError::BadRequest(
-                    "Level 1 hanya untuk read-only query: price/balance/points/market."
+                    "Level 1 is read-only: price, balance, points, and market queries only."
                         .to_string(),
                 ));
             }
         }
         2 => {
-            if scope != AIGuardScope::SwapBridge {
+            if !matches!(scope, AIGuardScope::ReadOnly | AIGuardScope::SwapBridge) {
                 return Err(AppError::BadRequest(
-                    "Level 2 hanya untuk auto swap/bridge execution.".to_string(),
+                    "Level 2 supports read-only + swap/bridge commands.".to_string(),
                 ));
             }
         }
         3 => {
-            if scope != AIGuardScope::PortfolioAlert {
+            if !matches!(
+                scope,
+                AIGuardScope::ReadOnly | AIGuardScope::SwapBridge | AIGuardScope::PortfolioAlert
+            ) {
                 return Err(AppError::BadRequest(
-                    "Level 3 hanya untuk portfolio management dan alerts.".to_string(),
+                    "Level 3 supports all AI commands: read-only, swap/bridge, portfolio, and alerts."
+                        .to_string(),
                 ));
             }
         }
@@ -129,7 +133,7 @@ fn time_bucket(window_seconds: u64) -> u64 {
     now / window
 }
 
-fn enforce_ai_rate_limit(
+async fn enforce_ai_rate_limit(
     state: &AppState,
     user_address: &str,
     level: u8,
@@ -145,15 +149,9 @@ fn enforce_ai_rate_limit(
     let level_key = format!("ai:rl:l{}:{}:{}:{}", level, mode, normalized_user, bucket);
     let global_key = format!("ai:rl:all:{}:{}", normalized_user, bucket);
 
-    let mut conn = match state.redis.get() {
-        Ok(conn) => conn,
-        Err(err) => {
-            tracing::warn!("AI rate limiter skipped (redis unavailable): {}", err);
-            return Ok(());
-        }
-    };
+    let mut conn = state.redis.clone();
 
-    let level_count: i64 = match conn.incr(&level_key, 1_i64) {
+    let level_count: i64 = match conn.incr(&level_key, 1_i64).await {
         Ok(value) => value,
         Err(err) => {
             tracing::warn!("AI rate limiter skipped (level incr failed): {}", err);
@@ -161,11 +159,11 @@ fn enforce_ai_rate_limit(
         }
     };
     if level_count == 1 {
-        let _: std::result::Result<bool, r2d2_redis::redis::RedisError> =
-            conn.expire(&level_key, window_seconds as usize);
+        let _: std::result::Result<bool, redis::RedisError> =
+            conn.expire(&level_key, window_seconds as i64).await;
     }
 
-    let global_count: i64 = match conn.incr(&global_key, 1_i64) {
+    let global_count: i64 = match conn.incr(&global_key, 1_i64).await {
         Ok(value) => value,
         Err(err) => {
             tracing::warn!("AI rate limiter skipped (global incr failed): {}", err);
@@ -173,8 +171,8 @@ fn enforce_ai_rate_limit(
         }
     };
     if global_count == 1 {
-        let _: std::result::Result<bool, r2d2_redis::redis::RedisError> =
-            conn.expire(&global_key, window_seconds as usize);
+        let _: std::result::Result<bool, redis::RedisError> =
+            conn.expire(&global_key, window_seconds as i64).await;
     }
 
     if level_count > level_limit || global_count > global_limit {
@@ -226,9 +224,11 @@ pub async fn execute_command(
         };
         ensure_onchain_action(&config, &user_address, action_id).await?;
     }
-    enforce_ai_rate_limit(&state, &user_address, level, level >= 2)?;
+    enforce_ai_rate_limit(&state, &user_address, level, level >= 2).await?;
 
-    let ai_response = service.execute_command(&user_address, &command, level).await?;
+    let ai_response = service
+        .execute_command(&user_address, &command, level)
+        .await?;
     let confidence =
         confidence_score(config.gemini_api_key.is_some() || config.openai_api_key.is_some());
 

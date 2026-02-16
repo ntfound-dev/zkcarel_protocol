@@ -337,7 +337,8 @@ pub async fn deposit(
         processed: false,
     };
     state.db.save_transaction(&tx).await?;
-    if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "stake_deposit").await
+    if let Err(err) =
+        consume_nft_usage_if_active(&state.config, &user_address, "stake_deposit").await
     {
         tracing::warn!(
             "Failed to consume NFT discount usage after stake deposit: user={} tx_hash={} err={}",
@@ -372,7 +373,8 @@ pub async fn withdraw(
         ));
     }
 
-    let pool_token = parse_pool_from_position_id(&req.position_id).unwrap_or_else(|| "CAREL".to_string());
+    let pool_token =
+        parse_pool_from_position_id(&req.position_id).unwrap_or_else(|| "CAREL".to_string());
     if pool_token.eq_ignore_ascii_case(BTC_GARDEN_POOL) {
         return Err(crate::error::AppError::BadRequest(
             "BTC staking native route is coming soon via Garden API.".to_string(),
@@ -414,7 +416,8 @@ pub async fn withdraw(
         processed: false,
     };
     state.db.save_transaction(&tx).await?;
-    if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "stake_withdraw").await
+    if let Err(err) =
+        consume_nft_usage_if_active(&state.config, &user_address, "stake_withdraw").await
     {
         tracing::warn!(
             "Failed to consume NFT discount usage after stake withdraw: user={} tx_hash={} err={}",
@@ -459,17 +462,18 @@ pub async fn get_positions(
                         };
                     if let Some(info) = stake_info {
                         if info.amount > 0 {
-                            let rewards = match fetch_carel_rewards(&reader, contract, &user_address).await {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    tracing::warn!(
-                                        "Failed to read on-chain staking rewards for {}: {}",
-                                        user_address,
-                                        err
-                                    );
-                                    0
-                                }
-                            };
+                            let rewards =
+                                match fetch_carel_rewards(&reader, contract, &user_address).await {
+                                    Ok(value) => value,
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            "Failed to read on-chain staking rewards for {}: {}",
+                                            user_address,
+                                            err
+                                        );
+                                        0
+                                    }
+                                };
                             let started_at = info.start_time as i64;
                             let unlock_at = started_at + 604800; // 7 days lock period (contract constant)
                             positions.push(StakingPosition {

@@ -1,7 +1,13 @@
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    Json,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::services::onchain::{parse_felt, OnchainInvoker, OnchainReader};
+use crate::services::onchain::{
+    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
+};
 use crate::services::privacy_verifier::{
     parse_privacy_verifier_kind, resolve_privacy_router_for_verifier, PrivacyVerifierKind,
 };
@@ -15,13 +21,13 @@ use crate::{
     integrations::bridge::{
         AtomiqClient, AtomiqQuote, GardenClient, GardenQuote, LayerSwapClient, LayerSwapQuote,
     },
-    models::{ApiResponse, BridgeQuoteRequest, BridgeQuoteResponse},
+    models::{ApiResponse, BridgeQuoteRequest, BridgeQuoteResponse, LinkedWalletAddress},
     services::nft_discount::consume_nft_usage_if_active,
     services::RouteOptimizer,
 };
-use starknet_core::types::{Call, ExecutionResult, Felt, TransactionFinalityStatus};
+use starknet_core::types::{Call, ExecutionResult, Felt, FunctionCall, TransactionFinalityStatus};
 use starknet_core::utils::get_selector_from_name;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 use super::{require_user, AppState};
 
@@ -59,7 +65,30 @@ pub struct ExecuteBridgeResponse {
     pub amount: String,
     pub estimated_receive: String,
     pub estimated_time: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deposit_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deposit_amount: Option<String>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct BridgeStatusResponse {
+    pub bridge_id: String,
+    pub status: String,
+    pub is_completed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_initiate_tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_redeem_tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_initiate_tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_redeem_tx_hash: Option<String>,
+}
+
+const ONCHAIN_DISCOUNT_TIMEOUT_MS: u64 = 2_500;
 
 fn estimate_time(provider: &str) -> &'static str {
     match provider {
@@ -69,6 +98,106 @@ fn estimate_time(provider: &str) -> &'static str {
         BRIDGE_GARDEN => "~25-35 min",
         _ => "~15-20 min",
     }
+}
+
+fn discount_contract_address(state: &AppState) -> Option<&str> {
+    state
+        .config
+        .discount_soulbound_address
+        .as_deref()
+        .filter(|addr| !addr.trim().is_empty() && !addr.starts_with("0x0000"))
+}
+
+async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f64 {
+    let Some(contract) = discount_contract_address(state) else {
+        return 0.0;
+    };
+
+    let reader = match OnchainReader::from_config(&state.config) {
+        Ok(reader) => reader,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to initialize on-chain reader for NFT discount in bridge: {}",
+                err
+            );
+            return 0.0;
+        }
+    };
+
+    let contract_address = match parse_felt(contract) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                "Invalid discount contract address while calculating bridge fee discount: {}",
+                err
+            );
+            return 0.0;
+        }
+    };
+    let user_felt = match parse_felt(user_address) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                "Invalid user address while calculating bridge fee discount: user={}, err={}",
+                user_address,
+                err
+            );
+            return 0.0;
+        }
+    };
+
+    let selector = match get_selector_from_name("has_active_discount") {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                "Selector resolution failed for has_active_discount in bridge: {}",
+                err
+            );
+            return 0.0;
+        }
+    };
+
+    let call = FunctionCall {
+        contract_address,
+        entry_point_selector: selector,
+        calldata: vec![user_felt],
+    };
+
+    let result = match timeout(
+        Duration::from_millis(ONCHAIN_DISCOUNT_TIMEOUT_MS),
+        reader.call(call),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "Failed on-chain NFT discount check in bridge for user={}: {}",
+                user_address,
+                err
+            );
+            return 0.0;
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Timeout on-chain NFT discount check in bridge for user={}",
+                user_address
+            );
+            return 0.0;
+        }
+    };
+
+    if result.len() < 3 {
+        return 0.0;
+    }
+
+    let is_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
+    if !is_active {
+        return 0.0;
+    }
+
+    let discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
+    discount.clamp(0.0, 100.0)
 }
 
 fn fallback_price_for(token: &str) -> f64 {
@@ -109,16 +238,19 @@ fn normalize_bridge_onchain_tx_hash(
     tx_hash: Option<&str>,
     from_chain: &str,
 ) -> std::result::Result<String, crate::error::AppError> {
-    let raw = tx_hash
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            crate::error::AppError::BadRequest(
-                "Bridge requires onchain_tx_hash from user-signed transaction".to_string(),
-            )
-        })?;
     let from_chain_normalized = from_chain.trim().to_ascii_lowercase();
-    let body = raw.strip_prefix("0x").unwrap_or(raw);
+    let raw = if let Some(value) = tx_hash.map(str::trim).filter(|v| !v.is_empty()) {
+        value.to_string()
+    } else if from_chain_normalized == "bitcoin" || from_chain_normalized == "btc" {
+        // Garden-style BTC flow creates order first, then user deposits to generated address.
+        // Keep internal tx_hash field non-empty for DB correlation even before real BTC txid exists.
+        return Ok(hex::encode(rand::random::<[u8; 32]>()));
+    } else {
+        return Err(crate::error::AppError::BadRequest(
+            "Bridge requires onchain_tx_hash from user-signed transaction".to_string(),
+        ));
+    };
+    let body = raw.strip_prefix("0x").unwrap_or(&raw);
     if body.is_empty() || body.len() > 64 || !body.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(crate::error::AppError::BadRequest(
             "onchain_tx_hash must be hex-encoded and max 64 chars (without 0x)".to_string(),
@@ -254,9 +386,7 @@ async fn verify_ethereum_bridge_tx_hash(state: &AppState, tx_hash: &str) -> Resu
         .get("blockNumber")
         .and_then(|value| value.as_str())
         .ok_or_else(|| {
-            crate::error::AppError::BadRequest(
-                "Ethereum receipt missing blockNumber".to_string(),
-            )
+            crate::error::AppError::BadRequest("Ethereum receipt missing blockNumber".to_string())
         })?;
 
     let block_number = parse_hex_u64(block_number_hex).ok_or_else(|| {
@@ -286,6 +416,39 @@ async fn verify_bridge_onchain_tx_hash(
     }
 }
 
+fn find_linked_wallet_for_chain(wallets: &[LinkedWalletAddress], chain: &str) -> Option<String> {
+    if chain.eq_ignore_ascii_case("bitcoin") || chain.eq_ignore_ascii_case("btc") {
+        return wallets
+            .iter()
+            .find(|wallet| {
+                wallet.chain.eq_ignore_ascii_case("bitcoin")
+                    || wallet.chain.eq_ignore_ascii_case("btc")
+            })
+            .map(|wallet| wallet.wallet_address.clone());
+    }
+
+    wallets
+        .iter()
+        .find(|wallet| wallet.chain.eq_ignore_ascii_case(chain))
+        .map(|wallet| wallet.wallet_address.clone())
+}
+
+async fn lookup_xverse_btc_address(state: &AppState, user_id: &str) -> Result<Option<String>> {
+    let normalized = user_id.trim();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+
+    let client = crate::integrations::xverse::XverseClient::new(
+        state.config.xverse_api_url.clone(),
+        state.config.xverse_api_key.clone(),
+    );
+    client
+        .get_btc_address(normalized)
+        .await
+        .map_err(|e| crate::error::AppError::BadRequest(format!("Xverse lookup failed: {}", e)))
+}
+
 fn privacy_seed_from_tx_hash(tx_hash: &str) -> String {
     let raw = tx_hash.trim();
     if raw.starts_with("0x")
@@ -309,28 +472,46 @@ fn is_private_trade(mode: Option<&str>, hide_balance: bool) -> bool {
 fn resolve_privacy_inputs(
     seed: &str,
     payload: Option<&PrivacyVerificationPayload>,
-) -> (String, String, Vec<String>, Vec<String>) {
+) -> Result<(String, String, Vec<String>, Vec<String>)> {
+    let payload = payload.ok_or_else(|| {
+        crate::error::AppError::BadRequest(
+            "privacy payload is required when mode=private or hide_balance=true".to_string(),
+        )
+    })?;
+
     let nullifier = payload
-        .and_then(|item| item.nullifier.as_deref())
+        .nullifier
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| seed.to_string());
     let commitment = payload
-        .and_then(|item| item.commitment.as_deref())
+        .commitment
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| hash::hash_string(&format!("commitment:{seed}")));
     let proof = payload
-        .and_then(|item| item.proof.clone())
+        .proof
+        .clone()
         .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| vec![seed.to_string()]);
+        .ok_or_else(|| {
+            crate::error::AppError::BadRequest(
+                "privacy.proof must be provided and non-empty in private mode".to_string(),
+            )
+        })?;
     let public_inputs = payload
-        .and_then(|item| item.public_inputs.clone())
+        .public_inputs
+        .clone()
         .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| vec![commitment.clone()]);
-    (nullifier, commitment, proof, public_inputs)
+        .ok_or_else(|| {
+            crate::error::AppError::BadRequest(
+                "privacy.public_inputs must be provided and non-empty in private mode".to_string(),
+            )
+        })?;
+    Ok((nullifier, commitment, proof, public_inputs))
 }
 
 async fn verify_private_trade_with_verifier(
@@ -341,14 +522,12 @@ async fn verify_private_trade_with_verifier(
 ) -> Result<String> {
     let router = resolve_privacy_router_for_verifier(&state.config, verifier)?;
     let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-        return Err(crate::error::AppError::BadRequest(
-            format!(
-                "On-chain invoker is not configured for '{}' verification",
-                verifier.as_str()
-            ),
-        ));
+        return Err(crate::error::AppError::BadRequest(format!(
+            "On-chain invoker is not configured for '{}' verification",
+            verifier.as_str()
+        )));
     };
-    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(seed, payload);
+    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(seed, payload)?;
 
     let to = parse_felt(&router)?;
     let selector = get_selector_from_name("submit_private_action")
@@ -415,48 +594,75 @@ pub async fn execute_bridge(
     Json(req): Json<ExecuteBridgeRequest>,
 ) -> Result<Json<ApiResponse<ExecuteBridgeResponse>>> {
     let user_address = require_user(&headers, &state).await?;
+    let linked_wallets = state
+        .db
+        .list_wallet_addresses(&user_address)
+        .await
+        .unwrap_or_default();
+
     let discount_usage_user = if parse_felt(&user_address).is_ok() {
         Some(user_address.clone())
     } else {
-        state
-            .db
-            .list_wallet_addresses(&user_address)
-            .await
-            .ok()
-            .and_then(|wallets| {
-                wallets
-                    .into_iter()
-                    .find(|wallet| {
-                        wallet.chain.eq_ignore_ascii_case("starknet")
-                            && parse_felt(wallet.wallet_address.trim()).is_ok()
-                    })
-                    .map(|wallet| wallet.wallet_address)
+        linked_wallets
+            .iter()
+            .find(|wallet| {
+                wallet.chain.eq_ignore_ascii_case("starknet")
+                    && parse_felt(wallet.wallet_address.trim()).is_ok()
             })
+            .map(|wallet| wallet.wallet_address.clone())
     };
     let from_chain_normalized = req.from_chain.trim().to_ascii_lowercase();
+    let to_chain_normalized = req.to_chain.trim().to_ascii_lowercase();
+    let is_from_btc = from_chain_normalized == "bitcoin" || from_chain_normalized == "btc";
+    let is_to_btc = to_chain_normalized == "bitcoin" || to_chain_normalized == "btc";
+    let is_to_starknet = to_chain_normalized == "starknet";
 
-    let mut recipient = req.recipient.clone();
-    if recipient.trim().is_empty() {
-        if let Some(user_id) = req.xverse_user_id.as_ref() {
-            let client = crate::integrations::xverse::XverseClient::new(
-                state.config.xverse_api_url.clone(),
-                state.config.xverse_api_key.clone(),
-            );
-            if let Some(addr) = client.get_btc_address(user_id).await.map_err(|e| {
-                crate::error::AppError::BadRequest(format!("Xverse lookup failed: {}", e))
-            })? {
-                recipient = addr;
-            } else {
-                return Err(crate::error::AppError::BadRequest(
-                    "Xverse address not found".into(),
-                ));
+    let mut recipient = req.recipient.trim().to_string();
+    if recipient.is_empty() {
+        if is_to_btc {
+            if let Some(user_id) = req.xverse_user_id.as_deref() {
+                if let Some(addr) = lookup_xverse_btc_address(&state, user_id).await? {
+                    recipient = addr;
+                }
             }
+            if recipient.is_empty() {
+                if let Some(addr) = find_linked_wallet_for_chain(&linked_wallets, "bitcoin") {
+                    recipient = addr;
+                }
+            }
+        } else if is_to_starknet {
+            if parse_felt(&user_address).is_ok() {
+                recipient = user_address.clone();
+            } else if let Some(addr) = find_linked_wallet_for_chain(&linked_wallets, "starknet") {
+                recipient = addr;
+            }
+        } else if let Some(addr) =
+            find_linked_wallet_for_chain(&linked_wallets, &to_chain_normalized)
+        {
+            recipient = addr;
         }
     }
-    if recipient.trim().is_empty() {
-        return Err(crate::error::AppError::BadRequest(
-            "Recipient is required".into(),
-        ));
+    if recipient.is_empty() {
+        return Err(crate::error::AppError::BadRequest(format!(
+            "Recipient is required for destination chain '{}'",
+            req.to_chain
+        )));
+    }
+
+    let mut garden_source_owner = if is_from_btc {
+        find_linked_wallet_for_chain(&linked_wallets, "bitcoin")
+    } else {
+        find_linked_wallet_for_chain(&linked_wallets, &from_chain_normalized)
+    };
+    if garden_source_owner.is_none() && is_from_btc {
+        if let Some(user_id) = req.xverse_user_id.as_deref() {
+            garden_source_owner = lookup_xverse_btc_address(&state, user_id).await?;
+        }
+    }
+    if garden_source_owner.is_none()
+        && (from_chain_normalized == "starknet" || from_chain_normalized == "ethereum")
+    {
+        garden_source_owner = Some(user_address.clone());
     }
 
     let amount: f64 = req
@@ -483,6 +689,8 @@ pub async fn execute_bridge(
 
     // Keep DB tx_hash within varchar(66), while exposing a human-friendly bridge_id.
     let mut bridge_id = build_bridge_id(&tx_hash);
+    let mut garden_deposit_address: Option<String> = None;
+    let mut garden_deposit_amount: Option<String> = None;
     let mut privacy_verification_tx: Option<String> = None;
     if should_hide {
         let verifier =
@@ -509,6 +717,22 @@ pub async fn execute_bridge(
     let best_route = optimizer
         .find_best_bridge_route(&req.from_chain, &req.to_chain, &req.token, amount)
         .await?;
+    let applied_nft_discount_percent = if let Some(discount_user) = discount_usage_user.as_deref() {
+        active_nft_discount_percent(&state, discount_user).await
+    } else {
+        0.0
+    };
+    let effective_bridge_fee =
+        best_route.fee * (1.0 - (applied_nft_discount_percent.clamp(0.0, 100.0) / 100.0));
+    if applied_nft_discount_percent > 0.0 {
+        tracing::debug!(
+            "Bridge fee discount applied: user={} discount_percent={} route_fee={} effective_fee={}",
+            user_address,
+            applied_nft_discount_percent,
+            best_route.fee,
+            effective_bridge_fee
+        );
+    }
 
     let estimated_receive = if let Some(raw) = req.estimated_out_amount.as_deref() {
         raw.parse::<f64>().unwrap_or(best_route.amount_out)
@@ -530,12 +754,12 @@ pub async fn execute_bridge(
         block_number: onchain_block_number,
         user_address: user_address.to_string(),
         tx_type: "bridge".to_string(),
-        token_in: Some(from_token),
-        token_out: Some(to_token),
+        token_in: Some(from_token.clone()),
+        token_out: Some(to_token.clone()),
         amount_in: Some(rust_decimal::Decimal::from_f64_retain(amount).unwrap()),
         amount_out: Some(rust_decimal::Decimal::from_f64_retain(estimated_receive).unwrap()),
         usd_value: Some(rust_decimal::Decimal::from_f64_retain(volume_usd).unwrap()),
-        fee_paid: Some(rust_decimal::Decimal::from_f64_retain(best_route.fee).unwrap()),
+        fee_paid: Some(rust_decimal::Decimal::from_f64_retain(effective_bridge_fee).unwrap()),
         points_earned: Some(rust_decimal::Decimal::ZERO),
         timestamp: chrono::Utc::now(),
         processed: false,
@@ -546,8 +770,7 @@ pub async fn execute_bridge(
         state.db.mark_transaction_private(&tx_hash).await?;
     }
     if let Some(discount_user) = discount_usage_user.as_deref() {
-        if let Err(err) =
-            consume_nft_usage_if_active(&state.config, discount_user, "bridge").await
+        if let Err(err) = consume_nft_usage_if_active(&state.config, discount_user, "bridge").await
         {
             tracing::warn!(
                 "Failed to consume NFT discount usage after bridge success: user={} tx_hash={} err={}",
@@ -570,7 +793,7 @@ pub async fn execute_bridge(
                 &state,
                 BRIDGE_STARKGATE,
                 amount,
-                best_route.fee,
+                effective_bridge_fee,
                 best_route.estimated_time_minutes,
             )
             .await
@@ -586,6 +809,8 @@ pub async fn execute_bridge(
             amount: req.amount,
             estimated_receive: estimated_receive.to_string(),
             estimated_time: estimate_time(response_provider).to_string(),
+            deposit_address: None,
+            deposit_amount: None,
         };
         return Ok(Json(ApiResponse::success(response)));
     }
@@ -613,7 +838,7 @@ pub async fn execute_bridge(
             token: req.token.clone(),
             amount_in: amount,
             amount_out: estimated_receive,
-            fee: best_route.fee,
+            fee: effective_bridge_fee,
             estimated_time_minutes: 15,
         };
         bridge_id = client.execute_bridge(&quote, &recipient).await?;
@@ -628,7 +853,7 @@ pub async fn execute_bridge(
             token: req.token.clone(),
             amount_in: amount,
             amount_out: estimated_receive,
-            fee: best_route.fee,
+            fee: effective_bridge_fee,
             estimated_time_minutes: 20,
         };
         bridge_id = client.execute_bridge(&quote, &recipient).await?;
@@ -637,23 +862,35 @@ pub async fn execute_bridge(
             state.config.garden_api_key.clone().unwrap_or_default(),
             state.config.garden_api_url.clone(),
         );
+        let source_owner = garden_source_owner.clone().ok_or_else(|| {
+            crate::error::AppError::BadRequest(
+                "Garden bridge requires source wallet address. Link source wallet (BTC/EVM/Starknet) or provide xverse_user_id for BTC."
+                    .to_string(),
+            )
+        })?;
         let quote = GardenQuote {
             from_chain: req.from_chain.clone(),
             to_chain: req.to_chain.clone(),
-            token: req.token.clone(),
+            from_token: from_token.clone(),
+            to_token: to_token.clone(),
             amount_in: amount,
             amount_out: estimated_receive,
-            fee: best_route.fee,
+            fee: effective_bridge_fee,
             estimated_time_minutes: 30,
         };
-        bridge_id = client.execute_bridge(&quote, &recipient).await?;
+        let submission = client
+            .execute_bridge(&quote, &source_owner, &recipient)
+            .await?;
+        bridge_id = submission.order_id;
+        garden_deposit_address = submission.deposit_address;
+        garden_deposit_amount = submission.deposit_amount;
     }
 
     if let Err(err) = invoke_bridge_aggregator(
         &state,
         &best_route.provider,
         amount,
-        best_route.fee,
+        effective_bridge_fee,
         best_route.estimated_time_minutes,
     )
     .await
@@ -669,9 +906,38 @@ pub async fn execute_bridge(
         amount: req.amount,
         estimated_receive: estimated_receive.to_string(),
         estimated_time: estimate_time(best_route.provider.as_str()).to_string(),
+        deposit_address: garden_deposit_address,
+        deposit_amount: garden_deposit_amount,
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+/// GET /api/v1/bridge/status/{bridge_id}
+pub async fn get_bridge_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(bridge_id): Path<String>,
+) -> Result<Json<ApiResponse<BridgeStatusResponse>>> {
+    let _ = require_user(&headers, &state).await?;
+
+    let client = GardenClient::new(
+        state.config.garden_api_key.clone().unwrap_or_default(),
+        state.config.garden_api_url.clone(),
+    );
+    let status = client.get_order_status(&bridge_id).await?;
+    let is_completed = status.destination_redeem_tx_hash.is_some();
+
+    Ok(Json(ApiResponse::success(BridgeStatusResponse {
+        bridge_id: status.order_id,
+        status: status.status,
+        is_completed,
+        version: status.version,
+        source_initiate_tx_hash: status.source_initiate_tx_hash,
+        source_redeem_tx_hash: status.source_redeem_tx_hash,
+        destination_initiate_tx_hash: status.destination_initiate_tx_hash,
+        destination_redeem_tx_hash: status.destination_redeem_tx_hash,
+    })))
 }
 
 async fn invoke_bridge_aggregator(
@@ -783,6 +1049,26 @@ mod tests {
         let normalized = normalize_bridge_onchain_tx_hash(Some(txid), "ethereum")
             .expect("evm tx hash should be valid");
         assert_eq!(normalized, format!("0x{}", txid));
+    }
+
+    #[test]
+    fn normalize_bridge_hash_allows_missing_btc_hash() {
+        let normalized = normalize_bridge_onchain_tx_hash(None, "bitcoin")
+            .expect("missing btc hash should generate internal correlation id");
+        assert_eq!(normalized.len(), 64);
+        assert!(normalized.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn normalize_bridge_hash_requires_non_btc_hash() {
+        let err = normalize_bridge_onchain_tx_hash(None, "starknet")
+            .expect_err("non-btc bridge must require user tx hash");
+        let message = err.to_string();
+        assert!(
+            message.contains("onchain_tx_hash"),
+            "unexpected error message: {}",
+            message
+        );
     }
 
     #[test]

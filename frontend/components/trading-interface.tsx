@@ -12,6 +12,8 @@ import {
   executeBridge,
   executeSwap,
   getBridgeQuote,
+  getGardenOrderInstantRefundHash,
+  getGardenOrderById,
   getOwnedNfts,
   getPortfolioBalance,
   getRewardsPoints,
@@ -75,6 +77,36 @@ type QuoteCacheEntry = {
   quoteError: string | null
 }
 
+type PendingBtcDepositState = {
+  bridgeId: string
+  depositAddress: string
+  amountSats: number
+  destinationChain: string
+  status?: string
+  txHash?: string | null
+  sourceInitiateTxHash?: string | null
+  destinationInitiateTxHash?: string | null
+  destinationRedeemTxHash?: string | null
+  refundTxHash?: string | null
+  instantRefundTx?: string | null
+  instantRefundHash?: string | null
+  lastUpdatedAt?: number
+}
+
+type GardenOrderProgress = {
+  status: string
+  sourceInitiateTxHash: string
+  destinationInitiateTxHash: string
+  destinationRedeemTxHash: string
+  sourceRefundTxHash: string
+  destinationRefundTxHash: string
+  instantRefundTx: string
+  isCompleted: boolean
+  isRefunded: boolean
+  isExpired: boolean
+  isRefundable: boolean
+}
+
 const TradePreviewDialog = dynamic(
   () => import("@/components/trade-preview-dialog").then((mod) => mod.TradePreviewDialog),
   { ssr: false }
@@ -84,7 +116,7 @@ const tokenCatalog = [
   { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 0, network: "Bitcoin Testnet" },
   { symbol: "ETH", name: "Ethereum", icon: "Ξ", price: 0, network: "Ethereum Sepolia" },
   { symbol: "STRK", name: "StarkNet", icon: "◈", price: 0, network: "Starknet Sepolia" },
-  { symbol: "CAREL", name: "ZkCarel", icon: "◇", price: 0, network: "Starknet Sepolia" },
+  { symbol: "CAREL", name: "Carel Protocol", icon: "◇", price: 0, network: "Starknet Sepolia" },
   { symbol: "USDC", name: "USD Coin", icon: "$", price: 0, network: "Starknet Sepolia" },
   { symbol: "USDT", name: "Tether", icon: "₮", price: 0, network: "Starknet Sepolia" },
   { symbol: "WBTC", name: "Wrapped BTC", icon: "₿", price: 0, network: "Starknet Sepolia" },
@@ -110,13 +142,23 @@ const STARKGATE_ETH_BRIDGE_ADDRESS =
 const STARKGATE_ETH_TOKEN_ADDRESS =
   process.env.NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS ||
   "0x0000000000000000000000000000000000455448"
+const BTC_TESTNET_EXPLORER_BASE_URL =
+  process.env.NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL || "https://mempool.space/testnet4"
+const BTC_TESTNET_FAUCET_URL =
+  process.env.NEXT_PUBLIC_BTC_TESTNET_FAUCET_URL || "https://testnet4.info/"
+const BTC_VAULT_ADDRESS = (process.env.NEXT_PUBLIC_BTC_VAULT_ADDRESS || "").trim()
 
 const STARKNET_TOKEN_ADDRESS: Record<string, string> = {
   CAREL:
     process.env.NEXT_PUBLIC_TOKEN_CAREL_ADDRESS ||
     "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545",
-  BTC: process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS || "0x2",
-  WBTC: process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS || process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS || "0x2",
+  BTC:
+    process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
+    "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5",
+  WBTC:
+    process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
+    process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
+    "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5",
   ETH: process.env.NEXT_PUBLIC_TOKEN_ETH_ADDRESS || "0x3",
   STRK:
     process.env.NEXT_PUBLIC_TOKEN_STRK_ADDRESS ||
@@ -141,18 +183,6 @@ const chainFromNetwork = (network: string) => {
   if (key.includes("ethereum")) return "ethereum"
   if (key.includes("starknet")) return "starknet"
   return key
-}
-
-const normalizeBtcTxHashInput = (raw: string): string => {
-  const trimmed = raw.trim().toLowerCase()
-  if (!trimmed) {
-    throw new Error("BTC tx hash wajib diisi untuk bridge native BTC.")
-  }
-  const body = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed
-  if (!/^[0-9a-f]{64}$/.test(body)) {
-    throw new Error("BTC tx hash tidak valid. Gunakan txid 64 karakter hex.")
-  }
-  return body
 }
 
 const convertAmountByUsdPrice = (
@@ -202,6 +232,149 @@ const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
   })
 }
 
+const estimatedBridgeTimeByProvider = (provider?: string) => {
+  const key = (provider || "").trim().toLowerCase()
+  if (!key) return "~15-20 min"
+  if (key.includes("garden")) return "~25-35 min"
+  if (key.includes("starkgate")) return "~10-15 min"
+  if (key.includes("atomiq")) return "~20-30 min"
+  if (key.includes("layerswap")) return "~15-20 min"
+  return "~15-20 min"
+}
+
+const normalizeEstimatedTimeLabel = ({
+  raw,
+  provider,
+  includeSwapLeg,
+}: {
+  raw?: unknown
+  provider?: string
+  includeSwapLeg?: boolean
+}) => {
+  const parseMinuteRange = (value: string): [number, number] | null => {
+    const normalized = value.trim().toLowerCase()
+    if (!normalized) return null
+    const rangeMatch = normalized.match(/(\d+)\s*-\s*(\d+)\s*min/)
+    if (rangeMatch) {
+      const min = Number.parseInt(rangeMatch[1], 10)
+      const max = Number.parseInt(rangeMatch[2], 10)
+      if (Number.isFinite(min) && Number.isFinite(max) && min > 0 && max >= min) {
+        return [min, max]
+      }
+    }
+    const singleMatch = normalized.match(/(\d+)\s*min/)
+    if (singleMatch) {
+      const minute = Number.parseInt(singleMatch[1], 10)
+      if (Number.isFinite(minute) && minute > 0) {
+        return [minute, minute]
+      }
+    }
+    return null
+  }
+
+  let base =
+    typeof raw === "string" && raw.trim().length > 0
+      ? raw.trim()
+      : estimatedBridgeTimeByProvider(provider)
+  if (includeSwapLeg) {
+    const parsed = parseMinuteRange(base)
+    if (parsed) {
+      const [baseMin, baseMax] = parsed
+      return `~${baseMin + 2}-${baseMax + 3} min total`
+    }
+    if (!/total/i.test(base)) {
+      return `${base} total`
+    }
+  }
+  return base
+}
+
+const formatBtcFromSats = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return "0.00000000 BTC"
+  return `${(value / 100_000_000).toFixed(8)} BTC`
+}
+
+const parseGardenOrderProgress = (orderPayload: unknown): GardenOrderProgress => {
+  const statusRaw = pickNestedString(orderPayload, ["status"]).toLowerCase()
+  const sourceInitiateTxHash =
+    pickNestedString(orderPayload, ["source_swap", "initiate_tx_hash"]) ||
+    pickNestedString(orderPayload, ["source_swap", "initiateTxHash"])
+  const destinationInitiateTxHash =
+    pickNestedString(orderPayload, ["destination_swap", "initiate_tx_hash"]) ||
+    pickNestedString(orderPayload, ["destination_swap", "initiateTxHash"])
+  const destinationRedeemTxHash =
+    pickNestedString(orderPayload, ["destination_swap", "redeem_tx_hash"]) ||
+    pickNestedString(orderPayload, ["destination_swap", "redeemTxHash"])
+  const sourceRefundTxHash =
+    pickNestedString(orderPayload, ["source_swap", "refund_tx_hash"]) ||
+    pickNestedString(orderPayload, ["source_swap", "refundTxHash"])
+  const destinationRefundTxHash =
+    pickNestedString(orderPayload, ["destination_swap", "refund_tx_hash"]) ||
+    pickNestedString(orderPayload, ["destination_swap", "refundTxHash"])
+  const instantRefundTx =
+    pickNestedString(orderPayload, ["source_swap", "instant_refund_tx"]) ||
+    pickNestedString(orderPayload, ["source_swap", "instantRefundTx"])
+
+  const isCompleted =
+    !!destinationRedeemTxHash ||
+    statusRaw === "completed" ||
+    statusRaw === "redeemed" ||
+    statusRaw === "success"
+  const isRefunded =
+    !!sourceRefundTxHash ||
+    !!destinationRefundTxHash ||
+    statusRaw === "refunded" ||
+    statusRaw === "refund_completed"
+  const isExpired = statusRaw === "expired"
+  const isRefundable =
+    !isCompleted &&
+    !isRefunded &&
+    (isExpired || statusRaw === "failed" || statusRaw === "cancelled" || !!instantRefundTx)
+
+  const status = (() => {
+    if (isCompleted) return "completed"
+    if (isRefunded) return "refunded"
+    if (isExpired) return "expired"
+    if (statusRaw === "failed" || statusRaw === "cancelled") return "failed"
+    if (statusRaw === "initiated" || sourceInitiateTxHash || destinationInitiateTxHash) {
+      return "initiated"
+    }
+    if (statusRaw === "in-progress" || statusRaw === "in_progress") return "processing"
+    if (statusRaw) return statusRaw
+    return "pending"
+  })()
+
+  return {
+    status,
+    sourceInitiateTxHash,
+    destinationInitiateTxHash,
+    destinationRedeemTxHash,
+    sourceRefundTxHash,
+    destinationRefundTxHash,
+    instantRefundTx,
+    isCompleted,
+    isRefunded,
+    isExpired,
+    isRefundable,
+  }
+}
+
+const broadcastBtcRawTransaction = async (rawTxHex: string): Promise<string> => {
+  const endpoint = `${BTC_TESTNET_EXPLORER_BASE_URL.replace(/\/$/, "")}/api/tx`
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "text/plain",
+    },
+    body: rawTxHex.trim(),
+  })
+  const payload = (await response.text()).trim()
+  if (!response.ok) {
+    throw new Error(payload || `Failed to broadcast refund tx (${response.status})`)
+  }
+  return payload
+}
+
 const formatMultiplier = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return "1x"
   const rounded = Math.round(value)
@@ -247,6 +420,14 @@ const parseLiquidityMaxFromQuoteError = (message: string, expectedSymbol: string
   if (!message) return null
   const expected = expectedSymbol.trim().toUpperCase()
   if (!expected) return null
+  const rangeMatch = message.match(/range of\s+([0-9]+)\s+to\s+([0-9]+)/i)
+  if (rangeMatch) {
+    const maxUnits = Number.parseFloat(rangeMatch[2] || "")
+    const decimals = resolveTokenDecimals(expected)
+    if (Number.isFinite(maxUnits) && maxUnits >= 0) {
+      return maxUnits / 10 ** decimals
+    }
+  }
   const patterns = [
     /maks sekitar\s+([0-9]+(?:[.,][0-9]+)?)\s+([a-z0-9]+)/i,
     /max(?:imum)?\s+around\s+([0-9]+(?:[.,][0-9]+)?)\s+([a-z0-9]+)/i,
@@ -263,6 +444,15 @@ const parseLiquidityMaxFromQuoteError = (message: string, expectedSymbol: string
     }
   }
   return null
+}
+
+const pickNestedString = (value: unknown, path: Array<string>): string => {
+  let current: any = value
+  for (const segment of path) {
+    if (!current || typeof current !== "object") return ""
+    current = current[segment]
+  }
+  return typeof current === "string" ? current.trim() : ""
 }
 
 interface TokenSelectorProps {
@@ -462,7 +652,18 @@ export function TradingInterface() {
           return wallet.onchainBalance.USDT ?? backendBalance
         }
         if (symbol === "WBTC" || symbol === "BTC") {
-          return wallet.onchainBalance.WBTC ?? backendBalance
+          const backendWbtcLike = Math.max(
+            backendBalance,
+            wallet.balance.WBTC ?? 0,
+            wallet.balance.BTC ?? 0
+          )
+          if (
+            typeof wallet.onchainBalance.WBTC === "number" &&
+            Number.isFinite(wallet.onchainBalance.WBTC)
+          ) {
+            return Math.max(wallet.onchainBalance.WBTC, backendWbtcLike)
+          }
+          return backendWbtcLike
         }
       }
       if (symbol === "BTC" && chain === "bitcoin" && wallet.btcAddress) {
@@ -583,7 +784,11 @@ export function TradingInterface() {
   const [receiveAddress, setReceiveAddress] = React.useState("")
   const [isReceiveAddressManual, setIsReceiveAddressManual] = React.useState(false)
   const [xverseUserId, setXverseUserId] = React.useState("")
-  const [btcBridgeTxHash, setBtcBridgeTxHash] = React.useState("")
+  const [btcVaultCopied, setBtcVaultCopied] = React.useState(false)
+  const [pendingBtcDeposit, setPendingBtcDeposit] = React.useState<PendingBtcDepositState | null>(null)
+  const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
+  const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
+  const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
 
   const formatSource = (source?: string) => {
     switch (source) {
@@ -614,6 +819,16 @@ export function TradingInterface() {
   const toPrice = toToken.price
   const fromChain = chainFromNetwork(fromNetwork)
   const toChain = chainFromNetwork(toNetwork)
+  const btcVaultExplorerUrl = React.useMemo(() => {
+    if (!BTC_VAULT_ADDRESS) return ""
+    const base = BTC_TESTNET_EXPLORER_BASE_URL.replace(/\/$/, "")
+    return `${base}/address/${encodeURIComponent(BTC_VAULT_ADDRESS)}`
+  }, [])
+  const btcDepositExplorerUrl = React.useMemo(() => {
+    if (!pendingBtcDeposit?.depositAddress) return ""
+    const base = BTC_TESTNET_EXPLORER_BASE_URL.replace(/\/$/, "")
+    return `${base}/address/${encodeURIComponent(pendingBtcDeposit.depositAddress)}`
+  }, [pendingBtcDeposit?.depositAddress])
 
   const preferredReceiveAddress = React.useMemo(
     () =>
@@ -649,21 +864,6 @@ export function TradingInterface() {
       window.sessionStorage.setItem("xverse_user_id", xverseUserId)
     }
   }, [xverseUserId])
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const stored = window.sessionStorage.getItem("btc_bridge_tx_hash") || ""
-    if (stored) {
-      setBtcBridgeTxHash(stored)
-    }
-  }, [])
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    if (btcBridgeTxHash.trim()) {
-      window.sessionStorage.setItem("btc_bridge_tx_hash", btcBridgeTxHash.trim())
-    }
-  }, [btcBridgeTxHash])
 
   React.useEffect(() => {
     let active = true
@@ -812,7 +1012,7 @@ export function TradingInterface() {
             setQuote(null)
             setToAmount("")
             setQuoteError(
-              "Arah STRK/Starknet -> ETH Sepolia belum didukung end-to-end. Gunakan ETH Sepolia -> Starknet Sepolia."
+              "STRK/Starknet -> ETH Sepolia is not fully supported end-to-end yet. Use ETH Sepolia -> Starknet Sepolia."
             )
             return
           }
@@ -856,10 +1056,11 @@ export function TradingInterface() {
                 ? normalizeTokenAmountDisplay(bridgeConvertedAmount as number, toSymbol)
                 : ""
               : normalizeTokenAmountDisplay(response.estimated_receive, toSymbol)
-          const estimatedTimeLabel =
-            fromSymbol !== toSymbol
-              ? `${response.estimated_time} + ~2-3 min swap`
-              : response.estimated_time
+          const estimatedTimeLabel = normalizeEstimatedTimeLabel({
+            raw: response.estimated_time,
+            provider: response.bridge_provider,
+            includeSwapLeg: fromSymbol !== toSymbol,
+          })
           const bridgeQuote: QuoteState = {
             type: "bridge",
             toAmount: displayToAmount,
@@ -875,7 +1076,7 @@ export function TradingInterface() {
           }
           const bridgeQuoteError =
             fromSymbol !== toSymbol && !displayToAmount
-              ? "Estimasi cross-token belum tersedia (harga live token tujuan belum masuk)."
+              ? "Cross-token estimate is not available yet (destination live price not loaded)."
               : null
           setToAmount(displayToAmount)
           setQuote(bridgeQuote)
@@ -952,7 +1153,10 @@ export function TradingInterface() {
             feeUnit: "usd",
             protocolFee,
             mevFee,
-            estimatedTime: response.estimated_time,
+            estimatedTime:
+              typeof response.estimated_time === "string" && response.estimated_time.trim().length > 0
+                ? response.estimated_time.trim()
+                : "~1-2 min",
             priceImpact: normalizedByLivePrice ? fallbackPriceImpact : response.price_impact,
             normalizedByLivePrice,
             onchainCalls,
@@ -1008,6 +1212,9 @@ export function TradingInterface() {
   const fromValueUSD = Number.parseFloat(fromAmount || "0") * fromToken.price
   const hasQuote = Boolean(quote)
   const bridgeTokenMismatch = isCrossChain && fromToken.symbol !== toToken.symbol
+  const tokenFeeDigits = ["BTC", "WBTC"].includes(fromToken.symbol.toUpperCase()) ? 8 : 6
+  const formatTokenFeeValue = (amount: number) =>
+    `${formatTokenAmount(Math.max(0, amount), tokenFeeDigits)} ${fromToken.symbol}`
   const rawFeeAmount = hasQuote ? quote?.fee ?? 0 : null
   const feeUnit = quote?.feeUnit || (quote?.type === "bridge" ? "token" : "usd")
   const discountRate = hasNftDiscount ? Math.min(Math.max(discountPercent, 0), 100) / 100 : 0
@@ -1016,15 +1223,20 @@ export function TradingInterface() {
   const rawNetworkFee = quote?.networkFee
   const protocolFeeEffective =
     rawProtocolFee === undefined
-      ? undefined
+      ? hasQuote
+        ? 0
+        : undefined
       : rawProtocolFee * (1 - discountRate)
   const mevFeeEffective =
     rawMevFee === undefined
-      ? undefined
+      ? hasQuote
+        ? 0
+        : undefined
       : rawMevFee * (1 - discountRate)
+  const networkFeeEffective = hasQuote ? Math.max(0, rawNetworkFee ?? 0) : 0
   const feeAmount =
     hasQuote
-      ? (protocolFeeEffective ?? 0) + (mevFeeEffective ?? 0) + (rawNetworkFee ?? 0)
+      ? (protocolFeeEffective ?? 0) + (mevFeeEffective ?? 0) + networkFeeEffective
       : null
   const feeUsdAmount =
     feeAmount === null
@@ -1046,27 +1258,27 @@ export function TradingInterface() {
     feeAmount === null
       ? "—"
       : feeUnit === "token"
-      ? `${formatTokenAmount(feeAmount, 6)} ${fromToken.symbol}${
+      ? `${formatTokenFeeValue(feeAmount)}${
           feeUsdAmount !== null && feeUsdAmount > 0 ? ` (~$${feeUsdAmount.toFixed(2)})` : ""
         }`
       : `$${(feeAmount ?? 0).toFixed(2)}`
   const protocolFeeDisplay =
-    protocolFeeEffective === undefined
+    !hasQuote || protocolFeeEffective === undefined
       ? "—"
       : feeUnit === "token"
-      ? `${formatTokenAmount(protocolFeeEffective, 6)} ${fromToken.symbol}`
+      ? formatTokenFeeValue(protocolFeeEffective)
       : `$${protocolFeeEffective.toFixed(2)}`
   const networkFeeDisplay =
-    quote?.networkFee === undefined || quote.networkFee <= 0
+    !hasQuote || quote?.type !== "bridge"
       ? "—"
-      : `${formatTokenAmount(quote.networkFee, 6)} ${fromToken.symbol}`
+      : formatTokenFeeValue(networkFeeEffective)
   const mevFeeDisplay =
-    mevFeeEffective === undefined || mevFeeEffective <= 0
+    !hasQuote || mevFeeEffective === undefined
       ? "—"
       : feeUnit === "token"
-      ? `${formatTokenAmount(mevFeeEffective, 6)} ${fromToken.symbol}`
+      ? formatTokenFeeValue(mevFeeEffective)
       : `$${mevFeeEffective.toFixed(2)}`
-  const mevFeePercent = mevProtection ? "1.0" : "0.0"
+  const mevFeePercent = mevProtection ? (MEV_FEE_RATE * 100).toFixed(1) : "0.0"
   const basePointsEarned = hasQuote ? Math.max(0, Math.floor(fromValueUSD * 10)) : null
   const nftPointsMultiplier = hasNftDiscount ? 1 + discountRate : 1
   const normalizedStakeMultiplier =
@@ -1077,7 +1289,10 @@ export function TradingInterface() {
       ? null
       : Math.max(0, Math.floor(basePointsEarned * effectivePointsMultiplier))
   const showPointsMultiplier = normalizedStakeMultiplier > 1 || nftPointsMultiplier > 1
-  const estimatedTime = hasQuote ? quote?.estimatedTime || "—" : "—"
+  const estimatedTime = hasQuote
+    ? (quote?.estimatedTime || "").trim() ||
+      (quote?.type === "bridge" ? estimatedBridgeTimeByProvider(quote?.provider) : "~1-2 min")
+    : "—"
   
   // Price Impact calculation
   const priceImpact = quote?.priceImpact
@@ -1086,6 +1301,49 @@ export function TradingInterface() {
 
   const activeSlippage = customSlippage || slippage
   const routeLabel = isCrossChain ? (quote?.provider || "Bridge") : "Auto"
+  const isBtcGardenRoute =
+    isCrossChain &&
+    fromChain === "bitcoin" &&
+    (routeLabel || "").trim().toLowerCase() === "garden"
+  const bridgeProviderKey = (quote?.provider || "").trim().toLowerCase()
+  const isStarkgateBridgeRoute = quote?.type === "bridge" && bridgeProviderKey === "starkgate"
+  const bridgeProtocolFeeLabel = isStarkgateBridgeRoute ? "StarkGate Fee" : "Bridge Fee"
+  const bridgeNetworkFeeLabel = isStarkgateBridgeRoute ? "Network Gas (est.)" : "Network Fee (est.)"
+  const showPendingBtcDeposit = Boolean(pendingBtcDeposit)
+  const pendingOrderStatus = (
+    pendingBtcDeposit?.status ||
+    (pendingBtcDeposit?.txHash ? "processing" : "pending_deposit")
+  )
+    .trim()
+    .toLowerCase()
+  const pendingIsFinalized =
+    pendingOrderStatus === "completed" || pendingOrderStatus === "refunded"
+  const pendingCanClaimRefund =
+    Boolean(
+      pendingBtcDeposit &&
+        !pendingIsFinalized &&
+        (pendingOrderStatus === "expired" ||
+          pendingOrderStatus === "failed" ||
+          pendingBtcDeposit.instantRefundTx ||
+          pendingBtcDeposit.instantRefundHash)
+    )
+  const pendingStatusLabel = (() => {
+    if (pendingOrderStatus === "pending_deposit") return "Pending deposit"
+    if (pendingOrderStatus === "initiated" || pendingOrderStatus === "processing") {
+      return "Processing"
+    }
+    if (pendingOrderStatus === "expired") return "Expired"
+    if (pendingOrderStatus === "refunded") return "Refunded"
+    if (pendingOrderStatus === "completed") return "Completed"
+    if (pendingOrderStatus === "failed") return "Failed"
+    return pendingOrderStatus || "Pending"
+  })()
+  const pendingStatusClassName =
+    pendingOrderStatus === "completed" || pendingOrderStatus === "refunded"
+      ? "text-success"
+      : pendingOrderStatus === "expired" || pendingOrderStatus === "failed"
+      ? "text-warning"
+      : "text-muted-foreground"
   const isSwapContractEventOnly = React.useMemo(() => {
     const forcedEventOnly = (process.env.NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY || "").toLowerCase()
     if (forcedEventOnly === "1" || forcedEventOnly === "true") {
@@ -1116,7 +1374,7 @@ export function TradingInterface() {
     fromToken.symbol.toUpperCase() === "STRK" && sourceChain === "starknet"
   const effectiveFromBalance =
     shouldRequireLiveStarknetBalance && typeof fromTokenLiveBalance === "number"
-      ? fromTokenLiveBalance
+      ? Math.max(fromTokenLiveBalance, fromToken.balance || 0)
       : fromToken.balance || 0
   const maxSpendableFromBalance = Math.max(
     0,
@@ -1149,8 +1407,6 @@ export function TradingInterface() {
     }
   }, [fromAmount, fromToken.symbol, maxExecutableFromAllLimits, onchainBalanceUnavailable])
   const resolvedReceiveAddress = (receiveAddress || preferredReceiveAddress).trim()
-  const requiresBtcTxHash = isCrossChain && sourceChain === "bitcoin"
-  const isBtcTxHashValid = !requiresBtcTxHash || /^[0-9a-fA-F]{64}$/.test((btcBridgeTxHash || "").trim().replace(/^0x/i, ""))
   const hasValidQuote = hasQuote && !quoteError
   const hasPreparedOnchainSwapCalls =
     quote?.type === "swap" && Array.isArray(quote.onchainCalls) && quote.onchainCalls.length > 0
@@ -1158,27 +1414,25 @@ export function TradingInterface() {
     Number.isFinite(fromToken.balance) && fromToken.balance > 0
   const executeDisabledReason =
     !wallet.isConnected
-      ? "Connect wallet dulu."
+      ? "Connect your wallet first."
       : !hasPositiveAmount
-      ? "Masukkan amount yang valid."
+      ? "Enter a valid amount."
       : onchainBalanceUnavailable && !hasFallbackPositiveBalance
-      ? `Saldo on-chain ${fromToken.symbol} belum terbaca. Tunggu refresh saldo dulu.`
+      ? `On-chain ${fromToken.symbol} balance is not available yet. Wait for balance refresh.`
       : hasInsufficientBalance
-      ? `Amount melebihi saldo. Maks ${formatTokenAmount(maxSpendableFromBalance, 6)} ${fromToken.symbol}${
-          needsStarknetGasReserve ? " (sudah sisakan gas)" : ""
+      ? `Amount exceeds balance. Max ${formatTokenAmount(maxSpendableFromBalance, 6)} ${fromToken.symbol}${
+          needsStarknetGasReserve ? " (gas reserve already kept)" : ""
         }.`
       : hasInsufficientLiquidityCap
-      ? `Likuiditas route saat ini membatasi amount. Maks ${formatTokenAmount(maxExecutableFromAllLimits, 6)} ${fromToken.symbol}.`
+      ? `Current route liquidity limits the amount. Max ${formatTokenAmount(maxExecutableFromAllLimits, 6)} ${fromToken.symbol}.`
       : isStarknetPairSwap && isSwapContractEventOnly
-      ? "Swap real token belum aktif: kontrak saat ini event-only (hanya event + gas)."
+      ? "Real-token swap is not active yet: current contract is event-only (events + gas only)."
       : !hasValidQuote
-      ? quoteError || "Quote belum siap."
+      ? quoteError || "Quote is not ready yet."
       : isStarknetPairSwap && !hasPreparedOnchainSwapCalls
-      ? "Quote on-chain calldata belum siap. Refresh quote lagi."
+      ? "Quote on-chain calldata is not ready yet. Refresh the quote."
       : isCrossChain && !resolvedReceiveAddress
-      ? "Receive address wajib diisi."
-      : !isBtcTxHashValid
-      ? "BTC tx hash harus 64 hex."
+      ? "Receive address is required."
       : null
   const executeButtonLabel = (() => {
     if (swapState === "confirming") {
@@ -1222,24 +1476,61 @@ export function TradingInterface() {
     }
     return "starknet"
   }, [wallet.provider])
+  const btcProviderLabel = React.useMemo(() => {
+    if (wallet.btcProvider === "xverse") return "Xverse"
+    if (wallet.btcProvider === "unisat") return "UniSat"
+    return "UniSat/Xverse"
+  }, [wallet.btcProvider])
+
+  const openExternalUrl = React.useCallback((url: string) => {
+    if (!url || typeof window === "undefined") return
+    window.open(url, "_blank", "noopener,noreferrer")
+  }, [])
+
+  const handleCopyBtcVaultAddress = React.useCallback(async () => {
+    if (!BTC_VAULT_ADDRESS) {
+      notifications.addNotification({
+        type: "warning",
+        title: "Vault address not configured",
+        message: "Set NEXT_PUBLIC_BTC_VAULT_ADDRESS di frontend/.env.local.",
+      })
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(BTC_VAULT_ADDRESS)
+      setBtcVaultCopied(true)
+      window.setTimeout(() => setBtcVaultCopied(false), 1800)
+      notifications.addNotification({
+        type: "success",
+        title: "Vault address copied",
+        message: "BTC vault address copied to clipboard.",
+      })
+    } catch {
+      notifications.addNotification({
+        type: "error",
+        title: "Copy failed",
+        message: "Unable to copy BTC vault address.",
+      })
+    }
+  }, [notifications])
 
   const submitOnchainSwapTx = React.useCallback(async () => {
     const fromChain = chainFromNetwork(fromToken.network)
     const toChain = chainFromNetwork(toToken.network)
     if (fromChain !== "starknet" || toChain !== "starknet") {
       throw new Error(
-        "On-chain user-sign untuk swap saat ini difokuskan ke pair Starknet. Gunakan pair Starknet ↔ Starknet atau mode bridge."
+        "On-chain swap signing currently supports Starknet pairs only. Use Starknet ↔ Starknet pair or bridge mode."
       )
     }
     if (isSwapContractEventOnly) {
       throw new Error(
-        "Kontrak swap saat ini event-only, belum memindahkan token real. Aktifkan/deploy real swap router dulu."
+        "Current swap contract is event-only and does not move real tokens yet. Enable/deploy the real swap router first."
       )
     }
     const preparedCalls = quote?.type === "swap" ? quote.onchainCalls || [] : []
     if (!preparedCalls.length) {
       throw new Error(
-        "Quote swap belum mengandung calldata on-chain. Refresh quote lalu coba lagi."
+        "Swap quote does not include on-chain calldata yet. Refresh quote and try again."
       )
     }
 
@@ -1263,12 +1554,6 @@ export function TradingInterface() {
     const fromChain = chainFromNetwork(fromToken.network)
     const toChain = chainFromNetwork(toToken.network)
     const recipient = (receiveAddress || preferredReceiveAddress).trim()
-    if (fromChain === "bitcoin") {
-      if (toChain !== "starknet") {
-        throw new Error("Bridge BTC native saat ini hanya didukung untuk tujuan Starknet.")
-      }
-      return normalizeBtcTxHashInput(btcBridgeTxHash)
-    }
     if (fromChain === "ethereum") {
       if (fromToken.symbol.toUpperCase() !== "ETH") {
         throw new Error(
@@ -1276,7 +1561,7 @@ export function TradingInterface() {
         )
       }
       if (toChain !== "starknet") {
-        throw new Error("Bridge source Ethereum saat ini hanya didukung untuk tujuan Starknet.")
+        throw new Error("Ethereum source bridge currently supports Starknet destination only.")
       }
       if (!recipient) {
         throw new Error("Starknet recipient address is required for StarkGate bridge.")
@@ -1297,17 +1582,19 @@ export function TradingInterface() {
     }
 
     if (fromChain !== "starknet") {
-      throw new Error("On-chain bridge currently supports Bitcoin/Ethereum/Starknet source only.")
+      throw new Error(
+        "On-chain bridge signing currently supports Ethereum/Starknet sources only. Native BTC source must create an order first, then deposit to the Garden address."
+      )
     }
     if (toChain === "ethereum") {
       throw new Error(
-        "STRK/Starknet -> ETH Sepolia withdrawal belum didukung end-to-end di UI ini. Saat ini bridge on-chain stabil hanya ETH Sepolia -> Starknet Sepolia."
+        "STRK/Starknet -> ETH Sepolia withdrawal is not fully supported end-to-end in this UI. The stable on-chain path currently is ETH Sepolia -> Starknet Sepolia only."
       )
     }
 
     if (!STARKNET_BRIDGE_AGGREGATOR_ADDRESS) {
       throw new Error(
-        "NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS belum diisi. Set alamat bridge aggregator Starknet di frontend/.env.local."
+        "NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS is not set. Configure Starknet bridge aggregator address in frontend/.env.local."
       )
     }
     const activeBridgeQuote =
@@ -1339,7 +1626,6 @@ export function TradingInterface() {
       starknetProviderHint
     )
   }, [
-    btcBridgeTxHash,
     fromAmount,
     fromToken.network,
     fromToken.symbol,
@@ -1355,6 +1641,264 @@ export function TradingInterface() {
     setPreviewOpen(true)
   }
 
+  const pollGardenBridgeOrder = React.useCallback(
+    async (bridgeId: string, destinationChain: string) => {
+      const maxAttempts = 18
+      const intervalMs = 10_000
+      const txNetwork: "btc" | "evm" | "starknet" =
+        destinationChain === "bitcoin"
+          ? "btc"
+          : destinationChain === "ethereum"
+          ? "evm"
+          : "starknet"
+
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        if (attempt > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, intervalMs))
+        }
+        try {
+          const orderResponse = await getGardenOrderById(bridgeId)
+          const orderPayload = (orderResponse as any)?.result ?? orderResponse
+          const progress = parseGardenOrderProgress(orderPayload)
+          const previousStatus = lastGardenOrderStatusRef.current[bridgeId]
+          const didStatusChange = previousStatus !== progress.status
+          lastGardenOrderStatusRef.current[bridgeId] = progress.status
+
+          setPendingBtcDeposit((prev) =>
+            prev && prev.bridgeId === bridgeId
+              ? {
+                  ...prev,
+                  status: progress.status,
+                  sourceInitiateTxHash: progress.sourceInitiateTxHash || null,
+                  destinationInitiateTxHash: progress.destinationInitiateTxHash || null,
+                  destinationRedeemTxHash: progress.destinationRedeemTxHash || null,
+                  refundTxHash:
+                    progress.sourceRefundTxHash ||
+                    progress.destinationRefundTxHash ||
+                    prev.refundTxHash ||
+                    null,
+                  instantRefundTx: progress.instantRefundTx || prev.instantRefundTx || null,
+                  lastUpdatedAt: Date.now(),
+                }
+              : prev
+          )
+
+          if (progress.isCompleted) {
+            const txHash =
+              progress.destinationRedeemTxHash ||
+              progress.destinationInitiateTxHash ||
+              progress.sourceInitiateTxHash
+            if (didStatusChange) {
+              notifications.addNotification({
+                type: "success",
+                title: "Bridge completed",
+                message: `Order ${bridgeId.slice(0, 10)}... selesai di chain tujuan.`,
+                txHash: txHash || undefined,
+                txNetwork,
+              })
+            }
+            setPendingBtcDeposit((prev) => (prev && prev.bridgeId === bridgeId ? null : prev))
+            delete lastGardenOrderStatusRef.current[bridgeId]
+            await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
+            const [nftState, rewardsState] = await Promise.allSettled([
+              getOwnedNfts({ force: true }),
+              getRewardsPoints({ force: true }),
+            ])
+            if (nftState.status === "fulfilled") {
+              const now = Math.floor(Date.now() / 1000)
+              const usable = nftState.value.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
+              setActiveNft(usable || null)
+            }
+            if (rewardsState.status === "fulfilled") {
+              const parsedMultiplier = Number(rewardsState.value.multiplier)
+              setStakePointsMultiplier(
+                Number.isFinite(parsedMultiplier) && parsedMultiplier > 0 ? parsedMultiplier : 1
+              )
+            }
+            return
+          }
+
+          if (progress.isRefunded) {
+            const refundTxHash =
+              progress.sourceRefundTxHash || progress.destinationRefundTxHash || undefined
+            if (didStatusChange) {
+              notifications.addNotification({
+                type: "success",
+                title: "Refund completed",
+                message: `Order ${bridgeId.slice(0, 10)}... has been refunded.`,
+                txHash: refundTxHash,
+                txNetwork: "btc",
+              })
+            }
+            lastGardenOrderStatusRef.current[bridgeId] = "refunded"
+            await wallet.refreshOnchainBalances()
+            return
+          }
+
+          if (progress.isExpired && didStatusChange) {
+            notifications.addNotification({
+              type: "warning",
+              title: "Order expired",
+              message: `Order ${bridgeId.slice(0, 10)}... expired. Click Claim Refund to process BTC return.`,
+            })
+          }
+
+          if (
+            didStatusChange &&
+            (progress.status === "initiated" || progress.status === "processing")
+          ) {
+            notifications.addNotification({
+              type: "info",
+              title: "Bridge processing",
+              message: `Order ${bridgeId.slice(0, 10)}... is waiting for settlement.`,
+            })
+          }
+        } catch {
+          // ignore transient polling errors
+        }
+      }
+
+      const status = lastGardenOrderStatusRef.current[bridgeId]
+      if (status !== "completed" && status !== "refunded") {
+        notifications.addNotification({
+          type: "info",
+          title: "Bridge still processing",
+          message: `Order ${bridgeId.slice(0, 10)}... masih diproses solver. Cek lagi beberapa menit.`,
+        })
+      }
+    },
+    [notifications, wallet]
+  )
+
+  const handleSendBtcDepositFromWallet = React.useCallback(async () => {
+    if (!pendingBtcDeposit) return
+    if (pendingBtcDeposit.amountSats <= 0) {
+      notifications.addNotification({
+        type: "warning",
+        title: "Invalid BTC amount",
+        message: "Deposit amount from order is invalid. Create a new bridge order.",
+      })
+      return
+    }
+
+    setIsSendingBtcDeposit(true)
+    try {
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: "Approve BTC transfer in UniSat/Xverse popup.",
+      })
+      const txHash = await wallet.sendBtcTransaction(
+        pendingBtcDeposit.depositAddress,
+        pendingBtcDeposit.amountSats
+      )
+      setPendingBtcDeposit((prev) =>
+        prev
+          ? {
+              ...prev,
+              txHash,
+              status: "processing",
+              lastUpdatedAt: Date.now(),
+            }
+          : prev
+      )
+      lastGardenOrderStatusRef.current[pendingBtcDeposit.bridgeId] = "processing"
+      notifications.addNotification({
+        type: "success",
+        title: "BTC deposit submitted",
+        message: `Deposit tx ${txHash.slice(0, 12)}... sent to Garden address.`,
+        txHash,
+        txNetwork: "btc",
+      })
+      void pollGardenBridgeOrder(pendingBtcDeposit.bridgeId, pendingBtcDeposit.destinationChain)
+      await wallet.refreshOnchainBalances()
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Send BTC failed",
+        message: error instanceof Error ? error.message : "Failed to send BTC deposit transaction.",
+      })
+    } finally {
+      setIsSendingBtcDeposit(false)
+    }
+  }, [notifications, pendingBtcDeposit, pollGardenBridgeOrder, wallet])
+
+  const handleClaimInstantRefund = React.useCallback(async () => {
+    if (!pendingBtcDeposit) return
+    setIsClaimingRefund(true)
+    try {
+      const orderLabel = pendingBtcDeposit.bridgeId.slice(0, 10)
+      const instantRefundTx = (pendingBtcDeposit.instantRefundTx || "").trim()
+
+      if (instantRefundTx) {
+        notifications.addNotification({
+          type: "info",
+          title: "Broadcasting refund tx",
+          message: `Broadcasting instant refund tx for order ${orderLabel}...`,
+        })
+        const refundTxHash = await broadcastBtcRawTransaction(instantRefundTx)
+        setPendingBtcDeposit((prev) =>
+          prev && prev.bridgeId === pendingBtcDeposit.bridgeId
+            ? {
+                ...prev,
+                status: "refunded",
+                refundTxHash,
+                lastUpdatedAt: Date.now(),
+              }
+            : prev
+        )
+        notifications.addNotification({
+          type: "success",
+          title: "Refund submitted",
+          message: `Refund tx ${refundTxHash.slice(0, 12)}... broadcast successfully.`,
+          txHash: refundTxHash,
+          txNetwork: "btc",
+        })
+        await wallet.refreshOnchainBalances()
+        void pollGardenBridgeOrder(pendingBtcDeposit.bridgeId, pendingBtcDeposit.destinationChain)
+        return
+      }
+
+      const refundResponse = await getGardenOrderInstantRefundHash(pendingBtcDeposit.bridgeId)
+      const instantRefundHash =
+        typeof refundResponse?.result === "string" ? refundResponse.result.trim() : ""
+      if (!instantRefundHash) {
+        throw new Error("Garden did not return an instant refund hash for this order.")
+      }
+      let copied = false
+      try {
+        await navigator.clipboard.writeText(instantRefundHash)
+        copied = true
+      } catch {
+        copied = false
+      }
+      setPendingBtcDeposit((prev) =>
+        prev && prev.bridgeId === pendingBtcDeposit.bridgeId
+          ? {
+              ...prev,
+              instantRefundHash,
+              lastUpdatedAt: Date.now(),
+            }
+          : prev
+      )
+      notifications.addNotification({
+        type: "info",
+        title: "Instant refund hash ready",
+        message: copied
+          ? `Refund hash for order ${orderLabel}... copied. Continue refund flow in wallet/Garden.`
+          : `Refund hash for order ${orderLabel}... ready. Copy the hash from the panel and continue refund.`,
+      })
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Claim refund failed",
+        message: error instanceof Error ? error.message : "Unable to process instant refund.",
+      })
+    } finally {
+      setIsClaimingRefund(false)
+    }
+  }, [notifications, pendingBtcDeposit, pollGardenBridgeOrder, wallet])
+
   const confirmTrade = async () => {
     setPreviewOpen(false)
     setSwapState("confirming")
@@ -1366,34 +1910,47 @@ export function TradingInterface() {
         const recipient = (receiveAddress || preferredReceiveAddress).trim()
         const sourceChain = chainFromNetwork(fromToken.network)
         const toChain = chainFromNetwork(toToken.network)
-        const xverseHint =
-          toChain === "bitcoin" && !recipient && xverseUserId.trim()
-            ? xverseUserId.trim()
-            : undefined
-        if (!recipient && !xverseHint) {
+        const xverseHint = xverseUserId.trim() || undefined
+        const recipientFallbackFromXverse =
+          toChain === "bitcoin" && !recipient ? xverseHint : undefined
+        if (!recipient && !recipientFallbackFromXverse) {
           throw new Error(`Recipient ${toChain} address is required.`)
         }
 
-        notifications.addNotification({
-          type: "info",
-          title: "Wallet signature required",
-          message:
-            sourceChain === "ethereum"
-              ? "Confirm bridge transaction in MetaMask (StarkGate). Nilai final di MetaMask termasuk amount + L1 message fee + gas, jadi bisa sedikit beda dari estimasi UI."
-              : sourceChain === "bitcoin"
-              ? "Bridge BTC native: kirim BTC ke vault lewat wallet BTC, lalu isi BTC Tx Hash di form ini."
-              : "Confirm bridge transaction in your Starknet wallet.",
-        })
-        const onchainTxHash = await submitOnchainBridgeTx()
-        const txNetwork = sourceChain === "ethereum" ? "evm" : sourceChain === "bitcoin" ? "btc" : "starknet"
+        const isSourceBitcoin = sourceChain === "bitcoin"
+        const txNetwork: "btc" | "evm" | "starknet" =
+          sourceChain === "ethereum" ? "evm" : sourceChain === "bitcoin" ? "btc" : "starknet"
+        let onchainTxHash: string | null = null
+        let btcDepositTxHash: string | null = null
+        let btcAutoSendAttempted = false
+        let btcAutoSendSucceeded = false
 
-        notifications.addNotification({
-          type: "info",
-          title: "Bridge pending",
-          message: `Bridge ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
-          txHash: onchainTxHash,
-          txNetwork,
-        })
+        if (isSourceBitcoin) {
+          notifications.addNotification({
+            type: "info",
+            title: "Create BTC bridge order",
+            message:
+              "Submitting Garden order. After the order is created, send BTC to the provided deposit address.",
+          })
+        } else {
+          notifications.addNotification({
+            type: "info",
+            title: "Wallet signature required",
+            message:
+              sourceChain === "ethereum"
+                ? "Confirm bridge transaction in MetaMask (StarkGate). Final value in MetaMask includes amount + L1 message fee + gas, so it may differ slightly from the UI estimate."
+                : "Confirm bridge transaction in your Starknet wallet.",
+          })
+          onchainTxHash = await submitOnchainBridgeTx()
+          notifications.addNotification({
+            type: "info",
+            title: "Bridge pending",
+            message: `Bridge ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+            txHash: onchainTxHash,
+            txNetwork,
+          })
+        }
+
         const response = await executeBridge({
           from_chain: sourceChain,
           to_chain: toChain,
@@ -1402,22 +1959,132 @@ export function TradingInterface() {
           estimated_out_amount: quote?.toAmount || toAmount || undefined,
           amount: fromAmount,
           recipient,
-          xverse_user_id: xverseHint,
-          onchain_tx_hash: onchainTxHash,
+          xverse_user_id:
+            sourceChain === "bitcoin" || toChain === "bitcoin" ? xverseHint : undefined,
+          onchain_tx_hash: onchainTxHash || undefined,
           mode: mevProtection ? "private" : "transparent",
         })
         const normalizedStatus = (response.status || "").toLowerCase()
         const isBridgeFinalized = normalizedStatus === "completed" || normalizedStatus === "success"
         tradeFinalized = isBridgeFinalized
-        notifications.addNotification({
-          type: isBridgeFinalized ? "success" : "info",
-          title: isBridgeFinalized ? "Bridge completed" : "Bridge submitted",
-          message: isBridgeFinalized
-            ? `Bridge ${fromAmount} ${fromToken.symbol} ke ${toToken.symbol} selesai. Tx: ${onchainTxHash}`
-            : `Bridge ${fromAmount} ${fromToken.symbol} masih proses settlement ke Starknet (~5-20 menit). Tx: ${onchainTxHash}`,
-          txHash: onchainTxHash,
-          txNetwork,
-        })
+
+        if (sourceChain === "bitcoin" && response.deposit_address) {
+          const parsedAmountSats = Number.parseInt(String(response.deposit_amount || "0"), 10)
+          const amountSats = Number.isFinite(parsedAmountSats) && parsedAmountSats > 0 ? parsedAmountSats : 0
+          const btcAmountDisplay =
+            amountSats > 0
+              ? formatBtcFromSats(amountSats)
+              : "required amount"
+          setPendingBtcDeposit({
+            bridgeId: response.bridge_id,
+            depositAddress: response.deposit_address,
+            amountSats,
+            destinationChain: toChain,
+            status: "pending_deposit",
+            txHash: null,
+            sourceInitiateTxHash: null,
+            destinationInitiateTxHash: null,
+            destinationRedeemTxHash: null,
+            refundTxHash: null,
+            instantRefundTx: null,
+            instantRefundHash: null,
+            lastUpdatedAt: Date.now(),
+          })
+          lastGardenOrderStatusRef.current[response.bridge_id] = "pending_deposit"
+          notifications.addNotification({
+            type: "info",
+            title: "Bridge order created",
+            message: `Order ${response.bridge_id.slice(0, 10)}... ready. Send ${btcAmountDisplay} to ${response.deposit_address} to continue settlement.`,
+          })
+
+          if (wallet.btcAddress && amountSats > 0) {
+            btcAutoSendAttempted = true
+            setIsSendingBtcDeposit(true)
+            try {
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: "Approve BTC transfer in UniSat/Xverse popup.",
+              })
+              btcDepositTxHash = await wallet.sendBtcTransaction(response.deposit_address, amountSats)
+              btcAutoSendSucceeded = true
+              setPendingBtcDeposit((prev) =>
+                prev && prev.bridgeId === response.bridge_id
+                  ? {
+                      ...prev,
+                      txHash: btcDepositTxHash,
+                      status: "processing",
+                      lastUpdatedAt: Date.now(),
+                    }
+                  : prev
+              )
+              lastGardenOrderStatusRef.current[response.bridge_id] = "processing"
+              notifications.addNotification({
+                type: "success",
+                title: "BTC deposit submitted",
+                message: `Deposit tx ${btcDepositTxHash.slice(0, 12)}... sent to Garden address.`,
+                txHash: btcDepositTxHash,
+                txNetwork: "btc",
+              })
+              void pollGardenBridgeOrder(response.bridge_id, toChain)
+              await wallet.refreshOnchainBalances()
+            } catch (depositError) {
+              notifications.addNotification({
+                type: "warning",
+                title: "Auto-send BTC skipped",
+                message:
+                  depositError instanceof Error
+                    ? `${depositError.message} Continue with manual send via Send BTC button.`
+                    : "Popup wallet dibatalkan/gagal. Continue with manual send via Send BTC button.",
+              })
+            } finally {
+              setIsSendingBtcDeposit(false)
+            }
+          } else if (!wallet.btcAddress) {
+            notifications.addNotification({
+              type: "warning",
+              title: "BTC wallet not connected",
+              message: "Connect UniSat/Xverse first to send BTC deposit on-chain.",
+            })
+          }
+        } else if (sourceChain === "bitcoin") {
+          setPendingBtcDeposit(null)
+          notifications.addNotification({
+            type: "warning",
+            title: "Deposit address missing",
+            message: "Order was created, but BTC deposit address is not available yet. Refresh quote and submit again.",
+          })
+        }
+
+        const isGardenProvider = ((quote?.provider || "").trim().toLowerCase() === "garden")
+        if (!isBridgeFinalized && isGardenProvider && response.bridge_id && sourceChain !== "bitcoin") {
+          void pollGardenBridgeOrder(response.bridge_id, toChain)
+        }
+        if (!isSourceBitcoin || isBridgeFinalized) {
+          notifications.addNotification({
+            type: isBridgeFinalized ? "success" : "info",
+            title: isBridgeFinalized ? "Bridge completed" : "Bridge submitted",
+            message: isBridgeFinalized
+              ? `Bridge ${fromAmount} ${fromToken.symbol} to ${toToken.symbol} completed.`
+              : `Bridge ${fromAmount} ${fromToken.symbol} is still processing settlement to Starknet (~5-20 min).`,
+            txHash: onchainTxHash || undefined,
+            txNetwork,
+          })
+        } else if (btcAutoSendSucceeded) {
+          notifications.addNotification({
+            type: "info",
+            title: "Bridge processing",
+            message: `Order ${response.bridge_id.slice(0, 10)}... BTC deposit received. Waiting for settlement.`,
+            txHash: btcDepositTxHash || undefined,
+            txNetwork: "btc",
+          })
+        } else if (btcAutoSendAttempted) {
+          notifications.addNotification({
+            type: "warning",
+            title: "Deposit not sent yet",
+            message: `Order ${response.bridge_id.slice(0, 10)}... was created, but BTC deposit has not been sent yet.`,
+          })
+        }
       } else {
         const slippageValue = Number(activeSlippage || "0.5")
         const minAmountOut = (Number.parseFloat(toAmount || "0") * (1 - slippageValue / 100)).toFixed(6)
@@ -1458,6 +2125,21 @@ export function TradingInterface() {
         })
       }
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
+      const [nftState, rewardsState] = await Promise.allSettled([
+        getOwnedNfts({ force: true }),
+        getRewardsPoints({ force: true }),
+      ])
+      if (nftState.status === "fulfilled") {
+        const now = Math.floor(Date.now() / 1000)
+        const usable = nftState.value.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
+        setActiveNft(usable || null)
+      }
+      if (rewardsState.status === "fulfilled") {
+        const parsedMultiplier = Number(rewardsState.value.multiplier)
+        setStakePointsMultiplier(
+          Number.isFinite(parsedMultiplier) && parsedMultiplier > 0 ? parsedMultiplier : 1
+        )
+      }
       if (tradeFinalized) {
         setSwapState("success")
       }
@@ -1465,8 +2147,9 @@ export function TradingInterface() {
       if (isCrossChain && error instanceof Error && error.message.toLowerCase().includes("xverse")) {
         notifications.addNotification({
           type: "error",
-          title: "Xverse address not found",
-          message: "We could not resolve your BTC address. Please check the Xverse User ID or enter a receive address.",
+          title: "BTC address not found",
+          message:
+            "We could not resolve your BTC address. Check the Xverse User ID (if used) or enter a receive address manually.",
         })
       }
       notifications.addNotification({
@@ -1533,7 +2216,7 @@ export function TradingInterface() {
           {fromToken.symbol === "BTC" && !wallet.btcAddress && (
             <div className="px-3 py-2 rounded-lg bg-warning/10 border border-warning/30">
               <p className="text-xs text-foreground">
-                Source BTC membutuhkan wallet BTC testnet (Xverse). Untuk cepat test STRK,
+                Source BTC membutuhkan wallet BTC testnet (UniSat/Xverse). Untuk cepat test STRK,
                 gunakan pair ETH ↔ STRK.
               </p>
             </div>
@@ -1591,12 +2274,12 @@ export function TradingInterface() {
               }
               className="mt-2 text-[11px] text-primary hover:text-primary/80 underline underline-offset-2"
             >
-              Pakai max aman: {formatTokenAmount(maxExecutableFromAllLimits, 6)} {fromToken.symbol}
+                  Use safe max: {formatTokenAmount(maxExecutableFromAllLimits, 6)} {fromToken.symbol}
             </button>
           )}
           {!isCrossChain && quote?.type === "swap" && quote.normalizedByLivePrice && !quoteError && (
             <p className="mt-2 text-[11px] text-warning">
-              Quote backend tidak konsisten dengan harga live. Estimasi output dinormalisasi via nilai USD live.
+              Backend quote is inconsistent with live prices. Output estimate is normalized using live USD value.
             </p>
           )}
         </div>
@@ -1695,11 +2378,11 @@ export function TradingInterface() {
             {quote?.type === "bridge" && bridgeTokenMismatch && (
               <div className="p-3 rounded-lg bg-warning/10 border border-warning/30">
                 <p className="text-xs text-foreground">
-                  Bridge quote asli:{" "}
+                  Original bridge quote:{" "}
                   <span className="font-medium">
                     {formatTokenAmount(quote.bridgeSourceAmount ?? 0, 8)} {fromToken.symbol}
                   </span>
-                  . Angka {toToken.symbol} di atas adalah estimasi konversi live (sudah termasuk asumsi swap fee + slippage).
+                  . The {toToken.symbol} above value is the live conversion estimate (already includes assumed swap fee + slippage).
                 </p>
               </div>
             )}
@@ -1718,7 +2401,7 @@ export function TradingInterface() {
               />
               {isCrossChain && (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  If you use Xverse and see “Address not found”, enter a BTC address manually or provide a valid Xverse User ID.
+                  If you use UniSat, enter BTC receive address manually. Xverse User ID is optional only for Xverse-managed BTC.
                 </p>
               )}
             </div>
@@ -1737,18 +2420,57 @@ export function TradingInterface() {
             )}
 
             {isCrossChain && sourceChain === "bitcoin" && (
-              <div>
-                <label className="text-sm text-foreground mb-2 block">BTC Tx Hash (required)</label>
-                <input
-                  type="text"
-                  value={btcBridgeTxHash}
-                  onChange={(e) => setBtcBridgeTxHash(e.target.value)}
-                  placeholder="Paste BTC txid from wallet (64 hex chars)"
-                  className="w-full py-2 px-3 rounded-lg text-sm bg-surface text-foreground border border-border focus:border-primary outline-none"
-                />
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Setelah kirim BTC ke vault bridge, paste txid di sini agar backend bisa lanjut settlement ke Starknet.
-                </p>
+              <div className="space-y-3">
+                <div className="p-3 rounded-lg bg-primary/10 border border-primary/30 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">BTC Vault Address (Testnet)</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={handleCopyBtcVaultAddress}
+                      disabled={!BTC_VAULT_ADDRESS}
+                    >
+                      {btcVaultCopied ? "Copied" : "Copy"}
+                    </Button>
+                  </div>
+                  <p className="font-mono text-xs text-foreground break-all">
+                    {BTC_VAULT_ADDRESS ||
+                      "Set NEXT_PUBLIC_BTC_VAULT_ADDRESS di frontend/.env.local"}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => openExternalUrl(BTC_TESTNET_FAUCET_URL)}
+                    >
+                      Open BTC Testnet Faucet
+                    </Button>
+                    {btcVaultExplorerUrl && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => openExternalUrl(btcVaultExplorerUrl)}
+                      >
+                        View Vault on Explorer
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    For Garden quickstart flow, click Execute Trade first to create an order and
+                    get a dynamic BTC deposit address (`result.to`). The vault address in this panel
+                    is for tester reference only.
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    If faucet is unavailable, fallback top-up can use ETH Sepolia to BTC Testnet bridge,
+                    then continue deposit to the Garden order BTC address.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -1757,11 +2479,11 @@ export function TradingInterface() {
               {quote?.type === "bridge" ? (
                 <>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">StarkGate Fee</span>
+                    <span className="text-sm text-muted-foreground">{bridgeProtocolFeeLabel}</span>
                     <span className="text-sm text-foreground">{protocolFeeDisplay}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Network Gas (est.)</span>
+                    <span className="text-sm text-muted-foreground">{bridgeNetworkFeeLabel}</span>
                     <span className="text-sm text-foreground">{networkFeeDisplay}</span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -1859,6 +2581,145 @@ export function TradingInterface() {
               Stake: {formatMultiplier(normalizedStakeMultiplier)}
               {nftPointsMultiplier > 1 ? ` • NFT: ${formatMultiplier(nftPointsMultiplier)}` : ""}
             </p>
+          </div>
+        )}
+
+        {showPendingBtcDeposit && pendingBtcDeposit && (
+          <div className="mt-3 p-3 rounded-xl bg-primary/10 border border-primary/30 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium text-foreground">
+                {pendingIsFinalized ? "BTC Bridge Status (Garden)" : "Pending BTC Deposit (Garden)"}
+              </p>
+              <span className="text-[11px] text-muted-foreground">
+                Order {pendingBtcDeposit.bridgeId.slice(0, 10)}...
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-muted-foreground">Status</span>
+              <span className={cn("text-[11px] font-medium", pendingStatusClassName)}>
+                {pendingStatusLabel}
+              </span>
+            </div>
+            <p className="text-xs text-foreground break-all">
+              Send{" "}
+              <span className="font-semibold">
+                {formatBtcFromSats(pendingBtcDeposit.amountSats)}
+              </span>{" "}
+              to{" "}
+              <span className="font-mono">{pendingBtcDeposit.depositAddress}</span>
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={handleSendBtcDepositFromWallet}
+                disabled={
+                  isSendingBtcDeposit ||
+                  !wallet.btcAddress ||
+                  pendingBtcDeposit.amountSats <= 0 ||
+                  pendingIsFinalized ||
+                  !!pendingBtcDeposit.txHash
+                }
+                className="h-8 px-3 text-xs"
+              >
+                {isSendingBtcDeposit ? (
+                  <span className="inline-flex items-center gap-1">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Waiting signature...
+                  </span>
+                ) : pendingBtcDeposit.txHash ? (
+                  "Deposit Sent"
+                ) : (
+                  `Send BTC (${btcProviderLabel})`
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-8 px-3 text-xs"
+                onClick={() =>
+                  void pollGardenBridgeOrder(
+                    pendingBtcDeposit.bridgeId,
+                    pendingBtcDeposit.destinationChain
+                  )
+                }
+                disabled={pendingIsFinalized}
+              >
+                Refresh Status
+              </Button>
+              {pendingCanClaimRefund && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 px-3 text-xs"
+                  onClick={handleClaimInstantRefund}
+                  disabled={isClaimingRefund}
+                >
+                  {isClaimingRefund ? (
+                    <span className="inline-flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Claiming...
+                    </span>
+                  ) : (
+                    "Claim Refund"
+                  )}
+                </Button>
+              )}
+              {btcDepositExplorerUrl && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 px-3 text-xs"
+                  onClick={() => openExternalUrl(btcDepositExplorerUrl)}
+                >
+                  View Deposit Address
+                </Button>
+              )}
+            </div>
+            {!wallet.btcAddress && (
+              <p className="text-[11px] text-warning">
+                Connect BTC wallet first so the send button can be used.
+              </p>
+            )}
+            {wallet.btcAddress && !isSendingBtcDeposit && !pendingBtcDeposit.txHash && (
+              <p className="text-[11px] text-muted-foreground">
+                Click Send button to show signature popup in {btcProviderLabel}.
+              </p>
+            )}
+            {pendingBtcDeposit.txHash && (
+              <p className="text-[11px] text-success break-all">
+                Last deposit tx: {pendingBtcDeposit.txHash}
+              </p>
+            )}
+            {pendingBtcDeposit.sourceInitiateTxHash && (
+              <p className="text-[11px] text-muted-foreground break-all">
+                Source initiate tx: {pendingBtcDeposit.sourceInitiateTxHash}
+              </p>
+            )}
+            {pendingBtcDeposit.destinationInitiateTxHash && (
+              <p className="text-[11px] text-muted-foreground break-all">
+                Destination initiate tx: {pendingBtcDeposit.destinationInitiateTxHash}
+              </p>
+            )}
+            {pendingBtcDeposit.destinationRedeemTxHash && (
+              <p className="text-[11px] text-success break-all">
+                Destination redeem tx: {pendingBtcDeposit.destinationRedeemTxHash}
+              </p>
+            )}
+            {pendingBtcDeposit.refundTxHash && (
+              <p className="text-[11px] text-success break-all">
+                Refund tx: {pendingBtcDeposit.refundTxHash}
+              </p>
+            )}
+            {pendingBtcDeposit.instantRefundHash && (
+              <p className="text-[11px] text-muted-foreground break-all">
+                Instant refund hash: {pendingBtcDeposit.instantRefundHash}
+              </p>
+            )}
+            {(pendingOrderStatus === "expired" || pendingOrderStatus === "failed") && (
+              <p className="text-[11px] text-warning">
+                Order is already {pendingOrderStatus}. Use Claim Refund button to process BTC return.
+              </p>
+            )}
           </div>
         )}
 
@@ -1968,6 +2829,7 @@ export function TradingInterface() {
           estimatedTime={estimatedTime}
           pointsEarned={pointsEarned}
           receiveAddress={resolvedReceiveAddress}
+          requiresBtcDepositSigning={isBtcGardenRoute}
           onCancel={() => setPreviewOpen(false)}
           onConfirm={confirmTrade}
         />

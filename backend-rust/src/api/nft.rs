@@ -13,11 +13,17 @@ use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use starknet_core::types::{Felt, FunctionCall};
 use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 use tokio::time::{timeout, Duration};
 
 const ONCHAIN_NFT_READ_TIMEOUT_MS: u64 = 3_500;
+const OWNED_NFT_CACHE_TTL_SECS: u64 = 20;
+const OWNED_NFT_CACHE_STALE_SECS: u64 = 300;
+const OWNED_NFT_CACHE_MAX_ENTRIES: usize = 100_000;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct NFT {
     pub token_id: String,
     pub tier: i32,
@@ -30,6 +36,85 @@ pub struct NFT {
     pub used_in_period: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remaining_usage: Option<u128>,
+}
+
+#[derive(Clone)]
+struct CachedOwnedNfts {
+    fetched_at: Instant,
+    value: Vec<NFT>,
+}
+
+static OWNED_NFT_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedOwnedNfts>>> =
+    OnceLock::new();
+static OWNED_NFT_FETCH_LOCKS: OnceLock<
+    tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
+
+fn owned_nft_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOwnedNfts>> {
+    OWNED_NFT_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn owned_nft_fetch_locks(
+) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    OWNED_NFT_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+async fn owned_nft_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = owned_nft_fetch_locks();
+    {
+        let guard = locks.read().await;
+        if let Some(lock) = guard.get(key) {
+            return lock.clone();
+        }
+    }
+
+    let mut guard = locks.write().await;
+    if let Some(lock) = guard.get(key) {
+        return lock.clone();
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    guard.insert(key.to_string(), lock.clone());
+
+    if guard.len() > OWNED_NFT_CACHE_MAX_ENTRIES {
+        let cache = owned_nft_cache();
+        let cache_guard = cache.read().await;
+        guard.retain(|cache_key, _| cache_guard.contains_key(cache_key));
+    }
+    lock
+}
+
+fn owned_nft_cache_key(contract: &str, user: &str) -> String {
+    format!(
+        "{}|{}",
+        contract.trim().to_ascii_lowercase(),
+        user.trim().to_ascii_lowercase()
+    )
+}
+
+async fn get_cached_owned_nfts(key: &str, max_age: Duration) -> Option<Vec<NFT>> {
+    let cache = owned_nft_cache();
+    let guard = cache.read().await;
+    let entry = guard.get(key)?;
+    if entry.fetched_at.elapsed() <= max_age {
+        return Some(entry.value.clone());
+    }
+    None
+}
+
+async fn cache_owned_nfts(key: String, value: Vec<NFT>) {
+    let cache = owned_nft_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key,
+        CachedOwnedNfts {
+            fetched_at: Instant::now(),
+            value,
+        },
+    );
+    if guard.len() > OWNED_NFT_CACHE_MAX_ENTRIES {
+        let stale_after = Duration::from_secs(OWNED_NFT_CACHE_STALE_SECS);
+        guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,11 +151,11 @@ fn tier_for_discount(discount: f64) -> i32 {
     let rounded = discount.round() as i64;
     match rounded {
         i if i <= 0 => 0,
-        1..=7 => 1,    // bronze ~5%
-        8..=15 => 2,   // silver ~10%
-        16..=25 => 3,  // gold 25%
-        26..=35 => 4,  // platinum 35%
-        _ => 5,        // onyx 50%+
+        1..=7 => 1,   // bronze ~5%
+        8..=15 => 2,  // silver ~10%
+        16..=25 => 3, // gold 25%
+        26..=35 => 4, // platinum 35%
+        _ => 5,       // onyx 50%+
     }
 }
 
@@ -179,7 +264,11 @@ fn u256_calldata(value: u128) -> [Felt; 2] {
     [Felt::from(value), Felt::from(0_u8)]
 }
 
-async fn read_nft_info_onchain(state: &AppState, contract: &str, token_id: u128) -> Result<OnchainNftState> {
+async fn read_nft_info_onchain(
+    state: &AppState,
+    contract: &str,
+    token_id: u128,
+) -> Result<OnchainNftState> {
     let reader = OnchainReader::from_config(&state.config)?;
     let [token_low, token_high] = u256_calldata(token_id);
     let call = FunctionCall {
@@ -224,16 +313,26 @@ async fn fallback_owned_nft_from_discount_state(
     let (active, discount) = match read {
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
-            tracing::warn!(
-                "nft_owned_discount_fallback failed user={} contract={} err={}",
-                user_address,
-                contract,
-                err
-            );
+            let message = err.to_string();
+            if looks_like_transient_rpc_error(&message) {
+                tracing::debug!(
+                    "nft_owned_discount_fallback transient rpc issue user={} contract={} err={}",
+                    user_address,
+                    contract,
+                    message
+                );
+            } else {
+                tracing::warn!(
+                    "nft_owned_discount_fallback failed user={} contract={} err={}",
+                    user_address,
+                    contract,
+                    message
+                );
+            }
             return None;
         }
         Err(_) => {
-            tracing::warn!(
+            tracing::debug!(
                 "nft_owned_discount_fallback timeout user={} contract={}",
                 user_address,
                 contract
@@ -328,10 +427,51 @@ pub async fn get_owned_nfts(
     let Some(contract) = discount_contract(&state) else {
         return Ok(Json(ApiResponse::success(Vec::new())));
     };
+    let cache_key = owned_nft_cache_key(contract, &user_address);
+    if let Some(cached) =
+        get_cached_owned_nfts(&cache_key, Duration::from_secs(OWNED_NFT_CACHE_TTL_SECS)).await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
 
+    let fetch_lock = owned_nft_fetch_lock_for(&cache_key).await;
+    let _guard = fetch_lock.lock().await;
+    if let Some(cached) =
+        get_cached_owned_nfts(&cache_key, Duration::from_secs(OWNED_NFT_CACHE_TTL_SECS)).await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
+
+    match get_owned_nfts_uncached(&state, contract, &user_address).await {
+        Ok(nfts) => {
+            cache_owned_nfts(cache_key, nfts.clone()).await;
+            Ok(Json(ApiResponse::success(nfts)))
+        }
+        Err(err) => {
+            if let Some(stale) =
+                get_cached_owned_nfts(&cache_key, Duration::from_secs(OWNED_NFT_CACHE_STALE_SECS))
+                    .await
+            {
+                tracing::debug!(
+                    "nft_owned returning stale cache fallback user={} contract={}",
+                    user_address,
+                    contract
+                );
+                return Ok(Json(ApiResponse::success(stale)));
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn get_owned_nfts_uncached(
+    state: &AppState,
+    contract: &str,
+    user_address: &str,
+) -> Result<Vec<NFT>> {
     let token_id = match timeout(
         Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
-        read_user_nft_token_id_onchain(&state, contract, &user_address),
+        read_user_nft_token_id_onchain(state, contract, user_address),
     )
     .await
     {
@@ -339,7 +479,7 @@ pub async fn get_owned_nfts(
         Ok(Err(err)) => {
             let message = err.to_string();
             if looks_like_transient_rpc_error(&message) {
-                tracing::warn!(
+                tracing::debug!(
                     "nft_owned_token_lookup transient rpc issue user={} contract={} err={}",
                     user_address,
                     contract,
@@ -353,33 +493,39 @@ pub async fn get_owned_nfts(
                     message
                 );
             }
-            if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
-                return Ok(Json(ApiResponse::success(vec![nft])));
+            if let Some(nft) =
+                fallback_owned_nft_from_discount_state(state, contract, user_address).await
+            {
+                return Ok(vec![nft]);
             }
-            return Ok(Json(ApiResponse::success(Vec::new())));
+            return Ok(Vec::new());
         }
         Err(_) => {
-            tracing::warn!(
+            tracing::debug!(
                 "nft_owned_token_lookup timeout user={} contract={}",
                 user_address,
                 contract
             );
-            if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
-                return Ok(Json(ApiResponse::success(vec![nft])));
+            if let Some(nft) =
+                fallback_owned_nft_from_discount_state(state, contract, user_address).await
+            {
+                return Ok(vec![nft]);
             }
-            return Ok(Json(ApiResponse::success(Vec::new())));
+            return Ok(Vec::new());
         }
     };
     if token_id == 0 {
-        if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
-            return Ok(Json(ApiResponse::success(vec![nft])));
+        if let Some(nft) =
+            fallback_owned_nft_from_discount_state(state, contract, user_address).await
+        {
+            return Ok(vec![nft]);
         }
-        return Ok(Json(ApiResponse::success(Vec::new())));
+        return Ok(Vec::new());
     }
 
     let nft_state = match timeout(
         Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
-        read_nft_info_onchain(&state, contract, token_id),
+        read_nft_info_onchain(state, contract, token_id),
     )
     .await
     {
@@ -387,7 +533,7 @@ pub async fn get_owned_nfts(
         Ok(Err(err)) => {
             let message = err.to_string();
             if looks_like_transient_rpc_error(&message) {
-                tracing::warn!(
+                tracing::debug!(
                     "nft_owned_info transient rpc issue user={} contract={} token_id={} err={}",
                     user_address,
                     contract,
@@ -403,22 +549,26 @@ pub async fn get_owned_nfts(
                     message
                 );
             }
-            if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
-                return Ok(Json(ApiResponse::success(vec![nft])));
+            if let Some(nft) =
+                fallback_owned_nft_from_discount_state(state, contract, user_address).await
+            {
+                return Ok(vec![nft]);
             }
-            return Ok(Json(ApiResponse::success(Vec::new())));
+            return Ok(Vec::new());
         }
         Err(_) => {
-            tracing::warn!(
+            tracing::debug!(
                 "nft_owned_info timeout user={} contract={} token_id={}",
                 user_address,
                 contract,
                 token_id
             );
-            if let Some(nft) = fallback_owned_nft_from_discount_state(&state, contract, &user_address).await {
-                return Ok(Json(ApiResponse::success(vec![nft])));
+            if let Some(nft) =
+                fallback_owned_nft_from_discount_state(state, contract, user_address).await
+            {
+                return Ok(vec![nft]);
             }
-            return Ok(Json(ApiResponse::success(Vec::new())));
+            return Ok(Vec::new());
         }
     };
 
@@ -431,7 +581,7 @@ pub async fn get_owned_nfts(
 
     let (active, onchain_discount) = match timeout(
         Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
-        read_discount_state_onchain(&state, contract, &user_address),
+        read_discount_state_onchain(state, contract, user_address),
     )
     .await
     {
@@ -439,7 +589,7 @@ pub async fn get_owned_nfts(
         Ok(Err(err)) => {
             let message = err.to_string();
             if looks_like_transient_rpc_error(&message) {
-                tracing::warn!(
+                tracing::debug!(
                     "nft_owned_active_lookup transient rpc issue user={} contract={} token_id={} err={}",
                     user_address,
                     contract,
@@ -458,7 +608,7 @@ pub async fn get_owned_nfts(
             (fallback_active, fallback_discount)
         }
         Err(_) => {
-            tracing::warn!(
+            tracing::debug!(
                 "nft_owned_active_lookup timeout user={} contract={} token_id={}",
                 user_address,
                 contract,
@@ -499,7 +649,7 @@ pub async fn get_owned_nfts(
         used_in_period: Some(nft_state.used_in_period),
         remaining_usage: Some(nft_state.max_usage.saturating_sub(nft_state.used_in_period)),
     }];
-    Ok(Json(ApiResponse::success(nfts)))
+    Ok(nfts)
 }
 
 #[cfg(test)]

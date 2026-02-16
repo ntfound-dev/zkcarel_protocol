@@ -4,11 +4,11 @@ import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'ZkCarel - Privacy-First Crypto Trading',
+  title: 'Carel Protocol - Privacy-First Crypto Trading',
   description: 'Trade cryptocurrencies with zero-knowledge privacy. Swap, bridge, and earn rewards on the most advanced DeFi platform.',
-  generator: 'ZkCarel',
+  generator: 'Carel Protocol',
   keywords: ['crypto', 'trading', 'DeFi', 'privacy', 'zero-knowledge', 'swap', 'bridge'],
-  authors: [{ name: 'ZkCarel Team' }],
+  authors: [{ name: 'Carel Protocol Team' }],
 }
 
 export const viewport: Viewport = {

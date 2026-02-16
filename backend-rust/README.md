@@ -57,6 +57,8 @@ Optional (defaults apply if empty):
 - `AI_RATE_LIMIT_LEVEL_1_PER_WINDOW` (default: `20`)
 - `AI_RATE_LIMIT_LEVEL_2_PER_WINDOW` (default: `10`)
 - `AI_RATE_LIMIT_LEVEL_3_PER_WINDOW` (default: `8`)
+- `POINT_CALCULATOR_BATCH_SIZE` (default: `500`, jumlah transaksi per batch saat kalkulasi points)
+- `POINT_CALCULATOR_MAX_BATCHES_PER_TICK` (default: `20`, jumlah batch maksimum per interval worker)
 - `PRIVACY_ROUTER_ADDRESS`
 - `POINT_STORAGE_ADDRESS` (enables on-chain points→CAREL conversion)
 - `STAKING_CAREL_ADDRESS` (optional, enables on-chain stake deposit/withdraw + position reads)
@@ -76,7 +78,9 @@ Optional (defaults apply if empty):
   Example: `BTC:bitcoin,ETH:ethereum,STRK:starknet,USDT:tether,USDC:usd-coin`
 - `LAYERSWAP_API_KEY`, `LAYERSWAP_API_URL`
 - `ATOMIQ_API_KEY`, `ATOMIQ_API_URL`
-- `GARDEN_API_KEY`, `GARDEN_API_URL`
+- `GARDEN_APP_ID` (preferred) or `GARDEN_API_KEY` (legacy alias), `GARDEN_API_URL`
+  - `GARDEN_APP_ID` is sent as header `garden-app-id` for Garden auth.
+  - `GARDEN_API_URL` is the Garden base endpoint (ex: `https://testnet.api.garden.finance`).
 - `SUMO_LOGIN_API_KEY`, `SUMO_LOGIN_API_URL`
 - `XVERSE_API_KEY`, `XVERSE_API_URL`
 - `PRIVACY_VERIFIER_ROUTERS` (map verifier -> router address)
@@ -177,7 +181,7 @@ docker compose up --build backend postgres redis
 - Health: `GET /health`
 - Auth: `POST /api/v1/auth/connect`, `POST /api/v1/auth/refresh`
 - Profile: `GET /api/v1/profile/me`, `PUT /api/v1/profile/display-name`
-- Swap/Bridge: `POST /api/v1/swap/quote`, `POST /api/v1/bridge/quote`
+- Swap/Bridge: `POST /api/v1/swap/quote`, `POST /api/v1/bridge/quote`, `GET /api/v1/bridge/status/{bridge_id}`
 - Orders: `POST /api/v1/limit-order/create`, `GET /api/v1/limit-order/list`
 - Social: `GET /api/v1/social/tasks`, `POST /api/v1/social/verify`
 - Admin manual: `POST /api/v1/admin/points/reset` (header `x-admin-key`)
@@ -208,7 +212,7 @@ docker compose up --build backend postgres redis
 - Rewards conversion (`/api/v1/rewards/convert`) uses on-chain `PointStorage.convert_points_to_carel(...)` when `POINT_STORAGE_ADDRESS` is configured.
 - Event indexer reads contract addresses from `.env` and skips placeholder `0x0000...` entries. Populate `BRIDGE_AGGREGATOR_ADDRESS`, `SNAPSHOT_DISTRIBUTOR_ADDRESS`, `LIMIT_ORDER_BOOK_ADDRESS`, plus optional `STAKING_CAREL_ADDRESS`/`REFERRAL_SYSTEM_ADDRESS` to enable indexing.
 - Private flow supports verifier selector per request: `garaga|tongo|semaphore`. If omitted, default is `garaga`.
-- Bridge flow validates on-chain tx hash receipt for Starknet/Ethereum before storing transaction as submitted.
+- Bridge flow validates on-chain tx hash receipt for source Starknet/Ethereum. Source BTC native (Garden order-first) can proceed without user tx hash at submit time.
 - AI assistant:
   - level 1: free,
   - level 2: 1 CAREL,
@@ -272,8 +276,9 @@ Bridge execute with Xverse recipient
   "to_chain": "starknet",
   "token": "BTC",
   "amount": "0.01",
-  "recipient": "",
-  "xverse_user_id": "user_123"
+  "recipient": "0x1234...",
+  "xverse_user_id": "user_123",
+  "onchain_tx_hash": "fa28fab8ae02404513796fbb4674347bff278e8806c8f5d29fecff534e94a07d"
 }
 ```
 Dark pool submit

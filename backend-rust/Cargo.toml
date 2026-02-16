@@ -34,7 +34,5 @@ futures-util = "0.3"
 dotenv = "0.15.0"
 ethers = "2.0.14"
 tower-http = { version = "0.6.8", features = ["cors", "trace"] }
-r2d2 = "0.8"
-r2d2_redis = "0.14"
 dotenvy = "0.15"
 base64 = "0.22"

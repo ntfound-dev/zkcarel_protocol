@@ -54,18 +54,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize Redis
     let redis = redis::Client::open(config.redis_url.clone())?;
-    let _redis_conn = redis.get_connection()?; // Ditambah underscore agar tidak warning unused
+    let redis_manager = redis::aio::ConnectionManager::new(redis).await?;
 
-    // 1. Buat manager dan pool
-    let manager = r2d2_redis::RedisConnectionManager::new(config.redis_url.clone())?;
-    let redis_pool = r2d2::Pool::builder()
-        .build(manager)
-        .expect("Failed to create Redis pool");
-
-    // 2. Masukkan pool ke AppState
+    // Masukkan manager ke AppState
     let app_state = api::AppState {
         db: db.clone(),
-        redis: redis_pool,
+        redis: redis_manager,
         config: config.clone(),
     };
 
@@ -125,6 +119,42 @@ fn build_router(state: api::AppState) -> Router {
         .route("/api/v1/swap/execute", post(api::swap::execute_swap))
         .route("/api/v1/bridge/quote", post(api::bridge::get_bridge_quote))
         .route("/api/v1/bridge/execute", post(api::bridge::execute_bridge))
+        .route(
+            "/api/v1/bridge/status/{bridge_id}",
+            get(api::bridge::get_bridge_status),
+        )
+        // Garden Public Data (proxied)
+        .route("/api/v1/garden/volume", get(api::garden::get_total_volume))
+        .route("/api/v1/garden/fees", get(api::garden::get_total_fees))
+        .route(
+            "/api/v1/garden/chains",
+            get(api::garden::get_supported_chains),
+        )
+        .route(
+            "/api/v1/garden/assets",
+            get(api::garden::get_supported_assets),
+        )
+        .route(
+            "/api/v1/garden/liquidity",
+            get(api::garden::get_available_liquidity),
+        )
+        .route("/api/v1/garden/orders", get(api::garden::get_orders))
+        .route(
+            "/api/v1/garden/orders/{order_id}",
+            get(api::garden::get_order_by_id),
+        )
+        .route(
+            "/api/v1/garden/orders/{order_id}/instant-refund-hash",
+            get(api::garden::get_order_instant_refund_hash),
+        )
+        .route(
+            "/api/v1/garden/schemas/{name}",
+            get(api::garden::get_schema),
+        )
+        .route(
+            "/api/v1/garden/apps/earnings",
+            get(api::garden::get_app_earnings),
+        )
         // Limit Orders
         .route(
             "/api/v1/limit-order/create",
@@ -215,10 +245,7 @@ fn build_router(state: api::AppState) -> Router {
         .route("/api/v1/social/tasks", get(api::social::get_tasks))
         .route("/api/v1/social/verify", post(api::social::verify_task))
         // Admin (manual maintenance)
-        .route(
-            "/api/v1/admin/points/reset",
-            post(api::admin::reset_points),
-        )
+        .route("/api/v1/admin/points/reset", post(api::admin::reset_points))
         // Privacy
         .route(
             "/api/v1/privacy/submit",

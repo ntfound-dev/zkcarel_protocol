@@ -2,7 +2,8 @@
 
 // Token addresses (Starknet)
 pub const TOKEN_CAREL: &str = "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545";
-pub const TOKEN_BTC: &str = "0x016f2d46ab5cc2244aeeb195cf76f75e7a316a92b71d56618c1bf1b69ab70998";
+// Canonical Starknet Sepolia WBTC (Garden `starknet_sepolia:wbtc` token.address).
+pub const TOKEN_BTC: &str = "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5";
 pub const TOKEN_ETH: &str = "0x0000000000000000000000000000000000000003";
 pub const TOKEN_STRK: &str = "0x04718f5a0Fc34cC1AF16A1cdee98fFB20C31f5cD61D6Ab07201858f4287c938D";
 pub const TOKEN_USDT: &str = "0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5";
@@ -10,13 +11,6 @@ pub const TOKEN_USDC: &str = "0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162
 
 // Contract addresses
 pub const CONTRACT_SWAP_AGGREGATOR: &str = "0x0000000000000000000000000000000000001001";
-pub const CONTRACT_BRIDGE_AGGREGATOR: &str = "0x0000000000000000000000000000000000001002";
-pub const CONTRACT_STAKING_CAREL: &str = "0x0000000000000000000000000000000000001003";
-pub const CONTRACT_STAKING_BTC: &str = "0x0000000000000000000000000000000000001004";
-pub const CONTRACT_POINT_STORAGE: &str = "0x0000000000000000000000000000000000001005";
-pub const CONTRACT_MERKLE_DISTRIBUTOR: &str = "0x0000000000000000000000000000000000001006";
-pub const CONTRACT_NFT_DISCOUNT: &str = "0x0000000000000000000000000000000000001007";
-pub const CONTRACT_LIMIT_ORDER: &str = "0x0000000000000000000000000000000000001008";
 
 // Points configuration
 pub const POINTS_PER_USD_SWAP: f64 = 10.0;
@@ -34,7 +28,6 @@ pub const POINTS_MIN_STAKE_STRK: f64 = 10.0;
 pub const POINTS_MIN_STAKE_STABLECOIN: f64 = 100.0;
 pub const POINTS_MIN_STAKE_BTC: f64 = 0.001;
 pub const POINTS_MIN_STAKE_LP: f64 = 1.0;
-pub const POINTS_PER_USD_BRIDGE: f64 = POINTS_PER_USD_BRIDGE_ETH; // backward compatibility
 pub const POINTS_TWITTER_FOLLOW: f64 = 5.0;
 pub const POINTS_TWITTER_LIKE: f64 = 2.0;
 pub const POINTS_TWITTER_RETWEET: f64 = 3.0;
@@ -44,8 +37,6 @@ pub const POINTS_TELEGRAM_JOIN_GROUP: f64 = 5.0;
 pub const POINTS_DISCORD_JOIN: f64 = 5.0;
 pub const POINTS_DISCORD_VERIFY: f64 = 10.0;
 pub const POINTS_DISCORD_ROLE: f64 = 5.0;
-// Backward-compat aliases for older clients.
-pub const POINTS_TELEGRAM_JOIN: f64 = POINTS_TELEGRAM_JOIN_CHANNEL;
 
 // Staking multipliers
 pub const MULTIPLIER_TIER_1: f64 = 1.0; // < 100 CAREL (no tier boost)
@@ -71,7 +62,6 @@ pub const NFT_TIER_6_DISCOUNT: f64 = 50.0; // reserved
 
 // Epoch configuration
 pub const EPOCH_DURATION_SECONDS: i64 = 2592000; // 30 days
-pub const POINTS_TO_CAREL_RATIO: f64 = 0.1; // 1 point = 0.1 CAREL
 
 // Faucet configuration
 pub const FAUCET_COOLDOWN_HOURS: i64 = 24;

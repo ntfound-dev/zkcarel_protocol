@@ -175,7 +175,10 @@ impl TransactionHistoryService {
             .ok_or_else(|| AppError::NotFound("Transaction not found".to_string()))
     }
 
-    pub async fn get_recent_transactions(&self, user_addresses: &[String]) -> Result<Vec<Transaction>> {
+    pub async fn get_recent_transactions(
+        &self,
+        user_addresses: &[String],
+    ) -> Result<Vec<Transaction>> {
         let normalized_addresses = normalize_scope_addresses(user_addresses);
         if normalized_addresses.is_empty() {
             return Ok(Vec::new());

@@ -85,7 +85,10 @@ impl AtomiqClient {
             .send()
             .await
             .map_err(|err| {
-                crate::error::AppError::ExternalAPI(format!("Atomiq execute request failed: {}", err))
+                crate::error::AppError::ExternalAPI(format!(
+                    "Atomiq execute request failed: {}",
+                    err
+                ))
             })?;
 
         if !resp.status().is_success() {
@@ -121,8 +124,7 @@ pub struct AtomiqQuote {
     pub estimated_time_minutes: u32,
 }
 
-impl AtomiqQuote {
-}
+impl AtomiqQuote {}
 
 #[derive(Debug, Serialize)]
 struct AtomiqQuoteRequest {
@@ -161,6 +163,9 @@ mod tests {
             .get_quote("ethereum", "starknet", "ETH", 200.0)
             .await
             .expect_err("quote should fail without API config");
-        assert!(err.to_string().to_ascii_lowercase().contains("not configured"));
+        assert!(err
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("not configured"));
     }
 }

@@ -15,6 +15,10 @@ pub struct Config {
     // Redis
     pub redis_url: String,
 
+    // Background workers
+    pub point_calculator_batch_size: u32,
+    pub point_calculator_max_batches_per_tick: u32,
+
     // Blockchain
     pub starknet_rpc_url: String,
     pub starknet_chain_id: String,
@@ -46,7 +50,6 @@ pub struct Config {
     pub token_strk_l1_address: Option<String>,
 
     // Faucet
-    pub faucet_wallet_private_key: Option<String>,
     pub faucet_btc_amount: Option<f64>,
     pub faucet_strk_amount: Option<f64>,
     pub faucet_carel_amount: Option<f64>,
@@ -126,6 +129,15 @@ impl Config {
             redis_url: env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://localhost:6379".to_string()),
 
+            point_calculator_batch_size: env::var("POINT_CALCULATOR_BATCH_SIZE")
+                .unwrap_or_else(|_| "500".to_string())
+                .parse()?,
+            point_calculator_max_batches_per_tick: env::var(
+                "POINT_CALCULATOR_MAX_BATCHES_PER_TICK",
+            )
+            .unwrap_or_else(|_| "20".to_string())
+            .parse()?,
+
             starknet_rpc_url: env::var("STARKNET_RPC_URL")?,
             starknet_chain_id: env::var("STARKNET_CHAIN_ID")
                 .unwrap_or_else(|_| "SN_MAIN".to_string()),
@@ -155,7 +167,6 @@ impl Config {
             token_btc_address: env::var("TOKEN_BTC_ADDRESS").ok(),
             token_strk_l1_address: env::var("TOKEN_STRK_L1_ADDRESS").ok(),
 
-            faucet_wallet_private_key: env::var("FAUCET_WALLET_PRIVATE_KEY").ok(),
             faucet_btc_amount: env::var("FAUCET_BTC_AMOUNT")
                 .ok()
                 .and_then(|s| s.parse().ok()),
@@ -182,9 +193,8 @@ impl Config {
             gemini_api_key: env::var("GEMINI_API_KEY")
                 .ok()
                 .or_else(|| env::var("GOOGLE_GEMINI_API_KEY").ok()),
-            gemini_api_url: env::var("GEMINI_API_URL").unwrap_or_else(|_| {
-                "https://generativelanguage.googleapis.com/v1beta".to_string()
-            }),
+            gemini_api_url: env::var("GEMINI_API_URL")
+                .unwrap_or_else(|_| "https://generativelanguage.googleapis.com/v1beta".to_string()),
             gemini_model: env::var("GEMINI_MODEL")
                 .unwrap_or_else(|_| "gemini-2.0-flash".to_string()),
             twitter_bearer_token: env::var("TWITTER_BEARER_TOKEN").ok(),
@@ -200,7 +210,9 @@ impl Config {
                 .unwrap_or_else(|_| "https://api.layerswap.io/api/v2".to_string()),
             atomiq_api_key: env::var("ATOMIQ_API_KEY").ok(),
             atomiq_api_url: env::var("ATOMIQ_API_URL").unwrap_or_else(|_| "".to_string()),
-            garden_api_key: env::var("GARDEN_API_KEY").ok(),
+            garden_api_key: env::var("GARDEN_APP_ID")
+                .ok()
+                .or_else(|| env::var("GARDEN_API_KEY").ok()),
             garden_api_url: env::var("GARDEN_API_URL").unwrap_or_else(|_| "".to_string()),
             sumo_login_api_key: env::var("SUMO_LOGIN_API_KEY").ok(),
             sumo_login_api_url: env::var("SUMO_LOGIN_API_URL").unwrap_or_else(|_| "".to_string()),
@@ -321,12 +333,27 @@ impl Config {
             tracing::warn!("Using placeholder anonymous credentials address");
         }
 
-        if self.backend_private_key.contains("123456") || self.jwt_secret.contains("super_secret") {
-            tracing::warn!("Detected dev credentials in config");
+        let using_dev_credentials =
+            self.backend_private_key.contains("123456") || self.jwt_secret.contains("super_secret");
+        if using_dev_credentials {
+            let env = self.environment.to_ascii_lowercase();
+            let is_non_production =
+                matches!(env.as_str(), "development" | "dev" | "local" | "testnet");
+            if is_non_production {
+                tracing::debug!("Detected dev credentials in config (development mode)");
+            } else {
+                tracing::warn!("Detected dev credentials in config");
+            }
         }
 
         if self.rate_limit_public == 0 || self.rate_limit_authenticated == 0 {
             tracing::warn!("Rate limit values should be > 0");
+        }
+        if self.point_calculator_batch_size == 0 {
+            tracing::warn!("POINT_CALCULATOR_BATCH_SIZE should be > 0");
+        }
+        if self.point_calculator_max_batches_per_tick == 0 {
+            tracing::warn!("POINT_CALCULATOR_MAX_BATCHES_PER_TICK should be > 0");
         }
         if self.ai_rate_limit_window_seconds == 0
             || self.ai_rate_limit_global_per_window == 0

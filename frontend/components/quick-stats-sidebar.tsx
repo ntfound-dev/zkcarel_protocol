@@ -13,6 +13,11 @@ import {
 } from "@/lib/api"
 import { useWallet } from "@/hooks/use-wallet"
 
+interface QuickStatsSidebarProps {
+  variant?: "sidebar" | "inline"
+  className?: string
+}
+
 interface StatCardProps {
   icon: React.ElementType
   label: string
@@ -122,7 +127,7 @@ function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
   )
 }
 
-export function QuickStatsSidebar() {
+export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStatsSidebarProps) {
   const wallet = useWallet()
   const [points, setPoints] = React.useState<number | null>(null)
   const [tierLabel, setTierLabel] = React.useState("—")
@@ -307,39 +312,62 @@ export function QuickStatsSidebar() {
     }
   }, [wallet.address, wallet.starknetAddress])
 
-  return (
-    <aside className="w-72 shrink-0 hidden xl:block">
-      <div className="sticky top-20 space-y-4">
-        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-4">
-          Quick Stats
-        </h2>
-        
-        <StatCard
-          icon={Diamond}
-          label="Usable Points"
-          value={points !== null ? points.toLocaleString() : "—"}
-          progress={points !== null ? Math.round(tierProgress) : 0}
-        />
+  const statsBlocks = (
+    <>
+      <StatCard
+        icon={Diamond}
+        label="Usable Points"
+        value={points !== null ? points.toLocaleString() : "—"}
+        progress={points !== null ? Math.round(tierProgress) : 0}
+        className={cn(variant === "inline" && "min-w-[230px]")}
+      />
 
-        <StatCard
-          icon={Trophy}
-          label="Tier Progress"
-          value={tierLabel}
-          subValue={tierSubValue}
-          progress={points !== null ? Math.round(tierProgress) : 0}
-        />
+      <StatCard
+        icon={Trophy}
+        label="Tier Progress"
+        value={tierLabel}
+        subValue={tierSubValue}
+        progress={points !== null ? Math.round(tierProgress) : 0}
+        className={cn(variant === "inline" && "min-w-[260px]")}
+      />
 
-        <StatCard
-          icon={BarChart3}
-          label="Total Volume"
-          value={volumeLabel}
-        />
+      <StatCard
+        icon={BarChart3}
+        label="Total Volume"
+        value={volumeLabel}
+        className={cn(variant === "inline" && "min-w-[230px]")}
+      />
 
+      <div className={cn(variant === "inline" && "min-w-[260px]")}>
         <LeaderboardRank
           rank={rankData.rank}
           change={rankData.change}
           categories={categoryRanks}
         />
+      </div>
+    </>
+  )
+
+  if (variant === "inline") {
+    return (
+      <section className={cn("w-full", className)}>
+        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-3">
+          Quick Stats
+        </h2>
+        <div className="flex gap-3 overflow-x-auto pb-2">
+          {statsBlocks}
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <aside className={cn("w-72 shrink-0 hidden xl:block", className)}>
+      <div className="sticky top-20 space-y-4">
+        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-4">
+          Quick Stats
+        </h2>
+        {statsBlocks}
       </div>
     </aside>
   )

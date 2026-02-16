@@ -225,13 +225,13 @@ export function ReferralSystem() {
               {/* Share Buttons */}
               <div className="mt-6 flex gap-3">
                 <Button variant="outline" className="flex-1 bg-transparent" asChild>
-                  <a href={`https://twitter.com/intent/tweet?text=Join ZkCarel and trade with privacy! Use my referral code: ${referralCode}&url=${referralLink}`} target="_blank" rel="noopener noreferrer">
+                  <a href={`https://twitter.com/intent/tweet?text=Join Carel Protocol and trade with privacy! Use my referral code: ${referralCode}&url=${referralLink}`} target="_blank" rel="noopener noreferrer">
                     <ExternalLink className="h-4 w-4 mr-2" />
                     Share on X
                   </a>
                 </Button>
                 <Button variant="outline" className="flex-1 bg-transparent" asChild>
-                  <a href={`https://t.me/share/url?url=${referralLink}&text=Join ZkCarel with my referral: ${referralCode}`} target="_blank" rel="noopener noreferrer">
+                  <a href={`https://t.me/share/url?url=${referralLink}&text=Join Carel Protocol with my referral: ${referralCode}`} target="_blank" rel="noopener noreferrer">
                     <ExternalLink className="h-4 w-4 mr-2" />
                     Share on Telegram
                   </a>

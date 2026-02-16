@@ -150,6 +150,7 @@ GARAGA_VERIFIER_ADDRESS=${GARAGA_VERIFIER_ADDRESS:-${MOCK_GARAGA_VERIFIER_ADDRES
 TONGO_VERIFIER_ADDRESS=${TONGO_VERIFIER_ADDRESS:-${MOCK_TONGO_VERIFIER_ADDRESS:-"0x0"}}
 SEMAPHORE_VERIFIER_ADDRESS=${SEMAPHORE_VERIFIER_ADDRESS:-${MOCK_SEMAPHORE_VERIFIER_ADDRESS:-"0x0"}}
 PRIVACY_VERIFIER_KIND=${PRIVACY_VERIFIER_KIND:-"garaga"}
+GARAGA_VERIFICATION_MODE=${GARAGA_VERIFICATION_MODE:-"0"}
 
 # ByteArray empty = [len=0, pending_word=0, pending_word_len=0]
 BYTEARRAY_EMPTY=(0 0 0)
@@ -197,6 +198,10 @@ echo "Configuring bridge adapters..."
 run_sncast sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x41544d51 "$ATOMIQ_ADAPTER_ADDRESS" >/dev/null
 run_sncast sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x47415244 "$GARDEN_ADAPTER_ADDRESS" >/dev/null
 run_sncast sncast invoke --network "$NET" --contract-address "$BRIDGE_AGGREGATOR_ADDRESS" --function set_provider_adapter --calldata 0x4c535750 "$LAYERSWAP_ADAPTER_ADDRESS" >/dev/null
+
+# Configure Garaga adapter mode
+echo "Configuring Garaga verification mode..."
+run_sncast sncast invoke --network "$NET" --contract-address "$GARAGA_ADAPTER_ADDRESS" --function set_verification_mode --calldata "$GARAGA_VERIFICATION_MODE" >/dev/null
 
 # Configure privacy router verifier (V1)
 echo "Configuring privacy router verifier (V1)..."

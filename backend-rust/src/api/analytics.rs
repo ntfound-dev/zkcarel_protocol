@@ -187,6 +187,9 @@ mod tests {
         let total_points = Decimal::from_f64_retain(1000.0).unwrap();
         let pool = Decimal::from_f64_retain(30_000_000.0).unwrap();
         let expected = (points / total_points) * pool * claim_fee_multiplier();
-        assert_eq!(estimated_carel_from_points(points, total_points, pool), expected);
+        assert_eq!(
+            estimated_carel_from_points(points, total_points, pool),
+            expected
+        );
     }
 }

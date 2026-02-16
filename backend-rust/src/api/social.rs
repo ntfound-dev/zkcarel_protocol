@@ -243,7 +243,11 @@ pub async fn verify_task(
                 .verify_discord(&user_address, task.id.as_str(), &req.proof)
                 .await?
         }
-        _ => return Err(AppError::BadRequest("Unsupported social task provider".into())),
+        _ => {
+            return Err(AppError::BadRequest(
+                "Unsupported social task provider".into(),
+            ))
+        }
     };
 
     let points = task.points;

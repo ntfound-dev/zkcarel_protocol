@@ -77,15 +77,15 @@ const faucetTokens = [
   { symbol: "BTC", name: "Bitcoin", amount: "0.001" },
   { symbol: "ETH", name: "Ethereum", amount: "0.01" },
   { symbol: "STRK", name: "StarkNet", amount: "10" },
-  { symbol: "CAREL", name: "ZkCarel", amount: "100" },
+  { symbol: "CAREL", name: "Carel Protocol", amount: "100" },
 ]
 
-// Transaction history filter options (Indonesian)
+// Transaction history filter options
 const txFilters = [
-  { id: "all", label: "Semua" },
-  { id: "pending", label: "Berlangsung" },
-  { id: "completed", label: "Selesai" },
-  { id: "failed", label: "Gagal" },
+  { id: "all", label: "All" },
+  { id: "pending", label: "In Progress" },
+  { id: "completed", label: "Completed" },
+  { id: "failed", label: "Failed" },
 ]
 
 // Top Up providers
@@ -150,16 +150,6 @@ export function EnhancedNavigation() {
     if (value === null || value === undefined) return "—"
     if (!Number.isFinite(value)) return "—"
     return value.toLocaleString(undefined, { maximumFractionDigits: 6 })
-  }
-
-  const renderOnchainValue = (
-    value: number | null | undefined,
-    connected: boolean,
-    fallback: string
-  ) => {
-    if (!connected) return fallback
-    if (value === null || value === undefined) return "Fetching..."
-    return formatAsset(value)
   }
 
   const formatTime = (ts: unknown) => {
@@ -450,7 +440,7 @@ export function EnhancedNavigation() {
       const message = error instanceof Error ? error.message : "Unable to connect BTC wallet"
       const missingExtension = message.toLowerCase().includes("extension not detected")
       if (missingExtension) {
-        const optionalMessage = `${message} Untuk trade STRK/ETH, lanjutkan dengan MetaMask + Braavos/ArgentX tanpa wallet BTC, atau link alamat BTC testnet manual di panel wallet.`
+        const optionalMessage = `${message} For STRK/ETH trading, continue with MetaMask + Braavos/ArgentX without BTC wallet, or manually link a BTC testnet address in the wallet panel.`
         if (shouldEmitBtcOptionalNotice(optionalMessage)) {
           notifications.addNotification({
             type: "warning",
@@ -475,14 +465,14 @@ export function EnhancedNavigation() {
       notifications.addNotification({
         type: "error",
         title: "Wallet not connected",
-        message: "Connect wallet dulu sebelum ganti nama.",
+        message: "Connect wallet first before changing display name.",
       })
       return
     }
 
     const initial = displayName || ""
     const input = window.prompt(
-      "Masukkan display name baru (3-24 karakter, huruf/angka/_/-). Perubahan kedua dan seterusnya bayar 1 CAREL on-chain.",
+      "Enter a new display name (3-24 chars, letters/numbers/_/-). The second change onward costs 1 CAREL on-chain.",
       initial
     )
     const nextName = (input || "").trim()
@@ -494,11 +484,11 @@ export function EnhancedNavigation() {
       notifications.addNotification({
         type: "success",
         title: "Display name updated",
-        message: `Nama berhasil disimpan: ${saved.display_name || nextName}`,
+        message: `Name saved: ${saved.display_name || nextName}`,
       })
       return
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Gagal update nama."
+      const message = error instanceof Error ? error.message : "Failed to update display name."
       const needsPayment =
         /requires 1 CAREL|rename_onchain_tx_hash|payment to DEV wallet/i.test(message)
       if (!needsPayment) {
@@ -516,7 +506,7 @@ export function EnhancedNavigation() {
         type: "error",
         title: "Config missing",
         message:
-          "NEXT_PUBLIC_DEV_WALLET_ADDRESS / NEXT_PUBLIC_TOKEN_CAREL_ADDRESS belum diisi.",
+          "NEXT_PUBLIC_DEV_WALLET_ADDRESS / NEXT_PUBLIC_TOKEN_CAREL_ADDRESS is not set.",
       })
       return
     }
@@ -530,7 +520,7 @@ export function EnhancedNavigation() {
       notifications.addNotification({
         type: "info",
         title: "Wallet signature required",
-        message: "Konfirmasi transfer 1 CAREL untuk ganti nama.",
+        message: "Confirm 1 CAREL transfer to change display name.",
       })
       const txHash = await invokeStarknetCallFromWallet(
         {
@@ -556,7 +546,7 @@ export function EnhancedNavigation() {
       notifications.addNotification({
         type: "success",
         title: "Display name updated",
-        message: `Nama berhasil diubah: ${saved.display_name || nextName}`,
+        message: `Name updated: ${saved.display_name || nextName}`,
         txHash,
         txNetwork: "starknet",
       })
@@ -564,7 +554,7 @@ export function EnhancedNavigation() {
       notifications.addNotification({
         type: "error",
         title: "Rename failed",
-        message: error instanceof Error ? error.message : "Gagal ganti nama.",
+        message: error instanceof Error ? error.message : "Failed to change display name.",
       })
     }
   }
@@ -604,7 +594,7 @@ export function EnhancedNavigation() {
       notifications.addNotification({
         type: "warning",
         title: "Starknet wallet required",
-        message: "Faucet hanya tersedia untuk wallet Starknet.",
+        message: "Faucet is available for Starknet wallet only.",
       })
       return
     }
@@ -613,8 +603,8 @@ export function EnhancedNavigation() {
     if (typeof strkBalance === "number" && strkBalance <= 0) {
       notifications.addNotification({
         type: "warning",
-        title: "Butuh STRK untuk gas",
-        message: "Saldo STRK kosong. Buka faucet Starknet untuk top up.",
+        title: "STRK required for gas",
+        message: "STRK balance is empty. Open Starknet faucet to top up.",
       })
       if (typeof window !== "undefined") {
         window.open(STARKNET_FAUCET_URL, "_blank", "noopener,noreferrer")
@@ -694,7 +684,7 @@ export function EnhancedNavigation() {
               </span>
             </div>
             <span className="font-sans text-xl font-bold tracking-wider text-foreground group-hover:text-primary transition-colors">
-              ZkCarel
+              Carel Protocol
             </span>
           </Link>
 
@@ -929,7 +919,7 @@ export function EnhancedNavigation() {
                         {!wallet.btcAddress && (
                           <div className="mt-2 rounded-md border border-border/60 bg-surface/40 p-2">
                             <p className="text-[10px] text-muted-foreground">
-                              Tidak ada extension BTC? Link alamat Bitcoin testnet manual.
+                              No BTC extension found? Link a Bitcoin testnet address manually.
                             </p>
                             <div className="mt-1 flex items-center gap-1">
                               <Input
@@ -957,152 +947,6 @@ export function EnhancedNavigation() {
                       <p className="text-xs text-muted-foreground">Total Portfolio (backend)</p>
                       <p className="text-2xl font-bold text-foreground">${formatCurrency(wallet?.totalValueUSD)}</p>
                       <p className="text-[10px] text-muted-foreground mt-1">Dari aktivitas backend, bukan saldo on-chain.</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">On-chain Balances (real testnet)</p>
-                      <div className="grid grid-cols-2 gap-2 mt-2">
-                        <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">STRK Starknet Sepolia</p>
-                          <p className="text-sm font-medium">
-                            {renderOnchainValue(
-                              wallet?.onchainBalance?.STRK_L2,
-                              !!effectiveStarknetAddress,
-                              "Not linked"
-                            )}
-                          </p>
-                          {!effectiveStarknetAddress && (
-                            <p className="text-[10px] text-muted-foreground">
-                              Link Starknet wallet to read STRK (Starknet Sepolia)
-                            </p>
-                          )}
-                          {effectiveStarknetAddress && (
-                            <p className="text-[10px] text-muted-foreground">Native STRK on Starknet Sepolia</p>
-                          )}
-                          {!effectiveStarknetAddress && (
-                            <div className="mt-2 flex flex-wrap gap-1">
-                              {starknetWalletProviders.map((starknetProvider) => (
-                                <Button
-                                  key={starknetProvider.id}
-                                  size="sm"
-                                  variant="secondary"
-                                  className="h-6 px-2 text-[10px]"
-                                  disabled={walletConnectPending}
-                                  onClick={() => handleWalletConnect(starknetProvider.id)}
-                                >
-                                  {starknetProvider.icon} {starknetProvider.name}
-                                </Button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">ETH Sepolia</p>
-                          <p className="text-sm font-medium">
-                            {renderOnchainValue(
-                              wallet?.onchainBalance?.ETH,
-                              !!wallet?.evmAddress,
-                              "Not linked"
-                            )}
-                          </p>
-                          {!wallet?.evmAddress && (
-                            <p className="text-[10px] text-muted-foreground">Link EVM wallet to read ETH L1</p>
-                          )}
-                          {!wallet?.evmAddress && (
-                            <div className="mt-2">
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                className="h-6 px-2 text-[10px]"
-                                disabled={walletConnectPending}
-                                onClick={() => handleWalletConnect("metamask")}
-                              >
-                                🦊 MetaMask
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                        <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">BTC Testnet</p>
-                          <p className="text-sm font-medium">
-                            {renderOnchainValue(
-                              wallet?.onchainBalance?.BTC,
-                              !!wallet?.btcAddress,
-                              "Not linked"
-                            )}
-                          </p>
-                          {!wallet?.btcAddress && (
-                            <p className="text-[10px] text-muted-foreground">Link BTC wallet to read BTC</p>
-                          )}
-                        </div>
-                        <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">CAREL Starknet Sepolia</p>
-                          <p className="text-sm font-medium">
-                            {renderOnchainValue(
-                              wallet?.onchainBalance?.CAREL,
-                              !!effectiveStarknetAddress,
-                              "Not linked"
-                            )}
-                          </p>
-                          {!effectiveStarknetAddress && (
-                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read CAREL</p>
-                          )}
-                        </div>
-                        <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">USDC Starknet Sepolia</p>
-                          <p className="text-sm font-medium">
-                            {renderOnchainValue(
-                              wallet?.onchainBalance?.USDC,
-                              !!effectiveStarknetAddress,
-                              "Not linked"
-                            )}
-                          </p>
-                          {!effectiveStarknetAddress && (
-                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read USDC</p>
-                          )}
-                        </div>
-                        <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">USDT Starknet Sepolia</p>
-                          <p className="text-sm font-medium">
-                            {renderOnchainValue(
-                              wallet?.onchainBalance?.USDT,
-                              !!effectiveStarknetAddress,
-                              "Not linked"
-                            )}
-                          </p>
-                          {!effectiveStarknetAddress && (
-                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read USDT</p>
-                          )}
-                        </div>
-                        <div className="p-2 rounded-lg bg-surface/50">
-                          <p className="text-xs text-muted-foreground">WBTC Starknet Sepolia</p>
-                          <p className="text-sm font-medium">
-                            {renderOnchainValue(
-                              wallet?.onchainBalance?.WBTC,
-                              !!effectiveStarknetAddress,
-                              "Not linked"
-                            )}
-                          </p>
-                          {!effectiveStarknetAddress && (
-                            <p className="text-[10px] text-muted-foreground">Link Starknet wallet to read WBTC</p>
-                          )}
-                        </div>
-                      </div>
-                      {!wallet?.btcAddress && (
-                        <div className="flex flex-wrap gap-2">
-                          {btcWalletProviders.map((btc) => (
-                            <Button
-                              key={btc.id}
-                              size="sm"
-                              variant="secondary"
-                              className="h-7 px-2 text-xs"
-                              disabled={btcConnectPending}
-                              onClick={() => handleBtcConnect(btc.id)}
-                            >
-                              {btc.icon} {btc.name}
-                            </Button>
-                          ))}
-                        </div>
-                      )}
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">Portfolio (effective)</p>
@@ -1456,11 +1300,29 @@ export function EnhancedNavigation() {
             <DialogDescription>Choose your preferred wallet to connect</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 py-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Starknet / EVM
+            </p>
             {walletProviders.map((provider) => (
               <button
                 key={provider.id}
                 disabled={walletConnectPending}
                 onClick={() => handleWalletConnect(provider.id)}
+                className="flex items-center gap-3 p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <span className="text-2xl">{provider.icon}</span>
+                <span className="font-medium text-foreground">{provider.name}</span>
+                <ChevronRight className="h-5 w-5 ml-auto text-muted-foreground" />
+              </button>
+            ))}
+            <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Bitcoin Native (Testnet)
+            </p>
+            {btcWalletProviders.map((provider) => (
+              <button
+                key={provider.id}
+                disabled={btcConnectPending}
+                onClick={() => handleBtcConnect(provider.id)}
                 className="flex items-center gap-3 p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <span className="text-2xl">{provider.icon}</span>
@@ -1642,12 +1504,12 @@ export function EnhancedNavigation() {
         <DialogContent className="glass-strong border-border max-w-2xl">
           <DialogHeader>
             <DialogTitle>Help Center</DialogTitle>
-            <DialogDescription>Get help with ZkCarel platform</DialogDescription>
+            <DialogDescription>Get help with Carel Protocol platform</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <Link href="#tutorial-swap" className="p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-surface/50 transition-all">
               <h4 className="font-medium text-foreground mb-1">How to Swap</h4>
-              <p className="text-sm text-muted-foreground">Learn how to swap tokens on ZkCarel</p>
+              <p className="text-sm text-muted-foreground">Learn how to swap tokens on Carel Protocol</p>
             </Link>
             <Link href="#tutorial-bridge" className="p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-surface/50 transition-all">
               <h4 className="font-medium text-foreground mb-1">How to Bridge</h4>
@@ -1670,8 +1532,8 @@ export function EnhancedNavigation() {
               <h4 className="font-medium text-foreground mb-2">Contact Support</h4>
               <div className="flex items-center gap-2">
                 <Mail className="h-4 w-4 text-primary" />
-                <a href="mailto:support@zkcarel.com" className="text-sm text-primary hover:underline">
-                  support@zkcarel.com
+                <a href="mailto:support@carelprotocol.com" className="text-sm text-primary hover:underline">
+                  support@carelprotocol.com
                 </a>
               </div>
             </div>

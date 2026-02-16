@@ -218,7 +218,9 @@ fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
         .checked_add(calls_len.checked_mul(header_width).ok_or_else(|| {
             AppError::BadRequest("Invalid invoke calldata: calls_len overflow".to_string())
         })?)
-        .ok_or_else(|| AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string()))?;
+        .ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string())
+        })?;
 
     if calldata.len() <= headers_end {
         return Err(AppError::BadRequest(

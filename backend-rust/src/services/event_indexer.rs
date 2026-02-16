@@ -8,7 +8,52 @@ use crate::{
     },
 };
 use std::sync::Arc;
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, sleep, Duration};
+
+const INDEXER_DEFAULT_INITIAL_BACKFILL_BLOCKS: u64 = 128;
+const INDEXER_DEFAULT_MAX_BLOCKS_PER_TICK: u64 = 32;
+const INDEXER_TRANSIENT_BACKOFF_MAX_SECS: u64 = 90;
+
+fn is_env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+        })
+        .unwrap_or(false)
+}
+
+fn env_non_empty(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn indexer_rpc_url(config: &Config) -> String {
+    env_non_empty("STARKNET_INDEXER_RPC_URL").unwrap_or_else(|| config.starknet_rpc_url.clone())
+}
+
+fn is_transient_indexer_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("error decoding response body")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("gateway")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("connection reset")
+        || lower.contains("eof while parsing")
+}
+
+fn transient_backoff_secs(failures: u32) -> u64 {
+    let exponent = failures.saturating_sub(1).min(5);
+    let multiplier = 1_u64 << exponent;
+    let candidate = INDEXER_INTERVAL_SECS.saturating_mul(multiplier);
+    candidate.clamp(INDEXER_INTERVAL_SECS, INDEXER_TRANSIENT_BACKOFF_MAX_SECS)
+}
 
 /// Event Indexer - Scans blockchain for CAREL Protocol events
 pub struct EventIndexer {
@@ -21,8 +66,9 @@ pub struct EventIndexer {
 
 impl EventIndexer {
     pub fn new(db: Database, config: Config) -> Self {
+        let rpc_url = indexer_rpc_url(&config);
         Self {
-            client: StarknetClient::new(config.starknet_rpc_url.clone()),
+            client: StarknetClient::new(rpc_url),
             parser: EventParser::new(),
             db,
             config,
@@ -44,6 +90,22 @@ impl EventIndexer {
         targets
     }
 
+    fn initial_backfill_blocks(&self) -> u64 {
+        std::env::var("INDEXER_INITIAL_BACKFILL_BLOCKS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(INDEXER_DEFAULT_INITIAL_BACKFILL_BLOCKS)
+    }
+
+    fn max_blocks_per_tick(&self) -> u64 {
+        std::env::var("INDEXER_MAX_BLOCKS_PER_TICK")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(INDEXER_DEFAULT_MAX_BLOCKS_PER_TICK)
+    }
+
     /// Start the event indexer loop
     pub async fn start(self: Arc<Self>) {
         tokio::spawn(async move {
@@ -53,14 +115,39 @@ impl EventIndexer {
             } else {
                 tracing::info!("Indexing contracts: {:?}", contract_targets);
             }
+            if !is_env_flag_enabled("USE_STARKNET_RPC") {
+                tracing::warn!(
+                    "Event indexer is enabled but USE_STARKNET_RPC is disabled; scans will be skipped"
+                );
+            }
 
             let mut ticker = interval(Duration::from_secs(INDEXER_INTERVAL_SECS));
+            let mut transient_failures: u32 = 0;
 
             loop {
                 ticker.tick().await;
 
-                if let Err(e) = self.scan_events().await {
-                    tracing::error!("Event indexer error: {}", e);
+                match self.scan_events().await {
+                    Ok(()) => {
+                        transient_failures = 0;
+                    }
+                    Err(e) => {
+                        let err_text = e.to_string();
+                        if is_transient_indexer_error(&err_text) {
+                            transient_failures = transient_failures.saturating_add(1);
+                            let backoff_secs = transient_backoff_secs(transient_failures);
+                            tracing::warn!(
+                                "Event indexer transient error: {} (backoff={}s, failures={})",
+                                err_text,
+                                backoff_secs,
+                                transient_failures
+                            );
+                            sleep(Duration::from_secs(backoff_secs)).await;
+                        } else {
+                            transient_failures = 0;
+                            tracing::error!("Event indexer error: {}", err_text);
+                        }
+                    }
                 }
             }
         });
@@ -68,57 +155,142 @@ impl EventIndexer {
 
     /// Scan for new events from last block to current
     async fn scan_events(&self) -> Result<()> {
-        let last_block = *self.last_block.read().await;
-        let current_block = self.get_current_block().await?;
-
-        if current_block <= last_block {
+        if !is_env_flag_enabled("USE_STARKNET_RPC") {
             return Ok(());
         }
 
-        tracing::info!("Scanning blocks {} to {}", last_block + 1, current_block);
+        let previous_last_block = *self.last_block.read().await;
+        let current_block = self.get_current_block().await?;
 
-        for block in (last_block + 1)..=current_block {
-            if std::env::var("USE_BLOCK_PROCESSOR").is_ok() {
-                let processor = BlockProcessor::new(
-                    StarknetClient::new(self.config.starknet_rpc_url.clone()),
-                    self.db.clone(),
-                );
-                let _ = processor.process_block(block).await?;
-            } else {
-                self.process_block(block).await?;
+        if current_block <= previous_last_block {
+            return Ok(());
+        }
+
+        let initial_backfill = self.initial_backfill_blocks();
+        let max_blocks_per_tick = self.max_blocks_per_tick();
+
+        let start_block = if previous_last_block == 0 {
+            current_block.saturating_sub(initial_backfill.saturating_sub(1))
+        } else {
+            previous_last_block + 1
+        };
+        if start_block > current_block {
+            return Ok(());
+        }
+        let end_block = start_block
+            .saturating_add(max_blocks_per_tick.saturating_sub(1))
+            .min(current_block);
+
+        tracing::info!(
+            "Scanning blocks {} to {} (head: {}, previous_last: {})",
+            start_block,
+            end_block,
+            current_block,
+            previous_last_block
+        );
+
+        let use_block_processor =
+            is_env_flag_enabled("USE_STARKNET_RPC") && is_env_flag_enabled("USE_BLOCK_PROCESSOR");
+        let processor = if use_block_processor {
+            let rpc_url = indexer_rpc_url(&self.config);
+            Some(BlockProcessor::new(
+                StarknetClient::new(rpc_url),
+                self.db.clone(),
+            ))
+        } else {
+            None
+        };
+
+        let mut last_successful_block = previous_last_block;
+        if let Some(processor) = processor.as_ref() {
+            for block in start_block..=end_block {
+                let result = processor.process_block(block).await.map(|_| ());
+                match result {
+                    Ok(()) => {
+                        last_successful_block = block;
+                    }
+                    Err(error) => {
+                        let err_text = error.to_string();
+                        if is_transient_indexer_error(&err_text) {
+                            tracing::debug!(
+                                "Event indexer transient block failure on {}: {}. Will retry from this block on next tick",
+                                block,
+                                err_text
+                            );
+                        } else {
+                            tracing::warn!(
+                                "Event indexer failed on block {}: {}. Will retry from this block on next tick",
+                                block,
+                                err_text
+                            );
+                        }
+                        if last_successful_block > previous_last_block {
+                            *self.last_block.write().await = last_successful_block;
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+        } else {
+            match self.process_block_range(start_block, end_block).await {
+                Ok(()) => {
+                    last_successful_block = end_block;
+                }
+                Err(error) => {
+                    let err_text = error.to_string();
+                    if is_transient_indexer_error(&err_text) {
+                        tracing::debug!(
+                            "Event indexer transient range failure on {}..{}: {}. Will retry from this range on next tick",
+                            start_block,
+                            end_block,
+                            err_text
+                        );
+                    } else {
+                        tracing::warn!(
+                            "Event indexer failed on range {}..{}: {}. Will retry from this range on next tick",
+                            start_block,
+                            end_block,
+                            err_text
+                        );
+                    }
+                    return Err(error);
+                }
             }
         }
 
-        // Update last processed block
-        *self.last_block.write().await = current_block;
+        if last_successful_block > previous_last_block {
+            *self.last_block.write().await = last_successful_block;
+        }
 
         Ok(())
     }
 
     /// Get current blockchain block number
     async fn get_current_block(&self) -> Result<u64> {
-        if std::env::var("USE_STARKNET_RPC").is_ok() {
+        if is_env_flag_enabled("USE_STARKNET_RPC") {
             return self.client.get_block_number().await;
         }
-        Ok(1000000)
+        Ok(0)
     }
 
-    /// Process a single block
-    async fn process_block(&self, block_number: u64) -> Result<()> {
-        // Get events from this block
-        let events = self.get_block_events(block_number).await?;
-
+    /// Process a block range by querying events in larger chunks.
+    async fn process_block_range(&self, start_block: u64, end_block: u64) -> Result<()> {
+        let events = self.get_range_events(start_block, end_block).await?;
         for event in events {
-            self.process_event(event, block_number).await?;
+            self.process_event(event.event, event.block_number).await?;
         }
 
         Ok(())
     }
 
-    /// Get events from a specific block
-    async fn get_block_events(&self, _block_number: u64) -> Result<Vec<BlockchainEvent>> {
+    /// Get events from a block range for indexed contracts.
+    async fn get_range_events(
+        &self,
+        start_block: u64,
+        end_block: u64,
+    ) -> Result<Vec<IndexedBlockchainEvent>> {
         let mut out = Vec::new();
-        if std::env::var("USE_STARKNET_RPC").is_err() {
+        if !is_env_flag_enabled("USE_STARKNET_RPC") {
             return Ok(out);
         }
 
@@ -130,7 +302,7 @@ impl EventIndexer {
         for contract in targets {
             let events = self
                 .client
-                .get_events(contract.as_str(), _block_number, _block_number)
+                .get_events(Some(contract.as_str()), start_block, end_block)
                 .await?;
 
             for ev in events {
@@ -138,10 +310,19 @@ impl EventIndexer {
                     let mut data = parsed.data;
                     normalize_event_data(&self.parser, &mut data);
 
-                    out.push(BlockchainEvent {
-                        tx_hash: ev.from_address.clone(),
-                        event_type: parsed.event_type,
-                        data,
+                    let block_number = ev.block_number.unwrap_or(start_block);
+                    let tx_hash = ev
+                        .transaction_hash
+                        .clone()
+                        .unwrap_or_else(|| format!("{}:{}", ev.from_address, block_number));
+
+                    out.push(IndexedBlockchainEvent {
+                        event: BlockchainEvent {
+                            tx_hash,
+                            event_type: parsed.event_type,
+                            data,
+                        },
+                        block_number,
                     });
                 }
             }
@@ -344,6 +525,12 @@ struct BlockchainEvent {
     tx_hash: String,
     event_type: String,
     data: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+struct IndexedBlockchainEvent {
+    event: BlockchainEvent,
+    block_number: u64,
 }
 
 fn normalize_event_data(parser: &EventParser, data: &mut serde_json::Value) {

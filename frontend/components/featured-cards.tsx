@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { ArrowRightLeft, TrendingUp, Coins, ChevronLeft, ChevronRight, Users, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -54,10 +53,15 @@ function useAnimatedValue(end: number, duration: number = 1500) {
 
   return { value, ref }
 }
+export type SelectableFeatureId = "swap-bridge" | "limit-order" | "stake-earn"
+type FeatureId = SelectableFeatureId | "referral"
 
- 
+interface FeaturedCardsProps {
+  onSelectFeature?: (featureId: SelectableFeatureId) => void
+  activeFeatureId?: SelectableFeatureId | null
+}
 
-export function FeaturedCards() {
+export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: FeaturedCardsProps = {}) {
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = React.useState(false)
   const [canScrollRight, setCanScrollRight] = React.useState(true)
@@ -158,7 +162,6 @@ export function FeaturedCards() {
       description: "Trade tokens seamlessly across chains with zero-knowledge privacy",
       icon: ArrowRightLeft,
       gradient: "from-primary via-accent to-secondary",
-      href: "#trade",
       stats: [
         { label: "Your Volume", value: "—", numericValue: swapStats.volume, prefix: "$" },
         { label: "Your Trades", value: "—", numericValue: swapStats.trades },
@@ -171,7 +174,6 @@ export function FeaturedCards() {
       description: "Set your price and let the market come to you with advanced order types",
       icon: TrendingUp,
       gradient: "from-secondary via-primary to-accent",
-      href: "#limit-order",
       stats: [
         { label: "Active Orders", value: "—", numericValue: limitStats.activeOrders },
         { label: "Success Rate", value: "—" },
@@ -184,7 +186,6 @@ export function FeaturedCards() {
       description: "Earn passive income by staking your crypto assets with competitive APY",
       icon: Coins,
       gradient: "from-accent via-secondary to-primary",
-      href: "#stake",
       stats: [
         { label: "TVL", value: "—", numericValue: stakeStats.tvl, prefix: "$" },
         { label: "APY", value: stakeStats.maxApy ? `Up to ${stakeStats.maxApy.toFixed(2)}%` : "—", numericValue: stakeStats.maxApy, prefix: "Up to ", suffix: "%" },
@@ -197,7 +198,6 @@ export function FeaturedCards() {
       description: "Invite friends and earn bonus points on their trading activity",
       icon: Users,
       gradient: "from-success via-primary to-accent",
-      href: "#referral",
       stats: [
         { label: "Total Referrals", value: "—", numericValue: referralStats.totalReferrals },
         { label: "Points Earned", value: "—", numericValue: referralStats.referralPoints },
@@ -250,6 +250,8 @@ export function FeaturedCards() {
             key={feature.id} 
             feature={feature} 
             onReferralClick={() => setReferralOpen(true)}
+            onSelect={onSelectFeature}
+            isActive={!feature.isReferral && activeFeatureId === feature.id}
           />
         ))}
       </div>
@@ -274,12 +276,11 @@ export function FeaturedCards() {
 }
 
 interface Feature {
-  id: string
+  id: FeatureId
   title: string
   description: string
   icon: typeof ArrowRightLeft
   gradient: string
-  href: string
   stats: Array<{
     label: string
     value: string
@@ -294,10 +295,14 @@ interface Feature {
 
 function FeatureCard({ 
   feature, 
-  onReferralClick 
+  onReferralClick,
+  onSelect,
+  isActive = false,
 }: { 
   feature: Feature
-  onReferralClick: () => void 
+  onReferralClick: () => void
+  onSelect?: (featureId: SelectableFeatureId) => void
+  isActive?: boolean
 }) {
   const stat1 = useAnimatedValue(feature.stats[0]?.numericValue || 0)
   const stat2 = useAnimatedValue(feature.stats[1]?.numericValue || 0)
@@ -326,12 +331,14 @@ function FeatureCard({
       ref={stat1.ref}
       className={cn(
         "relative h-full p-6 rounded-2xl border border-border glass overflow-hidden transition-all duration-300",
-        !feature.comingSoon && "hover:border-primary/50 hover:shadow-lg hover:shadow-primary/20 hover:-translate-y-1"
+        !feature.comingSoon && "hover:border-primary/50 hover:shadow-lg hover:shadow-primary/20 hover:-translate-y-1",
+        isActive && "border-primary shadow-lg shadow-primary/20"
       )}
     >
       {/* Background Gradient */}
       <div className={cn(
-        "absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-500 bg-gradient-to-br",
+        "absolute inset-0 transition-opacity duration-500 bg-gradient-to-br",
+        isActive ? "opacity-10" : "opacity-0 group-hover:opacity-10",
         feature.gradient
       )} />
 
@@ -440,9 +447,24 @@ function FeatureCard({
         {cardBody}
       </div>
     ) : (
-      <Link href={feature.href} className={wrapperClass}>
+      <div
+        className={wrapperClass}
+        role="button"
+        tabIndex={0}
+        onClick={() => {
+          if (!feature.comingSoon) {
+            onSelect?.(feature.id as SelectableFeatureId)
+          }
+        }}
+        onKeyDown={(event) => {
+          if ((event.key === "Enter" || event.key === " ") && !feature.comingSoon) {
+            event.preventDefault()
+            onSelect?.(feature.id as SelectableFeatureId)
+          }
+        }}
+      >
         {cardBody}
-      </Link>
+      </div>
     )
   )
 }

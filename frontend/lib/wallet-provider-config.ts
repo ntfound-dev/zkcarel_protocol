@@ -23,6 +23,7 @@ export const STARKNET_WALLET_PROVIDERS: { id: WalletProviderType; name: string; 
   ]
 
 export const BTC_WALLET_PROVIDERS: { id: BtcWalletProviderType; name: string; icon: string }[] = [
+  { id: "unisat", name: "UniSat (BTC)", icon: "🟨" },
   { id: "xverse", name: "Xverse (BTC)", icon: "🟧" },
 ]
 

@@ -2,31 +2,172 @@ use axum::{extract::State, http::HeaderMap, Json};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::services::onchain::{
     parse_felt, u256_from_felts, u256_to_felts, OnchainInvoker, OnchainReader,
 };
 use crate::services::MerkleGenerator;
-use crate::{constants::EPOCH_DURATION_SECONDS, error::Result, models::ApiResponse};
 use crate::tokenomics::{
     bps_to_percent, claim_fee_multiplier, distribution_mode_for_environment,
-    rewards_distribution_pool_for_environment, CLAIM_FEE_BPS, CLAIM_FEE_DEV_BPS,
-    CLAIM_FEE_MANAGEMENT_BPS, BPS_DENOM,
+    rewards_distribution_pool_for_environment, BPS_DENOM, CLAIM_FEE_BPS, CLAIM_FEE_DEV_BPS,
+    CLAIM_FEE_MANAGEMENT_BPS,
 };
+use crate::{constants::EPOCH_DURATION_SECONDS, error::Result, models::ApiResponse};
 
 use super::{require_user, resolve_user_scope_addresses, AppState};
 use crate::error::AppError;
 use crate::indexer::starknet_client::StarknetClient;
 use sqlx::FromRow;
-use starknet_core::types::{Call, FunctionCall};
 use starknet_core::types::Felt;
+use starknet_core::types::{Call, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
 use starknet_crypto::Felt as CryptoFelt;
 use tokio::time::{sleep, Duration};
 
 const ONCHAIN_READ_TIMEOUT_MS: u64 = 2_500;
+const ONCHAIN_POINTS_CACHE_TTL_SECS: u64 = 20;
+const ONCHAIN_POINTS_CACHE_STALE_SECS: u64 = 300;
+const ONCHAIN_POINTS_CACHE_MAX_ENTRIES: usize = 100_000;
+const POINTS_RESPONSE_CACHE_TTL_SECS: u64 = 15;
+const POINTS_RESPONSE_CACHE_STALE_SECS: u64 = 180;
+const POINTS_RESPONSE_CACHE_MAX_ENTRIES: usize = 100_000;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Copy)]
+struct CachedOnchainPoints {
+    fetched_at: Instant,
+    points: Option<f64>,
+}
+
+static ONCHAIN_POINTS_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedOnchainPoints>>> =
+    OnceLock::new();
+static POINTS_RESPONSE_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedPointsResponse>>> =
+    OnceLock::new();
+static POINTS_RESPONSE_FETCH_LOCKS: OnceLock<
+    tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
+
+#[derive(Clone)]
+struct CachedPointsResponse {
+    fetched_at: Instant,
+    value: PointsResponse,
+}
+
+fn onchain_points_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOnchainPoints>> {
+    ONCHAIN_POINTS_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn points_response_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedPointsResponse>> {
+    POINTS_RESPONSE_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn points_response_fetch_locks(
+) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    POINTS_RESPONSE_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+async fn points_response_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = points_response_fetch_locks();
+    {
+        let guard = locks.read().await;
+        if let Some(lock) = guard.get(key) {
+            return lock.clone();
+        }
+    }
+
+    let mut guard = locks.write().await;
+    if let Some(lock) = guard.get(key) {
+        return lock.clone();
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    guard.insert(key.to_string(), lock.clone());
+
+    if guard.len() > POINTS_RESPONSE_CACHE_MAX_ENTRIES {
+        let cache = points_response_cache();
+        let cache_guard = cache.read().await;
+        guard.retain(|cache_key, _| cache_guard.contains_key(cache_key));
+    }
+    lock
+}
+
+fn onchain_points_cache_key(contract: &str, epoch: i64, user: &str) -> String {
+    format!(
+        "{}|{}|{}",
+        contract.trim().to_ascii_lowercase(),
+        epoch,
+        user.trim().to_ascii_lowercase()
+    )
+}
+
+async fn get_cached_onchain_points(key: &str, max_age: Duration) -> Option<CachedOnchainPoints> {
+    let cache = onchain_points_cache();
+    let guard = cache.read().await;
+    let entry = guard.get(key).copied()?;
+    if entry.fetched_at.elapsed() <= max_age {
+        return Some(entry);
+    }
+    None
+}
+
+async fn cache_onchain_points(key: &str, points: Option<f64>) {
+    let cache = onchain_points_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedOnchainPoints {
+            fetched_at: Instant::now(),
+            points,
+        },
+    );
+    if guard.len() > ONCHAIN_POINTS_CACHE_MAX_ENTRIES {
+        let stale_after = Duration::from_secs(ONCHAIN_POINTS_CACHE_STALE_SECS);
+        guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
+    }
+}
+
+fn points_response_cache_key(user_addresses: &[String], epoch: i64) -> String {
+    let scope = normalize_scope_addresses(user_addresses);
+    format!(
+        "{}|{}",
+        epoch,
+        if scope.is_empty() {
+            "-".to_string()
+        } else {
+            scope.join(",")
+        }
+    )
+}
+
+async fn get_cached_points_response(key: &str, max_age: Duration) -> Option<PointsResponse> {
+    let cache = points_response_cache();
+    let guard = cache.read().await;
+    let entry = guard.get(key)?;
+    if entry.fetched_at.elapsed() <= max_age {
+        return Some(entry.value.clone());
+    }
+    None
+}
+
+async fn cache_points_response(key: &str, value: PointsResponse) {
+    let cache = points_response_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedPointsResponse {
+            fetched_at: Instant::now(),
+            value,
+        },
+    );
+    if guard.len() > POINTS_RESPONSE_CACHE_MAX_ENTRIES {
+        let stale_after = Duration::from_secs(POINTS_RESPONSE_CACHE_STALE_SECS);
+        guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
 pub struct PointsResponse {
     pub current_epoch: i64,
     pub total_points: f64,
@@ -179,7 +320,9 @@ async fn resolve_total_distribution(state: &AppState, requested: Option<f64>) ->
     if let Some(val) = requested {
         return Ok(Decimal::from_f64_retain(val).unwrap_or(Decimal::ZERO));
     }
-    Ok(rewards_distribution_pool_for_environment(&state.config.environment))
+    Ok(rewards_distribution_pool_for_environment(
+        &state.config.environment,
+    ))
 }
 
 fn configured_point_storage_contract(state: &AppState) -> Option<&str> {
@@ -222,9 +365,12 @@ async fn read_onchain_user_points(
             .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?,
         calldata: vec![Felt::from(epoch as u128), parse_felt(user)?],
     };
-    let result = tokio::time::timeout(Duration::from_millis(ONCHAIN_READ_TIMEOUT_MS), reader.call(call))
-        .await
-        .map_err(|_| AppError::BlockchainRPC("on-chain read timeout".to_string()))??;
+    let result = tokio::time::timeout(
+        Duration::from_millis(ONCHAIN_READ_TIMEOUT_MS),
+        reader.call(call),
+    )
+    .await
+    .map_err(|_| AppError::BlockchainRPC("on-chain read timeout".to_string()))??;
     if result.len() < 2 {
         return Err(AppError::Internal(
             "get_user_points returned malformed payload".to_string(),
@@ -239,41 +385,124 @@ pub async fn get_points(
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<PointsResponse>>> {
     let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
-
-    // Get current epoch
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64; // ~30 days
+    let cache_key = points_response_cache_key(&user_addresses, current_epoch);
+    if let Some(cached) = get_cached_points_response(
+        &cache_key,
+        Duration::from_secs(POINTS_RESPONSE_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
 
+    let fetch_lock = points_response_fetch_lock_for(&cache_key).await;
+    let _guard = fetch_lock.lock().await;
+    if let Some(cached) = get_cached_points_response(
+        &cache_key,
+        Duration::from_secs(POINTS_RESPONSE_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
+
+    match build_points_response(&state, &headers, &user_addresses, current_epoch).await {
+        Ok(response) => {
+            cache_points_response(&cache_key, response.clone()).await;
+            Ok(Json(ApiResponse::success(response)))
+        }
+        Err(err) => {
+            if let Some(stale) = get_cached_points_response(
+                &cache_key,
+                Duration::from_secs(POINTS_RESPONSE_CACHE_STALE_SECS),
+            )
+            .await
+            {
+                tracing::debug!(
+                    "rewards_points returning stale cache fallback key={}",
+                    cache_key
+                );
+                return Ok(Json(ApiResponse::success(stale)));
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn build_points_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_addresses: &[String],
+    current_epoch: i64,
+) -> Result<PointsResponse> {
     // Aggregate points across canonical user + linked wallets so Starknet swap points
     // are visible even when auth subject is EVM/BTC address.
-    let points = aggregate_points_for_scope(&state, &user_addresses, current_epoch).await?;
+    let points = aggregate_points_for_scope(state, user_addresses, current_epoch).await?;
 
     let mut onchain_points = None;
     let mut onchain_starknet_address = None;
-    if let Some(contract) = configured_point_storage_contract(&state) {
-        if let Ok(starknet_user) = super::require_starknet_user(&headers, &state).await {
-            match read_onchain_user_points(&state, contract, current_epoch, &starknet_user).await {
-                Ok(value) => {
-                    onchain_points = Some(value as f64);
+    if let Some(contract) = configured_point_storage_contract(state) {
+        if let Ok(starknet_user) = super::require_starknet_user(headers, state).await {
+            let cache_key = onchain_points_cache_key(contract, current_epoch, &starknet_user);
+            if let Some(cached) = get_cached_onchain_points(
+                &cache_key,
+                Duration::from_secs(ONCHAIN_POINTS_CACHE_TTL_SECS),
+            )
+            .await
+            {
+                if let Some(cached_points) = cached.points {
+                    onchain_points = Some(cached_points);
                     onchain_starknet_address = Some(starknet_user);
                 }
-                Err(err) => {
-                    let err_text = err.to_string();
-                    if err_text.contains("JsonRpcResponse")
-                        || err_text.contains("unknown block tag 'pre_confirmed'")
-                    {
-                        tracing::debug!(
-                            "Transient on-chain points read issue: user={} epoch={} err={}",
-                            starknet_user,
-                            current_epoch,
-                            err_text
-                        );
-                    } else {
-                        tracing::warn!(
-                            "Failed to read on-chain points for rewards panel: user={} epoch={} err={}",
-                            starknet_user,
-                            current_epoch,
-                            err_text
-                        );
+            } else {
+                match read_onchain_user_points(state, contract, current_epoch, &starknet_user).await
+                {
+                    Ok(value) => {
+                        let value_f64 = value as f64;
+                        cache_onchain_points(&cache_key, Some(value_f64)).await;
+                        onchain_points = Some(value_f64);
+                        onchain_starknet_address = Some(starknet_user);
+                    }
+                    Err(err) => {
+                        if let Some(stale) = get_cached_onchain_points(
+                            &cache_key,
+                            Duration::from_secs(ONCHAIN_POINTS_CACHE_STALE_SECS),
+                        )
+                        .await
+                        {
+                            if let Some(stale_points) = stale.points {
+                                tracing::debug!(
+                                    "Using stale on-chain points cache for user={} epoch={}",
+                                    starknet_user,
+                                    current_epoch
+                                );
+                                onchain_points = Some(stale_points);
+                                onchain_starknet_address = Some(starknet_user);
+                            }
+                        } else {
+                            let err_text = err.to_string();
+                            if err_text.contains("JsonRpcResponse")
+                                || err_text.contains("unknown block tag 'pre_confirmed'")
+                                || err_text.contains("timeout")
+                            {
+                                tracing::debug!(
+                                    "Transient on-chain points read issue: user={} epoch={} err={}",
+                                    starknet_user,
+                                    current_epoch,
+                                    err_text
+                                );
+                            } else {
+                                tracing::warn!(
+                                    "Failed to read on-chain points for rewards panel: user={} epoch={} err={}",
+                                    starknet_user,
+                                    current_epoch,
+                                    err_text
+                                );
+                            }
+                            // Negative-cache transient failures to avoid retry storms.
+                            cache_onchain_points(&cache_key, None).await;
+                        }
                     }
                 }
             }
@@ -287,17 +516,14 @@ pub async fn get_points(
             .bind(current_epoch)
             .fetch_one(state.db.pool())
             .await?;
-    let estimated_reward_carel = (calculate_epoch_reward(
-        points.total_points,
-        global_epoch_points,
-        distribution_pool,
-    ) * claim_fee_multiplier())
+    let estimated_reward_carel =
+        (calculate_epoch_reward(points.total_points, global_epoch_points, distribution_pool)
+            * claim_fee_multiplier())
         .to_f64()
         .unwrap_or(0.0);
-    let claim_net_percent =
-        bps_to_percent(BPS_DENOM - CLAIM_FEE_BPS);
+    let claim_net_percent = bps_to_percent(BPS_DENOM - CLAIM_FEE_BPS);
 
-    let response = PointsResponse {
+    Ok(PointsResponse {
         current_epoch,
         total_points: points.total_points.to_string().parse().unwrap_or(0.0),
         global_epoch_points: global_epoch_points.to_string().parse().unwrap_or(0.0),
@@ -318,9 +544,7 @@ pub async fn get_points(
         claim_fee_management_percent: bps_to_percent(CLAIM_FEE_MANAGEMENT_BPS),
         claim_fee_dev_percent: bps_to_percent(CLAIM_FEE_DEV_BPS),
         claim_net_percent,
-    };
-
-    Ok(Json(ApiResponse::success(response)))
+    })
 }
 
 /// POST /api/v1/rewards/sync-onchain
@@ -335,11 +559,7 @@ pub async fn sync_points_onchain(
     let points = aggregate_points_for_scope(&state, &user_addresses, current_epoch).await?;
     let offchain_points = points.total_points.max(Decimal::ZERO).trunc();
     let offchain_points_u128 = offchain_points.to_u128().unwrap_or(0);
-    let required_points_u128 = req
-        .minimum_points
-        .unwrap_or(0.0)
-        .max(0.0)
-        .floor() as u128;
+    let required_points_u128 = req.minimum_points.unwrap_or(0.0).max(0.0).floor() as u128;
     if required_points_u128 > offchain_points_u128 {
         return Err(AppError::BadRequest(format!(
             "Points backend belum cukup: required={} available={}",
@@ -351,7 +571,14 @@ pub async fn sync_points_onchain(
         AppError::BadRequest("POINT_STORAGE_ADDRESS is not configured".to_string())
     })?;
 
-    let onchain_before = match read_onchain_user_points(&state, contract, current_epoch, &starknet_user).await {
+    let onchain_before = match read_onchain_user_points(
+        &state,
+        contract,
+        current_epoch,
+        &starknet_user,
+    )
+    .await
+    {
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(
@@ -367,8 +594,9 @@ pub async fn sync_points_onchain(
     let mut sync_tx_hash = None;
 
     if offchain_points_u128 > onchain_before {
-        let invoker = OnchainInvoker::from_config(&state.config)?
-            .ok_or_else(|| AppError::BadRequest("Backend on-chain signer is not configured".to_string()))?;
+        let invoker = OnchainInvoker::from_config(&state.config)?.ok_or_else(|| {
+            AppError::BadRequest("Backend on-chain signer is not configured".to_string())
+        })?;
         // Set exact on-chain points to backend aggregate to avoid drift and read-before-add dependency.
         let call = build_submit_points_call(
             contract,

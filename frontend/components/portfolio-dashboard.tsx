@@ -42,11 +42,43 @@ type PortfolioSnapshot = {
 const assetMeta: Record<string, { name: string; icon: string }> = {
   BTC: { name: "Bitcoin", icon: "₿" },
   ETH: { name: "Ethereum", icon: "Ξ" },
-  CAREL: { name: "ZkCarel", icon: "◇" },
+  CAREL: { name: "Carel Protocol", icon: "◇" },
   STRK: { name: "StarkNet", icon: "◈" },
   USDT: { name: "Tether", icon: "₮" },
   USDC: { name: "USD Coin", icon: "⭕" },
 }
+
+const MAX_ASSET_VALUE_USD = 1_000_000
+type AssetChain = "starknet" | "evm" | "bitcoin" | "other"
+
+const resolveAssetChain = (symbol: string): AssetChain => {
+  const normalized = symbol.toUpperCase()
+  if (["STRK", "CAREL", "USDC", "USDT", "WBTC"].includes(normalized)) return "starknet"
+  if (normalized === "ETH") return "evm"
+  if (normalized === "BTC") return "bitcoin"
+  return "other"
+}
+
+const sanitizeUsdValue = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.min(value, MAX_ASSET_VALUE_USD)
+}
+
+const sanitizePercent = (value: number) => {
+  if (!Number.isFinite(value)) return 0
+  const capped = Math.max(-9999, Math.min(9999, value))
+  return Number(capped.toFixed(2))
+}
+
+const formatUsd = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return "$0.00"
+  return `$${value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+const formatPercent = (value: number) => `${sanitizePercent(value)}%`
 
 
 type ChartPoint = { label: string; value: number }
@@ -164,16 +196,16 @@ function AssetRow({ asset }: { asset: PortfolioAsset }) {
               style={{ width: `${asset.percent}%` }}
             />
           </div>
-          <p className="text-xs text-muted-foreground mt-1 text-center">{asset.percent}%</p>
+          <p className="text-xs text-muted-foreground mt-1 text-center">{formatPercent(asset.percent)}</p>
         </div>
         <div className="text-right min-w-[100px]">
-          <p className="font-medium text-foreground">${asset.value.toLocaleString()}</p>
+          <p className="font-medium text-foreground">{formatUsd(asset.value)}</p>
           <p className={cn(
             "text-xs flex items-center justify-end gap-1",
             isPositive ? "text-success" : "text-destructive"
           )}>
             {isPositive ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-            {isPositive ? "+" : ""}{asset.change}%
+            {isPositive ? "+" : ""}{formatPercent(asset.change)}
           </p>
         </div>
       </div>
@@ -345,28 +377,38 @@ export function PortfolioDashboard() {
   const pnlValue = analytics
     ? safeNumber(analytics.portfolio[periodKey], 0)
     : 0
+  const hasStarknetWallet = Boolean(effectiveStarknetAddress)
+  const hasEvmWallet = Boolean(wallet.evmAddress)
+  const hasBtcWallet = Boolean(wallet.btcAddress)
 
   const assetsRaw: PortfolioAsset[] = portfolioBalance
     ? portfolioBalance.balances.map((item) => {
         const symbol = item.token.toUpperCase()
         const meta = assetMeta[symbol] || { name: symbol, icon: "•" }
+        const chain = resolveAssetChain(symbol)
+        const chainLinked =
+          (chain === "starknet" && hasStarknetWallet) ||
+          (chain === "evm" && hasEvmWallet) ||
+          (chain === "bitcoin" && hasBtcWallet)
         const overrideAmount = onchainAmountOverride[symbol]
-        const amount = overrideAmount ?? Number(item.amount || 0)
+        const backendAmount = Number(item.amount || 0)
+        const amount = chainLinked
+          ? (overrideAmount !== null && Number.isFinite(overrideAmount) ? overrideAmount : 0)
+          : backendAmount
         const backendValue = Number(item.value_usd || 0)
         const fallbackPrice = Number(item.price || 0)
-        const inferredPrice = amount > 0 ? backendValue / amount : 0
+        const inferredPrice = backendAmount > 0 ? backendValue / backendAmount : 0
         const price = Number.isFinite(fallbackPrice) && fallbackPrice > 0 ? fallbackPrice : inferredPrice
-        const value =
-          overrideAmount !== null && Number.isFinite(price) && price > 0
-            ? amount * price
-            : backendValue
+        const value = chainLinked
+          ? (Number.isFinite(price) && price > 0 ? amount * price : 0)
+          : backendValue
         return {
           symbol,
           name: meta.name,
           icon: meta.icon,
-          value,
+          value: sanitizeUsdValue(value),
           percent: 0,
-          change: Number(item.change_24h || 0),
+          change: sanitizePercent(Number(item.change_24h || 0)),
         }
       })
     : analytics
@@ -376,7 +418,7 @@ export function PortfolioDashboard() {
           symbol: item.asset,
           name: meta.name,
           icon: meta.icon,
-          value: safeNumber(item.value_usd, 0),
+          value: sanitizeUsdValue(safeNumber(item.value_usd, 0)),
           percent: 0,
           change: 0,
         }
@@ -399,7 +441,7 @@ export function PortfolioDashboard() {
   }, null)
 
   const displayData: PortfolioSnapshot = {
-    totalValue: resolvedTotalValue,
+    totalValue: sanitizeUsdValue(resolvedTotalValue),
     pnl: pnlValue,
     pnlPercent: Number.isFinite(pnlPercent) ? Number(pnlPercent.toFixed(2)) : 0,
     period: selectedPeriod,
@@ -407,6 +449,7 @@ export function PortfolioDashboard() {
   }
 
   const isPositive = hasAnalytics ? displayData.pnl >= 0 : true
+  const pnlSign = displayData.pnl >= 0 ? "+" : "-"
 
   return (
     <section id="portfolio" className="py-12">
@@ -452,7 +495,7 @@ export function PortfolioDashboard() {
               "text-3xl font-bold",
               isPositive ? "text-success" : "text-destructive"
             )}>
-              {hasAnalytics ? `${isPositive ? "+" : ""}$${displayData.pnl.toLocaleString()}` : "—"}
+              {hasAnalytics ? `${pnlSign}${formatUsd(Math.abs(displayData.pnl))}` : "—"}
             </span>
             <span className={cn(
               "text-sm font-medium pb-1 flex items-center gap-1",
@@ -479,7 +522,7 @@ export function PortfolioDashboard() {
               <span className="font-medium text-foreground">Asset Allocation</span>
             </div>
             <span className="text-2xl font-bold text-foreground">
-              {hasAnalytics ? `$${displayData.totalValue.toLocaleString()}` : "—"}
+              {hasAnalytics ? formatUsd(displayData.totalValue) : "—"}
             </span>
           </div>
 
@@ -511,13 +554,13 @@ export function PortfolioDashboard() {
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Total Value</p>
                 <p className="text-lg font-bold text-foreground">
-                  {hasAnalytics ? `$${displayData.totalValue.toLocaleString()}` : "—"}
+                  {hasAnalytics ? formatUsd(displayData.totalValue) : "—"}
                 </p>
               </div>
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
                 <p className="text-xs text-muted-foreground">Total PnL</p>
                 <p className={cn("text-lg font-bold", isPositive ? "text-success" : "text-destructive")}>
-                  {hasAnalytics ? `${isPositive ? "+" : ""}$${displayData.pnl.toLocaleString()}` : "—"}
+                  {hasAnalytics ? `${pnlSign}${formatUsd(Math.abs(displayData.pnl))}` : "—"}
                 </p>
               </div>
               <div className="p-4 rounded-xl bg-surface/50 border border-border">
@@ -532,7 +575,7 @@ export function PortfolioDashboard() {
                   "text-lg font-bold",
                   bestPerformer && bestPerformer.change >= 0 ? "text-success" : "text-destructive"
                 )}>
-                  {bestPerformer ? `${bestPerformer.symbol} ${bestPerformer.change >= 0 ? "+" : ""}${bestPerformer.change}%` : "—"}
+                  {bestPerformer ? `${bestPerformer.symbol} ${bestPerformer.change >= 0 ? "+" : ""}${formatPercent(bestPerformer.change)}` : "—"}
                 </p>
               </div>
             </div>
@@ -556,10 +599,10 @@ export function PortfolioDashboard() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="font-medium text-foreground">${asset.value.toLocaleString()}</p>
+                        <p className="font-medium text-foreground">{formatUsd(asset.value)}</p>
                         {asset.change !== 0 && (
                           <p className={cn("text-xs", asset.change >= 0 ? "text-success" : "text-destructive")}>
-                            {asset.change >= 0 ? "+" : ""}{asset.change}%
+                            {asset.change >= 0 ? "+" : ""}{formatPercent(asset.change)}
                           </p>
                         )}
                       </div>

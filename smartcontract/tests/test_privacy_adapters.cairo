@@ -12,6 +12,9 @@ use smartcontract::privacy::zk_privacy_router::{
 use smartcontract::privacy::mock_verifiers::{
     IMockVerifierAdminDispatcher, IMockVerifierAdminDispatcherTrait
 };
+use smartcontract::privacy::garaga_verifier_adapter::GaragaVerifierAdapter::{
+    IGaragaVerifierModeAdminDispatcher, IGaragaVerifierModeAdminDispatcherTrait
+};
 
 #[test]
 fn test_garaga_adapter_forwards_verification() {
@@ -29,6 +32,9 @@ fn test_garaga_adapter_forwards_verification() {
     mock_address.serialize(ref adapter_args);
     let (adapter_address, _) = adapter_class.deploy(@adapter_args).unwrap();
 
+    let mode_admin = IGaragaVerifierModeAdminDispatcher { contract_address: adapter_address };
+    assert!(mode_admin.get_verification_mode() == 0, "Expected legacy mode by default");
+
     let dispatcher = IProofVerifierDispatcher { contract_address: adapter_address };
     assert!(dispatcher.verify_proof(array![].span(), array![].span()), "Expected proof to be valid");
 
@@ -38,6 +44,28 @@ fn test_garaga_adapter_forwards_verification() {
     stop_cheat_caller_address(mock_address);
 
     assert!(!dispatcher.verify_proof(array![].span(), array![].span()), "Expected proof to be invalid");
+}
+
+#[test]
+#[should_panic(expected: "Unsupported mode")]
+fn test_garaga_adapter_rejects_unsupported_mode() {
+    let admin: ContractAddress = 0x111.try_into().unwrap();
+
+    let mock_class = declare("MockGaragaVerifier").unwrap().contract_class();
+    let mut mock_args = array![];
+    admin.serialize(ref mock_args);
+    true.serialize(ref mock_args);
+    let (mock_address, _) = mock_class.deploy(@mock_args).unwrap();
+
+    let adapter_class = declare("GaragaVerifierAdapter").unwrap().contract_class();
+    let mut adapter_args = array![];
+    admin.serialize(ref adapter_args);
+    mock_address.serialize(ref adapter_args);
+    let (adapter_address, _) = adapter_class.deploy(@adapter_args).unwrap();
+
+    start_cheat_caller_address(adapter_address, admin);
+    let mode_admin = IGaragaVerifierModeAdminDispatcher { contract_address: adapter_address };
+    mode_admin.set_verification_mode(9);
 }
 
 #[test]

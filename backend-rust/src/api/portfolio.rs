@@ -3,7 +3,9 @@ use chrono::TimeZone;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use crate::{
     error::Result,
@@ -19,13 +21,13 @@ use super::{
     AppState,
 };
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct BalanceResponse {
     pub total_value_usd: f64,
     pub balances: Vec<TokenBalance>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct TokenBalance {
     pub token: String,
     pub amount: f64,
@@ -34,14 +36,14 @@ pub struct TokenBalance {
     pub change_24h: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct HistoryResponse {
     pub total_value: Vec<HistoryPoint>,
     pub pnl: f64,
     pub pnl_percentage: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct HistoryPoint {
     pub timestamp: i64,
     pub value: f64,
@@ -58,7 +60,7 @@ pub struct PortfolioOHLCVQuery {
     pub limit: Option<i32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct PortfolioOHLCVPoint {
     pub timestamp: i64,
     pub open: f64,
@@ -68,7 +70,7 @@ pub struct PortfolioOHLCVPoint {
     pub volume: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct PortfolioOHLCVResponse {
     pub interval: String,
     pub data: Vec<PortfolioOHLCVPoint>,
@@ -88,6 +90,381 @@ struct TokenSeries {
 }
 
 const ONCHAIN_BALANCE_TIMEOUT_SECS: u64 = 8;
+const ONCHAIN_HOLDINGS_CACHE_TTL_SECS: u64 = 20;
+const ONCHAIN_HOLDINGS_CACHE_STALE_SECS: u64 = 180;
+const ONCHAIN_HOLDINGS_CACHE_MAX_ENTRIES: usize = 50_000;
+const PORTFOLIO_BALANCE_CACHE_TTL_SECS: u64 = 15;
+const PORTFOLIO_BALANCE_CACHE_STALE_SECS: u64 = 180;
+const PORTFOLIO_BALANCE_CACHE_MAX_ENTRIES: usize = 50_000;
+const PORTFOLIO_HISTORY_CACHE_TTL_SECS: u64 = 15;
+const PORTFOLIO_HISTORY_CACHE_STALE_SECS: u64 = 180;
+const PORTFOLIO_HISTORY_CACHE_MAX_ENTRIES: usize = 50_000;
+const PORTFOLIO_OHLCV_CACHE_TTL_SECS: u64 = 15;
+const PORTFOLIO_OHLCV_CACHE_STALE_SECS: u64 = 180;
+const PORTFOLIO_OHLCV_CACHE_MAX_ENTRIES: usize = 50_000;
+
+#[derive(Clone)]
+struct CachedOnchainHoldings {
+    fetched_at: Instant,
+    values: HashMap<String, f64>,
+}
+
+static ONCHAIN_HOLDINGS_CACHE: OnceLock<
+    tokio::sync::RwLock<HashMap<String, CachedOnchainHoldings>>,
+> = OnceLock::new();
+static PORTFOLIO_BALANCE_CACHE: OnceLock<
+    tokio::sync::RwLock<HashMap<String, CachedBalanceResponse>>,
+> = OnceLock::new();
+static PORTFOLIO_HISTORY_CACHE: OnceLock<
+    tokio::sync::RwLock<HashMap<String, CachedHistoryResponse>>,
+> = OnceLock::new();
+static PORTFOLIO_OHLCV_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedOhlcvResponse>>> =
+    OnceLock::new();
+static PORTFOLIO_BALANCE_FETCH_LOCKS: OnceLock<
+    tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
+static PORTFOLIO_HISTORY_FETCH_LOCKS: OnceLock<
+    tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
+static PORTFOLIO_OHLCV_FETCH_LOCKS: OnceLock<
+    tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
+
+#[derive(Clone)]
+struct CachedBalanceResponse {
+    fetched_at: Instant,
+    value: BalanceResponse,
+}
+
+#[derive(Clone)]
+struct CachedHistoryResponse {
+    fetched_at: Instant,
+    value: HistoryResponse,
+}
+
+#[derive(Clone)]
+struct CachedOhlcvResponse {
+    fetched_at: Instant,
+    value: PortfolioOHLCVResponse,
+}
+
+fn onchain_holdings_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOnchainHoldings>>
+{
+    ONCHAIN_HOLDINGS_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn portfolio_balance_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedBalanceResponse>>
+{
+    PORTFOLIO_BALANCE_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn portfolio_history_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedHistoryResponse>>
+{
+    PORTFOLIO_HISTORY_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn portfolio_ohlcv_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOhlcvResponse>> {
+    PORTFOLIO_OHLCV_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn portfolio_balance_fetch_locks(
+) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    PORTFOLIO_BALANCE_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn portfolio_history_fetch_locks(
+) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    PORTFOLIO_HISTORY_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+fn portfolio_ohlcv_fetch_locks(
+) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    PORTFOLIO_OHLCV_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
+async fn portfolio_balance_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = portfolio_balance_fetch_locks();
+    {
+        let guard = locks.read().await;
+        if let Some(lock) = guard.get(key) {
+            return lock.clone();
+        }
+    }
+
+    let mut guard = locks.write().await;
+    if let Some(lock) = guard.get(key) {
+        return lock.clone();
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    guard.insert(key.to_string(), lock.clone());
+
+    if guard.len() > PORTFOLIO_BALANCE_CACHE_MAX_ENTRIES {
+        let cache = portfolio_balance_cache();
+        let cache_guard = cache.read().await;
+        guard.retain(|cache_key, _| cache_guard.contains_key(cache_key));
+    }
+    lock
+}
+
+async fn portfolio_history_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = portfolio_history_fetch_locks();
+    {
+        let guard = locks.read().await;
+        if let Some(lock) = guard.get(key) {
+            return lock.clone();
+        }
+    }
+
+    let mut guard = locks.write().await;
+    if let Some(lock) = guard.get(key) {
+        return lock.clone();
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    guard.insert(key.to_string(), lock.clone());
+
+    if guard.len() > PORTFOLIO_HISTORY_CACHE_MAX_ENTRIES {
+        let cache = portfolio_history_cache();
+        let cache_guard = cache.read().await;
+        guard.retain(|cache_key, _| cache_guard.contains_key(cache_key));
+    }
+    lock
+}
+
+async fn portfolio_ohlcv_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = portfolio_ohlcv_fetch_locks();
+    {
+        let guard = locks.read().await;
+        if let Some(lock) = guard.get(key) {
+            return lock.clone();
+        }
+    }
+
+    let mut guard = locks.write().await;
+    if let Some(lock) = guard.get(key) {
+        return lock.clone();
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    guard.insert(key.to_string(), lock.clone());
+
+    if guard.len() > PORTFOLIO_OHLCV_CACHE_MAX_ENTRIES {
+        let cache = portfolio_ohlcv_cache();
+        let cache_guard = cache.read().await;
+        guard.retain(|cache_key, _| cache_guard.contains_key(cache_key));
+    }
+    lock
+}
+
+fn portfolio_scope_cache_key(user_addresses: &[String]) -> String {
+    let normalized = normalize_scope_addresses(user_addresses);
+    if normalized.is_empty() {
+        return "-".to_string();
+    }
+    normalized.join(",")
+}
+
+fn portfolio_balance_cache_key(auth_subject: &str, user_addresses: &[String]) -> String {
+    format!(
+        "{}|{}",
+        auth_subject.trim().to_ascii_lowercase(),
+        portfolio_scope_cache_key(user_addresses)
+    )
+}
+
+fn portfolio_history_cache_key(
+    auth_subject: &str,
+    user_addresses: &[String],
+    period: &str,
+) -> String {
+    format!(
+        "{}|{}|{}",
+        auth_subject.trim().to_ascii_lowercase(),
+        portfolio_scope_cache_key(user_addresses),
+        period.trim().to_ascii_lowercase()
+    )
+}
+
+fn portfolio_ohlcv_cache_key(
+    auth_subject: &str,
+    user_addresses: &[String],
+    interval: &str,
+    limit: i64,
+) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        auth_subject.trim().to_ascii_lowercase(),
+        portfolio_scope_cache_key(user_addresses),
+        interval.trim().to_ascii_lowercase(),
+        limit
+    )
+}
+
+async fn get_cached_portfolio_balance(key: &str, max_age: Duration) -> Option<BalanceResponse> {
+    let cache = portfolio_balance_cache();
+    let guard = cache.read().await;
+    let entry = guard.get(key)?;
+    if entry.fetched_at.elapsed() <= max_age {
+        return Some(entry.value.clone());
+    }
+    None
+}
+
+async fn cache_portfolio_balance(key: &str, value: BalanceResponse) {
+    let cache = portfolio_balance_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedBalanceResponse {
+            fetched_at: Instant::now(),
+            value,
+        },
+    );
+    if guard.len() > PORTFOLIO_BALANCE_CACHE_MAX_ENTRIES {
+        let stale_after = Duration::from_secs(PORTFOLIO_BALANCE_CACHE_STALE_SECS);
+        guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
+    }
+}
+
+async fn get_cached_portfolio_history(key: &str, max_age: Duration) -> Option<HistoryResponse> {
+    let cache = portfolio_history_cache();
+    let guard = cache.read().await;
+    let entry = guard.get(key)?;
+    if entry.fetched_at.elapsed() <= max_age {
+        return Some(entry.value.clone());
+    }
+    None
+}
+
+async fn cache_portfolio_history(key: &str, value: HistoryResponse) {
+    let cache = portfolio_history_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedHistoryResponse {
+            fetched_at: Instant::now(),
+            value,
+        },
+    );
+    if guard.len() > PORTFOLIO_HISTORY_CACHE_MAX_ENTRIES {
+        let stale_after = Duration::from_secs(PORTFOLIO_HISTORY_CACHE_STALE_SECS);
+        guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
+    }
+}
+
+async fn get_cached_portfolio_ohlcv(
+    key: &str,
+    max_age: Duration,
+) -> Option<PortfolioOHLCVResponse> {
+    let cache = portfolio_ohlcv_cache();
+    let guard = cache.read().await;
+    let entry = guard.get(key)?;
+    if entry.fetched_at.elapsed() <= max_age {
+        return Some(entry.value.clone());
+    }
+    None
+}
+
+async fn cache_portfolio_ohlcv(key: &str, value: PortfolioOHLCVResponse) {
+    let cache = portfolio_ohlcv_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedOhlcvResponse {
+            fetched_at: Instant::now(),
+            value,
+        },
+    );
+    if guard.len() > PORTFOLIO_OHLCV_CACHE_MAX_ENTRIES {
+        let stale_after = Duration::from_secs(PORTFOLIO_OHLCV_CACHE_STALE_SECS);
+        guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
+    }
+}
+
+fn normalize_cache_part(value: Option<&str>) -> String {
+    value
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn onchain_holdings_cache_key(
+    auth_subject: &str,
+    starknet: Option<&str>,
+    evm: Option<&str>,
+    btc: Option<&str>,
+) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        auth_subject.trim().to_ascii_lowercase(),
+        normalize_cache_part(starknet),
+        normalize_cache_part(evm),
+        normalize_cache_part(btc)
+    )
+}
+
+async fn get_cached_onchain_holdings(key: &str, max_age: Duration) -> Option<HashMap<String, f64>> {
+    let cache = onchain_holdings_cache();
+    let guard = cache.read().await;
+    let entry = guard.get(key)?;
+    if entry.fetched_at.elapsed() <= max_age {
+        return Some(entry.values.clone());
+    }
+    None
+}
+
+async fn cache_onchain_holdings(key: String, values: HashMap<String, f64>) {
+    let cache = onchain_holdings_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key,
+        CachedOnchainHoldings {
+            fetched_at: Instant::now(),
+            values,
+        },
+    );
+    if guard.len() > ONCHAIN_HOLDINGS_CACHE_MAX_ENTRIES {
+        let stale_after = Duration::from_secs(ONCHAIN_HOLDINGS_CACHE_STALE_SECS);
+        guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
+    }
+}
+
+fn apply_onchain_overrides(
+    holdings: &mut HashMap<String, f64>,
+    onchain_values: &HashMap<String, f64>,
+) {
+    for (token, amount) in onchain_values {
+        override_holding(holdings, token, *amount);
+    }
+}
+
+fn prune_testnet_holdings_without_onchain(
+    holdings: &mut HashMap<String, f64>,
+    resolved_onchain: &HashMap<String, f64>,
+    has_starknet: bool,
+    has_evm: bool,
+    has_btc: bool,
+) {
+    if has_starknet {
+        for token in ["CAREL", "USDC", "USDT", "WBTC"] {
+            if !resolved_onchain.contains_key(token) {
+                holdings.remove(token);
+            }
+        }
+        if !resolved_onchain.contains_key("STRK") && !has_evm {
+            holdings.remove("STRK");
+        }
+    }
+    if has_evm {
+        if !resolved_onchain.contains_key("ETH") {
+            holdings.remove("ETH");
+        }
+        if !resolved_onchain.contains_key("STRK") && !has_starknet {
+            holdings.remove("STRK");
+        }
+    }
+    if has_btc && !resolved_onchain.contains_key("BTC") {
+        holdings.remove("BTC");
+    }
+}
 
 fn total_value_usd(balances: &[TokenBalance]) -> f64 {
     balances.iter().map(|b| b.value_usd).sum()
@@ -259,6 +636,16 @@ fn override_holding(holdings: &mut HashMap<String, f64>, token: &str, amount: f6
     holdings.insert(token.to_string(), amount);
 }
 
+fn looks_like_transient_rpc_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("jsonrpcresponse")
+        || lower.contains("error decoding response body")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+}
+
 async fn fetch_optional_balance_with_timeout<F>(label: &str, fut: F) -> Option<f64>
 where
     F: std::future::Future<Output = Result<Option<f64>>>,
@@ -266,11 +653,16 @@ where
     match tokio::time::timeout(Duration::from_secs(ONCHAIN_BALANCE_TIMEOUT_SECS), fut).await {
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
-            tracing::warn!("Portfolio {} fetch failed: {}", label, err);
+            let err_text = err.to_string();
+            if looks_like_transient_rpc_error(&err_text) {
+                tracing::debug!("Portfolio {} transient fetch issue: {}", label, err_text);
+            } else {
+                tracing::warn!("Portfolio {} fetch failed: {}", label, err_text);
+            }
             None
         }
         Err(_) => {
-            tracing::warn!(
+            tracing::debug!(
                 "Portfolio {} fetch timed out after {}s",
                 label,
                 ONCHAIN_BALANCE_TIMEOUT_SECS
@@ -302,6 +694,21 @@ async fn merge_onchain_holdings(
         .iter()
         .find(|item| item.chain == "bitcoin")
         .map(|item| item.wallet_address.clone());
+    let cache_key = onchain_holdings_cache_key(
+        auth_subject,
+        starknet_address.as_deref(),
+        evm_address.as_deref(),
+        btc_address.as_deref(),
+    );
+    if let Some(cached) = get_cached_onchain_holdings(
+        &cache_key,
+        Duration::from_secs(ONCHAIN_HOLDINGS_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        apply_onchain_overrides(holdings, &cached);
+        return Ok(());
+    }
 
     let starknet_strk_fut = async {
         match (
@@ -438,9 +845,13 @@ async fn merge_onchain_holdings(
         btc_fut
     );
 
+    let mut resolved_onchain = HashMap::new();
+    let has_starknet = starknet_address.is_some();
+    let has_evm = evm_address.is_some();
+    let has_btc = btc_address.is_some();
     if evm_address.is_some() {
         if let Some(balance) = evm_eth {
-            override_holding(holdings, "ETH", balance);
+            resolved_onchain.insert("ETH".to_string(), balance);
         }
     }
 
@@ -448,30 +859,61 @@ async fn merge_onchain_holdings(
     if (starknet_address.is_some() || evm_address.is_some())
         && (starknet_strk.is_some() || evm_strk.is_some())
     {
-        override_holding(holdings, "STRK", strk_total);
+        resolved_onchain.insert("STRK".to_string(), strk_total);
     } else if strk_total > 0.0 {
-        override_holding(holdings, "STRK", strk_total);
+        resolved_onchain.insert("STRK".to_string(), strk_total);
     }
 
     if btc_address.is_some() {
         if let Some(balance) = btc_balance {
-            override_holding(holdings, "BTC", balance);
+            resolved_onchain.insert("BTC".to_string(), balance);
         }
     }
     if starknet_address.is_some() {
         if let Some(balance) = starknet_carel {
-            override_holding(holdings, "CAREL", balance);
+            resolved_onchain.insert("CAREL".to_string(), balance);
         }
         if let Some(balance) = starknet_usdc {
-            override_holding(holdings, "USDC", balance);
+            resolved_onchain.insert("USDC".to_string(), balance);
         }
         if let Some(balance) = starknet_usdt {
-            override_holding(holdings, "USDT", balance);
+            resolved_onchain.insert("USDT".to_string(), balance);
         }
         if let Some(balance) = starknet_wbtc {
-            override_holding(holdings, "WBTC", balance);
+            resolved_onchain.insert("WBTC".to_string(), balance);
         }
     }
+
+    if state.config.is_testnet() {
+        prune_testnet_holdings_without_onchain(
+            holdings,
+            &resolved_onchain,
+            has_starknet,
+            has_evm,
+            has_btc,
+        );
+    }
+
+    if resolved_onchain.is_empty() {
+        if let Some(stale) = get_cached_onchain_holdings(
+            &cache_key,
+            Duration::from_secs(ONCHAIN_HOLDINGS_CACHE_STALE_SECS),
+        )
+        .await
+        {
+            tracing::debug!(
+                "portfolio onchain holdings returning stale cache fallback for key={}",
+                cache_key
+            );
+            apply_onchain_overrides(holdings, &stale);
+            return Ok(());
+        }
+        // Negative-cache empty/failed reads to avoid retry storms.
+        cache_onchain_holdings(cache_key, HashMap::new()).await;
+    } else {
+        cache_onchain_holdings(cache_key, resolved_onchain.clone()).await;
+    }
+    apply_onchain_overrides(holdings, &resolved_onchain);
 
     Ok(())
 }
@@ -608,16 +1050,52 @@ pub async fn get_balance(
 ) -> Result<Json<ApiResponse<BalanceResponse>>> {
     let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
     let auth_subject = user_addresses.first().cloned().unwrap_or_default();
-    let balances = build_balances(&state, &auth_subject, &user_addresses).await?;
+    let cache_key = portfolio_balance_cache_key(&auth_subject, &user_addresses);
+    if let Some(cached) = get_cached_portfolio_balance(
+        &cache_key,
+        Duration::from_secs(PORTFOLIO_BALANCE_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
 
-    let total_value_usd = total_value_usd(&balances);
+    let fetch_lock = portfolio_balance_fetch_lock_for(&cache_key).await;
+    let _guard = fetch_lock.lock().await;
+    if let Some(cached) = get_cached_portfolio_balance(
+        &cache_key,
+        Duration::from_secs(PORTFOLIO_BALANCE_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
 
-    let response = BalanceResponse {
-        total_value_usd,
-        balances,
-    };
-
-    Ok(Json(ApiResponse::success(response)))
+    match build_balances(&state, &auth_subject, &user_addresses).await {
+        Ok(balances) => {
+            let response = BalanceResponse {
+                total_value_usd: total_value_usd(&balances),
+                balances,
+            };
+            cache_portfolio_balance(&cache_key, response.clone()).await;
+            Ok(Json(ApiResponse::success(response)))
+        }
+        Err(err) => {
+            if let Some(stale) = get_cached_portfolio_balance(
+                &cache_key,
+                Duration::from_secs(PORTFOLIO_BALANCE_CACHE_STALE_SECS),
+            )
+            .await
+            {
+                tracing::debug!(
+                    "portfolio_balance returning stale cache fallback key={}",
+                    cache_key
+                );
+                return Ok(Json(ApiResponse::success(stale)));
+            }
+            Err(err)
+        }
+    }
 }
 
 /// GET /api/v1/portfolio/history
@@ -628,35 +1106,75 @@ pub async fn get_history(
 ) -> Result<Json<ApiResponse<HistoryResponse>>> {
     let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
     let auth_subject = user_addresses.first().cloned().unwrap_or_default();
+    let cache_key = portfolio_history_cache_key(&auth_subject, &user_addresses, &query.period);
+    if let Some(cached) = get_cached_portfolio_history(
+        &cache_key,
+        Duration::from_secs(PORTFOLIO_HISTORY_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
+
+    let fetch_lock = portfolio_history_fetch_lock_for(&cache_key).await;
+    let _guard = fetch_lock.lock().await;
+    if let Some(cached) = get_cached_portfolio_history(
+        &cache_key,
+        Duration::from_secs(PORTFOLIO_HISTORY_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
+
     let (interval, limit) = period_to_interval(&query.period);
-    let ohlcv = build_portfolio_ohlcv(&state, &auth_subject, &user_addresses, interval, limit).await?;
-    let total_value = ohlcv
-        .iter()
-        .map(|point| HistoryPoint {
-            timestamp: point.timestamp,
-            value: point.close,
-        })
-        .collect::<Vec<_>>();
+    match build_portfolio_ohlcv(&state, &auth_subject, &user_addresses, interval, limit).await {
+        Ok(ohlcv) => {
+            let total_value = ohlcv
+                .iter()
+                .map(|point| HistoryPoint {
+                    timestamp: point.timestamp,
+                    value: point.close,
+                })
+                .collect::<Vec<_>>();
 
-    let (pnl, pnl_percentage) = if let (Some(first), Some(last)) = (ohlcv.first(), ohlcv.last()) {
-        let diff = last.close - first.close;
-        let pct = if first.close > 0.0 {
-            (diff / first.close) * 100.0
-        } else {
-            0.0
-        };
-        (diff, pct)
-    } else {
-        (0.0, 0.0)
-    };
+            let (pnl, pnl_percentage) =
+                if let (Some(first), Some(last)) = (ohlcv.first(), ohlcv.last()) {
+                    let diff = last.close - first.close;
+                    let pct = if first.close > 0.0 {
+                        (diff / first.close) * 100.0
+                    } else {
+                        0.0
+                    };
+                    (diff, pct)
+                } else {
+                    (0.0, 0.0)
+                };
 
-    let response = HistoryResponse {
-        total_value,
-        pnl,
-        pnl_percentage,
-    };
-
-    Ok(Json(ApiResponse::success(response)))
+            let response = HistoryResponse {
+                total_value,
+                pnl,
+                pnl_percentage,
+            };
+            cache_portfolio_history(&cache_key, response.clone()).await;
+            Ok(Json(ApiResponse::success(response)))
+        }
+        Err(err) => {
+            if let Some(stale) = get_cached_portfolio_history(
+                &cache_key,
+                Duration::from_secs(PORTFOLIO_HISTORY_CACHE_STALE_SECS),
+            )
+            .await
+            {
+                tracing::debug!(
+                    "portfolio_history returning stale cache fallback key={}",
+                    cache_key
+                );
+                return Ok(Json(ApiResponse::success(stale)));
+            }
+            Err(err)
+        }
+    }
 }
 
 /// GET /api/v1/portfolio/ohlcv
@@ -669,12 +1187,49 @@ pub async fn get_portfolio_ohlcv(
     let auth_subject = user_addresses.first().cloned().unwrap_or_default();
     let interval = query.interval.clone();
     let limit = clamp_ohlcv_limit(query.limit);
-    let data = build_portfolio_ohlcv(&state, &auth_subject, &user_addresses, &interval, limit).await?;
+    let cache_key = portfolio_ohlcv_cache_key(&auth_subject, &user_addresses, &interval, limit);
+    if let Some(cached) = get_cached_portfolio_ohlcv(
+        &cache_key,
+        Duration::from_secs(PORTFOLIO_OHLCV_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
 
-    Ok(Json(ApiResponse::success(PortfolioOHLCVResponse {
-        interval,
-        data,
-    })))
+    let fetch_lock = portfolio_ohlcv_fetch_lock_for(&cache_key).await;
+    let _guard = fetch_lock.lock().await;
+    if let Some(cached) = get_cached_portfolio_ohlcv(
+        &cache_key,
+        Duration::from_secs(PORTFOLIO_OHLCV_CACHE_TTL_SECS),
+    )
+    .await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
+
+    match build_portfolio_ohlcv(&state, &auth_subject, &user_addresses, &interval, limit).await {
+        Ok(data) => {
+            let response = PortfolioOHLCVResponse { interval, data };
+            cache_portfolio_ohlcv(&cache_key, response.clone()).await;
+            Ok(Json(ApiResponse::success(response)))
+        }
+        Err(err) => {
+            if let Some(stale) = get_cached_portfolio_ohlcv(
+                &cache_key,
+                Duration::from_secs(PORTFOLIO_OHLCV_CACHE_STALE_SECS),
+            )
+            .await
+            {
+                tracing::debug!(
+                    "portfolio_ohlcv returning stale cache fallback key={}",
+                    cache_key
+                );
+                return Ok(Json(ApiResponse::success(stale)));
+            }
+            Err(err)
+        }
+    }
 }
 
 #[cfg(test)]

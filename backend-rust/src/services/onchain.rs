@@ -6,6 +6,10 @@ use starknet_core::types::{
 use starknet_providers::jsonrpc::{HttpTransport, JsonRpcClient};
 use starknet_providers::Provider;
 use starknet_signers::{LocalWallet, SigningKey};
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
 pub struct OnchainInvoker {
@@ -16,6 +20,125 @@ pub struct OnchainReader {
     provider: JsonRpcClient<HttpTransport>,
 }
 
+const STARKNET_RPC_MAX_INFLIGHT_DEFAULT: usize = 12;
+const STARKNET_RPC_BREAKER_THRESHOLD: u32 = 3;
+const STARKNET_RPC_BREAKER_BASE_SECS: u64 = 2;
+const STARKNET_RPC_BREAKER_MAX_SECS: u64 = 60;
+
+#[derive(Default)]
+struct RpcCircuitBreaker {
+    consecutive_failures: u32,
+    open_until: Option<Instant>,
+}
+
+static STARKNET_RPC_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+static STARKNET_RPC_BREAKER: OnceLock<tokio::sync::RwLock<RpcCircuitBreaker>> = OnceLock::new();
+
+fn env_non_empty(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn resolve_api_rpc_url(config: &Config) -> String {
+    env_non_empty("STARKNET_API_RPC_URL").unwrap_or_else(|| config.starknet_rpc_url.clone())
+}
+
+fn configured_max_inflight() -> usize {
+    std::env::var("STARKNET_RPC_MAX_INFLIGHT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(STARKNET_RPC_MAX_INFLIGHT_DEFAULT)
+}
+
+fn rpc_semaphore() -> &'static Arc<Semaphore> {
+    STARKNET_RPC_SEMAPHORE.get_or_init(|| Arc::new(Semaphore::new(configured_max_inflight())))
+}
+
+fn rpc_breaker() -> &'static tokio::sync::RwLock<RpcCircuitBreaker> {
+    STARKNET_RPC_BREAKER.get_or_init(|| tokio::sync::RwLock::new(RpcCircuitBreaker::default()))
+}
+
+fn looks_like_transient_rpc_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("gateway")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("connection reset")
+        || lower.contains("eof while parsing")
+        || lower.contains("jsonrpcresponse")
+        || lower.contains("error decoding response body")
+        || lower.contains("unknown field `code`")
+}
+
+fn breaker_backoff_duration(failures: u32) -> Duration {
+    if failures <= STARKNET_RPC_BREAKER_THRESHOLD {
+        return Duration::from_secs(STARKNET_RPC_BREAKER_BASE_SECS);
+    }
+    let exponent = (failures - STARKNET_RPC_BREAKER_THRESHOLD).min(6);
+    let multiplier = 1_u64 << exponent;
+    let secs = STARKNET_RPC_BREAKER_BASE_SECS.saturating_mul(multiplier);
+    Duration::from_secs(secs.min(STARKNET_RPC_BREAKER_MAX_SECS))
+}
+
+async fn rpc_preflight(method: &str) -> Result<OwnedSemaphorePermit> {
+    let now = Instant::now();
+    {
+        let guard = rpc_breaker().read().await;
+        if let Some(until) = guard.open_until {
+            if until > now {
+                let remain_ms = until.duration_since(now).as_millis();
+                return Err(crate::error::AppError::BlockchainRPC(format!(
+                    "{} skipped: Starknet RPC circuit open for {}ms",
+                    method, remain_ms
+                )));
+            }
+        }
+    }
+
+    rpc_semaphore()
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| crate::error::AppError::Internal(format!("RPC semaphore closed: {}", e)))
+}
+
+async fn rpc_record_success() {
+    let mut guard = rpc_breaker().write().await;
+    if guard.consecutive_failures != 0 || guard.open_until.is_some() {
+        guard.consecutive_failures = 0;
+        guard.open_until = None;
+    }
+}
+
+async fn rpc_record_failure(method: &str, error_text: &str) {
+    if !looks_like_transient_rpc_error(error_text) {
+        return;
+    }
+
+    let mut guard = rpc_breaker().write().await;
+    guard.consecutive_failures = guard.consecutive_failures.saturating_add(1);
+    if guard.consecutive_failures < STARKNET_RPC_BREAKER_THRESHOLD {
+        return;
+    }
+
+    let backoff = breaker_backoff_duration(guard.consecutive_failures);
+    let open_until = Instant::now() + backoff;
+    let backoff_secs = backoff.as_secs();
+    guard.open_until = Some(open_until);
+    tracing::warn!(
+        "{} transient RPC failure triggered circuit backoff={}s failures={}",
+        method,
+        backoff_secs,
+        guard.consecutive_failures
+    );
+}
+
 impl OnchainInvoker {
     pub fn from_config(config: &Config) -> Result<Option<Self>> {
         let account_address = resolve_backend_account(config);
@@ -23,7 +146,7 @@ impl OnchainInvoker {
             return Ok(None);
         };
 
-        let rpc_url = Url::parse(&config.starknet_rpc_url)
+        let rpc_url = Url::parse(&resolve_api_rpc_url(config))
             .map_err(|e| crate::error::AppError::Internal(format!("Invalid RPC URL: {}", e)))?;
         let provider = JsonRpcClient::new(HttpTransport::new(rpc_url));
 
@@ -48,12 +171,21 @@ impl OnchainInvoker {
     }
 
     pub async fn invoke(&self, call: Call) -> Result<Felt> {
-        let result = self
+        let _permit = rpc_preflight("starknet_invoke").await?;
+        let response = self
             .account
             .execute_v3(vec![call])
             .send()
             .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))?;
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+        match &response {
+            Ok(_) => rpc_record_success().await,
+            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                rpc_record_failure("starknet_invoke", err_text).await;
+            }
+            Err(_) => {}
+        }
+        let result = response?;
         Ok(result.transaction_hash)
     }
 
@@ -63,53 +195,102 @@ impl OnchainInvoker {
                 "No on-chain calls to execute".to_string(),
             ));
         }
-        let result = self
+        let _permit = rpc_preflight("starknet_invoke_many").await?;
+        let response = self
             .account
             .execute_v3(calls)
             .send()
             .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))?;
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+        match &response {
+            Ok(_) => rpc_record_success().await,
+            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                rpc_record_failure("starknet_invoke_many", err_text).await;
+            }
+            Err(_) => {}
+        }
+        let result = response?;
         Ok(result.transaction_hash)
     }
 }
 
 impl OnchainReader {
     pub fn from_config(config: &Config) -> Result<Self> {
-        let rpc_url = Url::parse(&config.starknet_rpc_url)
+        let rpc_url = Url::parse(&resolve_api_rpc_url(config))
             .map_err(|e| crate::error::AppError::Internal(format!("Invalid RPC URL: {}", e)))?;
         let provider = JsonRpcClient::new(HttpTransport::new(rpc_url));
         Ok(Self { provider })
     }
 
     pub async fn call(&self, call: FunctionCall) -> Result<Vec<Felt>> {
-        self.provider
+        let _permit = rpc_preflight("starknet_call").await?;
+        let response = self
+            .provider
             .call(call, BlockId::Tag(BlockTag::Latest))
             .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+        match &response {
+            Ok(_) => rpc_record_success().await,
+            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                rpc_record_failure("starknet_call", err_text).await;
+            }
+            Err(_) => {}
+        }
+        response
     }
 
     pub async fn get_transaction_receipt(
         &self,
         tx_hash: &Felt,
     ) -> Result<TransactionReceiptWithBlockInfo> {
-        self.provider
+        let _permit = rpc_preflight("starknet_getTransactionReceipt").await?;
+        let response = self
+            .provider
             .get_transaction_receipt(tx_hash)
             .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+        match &response {
+            Ok(_) => rpc_record_success().await,
+            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                rpc_record_failure("starknet_getTransactionReceipt", err_text).await;
+            }
+            Err(_) => {}
+        }
+        response
     }
 
     pub async fn get_transaction(&self, tx_hash: &Felt) -> Result<Transaction> {
-        self.provider
+        let _permit = rpc_preflight("starknet_getTransactionByHash").await?;
+        let response = self
+            .provider
             .get_transaction_by_hash(tx_hash)
             .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+        match &response {
+            Ok(_) => rpc_record_success().await,
+            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                rpc_record_failure("starknet_getTransactionByHash", err_text).await;
+            }
+            Err(_) => {}
+        }
+        response
     }
 
     pub async fn get_storage_at(&self, contract_address: Felt, key: Felt) -> Result<Felt> {
-        self.provider
+        let _permit = rpc_preflight("starknet_getStorageAt").await?;
+        let response = self
+            .provider
             .get_storage_at(contract_address, key, BlockId::Tag(BlockTag::Latest))
             .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()))
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+        match &response {
+            Ok(_) => rpc_record_success().await,
+            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                rpc_record_failure("starknet_getStorageAt", err_text).await;
+            }
+            Err(_) => {}
+        }
+        response
     }
 }
 

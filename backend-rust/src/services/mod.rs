@@ -11,9 +11,9 @@ pub mod merkle_generator;
 pub mod nft_discount;
 pub mod notification_service;
 pub mod onchain;
-pub mod privacy_verifier;
 pub mod point_calculator;
 pub mod price_chart_service;
+pub mod privacy_verifier;
 pub mod route_optimizer;
 pub mod snapshot_manager;
 pub mod social_verifier;
@@ -40,13 +40,31 @@ use crate::{config::Config, db::Database};
 use sqlx::Row;
 use std::sync::Arc;
 
+fn is_env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+        })
+        .unwrap_or(false)
+}
+
 /// Start all background services
 pub async fn start_background_services(db: Database, config: Config) {
     tracing::info!("Starting background services...");
 
-    // Start event indexer
-    let event_indexer = Arc::new(EventIndexer::new(db.clone(), config.clone()));
-    event_indexer.clone().start().await;
+    let enable_event_indexer = if std::env::var("ENABLE_EVENT_INDEXER").is_ok() {
+        is_env_flag_enabled("ENABLE_EVENT_INDEXER")
+    } else {
+        true
+    };
+    if enable_event_indexer {
+        let event_indexer = Arc::new(EventIndexer::new(db.clone(), config.clone()));
+        event_indexer.clone().start().await;
+    } else {
+        tracing::warn!("Event indexer disabled via ENABLE_EVENT_INDEXER");
+    }
 
     // Start point calculator
     let point_calculator = Arc::new(PointCalculator::new(db.clone(), config.clone()));
@@ -65,7 +83,7 @@ pub async fn start_background_services(db: Database, config: Config) {
     let current_epoch = snapshot_manager.get_current_epoch();
     tracing::info!("Current epoch: {}", current_epoch);
 
-    if std::env::var("RUN_EPOCH_JOBS").is_ok() {
+    if is_env_flag_enabled("RUN_EPOCH_JOBS") {
         tracing::info!("Running epoch finalize job...");
         let finalize_epoch = current_epoch.saturating_sub(1);
         let merkle = MerkleGenerator::new(db.clone(), config.clone());

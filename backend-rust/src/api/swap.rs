@@ -1,5 +1,7 @@
 use super::{require_starknet_user, require_user, AppState};
-use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader};
+use crate::services::onchain::{
+    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
+};
 use crate::services::privacy_verifier::{
     parse_privacy_verifier_kind, resolve_privacy_router_for_verifier, PrivacyVerifierKind,
 };
@@ -132,7 +134,10 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
     let selector = match get_selector_from_name("has_active_discount") {
         Ok(value) => value,
         Err(err) => {
-            tracing::warn!("Selector resolution failed for has_active_discount: {}", err);
+            tracing::warn!(
+                "Selector resolution failed for has_active_discount: {}",
+                err
+            );
             return 0.0;
         }
     };
@@ -143,7 +148,12 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         calldata: vec![user_felt],
     };
 
-    let result = match timeout(Duration::from_millis(ONCHAIN_DISCOUNT_TIMEOUT_MS), reader.call(call)).await {
+    let result = match timeout(
+        Duration::from_millis(ONCHAIN_DISCOUNT_TIMEOUT_MS),
+        reader.call(call),
+    )
+    .await
+    {
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
             tracing::warn!(
@@ -354,7 +364,9 @@ fn felt_hex(value: Felt) -> String {
 
 fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     let raw = felt_to_u128(value).map_err(|_| {
-        AppError::BadRequest(format!("Invalid invoke calldata: {field_name} is not a valid number"))
+        AppError::BadRequest(format!(
+            "Invalid invoke calldata: {field_name} is not a valid number"
+        ))
     })?;
     usize::try_from(raw).map_err(|_| {
         AppError::BadRequest(format!(
@@ -377,7 +389,9 @@ fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
         .checked_add(calls_len.checked_mul(header_width).ok_or_else(|| {
             AppError::BadRequest("Invalid invoke calldata: calls_len overflow".to_string())
         })?)
-        .ok_or_else(|| AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string()))?;
+        .ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string())
+        })?;
 
     if calldata.len() <= headers_end {
         return Err(AppError::BadRequest(
@@ -387,9 +401,9 @@ fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
 
     let flattened_len = felt_to_usize(&calldata[headers_end], "flattened_len")?;
     let flattened_start = headers_end + 1;
-    let flattened_end = flattened_start
-        .checked_add(flattened_len)
-        .ok_or_else(|| AppError::BadRequest("Invalid invoke calldata: flattened overflow".to_string()))?;
+    let flattened_end = flattened_start.checked_add(flattened_len).ok_or_else(|| {
+        AppError::BadRequest("Invalid invoke calldata: flattened overflow".to_string())
+    })?;
 
     if calldata.len() < flattened_end {
         return Err(AppError::BadRequest(
@@ -436,9 +450,9 @@ fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     let mut calls = Vec::with_capacity(calls_len);
 
     for _ in 0..calls_len {
-        let header_end = cursor
-            .checked_add(3)
-            .ok_or_else(|| AppError::BadRequest("Invalid invoke calldata: malformed call header".to_string()))?;
+        let header_end = cursor.checked_add(3).ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: malformed call header".to_string())
+        })?;
         if calldata.len() < header_end {
             return Err(AppError::BadRequest(
                 "Invalid invoke calldata: missing inline call header".to_string(),
@@ -568,8 +582,14 @@ fn configured_token_candidates(state: &AppState, token: &str) -> Vec<Felt> {
     match token.as_str() {
         "CAREL" => {
             push_token_candidate(env_value("TOKEN_CAREL_ADDRESS"), &mut candidates);
-            push_token_candidate(env_value("NEXT_PUBLIC_TOKEN_CAREL_ADDRESS"), &mut candidates);
-            push_token_candidate(Some(state.config.carel_token_address.clone()), &mut candidates);
+            push_token_candidate(
+                env_value("NEXT_PUBLIC_TOKEN_CAREL_ADDRESS"),
+                &mut candidates,
+            );
+            push_token_candidate(
+                Some(state.config.carel_token_address.clone()),
+                &mut candidates,
+            );
         }
         "STRK" => {
             push_token_candidate(env_value("TOKEN_STRK_ADDRESS"), &mut candidates);
@@ -599,7 +619,10 @@ fn configured_token_candidates(state: &AppState, token: &str) -> Vec<Felt> {
         _ => {}
     }
 
-    push_token_candidate(token_address_for(&token).map(|value| value.to_string()), &mut candidates);
+    push_token_candidate(
+        token_address_for(&token).map(|value| value.to_string()),
+        &mut candidates,
+    );
     candidates
 }
 
@@ -607,7 +630,9 @@ fn resolve_primary_token_address(state: &AppState, token: &str) -> Result<Felt> 
     configured_token_candidates(state, token)
         .into_iter()
         .next()
-        .ok_or_else(|| AppError::BadRequest(format!("Token address is not configured for {}", token)))
+        .ok_or_else(|| {
+            AppError::BadRequest(format!("Token address is not configured for {}", token))
+        })
 }
 
 fn parse_onchain_route(raw: &[Felt]) -> Result<OnchainSwapRoute> {
@@ -753,7 +778,8 @@ async fn fetch_onchain_swap_context(
     })?;
     let from_token_felt = resolve_primary_token_address(state, from_token)?;
     let to_token_felt = resolve_primary_token_address(state, to_token)?;
-    let (amount_low, amount_high) = parse_decimal_to_u256_parts(amount, token_decimals(from_token))?;
+    let (amount_low, amount_high) =
+        parse_decimal_to_u256_parts(amount, token_decimals(from_token))?;
 
     let reader = OnchainReader::from_config(&state.config)?;
     let route_selector = get_selector_from_name("get_best_swap_route")
@@ -893,7 +919,9 @@ fn verify_swap_invoke_payload_fallback_raw(
         }
 
         let contract_matches = match expected_swap_contract {
-            Some(expected) => (idx > 0 && calldata[idx - 1] == expected) || calldata.contains(&expected),
+            Some(expected) => {
+                (idx > 0 && calldata[idx - 1] == expected) || calldata.contains(&expected)
+            }
             None => true,
         };
         if !contract_matches {
@@ -992,7 +1020,10 @@ fn verify_swap_invoke_payload(
     if let Some(calls) = calls {
         for call in calls {
             if call.selector == approve_selector {
-                if !from_token_candidates.iter().any(|candidate| *candidate == call.to) {
+                if !from_token_candidates
+                    .iter()
+                    .any(|candidate| *candidate == call.to)
+                {
                     continue;
                 }
                 saw_approve_from_token = true;
@@ -1006,7 +1037,10 @@ fn verify_swap_invoke_payload(
                 }
                 continue;
             }
-            if !swap_selectors.iter().any(|selector| *selector == call.selector) {
+            if !swap_selectors
+                .iter()
+                .any(|selector| *selector == call.selector)
+            {
                 continue;
             }
             saw_swap_selector = true;
@@ -1212,28 +1246,46 @@ fn normalize_onchain_tx_hash(tx_hash: Option<&str>) -> Result<Option<String>> {
 fn resolve_privacy_inputs(
     seed: &str,
     payload: Option<&PrivacyVerificationPayload>,
-) -> (String, String, Vec<String>, Vec<String>) {
+) -> Result<(String, String, Vec<String>, Vec<String>)> {
+    let payload = payload.ok_or_else(|| {
+        AppError::BadRequest(
+            "privacy payload is required when mode=private or hide_balance=true".to_string(),
+        )
+    })?;
+
     let nullifier = payload
-        .and_then(|item| item.nullifier.as_deref())
+        .nullifier
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| seed.to_string());
     let commitment = payload
-        .and_then(|item| item.commitment.as_deref())
+        .commitment
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| hash::hash_string(&format!("commitment:{seed}")));
     let proof = payload
-        .and_then(|item| item.proof.clone())
+        .proof
+        .clone()
         .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| vec![seed.to_string()]);
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "privacy.proof must be provided and non-empty in private mode".to_string(),
+            )
+        })?;
     let public_inputs = payload
-        .and_then(|item| item.public_inputs.clone())
+        .public_inputs
+        .clone()
         .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| vec![commitment.clone()]);
-    (nullifier, commitment, proof, public_inputs)
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "privacy.public_inputs must be provided and non-empty in private mode".to_string(),
+            )
+        })?;
+    Ok((nullifier, commitment, proof, public_inputs))
 }
 
 async fn verify_private_trade_with_verifier(
@@ -1244,15 +1296,13 @@ async fn verify_private_trade_with_verifier(
 ) -> Result<String> {
     let router = resolve_privacy_router_for_verifier(&state.config, verifier)?;
     let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-        return Err(AppError::BadRequest(
-            format!(
-                "On-chain invoker is not configured for '{}' verification",
-                verifier.as_str()
-            ),
-        ));
+        return Err(AppError::BadRequest(format!(
+            "On-chain invoker is not configured for '{}' verification",
+            verifier.as_str()
+        )));
     };
 
-    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(seed, payload);
+    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(seed, payload)?;
 
     let to = parse_felt(&router)?;
     let selector = get_selector_from_name("submit_private_action")
@@ -1288,7 +1338,9 @@ pub async fn get_quote(
         .parse()
         .map_err(|_| AppError::BadRequest("Invalid amount".to_string()))?;
     if !amount_in.is_finite() || amount_in <= 0.0 {
-        return Err(AppError::BadRequest("Amount must be greater than zero".to_string()));
+        return Err(AppError::BadRequest(
+            "Amount must be greater than zero".to_string(),
+        ));
     }
 
     tracing::debug!(
@@ -1330,10 +1382,8 @@ pub async fn get_quote(
         &req.amount,
     )
     .await?;
-    let onchain_calls = build_onchain_swap_wallet_calls(
-        &onchain_context,
-        req.mode.eq_ignore_ascii_case("private"),
-    );
+    let onchain_calls =
+        build_onchain_swap_wallet_calls(&onchain_context, req.mode.eq_ignore_ascii_case("private"));
     let onchain_to_amount = onchain_u256_to_f64(
         onchain_context.route.expected_amount_out_low,
         onchain_context.route.expected_amount_out_high,
@@ -1405,7 +1455,9 @@ pub async fn execute_swap(
         .parse()
         .map_err(|_| AppError::BadRequest("Invalid amount".to_string()))?;
     if !amount_in.is_finite() || amount_in <= 0.0 {
-        return Err(AppError::BadRequest("Amount must be greater than zero".to_string()));
+        return Err(AppError::BadRequest(
+            "Amount must be greater than zero".to_string(),
+        ));
     }
 
     ensure_supported_starknet_swap_pair(&req.from_token, &req.to_token)?;
@@ -1523,8 +1575,7 @@ pub async fn execute_swap(
         state.db.mark_transaction_private(&tx_hash).await?;
     }
     if nft_discount_percent > 0.0 {
-        if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "swap").await
-        {
+        if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "swap").await {
             tracing::warn!(
                 "Failed to consume NFT discount usage after swap success: user={} tx_hash={} err={}",
                 user_address,
@@ -1638,7 +1689,10 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].to, to);
         assert_eq!(calls[0].selector, selector);
-        assert_eq!(calls[0].calldata, vec![Felt::from(111_u64), Felt::from(222_u64)]);
+        assert_eq!(
+            calls[0].calldata,
+            vec![Felt::from(111_u64), Felt::from(222_u64)]
+        );
     }
 
     #[test]
@@ -1677,25 +1731,27 @@ mod tests {
         let swap_selector = get_selector_from_name("swap").expect("selector");
         let from_token = parse_felt(token_address_for("STRK").unwrap()).expect("token");
         let to_token = parse_felt(token_address_for("USDT").unwrap()).expect("token");
-        let tx = Transaction::Invoke(InvokeTransaction::V1(starknet_core::types::InvokeTransactionV1 {
-            transaction_hash: Felt::from(1_u64),
-            sender_address: Felt::from(0xdead_u64),
-            calldata: vec![
-                Felt::from(1_u64),
-                swap_contract,
-                swap_selector,
-                Felt::from(0_u64),
-                Felt::from(4_u64),
-                Felt::from(4_u64),
-                Felt::from(25_u64),
-                Felt::from(0_u64),
-                from_token,
-                to_token,
-            ],
-            max_fee: Felt::from(0_u64),
-            signature: Vec::new(),
-            nonce: Felt::from(0_u64),
-        }));
+        let tx = Transaction::Invoke(InvokeTransaction::V1(
+            starknet_core::types::InvokeTransactionV1 {
+                transaction_hash: Felt::from(1_u64),
+                sender_address: Felt::from(0xdead_u64),
+                calldata: vec![
+                    Felt::from(1_u64),
+                    swap_contract,
+                    swap_selector,
+                    Felt::from(0_u64),
+                    Felt::from(4_u64),
+                    Felt::from(4_u64),
+                    Felt::from(25_u64),
+                    Felt::from(0_u64),
+                    from_token,
+                    to_token,
+                ],
+                max_fee: Felt::from(0_u64),
+                signature: Vec::new(),
+                nonce: Felt::from(0_u64),
+            },
+        ));
 
         let result = verify_swap_invoke_payload(
             &tx,
@@ -1713,31 +1769,33 @@ mod tests {
         let execute_swap_selector = get_selector_from_name("execute_swap").expect("selector");
         let from_token = parse_felt(token_address_for("STRK").unwrap()).expect("token");
         let to_token = parse_felt(token_address_for("USDT").unwrap()).expect("token");
-        let tx = Transaction::Invoke(InvokeTransaction::V1(starknet_core::types::InvokeTransactionV1 {
-            transaction_hash: Felt::from(2_u64),
-            sender_address: Felt::from(0xbeef_u64),
-            calldata: vec![
-                Felt::from(1_u64),
-                swap_contract,
-                execute_swap_selector,
-                Felt::from(0_u64),
-                Felt::from(10_u64),
-                Felt::from(10_u64),
-                Felt::from(0x454b_u64), // dex_id
-                Felt::from(100_u64),    // expected low
-                Felt::from(0_u64),      // expected high
-                Felt::from(99_u64),     // min low
-                Felt::from(0_u64),      // min high
-                from_token,
-                to_token,
-                Felt::from(25_u64), // amount low
-                Felt::from(0_u64),  // amount high
-                Felt::from(0_u64),  // mev flag
-            ],
-            max_fee: Felt::from(0_u64),
-            signature: Vec::new(),
-            nonce: Felt::from(0_u64),
-        }));
+        let tx = Transaction::Invoke(InvokeTransaction::V1(
+            starknet_core::types::InvokeTransactionV1 {
+                transaction_hash: Felt::from(2_u64),
+                sender_address: Felt::from(0xbeef_u64),
+                calldata: vec![
+                    Felt::from(1_u64),
+                    swap_contract,
+                    execute_swap_selector,
+                    Felt::from(0_u64),
+                    Felt::from(10_u64),
+                    Felt::from(10_u64),
+                    Felt::from(0x454b_u64), // dex_id
+                    Felt::from(100_u64),    // expected low
+                    Felt::from(0_u64),      // expected high
+                    Felt::from(99_u64),     // min low
+                    Felt::from(0_u64),      // min high
+                    from_token,
+                    to_token,
+                    Felt::from(25_u64), // amount low
+                    Felt::from(0_u64),  // amount high
+                    Felt::from(0_u64),  // mev flag
+                ],
+                max_fee: Felt::from(0_u64),
+                signature: Vec::new(),
+                nonce: Felt::from(0_u64),
+            },
+        ));
 
         let result = verify_swap_invoke_payload(
             &tx,
@@ -1756,38 +1814,40 @@ mod tests {
         let approve_selector = get_selector_from_name("approve").expect("selector");
         let from_token = parse_felt(token_address_for("STRK").unwrap()).expect("token");
         let to_token = parse_felt(token_address_for("USDT").unwrap()).expect("token");
-        let tx = Transaction::Invoke(InvokeTransaction::V1(starknet_core::types::InvokeTransactionV1 {
-            transaction_hash: Felt::from(3_u64),
-            sender_address: Felt::from(0xbeef_u64),
-            calldata: vec![
-                Felt::from(2_u64),
-                from_token,
-                approve_selector,
-                Felt::from(0_u64),
-                Felt::from(3_u64),
-                swap_contract,
-                execute_swap_selector,
-                Felt::from(3_u64),
-                Felt::from(10_u64),
-                Felt::from(13_u64),
-                Felt::from(0x999_u64), // wrong approve spender
-                Felt::from(25_u64),    // approve amount low
-                Felt::from(0_u64),     // approve amount high
-                Felt::from(0x454b_u64),
-                Felt::from(100_u64),
-                Felt::from(0_u64),
-                Felt::from(99_u64),
-                Felt::from(0_u64),
-                from_token,
-                to_token,
-                Felt::from(25_u64),
-                Felt::from(0_u64),
-                Felt::from(0_u64),
-            ],
-            max_fee: Felt::from(0_u64),
-            signature: Vec::new(),
-            nonce: Felt::from(0_u64),
-        }));
+        let tx = Transaction::Invoke(InvokeTransaction::V1(
+            starknet_core::types::InvokeTransactionV1 {
+                transaction_hash: Felt::from(3_u64),
+                sender_address: Felt::from(0xbeef_u64),
+                calldata: vec![
+                    Felt::from(2_u64),
+                    from_token,
+                    approve_selector,
+                    Felt::from(0_u64),
+                    Felt::from(3_u64),
+                    swap_contract,
+                    execute_swap_selector,
+                    Felt::from(3_u64),
+                    Felt::from(10_u64),
+                    Felt::from(13_u64),
+                    Felt::from(0x999_u64), // wrong approve spender
+                    Felt::from(25_u64),    // approve amount low
+                    Felt::from(0_u64),     // approve amount high
+                    Felt::from(0x454b_u64),
+                    Felt::from(100_u64),
+                    Felt::from(0_u64),
+                    Felt::from(99_u64),
+                    Felt::from(0_u64),
+                    from_token,
+                    to_token,
+                    Felt::from(25_u64),
+                    Felt::from(0_u64),
+                    Felt::from(0_u64),
+                ],
+                max_fee: Felt::from(0_u64),
+                signature: Vec::new(),
+                nonce: Felt::from(0_u64),
+            },
+        ));
 
         let result = verify_swap_invoke_payload(
             &tx,

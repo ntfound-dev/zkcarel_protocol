@@ -1,8 +1,5 @@
 use crate::{
-    config::Config,
-    constants::EPOCH_DURATION_SECONDS,
-    db::Database,
-    error::Result,
+    config::Config, constants::EPOCH_DURATION_SECONDS, db::Database, error::Result,
     tokenomics::rewards_distribution_pool_for_environment,
 };
 use rust_decimal::prelude::ToPrimitive;
@@ -219,6 +216,14 @@ fn parse_intent_from_command(command: &str) -> Intent {
                 "token": extract_token_from_text(&command_lower),
             }),
         }
+    } else if contains_any_keyword(
+        &command_lower,
+        &["tutorial", "guide", "how to use", "help", "pemula"],
+    ) {
+        Intent {
+            action: "tutorial".to_string(),
+            parameters: serde_json::json!({}),
+        }
     } else {
         Intent {
             action: "unknown".to_string(),
@@ -321,8 +326,12 @@ impl AIService {
             "check_points" => self.execute_points_command(user_address).await?,
             "stake" => self.execute_stake_command(&intent).await?,
             "market_analysis" => self.execute_market_analysis(&intent).await?,
-            "portfolio_management" => self.execute_portfolio_management_command(user_address).await?,
+            "portfolio_management" => {
+                self.execute_portfolio_management_command(user_address)
+                    .await?
+            }
             "alerts" => self.execute_alerts_command().await?,
+            "tutorial" => self.execute_tutorial_command(level).await?,
             _ => AIResponse {
                 message:
                     "I'm not sure what you want to do. Try asking about swaps, balances, or points."
@@ -376,7 +385,7 @@ impl AIService {
 
         let prompt = format!(
             "You are ZkCarel AI assistant.\n\
-             Language: Indonesian, concise, practical.\n\
+             Language: English, concise, practical.\n\
              {level_policy}\n\
              User: {user_address}\n\
              Intent: {}\n\
@@ -495,7 +504,7 @@ impl AIService {
 
         if from.is_empty() || to.is_empty() || amount == 0.0 || from == to {
             return Ok(AIResponse {
-                message: "Saya butuh detail bridge dengan format: bridge <amount> <FROM> to <TO>. Contoh: bridge 100 USDT to STRK".to_string(),
+                message: "I need bridge details in this format: bridge <amount> <FROM> to <TO>. Example: bridge 100 USDT to STRK".to_string(),
                 actions: vec![],
                 data: None,
             });
@@ -503,7 +512,7 @@ impl AIService {
 
         Ok(AIResponse {
             message: format!(
-                "Saya bantu bridge {} {} ke {}. Saya cek rute dan fee terbaik dulu.",
+                "I can help bridge {} {} to {}. Let me check the best route and fee first.",
                 amount, from, to
             ),
             actions: vec!["get_bridge_quote".to_string()],
@@ -520,7 +529,7 @@ impl AIService {
         if assets.is_empty() {
             return Ok(AIResponse {
                 message:
-                    "Belum ada data portfolio. Lakukan transaksi on-chain dulu, lalu cek lagi."
+                    "No portfolio data yet. Do your first on-chain transaction and check again."
                         .to_string(),
                 actions: vec!["open_portfolio".to_string()],
                 data: Some(serde_json::json!({
@@ -540,7 +549,7 @@ impl AIService {
 
         Ok(AIResponse {
             message: format!(
-                "Portfolio {} sekitar ${:.2}. Top aset: {}.",
+                "Portfolio {} is around ${:.2}. Top assets: {}.",
                 user_address, total_usd, top_assets
             ),
             actions: vec!["show_balance".to_string()],
@@ -637,7 +646,7 @@ impl AIService {
         let total_usd: f64 = assets.iter().map(|asset| asset.value_usd).sum();
         Ok(AIResponse {
             message: format!(
-                "Saya siapkan ringkasan manajemen portfolio {}. Total nilai saat ini sekitar ${:.2}.",
+                "Portfolio management summary for {} is ready. Current total value is about ${:.2}.",
                 user_address, total_usd
             ),
             actions: vec!["open_portfolio_manager".to_string(), "set_rebalance_plan".to_string()],
@@ -650,10 +659,35 @@ impl AIService {
 
     async fn execute_alerts_command(&self) -> Result<AIResponse> {
         Ok(AIResponse {
-            message: "Fitur alert siap. Tentukan token, kondisi harga, dan channel notifikasi yang Anda mau.".to_string(),
+            message: "Alerts are ready. Choose token, trigger condition, and notification channel."
+                .to_string(),
             actions: vec!["configure_alerts".to_string()],
             data: Some(serde_json::json!({
                 "supported_triggers": ["price_above", "price_below", "volatility_spike"]
+            })),
+        })
+    }
+
+    async fn execute_tutorial_command(&self, level: u8) -> Result<AIResponse> {
+        let level_hint = match level {
+            1 => "You are on Level 1 (read-only).",
+            2 => "You are on Level 2 (read-only + swap/bridge).",
+            3 => "You are on Level 3 (all features).",
+            _ => "Unknown level.",
+        };
+        Ok(AIResponse {
+            message: format!(
+                "{level_hint} Beginner steps: 1) Connect wallet. 2) For Level 2/3 create one on-chain action_id. 3) Try: 'check my balance'. 4) Then try: 'swap 25 STRK to CAREL' or 'bridge 10 USDT to STRK'. 5) Confirm only in wallet popup."
+            ),
+            actions: vec!["show_tutorial".to_string()],
+            data: Some(serde_json::json!({
+                "steps": [
+                    "Connect wallet",
+                    "Create/resolve on-chain action_id (Level 2/3)",
+                    "Run read-only command",
+                    "Run swap/bridge command",
+                    "Confirm transaction in wallet"
+                ]
             })),
         })
     }

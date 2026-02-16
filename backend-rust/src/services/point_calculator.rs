@@ -8,11 +8,11 @@ use crate::{
         MULTIPLIER_TIER_4, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_CAREL, POINTS_MIN_STAKE_LP,
         POINTS_MIN_STAKE_STABLECOIN, POINTS_MIN_STAKE_STRK, POINTS_MIN_USD_BRIDGE_BTC,
         POINTS_MIN_USD_BRIDGE_ETH, POINTS_MIN_USD_LIMIT_ORDER, POINTS_MIN_USD_SWAP,
-        POINTS_MIN_USD_SWAP_TESTNET, POINTS_PER_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_ETH,
+        POINTS_MIN_USD_SWAP_TESTNET, POINTS_MULTIPLIER_STAKE_BTC,
+        POINTS_MULTIPLIER_STAKE_CAREL_TIER_1, POINTS_MULTIPLIER_STAKE_CAREL_TIER_2,
+        POINTS_MULTIPLIER_STAKE_CAREL_TIER_3, POINTS_MULTIPLIER_STAKE_LP,
+        POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_ETH,
         POINTS_PER_USD_LIMIT_ORDER, POINTS_PER_USD_STAKE, POINTS_PER_USD_SWAP,
-        POINTS_MULTIPLIER_STAKE_BTC, POINTS_MULTIPLIER_STAKE_CAREL_TIER_1,
-        POINTS_MULTIPLIER_STAKE_CAREL_TIER_2, POINTS_MULTIPLIER_STAKE_CAREL_TIER_3,
-        POINTS_MULTIPLIER_STAKE_LP, POINTS_MULTIPLIER_STAKE_STABLECOIN,
         POINT_CALCULATOR_INTERVAL_SECS,
     },
     db::Database,
@@ -72,15 +72,58 @@ impl PointCalculator {
         if self.config.is_testnet() {
             tracing::debug!("Point calculator running in testnet mode");
         }
-        // Ganti ke runtime query_as
-        let transactions = sqlx::query_as::<_, crate::models::Transaction>(
-            "SELECT * FROM transactions WHERE processed = false ORDER BY timestamp ASC LIMIT 100",
-        )
-        .fetch_all(self.db.pool())
-        .await?;
+        let batch_size = self.config.point_calculator_batch_size.max(1) as i64;
+        let max_batches = self.config.point_calculator_max_batches_per_tick.max(1);
 
-        for tx in transactions {
-            self.process_transaction(&tx).await?;
+        let mut fetched_total = 0usize;
+        let mut processed_total = 0usize;
+        let mut failed_total = 0usize;
+
+        for _ in 0..max_batches {
+            let transactions = sqlx::query_as::<_, crate::models::Transaction>(
+                "SELECT * FROM transactions WHERE processed = false ORDER BY timestamp ASC LIMIT $1",
+            )
+            .bind(batch_size)
+            .fetch_all(self.db.pool())
+            .await?;
+
+            if transactions.is_empty() {
+                break;
+            }
+
+            let batch_len = transactions.len();
+            fetched_total += batch_len;
+
+            for tx in transactions {
+                match self.process_transaction(&tx).await {
+                    Ok(()) => processed_total += 1,
+                    Err(err) => {
+                        failed_total += 1;
+                        tracing::error!(
+                            "Point calculator failed to process tx: tx_hash={}, user={}, tx_type={}, error={}",
+                            tx.tx_hash,
+                            tx.user_address,
+                            tx.tx_type,
+                            err
+                        );
+                    }
+                }
+            }
+
+            if batch_len < batch_size as usize {
+                break;
+            }
+        }
+
+        if fetched_total > 0 {
+            tracing::info!(
+                "Point calculator tick complete: fetched={}, processed={}, failed={}, batch_size={}, max_batches={}",
+                fetched_total,
+                processed_total,
+                failed_total,
+                batch_size,
+                max_batches
+            );
         }
 
         Ok(())
@@ -262,7 +305,7 @@ impl PointCalculator {
             &tx.user_address,
             usd_value * POINTS_PER_USD_STAKE * multiplier,
         )
-            .await
+        .await
     }
 
     async fn apply_nft_discount_bonus(&self, user_address: &str, base_points: f64) -> Result<f64> {
@@ -600,14 +643,22 @@ impl PointCalculator {
             return Ok(());
         };
 
-        let expected_u128 = expected_total.max(Decimal::ZERO).trunc().to_u128().unwrap_or(0);
+        let expected_u128 = expected_total
+            .max(Decimal::ZERO)
+            .trunc()
+            .to_u128()
+            .unwrap_or(0);
         if expected_u128 == 0 {
             return Ok(());
         }
 
         // Write exact aggregate points to on-chain storage to avoid drift/race from repeated delta adds.
-        let submit_call =
-            build_point_storage_submit_points_call(contract, epoch as u64, user_address, expected_u128)?;
+        let submit_call = build_point_storage_submit_points_call(
+            contract,
+            epoch as u64,
+            user_address,
+            expected_u128,
+        )?;
         let tx_hash = invoker.invoke(submit_call).await?;
         tracing::info!(
             "Trading points synced onchain: user={}, epoch={}, total={}, tx={}",

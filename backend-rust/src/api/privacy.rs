@@ -2,7 +2,9 @@ use crate::{
     error::Result,
     models::ApiResponse,
     services::onchain::{parse_felt, OnchainInvoker},
-    services::privacy_verifier::{parse_privacy_verifier_kind, resolve_privacy_router_for_verifier},
+    services::privacy_verifier::{
+        parse_privacy_verifier_kind, resolve_privacy_router_for_verifier,
+    },
 };
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};

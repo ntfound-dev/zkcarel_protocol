@@ -8,6 +8,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
+use tokio::time::{timeout, Duration};
 
 use crate::{
     api::{auth::extract_user_from_token, AppState},
@@ -74,11 +75,23 @@ pub async fn handler(
         Err(err) => return err.into_response(),
     };
 
-    if let Err(err) = state.db.create_user(&user_address).await {
-        return err.into_response();
-    }
-    if let Err(err) = state.db.update_last_active(&user_address).await {
-        return err.into_response();
+    match timeout(
+        Duration::from_millis(1200),
+        state.db.touch_user(&user_address),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "orders websocket touch_user failed for {}: {}",
+                user_address,
+                err
+            );
+        }
+        Err(_) => {
+            tracing::warn!("orders websocket touch_user timed out for {}", user_address);
+        }
     }
 
     ws.on_upgrade(|socket| handle_socket(socket, state, user_address))

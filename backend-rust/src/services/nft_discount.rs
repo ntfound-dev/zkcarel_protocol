@@ -30,9 +30,12 @@ async fn active_discount_rate(config: &Config, user_address: &str) -> Result<f64
         calldata: vec![parse_felt(user_address)?],
     };
 
-    let result = timeout(Duration::from_millis(DISCOUNT_READ_TIMEOUT_MS), reader.call(call))
-        .await
-        .map_err(|_| AppError::BlockchainRPC("NFT discount read timeout".to_string()))??;
+    let result = timeout(
+        Duration::from_millis(DISCOUNT_READ_TIMEOUT_MS),
+        reader.call(call),
+    )
+    .await
+    .map_err(|_| AppError::BlockchainRPC("NFT discount read timeout".to_string()))??;
 
     if result.len() < 3 {
         return Ok(0.0);
@@ -74,9 +77,12 @@ pub async fn consume_nft_usage_if_active(
         calldata: vec![parse_felt(user_address)?],
     };
 
-    let tx_hash = timeout(Duration::from_millis(DISCOUNT_CONSUME_TIMEOUT_MS), invoker.invoke(call))
-        .await
-        .map_err(|_| AppError::BlockchainRPC("NFT discount consume timeout".to_string()))??;
+    let tx_hash = timeout(
+        Duration::from_millis(DISCOUNT_CONSUME_TIMEOUT_MS),
+        invoker.invoke(call),
+    )
+    .await
+    .map_err(|_| AppError::BlockchainRPC("NFT discount consume timeout".to_string()))??;
     let tx_hash_text = tx_hash.to_string();
     tracing::info!(
         "nft_discount_usage_consumed action={} user={} discount={} tx_hash={}",

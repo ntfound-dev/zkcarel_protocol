@@ -33,8 +33,11 @@ pub async fn health_check(State(state): State<AppState>) -> Json<HealthResponse>
     let db_ok = state.db.pool().acquire().await.is_ok();
 
     // 2. Cek koneksi Redis
-    // Mencoba mengambil satu koneksi dari pool r2d2 agar field 'redis' terpakai
-    let redis_ok = state.redis.get().is_ok();
+    let mut redis_conn = state.redis.clone();
+    let redis_ok = redis::cmd("PING")
+        .query_async::<String>(&mut redis_conn)
+        .await
+        .is_ok();
 
     Json(build_health_response(db_ok, redis_ok))
 }

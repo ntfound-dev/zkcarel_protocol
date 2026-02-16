@@ -47,9 +47,6 @@ pub enum AppError {
     #[error("Insufficient liquidity")]
     InsufficientLiquidity,
 
-    #[error("Price slippage too high")]
-    SlippageTooHigh,
-
     #[error("External API error: {0}")]
     ExternalAPI(String),
 
@@ -121,11 +118,6 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_REQUEST,
                 "INSUFFICIENT_LIQUIDITY",
                 "Not enough liquidity available".to_string(),
-            ),
-            AppError::SlippageTooHigh => (
-                StatusCode::BAD_REQUEST,
-                "SLIPPAGE_TOO_HIGH",
-                "Price impact exceeds slippage tolerance".to_string(),
             ),
             AppError::ExternalAPI(ref msg) => {
                 (StatusCode::BAD_GATEWAY, "EXTERNAL_API_ERROR", msg.clone())

@@ -27,6 +27,7 @@ Pass criteria:
 
 - [ ] Login with Sumo token once.
 - [ ] Verify same Sumo subject resolves to the same account on relogin.
+- [ ] Verify wallet yang sama (Starknet/EVM/BTC) tidak bisa membuat user baru; harus resolve ke user lama.
 - [ ] Set `display_name` once (or update as expected by product rule).
 - [ ] Bind referral code on first login.
 - [ ] Try rebinding referral with another code (must be rejected / ignored).
@@ -53,19 +54,28 @@ Pass criteria:
 
 ## 3) Bridge BTC native -> Starknet settlement
 
+Prerequisite:
+- [ ] Gunakan wallet BTC native (disarankan UniSat) di chain `BITCOIN_TESTNET4`.
+- [ ] Gunakan faucet BTC testnet4 (bukan testnet3) untuk top-up saldo uji.
+- [ ] `BTC_VAULT_ADDRESS` backend dan `NEXT_PUBLIC_BTC_VAULT_ADDRESS` frontend harus sama.
+
 Flow:
-- [ ] Send BTC testnet to bridge vault from BTC wallet.
-- [ ] Paste BTC txid (64 hex) into UI field.
-- [ ] Submit bridge request with that txid.
-- [ ] Confirm txid exists in Mempool explorer.
+- [ ] Submit bridge request dari UI (Garden order dibuat dulu).
+- [ ] Pastikan response berisi `order_id`, `deposit_address` (`result.to`), dan `deposit_amount`.
+- [ ] Send BTC testnet sesuai `deposit_amount` ke `deposit_address` order (bukan testnet3).
+- [ ] Confirm txid deposit exists in Mempool explorer (testnet4).
 - [ ] Confirm bridge record saved with BTC source.
+- [ ] (Garden) Monitor status order sampai selesai, minimal melewati:
+  - `Created` -> `Matched` -> `Initiated` -> `CounterPartyInitiated` -> `Redeemed` -> `Completed`
 
 Points:
 - [ ] Test < $100 equivalent BTC -> points 0.
 - [ ] Test >= $100 equivalent BTC -> points = `usd_value * 25`.
 
 Pass criteria:
-- BTC native flow works with user BTC txid evidence; rule 25/$ and min $100 applied.
+- BTC native flow works with Garden order lifecycle + dynamic deposit address; rule 25/$ and min $100 applied.
+- Untuk mode API Garden, app hanya membuat quote/order + tracking status. Eksekusi script HTLC
+  (initiate/redeem/refund/instant-refund berbasis Taproot/P2TR) ditangani oleh protokol/solver.
 
 ## 4) Swap on Starknet (user-sign onchain)
 
@@ -138,7 +148,7 @@ Pass criteria:
 MVP is accepted only if all below are true:
 
 - [ ] No backend-mode execution for swap/bridge/limit-order/stake.
-- [ ] Onchain tx hash required and validated for all user actions.
+- [ ] Onchain tx hash required and validated untuk source Starknet/Ethereum; source BTC native pakai flow order-first (deposit address dari Garden).
 - [ ] Points formulas are correct:
   - BTC bridge: 25/$, min $100
   - ETH bridge: 15/$, min $10

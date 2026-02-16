@@ -48,7 +48,7 @@ import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 const tokenCatalog = [
   { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 0, change: 0 },
   { symbol: "STRK", name: "StarkNet", icon: "◈", price: 0, change: 0 },
-  { symbol: "CAREL", name: "ZkCarel", icon: "◐", price: 0, change: 0 },
+  { symbol: "CAREL", name: "Carel Protocol", icon: "◐", price: 0, change: 0 },
   { symbol: "USDT", name: "Tether", icon: "₮", price: 0, change: 0 },
   { symbol: "USDC", name: "USD Coin", icon: "⭕", price: 0, change: 0 },
 ]
@@ -56,9 +56,9 @@ const tokenCatalog = [
 type TokenItem = (typeof tokenCatalog)[number]
 
 const expiryOptions = [
-  { label: "1 hari", value: "1d" },
-  { label: "7 hari", value: "7d" },
-  { label: "30 hari", value: "30d" },
+  { label: "1 day", value: "1d" },
+  { label: "7 days", value: "7d" },
+  { label: "30 days", value: "30d" },
 ]
 
 const pricePresets = [
@@ -107,11 +107,13 @@ const STARKNET_TOKEN_ADDRESS_MAP: Record<string, string> = {
     "0x1",
   STRK: process.env.NEXT_PUBLIC_TOKEN_STRK_ADDRESS || "0x4",
   ETH: process.env.NEXT_PUBLIC_TOKEN_ETH_ADDRESS || "0x3",
-  BTC: process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS || "0x2",
+  BTC:
+    process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
+    "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5",
   WBTC:
     process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
     process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
-    "0x2",
+    "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5",
   USDT: process.env.NEXT_PUBLIC_TOKEN_USDT_ADDRESS || "0x5",
   USDC: process.env.NEXT_PUBLIC_TOKEN_USDC_ADDRESS || "0x6",
 }
@@ -505,7 +507,7 @@ export function LimitOrder() {
       notifications.addNotification({
         type: "info",
         title: "Coming Soon",
-        message: "Limit Order Buy BTC masih dalam tahap finalisasi integrasi.",
+        message: "Limit Order BTC Buy is still in final integration.",
       })
       return
     }
@@ -514,16 +516,16 @@ export function LimitOrder() {
       const fromToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
       const toToken = orderType === "buy" ? selectedToken.symbol : receiveToken.symbol
       if (fromToken.toUpperCase() === toToken.toUpperCase()) {
-        throw new Error("Token asal dan tujuan tidak boleh sama.")
+        throw new Error("Source and destination tokens cannot be the same.")
       }
       const fromTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[fromToken.toUpperCase()]
       const toTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[toToken.toUpperCase()]
       if (!fromTokenAddress || !toTokenAddress) {
-        throw new Error("Token pair belum didukung untuk limit order on-chain Starknet.")
+        throw new Error("Token pair is not supported for Starknet on-chain limit orders.")
       }
       if (!STARKNET_LIMIT_ORDER_BOOK_ADDRESS) {
         throw new Error(
-          "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS belum diisi. Set alamat kontrak limit order di frontend/.env.local."
+          "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS is not set. Configure the limit order contract address in frontend/.env.local."
         )
       }
       const clientOrderId = generateClientOrderId()
@@ -579,23 +581,23 @@ export function LimitOrder() {
         price,
         expiry,
         status: "active",
-        createdAt: "Baru saja",
+        createdAt: "Just now",
       }
 
       setOrders((prev) => [newOrder, ...prev])
       setSubmitSuccess(true)
       notifications.addNotification({
         type: "success",
-        title: "Order dibuat",
-        message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} berhasil dibuat`,
+        title: "Order created",
+        message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} created successfully`,
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
     } catch (error) {
       notifications.addNotification({
         type: "error",
-        title: "Gagal membuat order",
-        message: error instanceof Error ? error.message : "Terjadi kesalahan saat membuat order",
+        title: "Failed to create order",
+        message: error instanceof Error ? error.message : "Unexpected error while creating order",
       })
     } finally {
       setIsSubmitting(false)
@@ -612,7 +614,7 @@ export function LimitOrder() {
     try {
       if (!STARKNET_LIMIT_ORDER_BOOK_ADDRESS) {
         throw new Error(
-          "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS belum diisi. Set alamat kontrak limit order di frontend/.env.local."
+          "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS is not set. Configure the limit order contract address in frontend/.env.local."
         )
       }
       notifications.addNotification({
@@ -632,16 +634,16 @@ export function LimitOrder() {
       setOrders((prev) => prev.filter((order) => order.id !== orderId))
       notifications.addNotification({
         type: "success",
-        title: "Order dibatalkan",
-        message: "Order berhasil dibatalkan",
+        title: "Order cancelled",
+        message: "Order cancelled successfully",
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
     } catch (error) {
       notifications.addNotification({
         type: "error",
-        title: "Gagal membatalkan",
-        message: error instanceof Error ? error.message : "Tidak dapat membatalkan order",
+        title: "Failed to cancel",
+        message: error instanceof Error ? error.message : "Unable to cancel order",
       })
     }
   }
@@ -657,7 +659,7 @@ export function LimitOrder() {
               <span className="text-sm font-medium text-primary">Testnet Active</span>
             </div>
             <h2 className="text-3xl font-bold text-foreground mb-2">Limit Order</h2>
-            <p className="text-muted-foreground">Atur harga dan eksekusi trade secara otomatis</p>
+            <p className="text-muted-foreground">Set your price and execute trades automatically</p>
           </div>
 
           <div className="grid lg:grid-cols-3 gap-6">
@@ -872,11 +874,11 @@ export function LimitOrder() {
 
               <div className="mt-4 p-3 rounded-lg bg-surface/40 border border-border">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs text-muted-foreground">Order Aktif</p>
+                  <p className="text-xs text-muted-foreground">Active Orders</p>
                   <span className="text-xs text-muted-foreground">{orders.length}</span>
                 </div>
                 {orders.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">Tidak ada order aktif</p>
+                  <p className="text-xs text-muted-foreground">No active orders</p>
                 ) : (
                   <div className="space-y-1.5">
                     {orders.slice(0, 4).map((order) => (
@@ -885,7 +887,7 @@ export function LimitOrder() {
                         className="flex items-center justify-between text-xs gap-2"
                       >
                         <span className="text-foreground">
-                          {order.type === "buy" ? "BELI" : "JUAL"} {order.amount} {order.token}
+                          {order.type === "buy" ? "BUY" : "SELL"} {order.amount} {order.token}
                         </span>
                         <div className="flex items-center gap-2">
                           <span className="text-muted-foreground">
@@ -914,10 +916,10 @@ export function LimitOrder() {
               <Tabs value={orderType} onValueChange={(value) => setOrderType(value as "buy" | "sell")}>
                 <TabsList className="grid w-full grid-cols-2 mb-6">
                   <TabsTrigger value="buy" className="data-[state=active]:bg-success/20 data-[state=active]:text-success">
-                    Beli
+                    Buy
                   </TabsTrigger>
                   <TabsTrigger value="sell" className="data-[state=active]:bg-destructive/20 data-[state=active]:text-destructive">
-                    Jual
+                    Sell
                   </TabsTrigger>
                 </TabsList>
 
@@ -953,7 +955,7 @@ export function LimitOrder() {
                   {/* Buy Price */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm font-medium text-foreground">Harga Beli</label>
+                      <label className="text-sm font-medium text-foreground">Buy Price</label>
                       <span className="text-xs text-muted-foreground">Market: ${marketPrice.toLocaleString()}</span>
                     </div>
                     <input
@@ -990,7 +992,7 @@ export function LimitOrder() {
 
                   {/* Pay With */}
                   <div>
-                    <label className="text-sm font-medium text-foreground mb-2 block">Bayar dengan</label>
+                    <label className="text-sm font-medium text-foreground mb-2 block">Pay with</label>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="outline" className="w-full justify-between bg-transparent">
@@ -1019,9 +1021,9 @@ export function LimitOrder() {
                   {/* Amount */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm font-medium text-foreground">Jumlah</label>
+                      <label className="text-sm font-medium text-foreground">Amount</label>
                       <span className="text-xs text-muted-foreground">
-                        Saldo: {(wallet.balance[payToken.symbol] ?? 0).toLocaleString()} {payToken.symbol}
+                        Balance: {(wallet.balance[payToken.symbol] ?? 0).toLocaleString()} {payToken.symbol}
                       </span>
                     </div>
                     <input
@@ -1046,7 +1048,7 @@ export function LimitOrder() {
 
                   {/* Expiry */}
                   <div>
-                    <label className="text-sm font-medium text-foreground mb-2 block">Kedaluwarsa</label>
+                    <label className="text-sm font-medium text-foreground mb-2 block">Expiry</label>
                     <div className="grid grid-cols-3 gap-2">
                       {expiryOptions.map((option) => (
                         <button
@@ -1069,13 +1071,13 @@ export function LimitOrder() {
                   {currentPrice > 0 && Number.parseFloat(amount) > 0 && (
                     <div className="p-3 rounded-lg bg-surface/50 border border-border">
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Estimasi dapat</span>
+                        <span className="text-muted-foreground">Estimated receive</span>
                         <span className="font-medium text-foreground">
                           {(Number.parseFloat(amount) / currentPrice).toFixed(6)} {selectedToken.symbol}
                         </span>
                       </div>
                       <div className="flex justify-between text-sm mt-1">
-                        <span className="text-muted-foreground">Total bayar</span>
+                        <span className="text-muted-foreground">Total pay</span>
                         <span className="font-medium text-foreground">
                           {amount} {payToken.symbol}
                         </span>
@@ -1088,7 +1090,7 @@ export function LimitOrder() {
                     <div className="flex items-start gap-2">
                       <Info className="h-4 w-4 text-secondary flex-shrink-0 mt-0.5" />
                       <p className="text-xs text-foreground">
-                        Order akan dieksekusi otomatis saat harga market mencapai target Anda
+                        Order will execute automatically when market price reaches your target
                       </p>
                     </div>
                   </div>
@@ -1098,8 +1100,8 @@ export function LimitOrder() {
                       <div className="flex items-start gap-2">
                         <AlertCircle className="h-4 w-4 text-amber-300 flex-shrink-0 mt-0.5" />
                         <p className="text-xs text-foreground">
-                          Buy BTC via Limit Order masih <span className="font-semibold">Coming Soon</span>.
-                          Silakan gunakan pair token lain sementara.
+                          Buy BTC via Limit Order is still <span className="font-semibold">Coming Soon</span>.
+                          Please use another token pair for now.
                         </p>
                       </div>
                     </div>
@@ -1136,7 +1138,7 @@ export function LimitOrder() {
                         </span>
                       </div>
                       <p className="text-[11px] text-muted-foreground">
-                        Points diberikan saat order berhasil terisi (filled).
+                        Points are awarded when the order is filled.
                       </p>
                     </div>
                   )}
@@ -1147,7 +1149,7 @@ export function LimitOrder() {
                     disabled={!price || !amount || isBtcBuyComingSoon}
                     className="w-full py-6 bg-success hover:bg-success/90 text-success-foreground font-bold"
                   >
-                    {isBtcBuyComingSoon ? "Coming Soon (BTC Buy)" : "Buat Order Beli"}
+                    {isBtcBuyComingSoon ? "Coming Soon (BTC Buy)" : "Create Buy Order"}
                   </Button>
                 </TabsContent>
 
@@ -1183,7 +1185,7 @@ export function LimitOrder() {
                   {/* Sell Price */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm font-medium text-foreground">Harga Jual</label>
+                      <label className="text-sm font-medium text-foreground">Sell Price</label>
                       <span className="text-xs text-muted-foreground">Market: ${marketPrice.toLocaleString()}</span>
                     </div>
                     <input
@@ -1208,7 +1210,7 @@ export function LimitOrder() {
 
                   {/* Receive In */}
                   <div>
-                    <label className="text-sm font-medium text-foreground mb-2 block">Terima dalam</label>
+                    <label className="text-sm font-medium text-foreground mb-2 block">Receive in</label>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="outline" className="w-full justify-between bg-transparent">
@@ -1237,9 +1239,9 @@ export function LimitOrder() {
                   {/* Amount */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm font-medium text-foreground">Jumlah</label>
+                      <label className="text-sm font-medium text-foreground">Amount</label>
                       <span className="text-xs text-muted-foreground">
-                        Saldo: {(wallet.balance[selectedToken.symbol] ?? 0).toLocaleString()} {selectedToken.symbol}
+                        Balance: {(wallet.balance[selectedToken.symbol] ?? 0).toLocaleString()} {selectedToken.symbol}
                       </span>
                     </div>
                     <input
@@ -1264,7 +1266,7 @@ export function LimitOrder() {
 
                   {/* Expiry */}
                   <div>
-                    <label className="text-sm font-medium text-foreground mb-2 block">Kedaluwarsa</label>
+                    <label className="text-sm font-medium text-foreground mb-2 block">Expiry</label>
                     <div className="grid grid-cols-3 gap-2">
                       {expiryOptions.map((option) => (
                         <button
@@ -1287,7 +1289,7 @@ export function LimitOrder() {
                   {currentPrice > 0 && Number.parseFloat(amount) > 0 && (
                     <div className="p-3 rounded-lg bg-surface/50 border border-border">
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Estimasi dapat</span>
+                        <span className="text-muted-foreground">Estimated receive</span>
                         <span className="font-medium text-foreground">
                           {(Number.parseFloat(amount) * currentPrice).toLocaleString()} {receiveToken.symbol}
                         </span>
@@ -1326,7 +1328,7 @@ export function LimitOrder() {
                         </span>
                       </div>
                       <p className="text-[11px] text-muted-foreground">
-                        Points diberikan saat order berhasil terisi (filled).
+                        Points are awarded when the order is filled.
                       </p>
                     </div>
                   )}
@@ -1337,7 +1339,7 @@ export function LimitOrder() {
                     disabled={!price || !amount}
                     className="w-full py-6 bg-destructive hover:bg-destructive/90 text-destructive-foreground font-bold"
                   >
-                    Buat Order Jual
+                    Create Sell Order
                   </Button>
                 </TabsContent>
               </Tabs>
@@ -1446,7 +1448,7 @@ export function LimitOrder() {
       <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
         <DialogContent className="max-w-md glass-strong border-border">
           <DialogHeader>
-            <DialogTitle>Konfirmasi Order</DialogTitle>
+            <DialogTitle>Confirm Order</DialogTitle>
           </DialogHeader>
           
           {submitSuccess ? (
@@ -1454,20 +1456,20 @@ export function LimitOrder() {
               <div className="w-16 h-16 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-4">
                 <Check className="h-8 w-8 text-success" />
               </div>
-              <p className="text-lg font-medium text-foreground">Order Berhasil Dibuat!</p>
-              <p className="text-sm text-muted-foreground mt-2">Order Anda akan dieksekusi saat harga tercapai</p>
+              <p className="text-lg font-medium text-foreground">Order Created Successfully!</p>
+              <p className="text-sm text-muted-foreground mt-2">Your order will be executed when target price is reached</p>
             </div>
           ) : (
             <>
               <div className="space-y-4 py-4">
                 <div className="p-4 rounded-xl bg-surface/50 border border-border">
                   <div className="flex justify-between mb-2">
-                    <span className="text-muted-foreground">Tipe</span>
+                    <span className="text-muted-foreground">Type</span>
                     <span className={cn(
                       "font-medium",
                       orderType === "buy" ? "text-success" : "text-destructive"
                     )}>
-                      {orderType === "buy" ? "Beli" : "Jual"}
+                      {orderType === "buy" ? "Buy" : "Sell"}
                     </span>
                   </div>
                   <div className="flex justify-between mb-2">
@@ -1475,15 +1477,15 @@ export function LimitOrder() {
                     <span className="font-medium text-foreground">{selectedToken.symbol}</span>
                   </div>
                   <div className="flex justify-between mb-2">
-                    <span className="text-muted-foreground">Harga Target</span>
+                    <span className="text-muted-foreground">Target Price</span>
                     <span className="font-medium text-foreground">${currentPrice.toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between mb-2">
-                    <span className="text-muted-foreground">Jumlah</span>
+                    <span className="text-muted-foreground">Amount</span>
                     <span className="font-medium text-foreground">{amount} {orderType === "buy" ? payToken.symbol : selectedToken.symbol}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Kedaluwarsa</span>
+                    <span className="text-muted-foreground">Expiry</span>
                     <span className="font-medium text-foreground">{expiryOptions.find(e => e.value === expiry)?.label}</span>
                   </div>
                 </div>
@@ -1492,7 +1494,7 @@ export function LimitOrder() {
                   <div className="flex items-start gap-2">
                     <AlertCircle className="h-4 w-4 text-secondary flex-shrink-0 mt-0.5" />
                     <p className="text-xs text-foreground">
-                      Order ini bersifat testnet dan tidak menggunakan dana riil
+                      This order is testnet-only and does not use real funds
                     </p>
                   </div>
                 </div>
@@ -1514,7 +1516,7 @@ export function LimitOrder() {
                     orderType === "buy" ? "bg-success hover:bg-success/90" : "bg-destructive hover:bg-destructive/90"
                   )}
                 >
-                  {isSubmitting ? "Memproses..." : "Konfirmasi"}
+                  {isSubmitting ? "Processing..." : "Confirm"}
                 </Button>
               </div>
             </>

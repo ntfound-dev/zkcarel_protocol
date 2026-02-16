@@ -164,7 +164,7 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
       notifications.addNotification({
         type: "error",
         title: "Privacy submit failed",
-        message: error instanceof Error ? error.message : "Gagal submit privacy action.",
+        message: error instanceof Error ? error.message : "Failed to submit privacy action.",
       })
     } finally {
       setIsSubmitting(false)
@@ -266,7 +266,7 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
             </div>
             <div className="rounded-xl bg-surface/40 border border-border p-4 text-xs text-muted-foreground">
               <p className="flex items-center gap-2 mb-2"><Database className="h-4 w-4" />Legacy V1 path (ZkPrivacyRouter.submit_private_action)</p>
-              <p>Gunakan ini jika router V2 belum di-deploy.</p>
+              <p>Use this if the V2 router has not been deployed yet.</p>
             </div>
           </div>
         )}
@@ -295,7 +295,7 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
         <div className="flex flex-wrap items-center justify-between mt-5 gap-3">
           <div className="text-xs text-muted-foreground flex items-center gap-2">
             <Hash className="h-4 w-4" />
-            Payload akan diarahkan ke router yang aktif di backend.
+            Payload will be routed to the active backend router.
           </div>
           <Button onClick={handleSubmit} disabled={isSubmitting} className="bg-gradient-to-r from-primary to-accent">
             {isSubmitting ? "Submitting..." : "Submit Privacy Action"}
@@ -310,7 +310,7 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
           </div>
           {history.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/70 p-4 text-xs text-muted-foreground">
-              Belum ada submit proof. Setelah submit, riwayat akan muncul di sini.
+              No proof submissions yet. History will appear here after your first submission.
             </div>
           ) : (
             <div className="space-y-2">

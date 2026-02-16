@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 import { getPortfolioAnalytics } from "@/lib/api"
 import { MarketTicker } from "@/components/market-ticker"
+import { QuickStatsSidebar } from "@/components/quick-stats-sidebar"
 
 // Animated counter hook - starts at 0 on server, animates on client mount
 function useAnimatedCounter(end: number, duration: number = 2000) {
@@ -157,6 +158,9 @@ export function HeroSection() {
         {/* Swap & Bridge Feature Card */}
         <div className="max-w-5xl mx-auto mb-8">
           <MarketTicker />
+        </div>
+        <div className="max-w-5xl mx-auto mb-10">
+          <QuickStatsSidebar variant="inline" />
         </div>
 
         <div className="max-w-4xl mx-auto mb-12">

@@ -3,7 +3,7 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* ZkCarel Cyberpunk Theme - Dark Mode (Private) */
+/* Carel Protocol Cyberpunk Theme - Dark Mode (Private) */
 :root {
   --background: #0A0A0F;
   --foreground: #F0F2FF;

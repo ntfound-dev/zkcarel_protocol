@@ -154,7 +154,7 @@ const defaultSocialTasks: SocialTaskUi[] = [
   {
     id: "twitter_follow",
     title: "X: Follow",
-    description: "Follow @zkcarel and paste your profile link or handle. (+5 pts)",
+    description: "Follow @carelprotocol and paste your profile link or handle. (+5 pts)",
     points: 5,
     provider: "twitter",
     placeholder: "https://x.com/your_handle",
@@ -165,7 +165,7 @@ const defaultSocialTasks: SocialTaskUi[] = [
     description: "Like announcement tweet and paste the tweet URL. (+2 pts)",
     points: 2,
     provider: "twitter",
-    placeholder: "https://x.com/zkcarel/status/...",
+    placeholder: "https://x.com/carelprotocol/status/...",
   },
   {
     id: "twitter_retweet",
@@ -173,7 +173,7 @@ const defaultSocialTasks: SocialTaskUi[] = [
     description: "Retweet announcement tweet and paste the tweet URL. (+3 pts)",
     points: 3,
     provider: "twitter",
-    placeholder: "https://x.com/zkcarel/status/...",
+    placeholder: "https://x.com/carelprotocol/status/...",
   },
   {
     id: "twitter_comment",
@@ -181,7 +181,7 @@ const defaultSocialTasks: SocialTaskUi[] = [
     description: "Comment on announcement tweet and paste the tweet URL. (+10 pts)",
     points: 10,
     provider: "twitter",
-    placeholder: "https://x.com/zkcarel/status/...",
+    placeholder: "https://x.com/carelprotocol/status/...",
   },
   {
     id: "telegram_join_channel",
@@ -273,7 +273,7 @@ function TierProgressBar({
         <span className="font-medium text-foreground">Tier Progression</span>
       </div>
       <p className="text-xs text-muted-foreground mb-4">
-        Tier aktif mengikuti NFT discount on-chain. Points hanya untuk unlock/mint tier berikutnya.
+        Active tier follows on-chain NFT discount. Points are used to unlock/mint the next tier.
       </p>
 
       {/* Tier Progress Line */}
@@ -583,7 +583,7 @@ export function RewardsHub() {
               ? "@username"
               : task.provider === "discord"
               ? "username#1234"
-              : "https://x.com/zkcarel/status/...",
+              : "https://x.com/carelprotocol/status/...",
           description: task.description || `Complete ${task.title} (+${task.points} pts)`,
         }))
         setSocialTasks(merged)
@@ -632,8 +632,8 @@ export function RewardsHub() {
     if (!wallet.isConnected) {
       notifications.addNotification({
         type: "error",
-        title: "Wallet belum terkoneksi",
-        message: "Connect Starknet wallet dulu sebelum mint NFT.",
+        title: "Wallet not connected",
+        message: "Connect Starknet wallet before minting NFT.",
       })
       return
     }
@@ -641,7 +641,7 @@ export function RewardsHub() {
       notifications.addNotification({
         type: "error",
         title: "Insufficient points",
-        message: "Points Anda belum cukup untuk mint NFT ini.",
+        message: "Your points are not enough to mint this NFT.",
       })
       return
     }
@@ -650,25 +650,25 @@ export function RewardsHub() {
       setIsMintingTier(nft.tierId)
       if (!STARKNET_DISCOUNT_SOULBOUND_ADDRESS) {
         throw new Error(
-          "NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS belum diisi. Set alamat kontrak NFT discount di frontend/.env.local."
+          "NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS is not set. Configure NFT discount contract address in frontend/.env.local."
         )
       }
       notifications.addNotification({
         type: "info",
         title: "Syncing points",
-        message: "Sinkronisasi points backend ke PointStorage on-chain...",
+        message: "Syncing backend points to on-chain PointStorage...",
       })
       const syncResult = await syncRewardsPointsOnchain({ minimum_points: nft.cost })
       if (syncResult.onchain_points_after < nft.cost) {
         throw new Error(
-          `On-chain points belum cukup untuk mint. Required ${nft.cost.toLocaleString()}, on-chain ${Math.floor(syncResult.onchain_points_after).toLocaleString()}.`
+          `On-chain points are insufficient for mint. Required ${nft.cost.toLocaleString()}, on-chain ${Math.floor(syncResult.onchain_points_after).toLocaleString()}.`
         )
       }
       if (syncResult.sync_tx_hash) {
         notifications.addNotification({
           type: "success",
           title: "Points synced on-chain",
-          message: `On-chain points siap: ${Math.floor(syncResult.onchain_points_after).toLocaleString()} pts.`,
+          message: `On-chain points ready: ${Math.floor(syncResult.onchain_points_after).toLocaleString()} pts.`,
           txHash: syncResult.sync_tx_hash,
           txNetwork: "starknet",
         })
@@ -692,19 +692,19 @@ export function RewardsHub() {
       notifications.addNotification({
         type: "success",
         title: "NFT minted",
-        message: `NFT tier ${nft.tier} berhasil dibuat.`,
+        message: `NFT tier ${nft.tier} minted successfully.`,
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
     } catch (error) {
-      const rawMessage = error instanceof Error ? error.message : "Gagal mint NFT."
+      const rawMessage = error instanceof Error ? error.message : "Failed to mint NFT."
       let normalizedMessage = rawMessage
-      if (/sudah memiliki nft|already has nft/i.test(rawMessage)) {
+      if (/already has nft|already minted/i.test(rawMessage)) {
         normalizedMessage =
-          "Kontrak NFT yang aktif masih mode single-mint. Deploy versi unlimited-mint agar mint berulang bisa jalan."
+          "Active NFT contract is still single-mint mode. Deploy unlimited-mint version for repeated mints."
       } else if (/invalid felt hex|representative out of range/i.test(rawMessage)) {
         normalizedMessage =
-          "Backend signer on-chain belum valid. Sync points gagal sebelum wallet signature. Cek BACKEND_PRIVATE_KEY/BACKEND_ACCOUNT_ADDRESS lalu restart backend."
+          "Backend on-chain signer is invalid. Points sync failed before wallet signature. Check BACKEND_PRIVATE_KEY/BACKEND_ACCOUNT_ADDRESS and restart backend."
       }
       notifications.addNotification({
         type: "error",
@@ -720,7 +720,7 @@ export function RewardsHub() {
     notifications.addNotification({
       type: "info",
       title: "Coming Soon",
-      message: "Fitur Convert Points ke CAREL akan segera tersedia.",
+      message: "Convert Points to CAREL feature will be available soon.",
     })
   }
 
@@ -728,7 +728,7 @@ export function RewardsHub() {
     notifications.addNotification({
       type: "info",
       title: "Coming Soon",
-      message: "Fitur Claim Rewards akan segera tersedia.",
+      message: "Claim Rewards feature will be available soon.",
     })
   }
 

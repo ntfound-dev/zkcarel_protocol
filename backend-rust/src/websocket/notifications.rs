@@ -54,11 +54,26 @@ pub async fn handler(
         Err(err) => return err.into_response(),
     };
 
-    if let Err(err) = state.db.create_user(&user_address).await {
-        return err.into_response();
-    }
-    if let Err(err) = state.db.update_last_active(&user_address).await {
-        return err.into_response();
+    match timeout(
+        Duration::from_millis(1200),
+        state.db.touch_user(&user_address),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "notifications websocket touch_user failed for {}: {}",
+                user_address,
+                err
+            );
+        }
+        Err(_) => {
+            tracing::warn!(
+                "notifications websocket touch_user timed out for {}",
+                user_address
+            );
+        }
     }
 
     ws.on_upgrade(|socket| handle_socket(socket, state, user_address))
