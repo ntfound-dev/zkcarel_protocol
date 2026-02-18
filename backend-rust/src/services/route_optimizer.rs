@@ -23,18 +23,10 @@ fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     match (from, to) {
         ("bitcoin", "starknet") => vec![BRIDGE_GARDEN.to_string()],
         ("starknet", "bitcoin") => vec![BRIDGE_GARDEN.to_string()],
-        ("bitcoin", "ethereum") => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
-        ("ethereum", "bitcoin") => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
-        ("ethereum", "starknet") => vec![
-            BRIDGE_STARKGATE.to_string(),
-            BRIDGE_GARDEN.to_string(),
-            BRIDGE_ATOMIQ.to_string(),
-        ],
-        ("starknet", "ethereum") => vec![
-            BRIDGE_STARKGATE.to_string(),
-            BRIDGE_GARDEN.to_string(),
-            BRIDGE_ATOMIQ.to_string(),
-        ],
+        ("bitcoin", "ethereum") => vec![BRIDGE_GARDEN.to_string()],
+        ("ethereum", "bitcoin") => vec![BRIDGE_GARDEN.to_string()],
+        ("ethereum", "starknet") => vec![BRIDGE_STARKGATE.to_string(), BRIDGE_GARDEN.to_string()],
+        ("starknet", "ethereum") => vec![BRIDGE_STARKGATE.to_string(), BRIDGE_GARDEN.to_string()],
         _ => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
     }
 }
@@ -43,7 +35,16 @@ fn normalize_token_symbol(token: &str) -> String {
     token.trim().to_ascii_uppercase()
 }
 
-fn garden_destination_token(to_chain: &str, source_token: &str) -> String {
+fn garden_destination_token(
+    to_chain: &str,
+    source_token: &str,
+    preferred_to_token: Option<&str>,
+) -> String {
+    if let Some(token) = preferred_to_token.map(normalize_token_symbol) {
+        if !token.is_empty() {
+            return token;
+        }
+    }
     let source = normalize_token_symbol(source_token);
     match to_chain {
         "bitcoin" => "BTC".to_string(),
@@ -65,14 +66,41 @@ fn garden_destination_token(to_chain: &str, source_token: &str) -> String {
     }
 }
 
-fn garden_supports_route(from: &str, to: &str, token: &str) -> bool {
+fn garden_token_supported_on_chain(chain: &str, token: &str) -> bool {
+    let chain = chain.trim().to_ascii_lowercase();
     let token = normalize_token_symbol(token);
-    match (from, to) {
-        ("bitcoin", "starknet") | ("starknet", "bitcoin") => token == "BTC" || token == "WBTC",
-        ("bitcoin", "ethereum") | ("ethereum", "bitcoin") => {
-            token == "BTC" || token == "WBTC" || token == "ETH"
+    match chain.as_str() {
+        "bitcoin" => token == "BTC" || token == "WBTC",
+        "ethereum" => {
+            token == "ETH"
+                || token == "BTC"
+                || token == "WBTC"
+                || token == "USDC"
+                || token == "USDT"
+                || token == "CAREL"
+                || token == "STRK"
         }
-        ("ethereum", "starknet") | ("starknet", "ethereum") => token == "BTC" || token == "WBTC",
+        "starknet" => {
+            // Garden currently rejects starknet ETH as destination on Sepolia.
+            token == "STRK"
+                || token == "BTC"
+                || token == "WBTC"
+                || token == "USDC"
+                || token == "USDT"
+                || token == "CAREL"
+        }
+        _ => false,
+    }
+}
+
+fn garden_supports_route(from: &str, to: &str) -> bool {
+    match (from, to) {
+        ("bitcoin", "starknet")
+        | ("starknet", "bitcoin")
+        | ("bitcoin", "ethereum")
+        | ("ethereum", "bitcoin")
+        | ("ethereum", "starknet")
+        | ("starknet", "ethereum") => true,
         _ => false,
     }
 }
@@ -122,12 +150,27 @@ impl RouteOptimizer {
         from_chain: &str,
         to_chain: &str,
         token: &str,
+        to_token: Option<&str>,
         amount: f64,
     ) -> Result<BridgeRoute> {
         let from_chain_normalized = normalize_chain(from_chain);
         let to_chain_normalized = normalize_chain(to_chain);
         let expected_providers = bridge_providers_for(&from_chain_normalized, &to_chain_normalized);
-        let providers = self.get_bridge_providers(&from_chain_normalized, &to_chain_normalized);
+        let mut providers = self.get_bridge_providers(&from_chain_normalized, &to_chain_normalized);
+        let normalized_from_token = normalize_token_symbol(token);
+        let normalized_to_token = to_token
+            .map(normalize_token_symbol)
+            .filter(|value| !value.is_empty());
+        let is_cross_token_bridge = normalized_to_token
+            .as_deref()
+            .map(|value| value != normalized_from_token.as_str())
+            .unwrap_or(false);
+        // StarkGate only supports ETH <-> ETH bridge semantics. Any cross-token target
+        // must use a bridge provider that natively supports destination token conversion.
+        let force_garden_cross_token = is_cross_token_bridge;
+        if force_garden_cross_token {
+            providers.retain(|provider| provider == BRIDGE_GARDEN);
+        }
 
         if providers.is_empty() {
             let fallback = if expected_providers.is_empty() {
@@ -152,6 +195,7 @@ impl RouteOptimizer {
                     &from_chain_normalized,
                     &to_chain_normalized,
                     token,
+                    to_token,
                     amount,
                 )
                 .await
@@ -227,12 +271,13 @@ impl RouteOptimizer {
         from_chain: &str,
         to_chain: &str,
         token: &str,
+        to_token: Option<&str>,
         amount: f64,
     ) -> Result<BridgeRoute> {
-        if provider == BRIDGE_GARDEN && !garden_supports_route(from_chain, to_chain, token) {
+        if provider == BRIDGE_GARDEN && !garden_supports_route(from_chain, to_chain) {
             return Err(crate::error::AppError::BadRequest(format!(
-                "Garden does not support {} -> {} for token {}",
-                from_chain, to_chain, token
+                "Garden does not support {} -> {} route",
+                from_chain, to_chain
             )));
         }
 
@@ -272,6 +317,17 @@ impl RouteOptimizer {
                 }
             }
             BRIDGE_STARKGATE => {
+                let token_normalized = normalize_token_symbol(token);
+                let supports_pair = (from_chain == "ethereum" && to_chain == "starknet")
+                    || (from_chain == "starknet" && to_chain == "ethereum");
+                if token_normalized != "ETH" || !supports_pair {
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "StarkGate supports ETH bridge on ethereum<->starknet only (requested token={}, route={} -> {})",
+                        token,
+                        from_chain,
+                        to_chain
+                    )));
+                }
                 // Mock implementation for StarkGate
                 let fee_percent = 0.3;
                 BridgeRoute {
@@ -288,7 +344,19 @@ impl RouteOptimizer {
                     self.config.garden_api_key.clone().unwrap_or_default(),
                     self.config.garden_api_url.clone(),
                 );
-                let to_token = garden_destination_token(to_chain, token);
+                let to_token = garden_destination_token(to_chain, token, to_token);
+                if !garden_token_supported_on_chain(from_chain, token) {
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "Garden does not support source token {} on {}",
+                        token, from_chain
+                    )));
+                }
+                if !garden_token_supported_on_chain(to_chain, &to_token) {
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "Garden does not support destination token {} on {}",
+                        to_token, to_chain
+                    )));
+                }
                 let quote = client
                     .get_quote(from_chain, to_chain, token, &to_token, amount)
                     .await?;
@@ -365,19 +433,34 @@ mod tests {
     fn bridge_providers_for_ethereum_to_bitcoin_prefers_garden() {
         let providers = bridge_providers_for("ethereum", "bitcoin");
         assert_eq!(providers.first().map(String::as_str), Some(BRIDGE_GARDEN));
-        assert!(providers.contains(&BRIDGE_ATOMIQ.to_string()));
+        assert_eq!(providers.len(), 1);
     }
 
     #[test]
     fn garden_destination_token_for_bitcoin_is_btc() {
-        assert_eq!(garden_destination_token("bitcoin", "ETH"), "BTC");
-        assert_eq!(garden_destination_token("bitcoin", "WBTC"), "BTC");
+        assert_eq!(garden_destination_token("bitcoin", "ETH", None), "BTC");
+        assert_eq!(garden_destination_token("bitcoin", "WBTC", None), "BTC");
     }
 
     #[test]
-    fn garden_supports_eth_to_btc_but_not_eth_to_starknet() {
-        assert!(garden_supports_route("ethereum", "bitcoin", "ETH"));
-        assert!(!garden_supports_route("ethereum", "starknet", "ETH"));
+    fn garden_destination_token_prefers_explicit_to_token() {
+        assert_eq!(
+            garden_destination_token("starknet", "ETH", Some("WBTC")),
+            "WBTC"
+        );
+    }
+
+    #[test]
+    fn garden_supports_common_routes() {
+        assert!(garden_supports_route("ethereum", "bitcoin"));
+        assert!(garden_supports_route("ethereum", "starknet"));
+        assert!(garden_supports_route("starknet", "ethereum"));
+    }
+
+    #[test]
+    fn garden_token_support_rejects_eth_on_starknet() {
+        assert!(garden_token_supported_on_chain("starknet", "STRK"));
+        assert!(!garden_token_supported_on_chain("starknet", "ETH"));
     }
 
     #[test]

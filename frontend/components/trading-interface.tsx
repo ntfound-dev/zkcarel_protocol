@@ -9,6 +9,7 @@ import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
 import { useLivePrices } from "@/hooks/use-live-prices"
 import {
+  autoSubmitPrivacyAction,
   executeBridge,
   executeSwap,
   getBridgeQuote,
@@ -19,6 +20,7 @@ import {
   getRewardsPoints,
   getSwapQuote,
   type NFTItem,
+  type PrivacyVerificationPayload,
 } from "@/lib/api"
 import {
   bigintWeiToUnitNumber,
@@ -29,6 +31,8 @@ import {
   invokeStarknetCallFromWallet,
   parseEstimatedMinutes,
   providerIdToFeltHex,
+  getConnectedEvmAddressFromWallet,
+  sendEvmTransactionFromWallet,
   sendEvmStarkgateEthDepositFromWallet,
   toHexFelt,
   unitNumberToScaledBigInt,
@@ -127,6 +131,12 @@ const MEV_FEE_RATE = 0.01
 const STARKNET_STRK_GAS_RESERVE = 0.02
 const QUOTE_CACHE_TTL_MS = 20_000
 const MAX_QUOTE_CACHE_ENTRIES = 120
+const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v2"
+const DEV_AUTO_GARAGA_PAYLOAD_ENABLED =
+  process.env.NODE_ENV !== "production" &&
+  (process.env.NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL || "false").toLowerCase() === "true"
+const HIDE_BALANCE_FALLBACK_TO_PUBLIC_ENABLED =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_FALLBACK_TO_PUBLIC || "true").toLowerCase() === "true"
 
 const CAREL_PROTOCOL_ADDRESS = process.env.NEXT_PUBLIC_CAREL_PROTOCOL_ADDRESS || ""
 const STARKNET_SWAP_CONTRACT_ADDRESS =
@@ -135,6 +145,10 @@ const STARKNET_SWAP_CONTRACT_ADDRESS =
   ""
 const STARKNET_BRIDGE_AGGREGATOR_ADDRESS =
   process.env.NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS ||
+  ""
+const STARKNET_ZK_PRIVACY_ROUTER_ADDRESS =
+  process.env.NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS ||
+  process.env.NEXT_PUBLIC_PRIVACY_ROUTER_ADDRESS ||
   ""
 const STARKGATE_ETH_BRIDGE_ADDRESS =
   process.env.NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS ||
@@ -178,7 +192,7 @@ const TOKEN_DECIMALS: Record<string, number> = {
 }
 
 const chainFromNetwork = (network: string) => {
-  const key = network.toLowerCase()
+  const key = network.trim().toLowerCase()
   if (key.includes("bitcoin")) return "bitcoin"
   if (key.includes("ethereum")) return "ethereum"
   if (key.includes("starknet")) return "starknet"
@@ -204,6 +218,124 @@ const normalizeFeltAddress = (value: string) => {
     return `0x${BigInt(trimmed).toString(16)}`
   } catch {
     return trimmed.toLowerCase()
+  }
+}
+
+const normalizeHexArray = (value: unknown): string[] => {
+  if (typeof value === "string") {
+    return value
+      .split(/[\n,]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+  }
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0)
+}
+
+const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
+  if (typeof window === "undefined") return undefined
+  const raw = window.localStorage.getItem(TRADE_PRIVACY_PAYLOAD_KEY)
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw) as PrivacyVerificationPayload & {
+      nullifiers?: unknown
+      commitments?: unknown
+    }
+    const proof = normalizeHexArray(parsed.proof)
+    const publicInputs = normalizeHexArray(parsed.public_inputs)
+    if (!proof.length || !publicInputs.length) return undefined
+    const nullifierCandidates = normalizeHexArray(parsed.nullifiers)
+    const commitmentCandidates = normalizeHexArray(parsed.commitments)
+    const nullifier = parsed.nullifier?.trim() || nullifierCandidates[0] || undefined
+    const commitment = parsed.commitment?.trim() || commitmentCandidates[0] || undefined
+    const isLikelyMockPayload =
+      proof.length === 1 &&
+      publicInputs.length === 1 &&
+      proof[0]?.toLowerCase() === "0x1" &&
+      publicInputs[0]?.toLowerCase() === "0x1"
+    if (isLikelyMockPayload) {
+      // Drop legacy/dev mock payload so hide-balance requires real proof input.
+      window.localStorage.removeItem(TRADE_PRIVACY_PAYLOAD_KEY)
+      return undefined
+    }
+    return {
+      verifier: (parsed.verifier || "garaga").trim() || "garaga",
+      nullifier,
+      commitment,
+      proof,
+      public_inputs: publicInputs,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(payload))
+  window.dispatchEvent(new Event("trade-privacy-payload-updated"))
+}
+
+const clearTradePrivacyPayload = () => {
+  if (typeof window === "undefined") return
+  window.localStorage.removeItem(TRADE_PRIVACY_PAYLOAD_KEY)
+  window.dispatchEvent(new Event("trade-privacy-payload-updated"))
+}
+
+const randomHexFelt = () => {
+  const bytes = new Uint8Array(16)
+  const cryptoApi =
+    typeof globalThis !== "undefined" && "crypto" in globalThis ? globalThis.crypto : undefined
+  if (cryptoApi?.getRandomValues) {
+    cryptoApi.getRandomValues(bytes)
+  } else {
+    const seed = `${Date.now()}-${Math.random()}`
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = seed.charCodeAt(i % seed.length) & 0xff
+    }
+  }
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+  const normalized = hex.replace(/^0+/, "") || "1"
+  return `0x${normalized}`
+}
+
+const createDevTradePrivacyPayload = (): PrivacyVerificationPayload => ({
+  verifier: "garaga",
+  nullifier: randomHexFelt(),
+  commitment: randomHexFelt(),
+  proof: ["0x1"],
+  public_inputs: ["0x1"],
+})
+
+const buildHideBalancePrivacyCall = (payload: PrivacyVerificationPayload) => {
+  const router = STARKNET_ZK_PRIVACY_ROUTER_ADDRESS.trim()
+  if (!router) {
+    throw new Error(
+      "NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS is not configured. On-chain Hide Balance swap requires privacy router address."
+    )
+  }
+  const nullifier = payload.nullifier?.trim() || ""
+  const commitment = payload.commitment?.trim() || ""
+  const proof = normalizeHexArray(payload.proof)
+  const publicInputs = normalizeHexArray(payload.public_inputs)
+  if (!nullifier || !commitment || !proof.length || !publicInputs.length) {
+    throw new Error(
+      "On-chain Hide Balance requires complete Garaga payload (nullifier, commitment, proof, public_inputs)."
+    )
+  }
+  return {
+    contractAddress: router,
+    entrypoint: "submit_private_action",
+    calldata: [
+      nullifier,
+      commitment,
+      String(proof.length),
+      ...proof,
+      String(publicInputs.length),
+      ...publicInputs,
+    ],
   }
 }
 
@@ -651,19 +783,20 @@ export function TradingInterface() {
         if (symbol === "USDT") {
           return wallet.onchainBalance.USDT ?? backendBalance
         }
-        if (symbol === "WBTC" || symbol === "BTC") {
-          const backendWbtcLike = Math.max(
-            backendBalance,
-            wallet.balance.WBTC ?? 0,
-            wallet.balance.BTC ?? 0
-          )
+        if (symbol === "WBTC") {
           if (
             typeof wallet.onchainBalance.WBTC === "number" &&
             Number.isFinite(wallet.onchainBalance.WBTC)
           ) {
-            return Math.max(wallet.onchainBalance.WBTC, backendWbtcLike)
+            return wallet.onchainBalance.WBTC
           }
-          return backendWbtcLike
+          if (
+            typeof wallet.balance.WBTC === "number" &&
+            Number.isFinite(wallet.balance.WBTC)
+          ) {
+            return wallet.balance.WBTC
+          }
+          return backendBalance
         }
       }
       if (symbol === "BTC" && chain === "bitcoin" && wallet.btcAddress) {
@@ -772,8 +905,13 @@ export function TradingInterface() {
   const [activeNft, setActiveNft] = React.useState<NFTItem | null>(null)
   const [stakePointsMultiplier, setStakePointsMultiplier] = React.useState(1)
   
-  // Privacy mode - ONLY for hiding balance in this module
+  // Unified privacy toggle: UI masking and on-chain hide-balance flow.
   const [balanceHidden, setBalanceHidden] = React.useState(false)
+  const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
+  const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
+  const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
+  // Unified toggle: when user hides balances, on-chain hide flow is expected as well.
+  const hideBalanceOnchain = balanceHidden
   
   // Settings state
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -789,6 +927,123 @@ export function TradingInterface() {
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
+  const refreshTradePrivacyPayload = React.useCallback(() => {
+    setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
+  }, [])
+  const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
+    if (autoPrivacyPayloadPromiseRef.current) {
+      return autoPrivacyPayloadPromiseRef.current
+    }
+
+    const task = (async () => {
+      if (DEV_AUTO_GARAGA_PAYLOAD_ENABLED) {
+        const generated = createDevTradePrivacyPayload()
+        persistTradePrivacyPayload(generated)
+        setHasTradePrivacyPayload(true)
+        notifications.addNotification({
+          type: "info",
+          title: "Dev Garaga payload generated",
+          message: "Payload mock dibuat otomatis untuk local test. Ganti ke proof real untuk testnet production.",
+        })
+        return generated
+      }
+
+      if (!wallet.isConnected) return undefined
+
+      setIsAutoPrivacyProvisioning(true)
+      try {
+        const response = await autoSubmitPrivacyAction({
+          verifier: "garaga",
+          submit_onchain: false,
+          tx_context: {
+            flow:
+              chainFromNetwork(fromToken.network) !== chainFromNetwork(toToken.network)
+                ? "bridge"
+                : "swap",
+            from_token: fromToken.symbol,
+            to_token: toToken.symbol,
+            amount: fromAmount,
+            recipient: receiveAddress || undefined,
+            from_network: fromToken.network,
+            to_network: toToken.network,
+          },
+        })
+        const payload: PrivacyVerificationPayload = {
+          verifier: (response.payload?.verifier || "garaga").trim() || "garaga",
+          nullifier: response.payload?.nullifier?.trim(),
+          commitment: response.payload?.commitment?.trim(),
+          proof: normalizeHexArray(response.payload?.proof),
+          public_inputs: normalizeHexArray(response.payload?.public_inputs),
+        }
+        const proof = normalizeHexArray(payload.proof)
+        const publicInputs = normalizeHexArray(payload.public_inputs)
+        if (!payload.nullifier || !payload.commitment || !proof.length || !publicInputs.length) {
+          throw new Error("Auto Garaga payload tidak lengkap dari backend.")
+        }
+        if (
+          proof.length === 1 &&
+          publicInputs.length === 1 &&
+          proof[0]?.toLowerCase() === "0x1" &&
+          publicInputs[0]?.toLowerCase() === "0x1"
+        ) {
+          throw new Error("Auto Garaga payload backend masih dummy (0x1).")
+        }
+
+        const normalizedPayload: PrivacyVerificationPayload = {
+          verifier: payload.verifier,
+          nullifier: payload.nullifier,
+          commitment: payload.commitment,
+          proof,
+          public_inputs: publicInputs,
+        }
+        persistTradePrivacyPayload(normalizedPayload)
+        setHasTradePrivacyPayload(true)
+        notifications.addNotification({
+          type: "success",
+          title: "Garaga payload ready",
+          message: "Payload Hide Balance berhasil disiapkan otomatis.",
+        })
+        if (response.tx_hash) {
+          notifications.addNotification({
+            type: "info",
+            title: "Privacy tx submitted",
+            message: `Privacy tx ${response.tx_hash.slice(0, 12)}...`,
+            txHash: response.tx_hash,
+            txNetwork: "starknet",
+          })
+        }
+        return normalizedPayload
+      } catch (error) {
+        notifications.addNotification({
+          type: "error",
+          title: "Auto Garaga payload failed",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Gagal menyiapkan payload Garaga otomatis.",
+        })
+        return undefined
+      } finally {
+        setIsAutoPrivacyProvisioning(false)
+      }
+    })()
+
+    autoPrivacyPayloadPromiseRef.current = task
+    try {
+      return await task
+    } finally {
+      autoPrivacyPayloadPromiseRef.current = null
+    }
+  }, [
+    fromAmount,
+    fromToken.network,
+    fromToken.symbol,
+    notifications,
+    receiveAddress,
+    toToken.network,
+    toToken.symbol,
+    wallet.isConnected,
+  ])
 
   const formatSource = (source?: string) => {
     switch (source) {
@@ -807,18 +1062,18 @@ export function TradingInterface() {
   const discountPercent = activeNft ? activeNft.discount : 0
   const hasNftDiscount = Boolean(activeNft)
 
-  // Detect cross-chain
-  const isCrossChain = fromToken.network !== toToken.network
+  // Detect cross-chain by normalized chain id (not raw label text).
   const sourceChain = chainFromNetwork(fromToken.network)
   const targetChain = chainFromNetwork(toToken.network)
+  const isCrossChain = sourceChain !== targetChain
   const fromSymbol = fromToken.symbol
   const toSymbol = toToken.symbol
   const fromNetwork = fromToken.network
   const toNetwork = toToken.network
   const fromPrice = fromToken.price
   const toPrice = toToken.price
-  const fromChain = chainFromNetwork(fromNetwork)
-  const toChain = chainFromNetwork(toNetwork)
+  const fromChain = sourceChain
+  const toChain = targetChain
   const btcVaultExplorerUrl = React.useMemo(() => {
     if (!BTC_VAULT_ADDRESS) return ""
     const base = BTC_TESTNET_EXPLORER_BASE_URL.replace(/\/$/, "")
@@ -864,6 +1119,18 @@ export function TradingInterface() {
       window.sessionStorage.setItem("xverse_user_id", xverseUserId)
     }
   }, [xverseUserId])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const syncPayload = () => refreshTradePrivacyPayload()
+    syncPayload()
+    window.addEventListener("focus", syncPayload)
+    window.addEventListener("trade-privacy-payload-updated", syncPayload)
+    return () => {
+      window.removeEventListener("focus", syncPayload)
+      window.removeEventListener("trade-privacy-payload-updated", syncPayload)
+    }
+  }, [refreshTradePrivacyPayload])
 
   React.useEffect(() => {
     let active = true
@@ -964,6 +1231,13 @@ export function TradingInterface() {
       setLiquidityMaxFromQuote(null)
       return
     }
+    if (!isCrossChain && fromSymbol.toUpperCase() === toSymbol.toUpperCase()) {
+      setToAmount(normalizeTokenAmountDisplay(fromAmount, toSymbol))
+      setQuote(null)
+      setQuoteError("Select a different destination token.")
+      setLiquidityMaxFromQuote(null)
+      return
+    }
     const slippageValue = Number(customSlippage || slippage || "0.5")
     const tradeMode = mevProtection ? "private" : "transparent"
     const quoteCacheKey = [
@@ -1016,18 +1290,11 @@ export function TradingInterface() {
       try {
         if (isCrossChain) {
           setLiquidityMaxFromQuote(null)
-          if (fromChain === "starknet" && toChain === "ethereum") {
-            setQuote(null)
-            setToAmount("")
-            setQuoteError(
-              "STRK/Starknet -> ETH Sepolia is not fully supported end-to-end yet. Use ETH Sepolia -> Starknet Sepolia."
-            )
-            return
-          }
           const response = await getBridgeQuote({
             from_chain: fromChain,
             to_chain: toChain,
             token: fromSymbol,
+            to_token: toSymbol,
             amount: fromAmount,
           })
           if (cancelled) return
@@ -1050,7 +1317,11 @@ export function TradingInterface() {
           const estimatedReceiveRaw = Number(response.estimated_receive || 0)
           const bridgeToSwapAmount = estimatedReceiveRaw * (1 - 0.003)
           const slippageFactor = 1 - slippageValue / 100
-          const shouldProjectCrossTokenAmount = fromSymbol !== toSymbol && toChain === "starknet"
+          const bridgeProviderKey = (response.bridge_provider || "").trim().toLowerCase()
+          const shouldProjectCrossTokenAmount =
+            fromSymbol !== toSymbol &&
+            toChain === "starknet" &&
+            bridgeProviderKey !== "garden"
           const bridgeConvertedAmount =
             shouldProjectCrossTokenAmount
               ? convertAmountByUsdPrice(
@@ -1080,6 +1351,15 @@ export function TradingInterface() {
             mevFee,
             estimatedTime: estimatedTimeLabel,
             provider: response.bridge_provider,
+            priceImpact:
+              amountValue > 0 && fromPrice > 0 && Number.parseFloat(displayToAmount || "0") > 0 && toPrice > 0
+                ? `${Math.max(
+                    0,
+                    ((amountValue * fromPrice - Number.parseFloat(displayToAmount || "0") * toPrice) /
+                      (amountValue * fromPrice)) *
+                      100
+                  ).toFixed(2)}%`
+                : undefined,
             bridgeSourceAmount: estimatedReceiveRaw,
             bridgeConvertedAmount: bridgeConvertedAmount ?? undefined,
           }
@@ -1222,8 +1502,14 @@ export function TradingInterface() {
   const hasQuote = Boolean(quote)
   const bridgeTokenMismatch = isCrossChain && fromToken.symbol !== toToken.symbol
   const tokenFeeDigits = ["BTC", "WBTC"].includes(fromToken.symbol.toUpperCase()) ? 8 : 6
-  const formatTokenFeeValue = (amount: number) =>
-    `${formatTokenAmount(Math.max(0, amount), tokenFeeDigits)} ${fromToken.symbol}`
+  const formatTokenFeeValue = (amount: number) => {
+    const safeAmount = Math.max(0, amount)
+    const minDisplayAmount = 10 ** -tokenFeeDigits
+    if (safeAmount > 0 && safeAmount < minDisplayAmount) {
+      return `< ${formatTokenAmount(minDisplayAmount, tokenFeeDigits)} ${fromToken.symbol}`
+    }
+    return `${formatTokenAmount(safeAmount, tokenFeeDigits)} ${fromToken.symbol}`
+  }
   const rawFeeAmount = hasQuote ? quote?.fee ?? 0 : null
   const feeUnit = quote?.feeUnit || (quote?.type === "bridge" ? "token" : "usd")
   const discountRate = hasNftDiscount ? Math.min(Math.max(discountPercent, 0), 100) / 100 : 0
@@ -1268,7 +1554,11 @@ export function TradingInterface() {
       ? "—"
       : feeUnit === "token"
       ? `${formatTokenFeeValue(feeAmount)}${
-          feeUsdAmount !== null && feeUsdAmount > 0 ? ` (~$${feeUsdAmount.toFixed(2)})` : ""
+          feeUsdAmount !== null && feeUsdAmount >= 0.01
+            ? ` (~$${feeUsdAmount.toFixed(2)})`
+            : feeUsdAmount !== null && feeUsdAmount > 0
+            ? " (~<$0.01)"
+            : ""
         }`
       : `$${(feeAmount ?? 0).toFixed(2)}`
   const protocolFeeDisplay =
@@ -1310,6 +1600,7 @@ export function TradingInterface() {
 
   const activeSlippage = customSlippage || slippage
   const routeLabel = isCrossChain ? (quote?.provider || "Bridge") : "Auto"
+  const isSameTokenSwapPair = !isCrossChain && fromSymbol.toUpperCase() === toSymbol.toUpperCase()
   const isBtcGardenRoute =
     isCrossChain &&
     fromChain === "bitcoin" &&
@@ -1365,7 +1656,7 @@ export function TradingInterface() {
   const hasPositiveAmount = Number.isFinite(fromAmountValue) && fromAmountValue > 0
   const shouldRequireLiveStarknetBalance =
     sourceChain === "starknet" &&
-    ["STRK", "CAREL", "USDC", "USDT", "WBTC", "BTC"].includes(fromToken.symbol.toUpperCase())
+    ["STRK", "CAREL", "USDC", "USDT", "WBTC"].includes(fromToken.symbol.toUpperCase())
   const fromTokenLiveBalance = (() => {
     const symbol = fromToken.symbol.toUpperCase()
     if (!shouldRequireLiveStarknetBalance) return null
@@ -1373,7 +1664,7 @@ export function TradingInterface() {
     if (symbol === "CAREL") return wallet.onchainBalance.CAREL
     if (symbol === "USDC") return wallet.onchainBalance.USDC
     if (symbol === "USDT") return wallet.onchainBalance.USDT
-    if (symbol === "WBTC" || symbol === "BTC") return wallet.onchainBalance.WBTC
+    if (symbol === "WBTC") return wallet.onchainBalance.WBTC
     return null
   })()
   const onchainBalanceUnavailable =
@@ -1426,6 +1717,8 @@ export function TradingInterface() {
       ? "Connect your wallet first."
       : !hasPositiveAmount
       ? "Enter a valid amount."
+      : isSameTokenSwapPair
+      ? "Select a different destination token."
       : onchainBalanceUnavailable && !hasFallbackPositiveBalance
       ? `On-chain ${fromToken.symbol} balance is not available yet. Wait for balance refresh.`
       : hasInsufficientBalance
@@ -1523,7 +1816,11 @@ export function TradingInterface() {
     }
   }, [notifications])
 
-  const submitOnchainSwapTx = React.useCallback(async () => {
+  const submitOnchainSwapTx = React.useCallback(
+    async (
+      privacyPayload?: PrivacyVerificationPayload,
+      hideBalanceForTx: boolean = hideBalanceOnchain
+    ) => {
     const fromChain = chainFromNetwork(fromToken.network)
     const toChain = chainFromNetwork(toToken.network)
     if (fromChain !== "starknet" || toChain !== "starknet") {
@@ -1536,11 +1833,79 @@ export function TradingInterface() {
         "Current swap contract is event-only and does not move real tokens yet. Enable/deploy the real swap router first."
       )
     }
-    const preparedCalls = quote?.type === "swap" ? quote.onchainCalls || [] : []
+    let preparedCalls = quote?.type === "swap" ? quote.onchainCalls || [] : []
     if (!preparedCalls.length) {
-      throw new Error(
-        "Swap quote does not include on-chain calldata yet. Refresh quote and try again."
+      const slippageValue = Number(activeSlippage || "0.5")
+      const refreshedQuote = await getSwapQuote({
+        from_token: fromToken.symbol,
+        to_token: toToken.symbol,
+        amount: fromAmount,
+        slippage: Number.isFinite(slippageValue) && slippageValue >= 0 ? slippageValue : 0.5,
+        mode: mevProtection ? "private" : "transparent",
+      })
+      const refreshedCalls =
+        Array.isArray(refreshedQuote.onchain_calls) && refreshedQuote.onchain_calls.length > 0
+          ? refreshedQuote.onchain_calls
+              .filter((call) => {
+                return (
+                  call &&
+                  typeof call.contract_address === "string" &&
+                  typeof call.entrypoint === "string" &&
+                  Array.isArray(call.calldata)
+                )
+              })
+              .map((call) => ({
+                contractAddress: call.contract_address.trim(),
+                entrypoint: call.entrypoint.trim(),
+                calldata: call.calldata.map((item) => String(item)),
+              }))
+              .filter(
+                (call) =>
+                  !!call.contractAddress &&
+                  !!call.entrypoint &&
+                  call.calldata.every((item) => typeof item === "string" && item.trim().length > 0)
+              )
+          : []
+      if (!refreshedCalls.length) {
+        throw new Error(
+          "Swap quote does not include on-chain calldata yet. Refresh quote and try again."
+        )
+      }
+      preparedCalls = refreshedCalls
+      setQuote((prev) =>
+        prev && prev.type === "swap"
+          ? {
+              ...prev,
+              onchainCalls: refreshedCalls,
+            }
+          : prev
       )
+    }
+
+    if (hideBalanceForTx) {
+      const resolvedPayload = privacyPayload || (await resolveHideBalancePrivacyPayload())
+      if (!resolvedPayload) {
+        throw new Error(
+          "Garaga payload belum siap untuk Hide Balance. Coba lagi, atau cek backend auto-proof config."
+        )
+      }
+      const hasPrivacyCall = preparedCalls.some(
+        (call) =>
+          call.entrypoint === "submit_private_action" &&
+          isSameFeltAddress(call.contractAddress, STARKNET_ZK_PRIVACY_ROUTER_ADDRESS)
+      )
+      if (!hasPrivacyCall) {
+        const privacyCall = buildHideBalancePrivacyCall(resolvedPayload)
+        preparedCalls = [privacyCall, ...preparedCalls]
+      }
+    }
+
+    if (process.env.NODE_ENV !== "production") {
+      notifications.addNotification({
+        type: "info",
+        title: "Prepared Starknet calls",
+        message: preparedCalls.map((call) => call.entrypoint).join(" -> "),
+      })
     }
 
     return invokeStarknetCallsFromWallet(
@@ -1551,13 +1916,23 @@ export function TradingInterface() {
       })),
       starknetProviderHint
     )
-  }, [
-    fromToken.network,
-    isSwapContractEventOnly,
-    quote,
-    starknetProviderHint,
-    toToken.network,
-  ])
+    },
+    [
+      activeSlippage,
+      fromAmount,
+      fromToken.network,
+      fromToken.symbol,
+      hideBalanceOnchain,
+      isSwapContractEventOnly,
+      mevProtection,
+      notifications,
+      quote,
+      starknetProviderHint,
+      toToken.network,
+      toToken.symbol,
+      resolveHideBalancePrivacyPayload,
+    ]
+  )
 
   const submitOnchainBridgeTx = React.useCallback(async () => {
     const fromChain = chainFromNetwork(fromToken.network)
@@ -1613,6 +1988,7 @@ export function TradingInterface() {
             from_chain: chainFromNetwork(fromToken.network),
             to_chain: chainFromNetwork(toToken.network),
             token: fromToken.symbol,
+            to_token: toToken.symbol,
             amount: fromAmount,
           })
 
@@ -1917,8 +2293,27 @@ export function TradingInterface() {
     setSwapState("confirming")
     setSwapState("processing")
     let tradeFinalized = true
+    let submittedSwapTxHash: string | null = null
+    const requestedHideBalance = hideBalanceOnchain
+    const tradePrivacyPayload = requestedHideBalance
+      ? await resolveHideBalancePrivacyPayload()
+      : undefined
+    const effectiveHideBalance = requestedHideBalance && !!tradePrivacyPayload
 
     try {
+      if (requestedHideBalance && !tradePrivacyPayload) {
+        if (!HIDE_BALANCE_FALLBACK_TO_PUBLIC_ENABLED) {
+          throw new Error(
+            "Garaga payload belum siap untuk Hide Balance. Cek konfigurasi auto-proof backend lalu coba lagi."
+          )
+        }
+        notifications.addNotification({
+          type: "warning",
+          title: "Hide Balance unavailable",
+          message:
+            "Proof belum siap. Transaksi dilanjutkan dalam mode publik supaya tidak blok user.",
+        })
+      }
       if (isCrossChain) {
         const recipient = (receiveAddress || preferredReceiveAddress).trim()
         const sourceChain = chainFromNetwork(fromToken.network)
@@ -1926,17 +2321,47 @@ export function TradingInterface() {
         const xverseHint = xverseUserId.trim() || undefined
         const recipientFallbackFromXverse =
           toChain === "bitcoin" && !recipient ? xverseHint : undefined
+        let sourceOwner =
+          sourceChain === "ethereum"
+            ? wallet.evmAddress || undefined
+            : sourceChain === "starknet"
+            ? wallet.starknetAddress || wallet.address || undefined
+            : sourceChain === "bitcoin"
+            ? wallet.btcAddress || undefined
+            : undefined
+        if (sourceChain === "ethereum") {
+          sourceOwner = await getConnectedEvmAddressFromWallet()
+        }
         if (!recipient && !recipientFallbackFromXverse) {
           throw new Error(`Recipient ${toChain} address is required.`)
         }
 
         const isSourceBitcoin = sourceChain === "bitcoin"
+        const isGardenProvider = ((quote?.provider || "").trim().toLowerCase() === "garden")
+        const isGardenSourceSigningFlow =
+          isGardenProvider && (sourceChain === "ethereum" || sourceChain === "starknet")
         const txNetwork: "btc" | "evm" | "starknet" =
           sourceChain === "ethereum" ? "evm" : sourceChain === "bitcoin" ? "btc" : "starknet"
+        const bridgePayloadBase = {
+          from_chain: sourceChain,
+          to_chain: toChain,
+          token: fromToken.symbol,
+          to_token: toToken.symbol,
+          estimated_out_amount: quote?.toAmount || toAmount || undefined,
+          amount: fromAmount,
+          recipient,
+          source_owner: sourceOwner,
+          xverse_user_id:
+            sourceChain === "bitcoin" || toChain === "bitcoin" ? xverseHint : undefined,
+          mode: mevProtection ? "private" : "transparent",
+          hide_balance: effectiveHideBalance,
+          privacy: effectiveHideBalance ? tradePrivacyPayload : undefined,
+        }
         let onchainTxHash: string | null = null
         let btcDepositTxHash: string | null = null
         let btcAutoSendAttempted = false
         let btcAutoSendSucceeded = false
+        let response: Awaited<ReturnType<typeof executeBridge>>
 
         if (isSourceBitcoin) {
           notifications.addNotification({
@@ -1944,6 +2369,78 @@ export function TradingInterface() {
             title: "Create BTC bridge order",
             message:
               "Submitting Garden order. After the order is created, send BTC to the provided deposit address.",
+          })
+          response = await executeBridge(bridgePayloadBase)
+        } else if (isGardenSourceSigningFlow) {
+          notifications.addNotification({
+            type: "info",
+            title: "Create Garden order",
+            message: "Creating order and preparing source-chain transaction for wallet signature.",
+          })
+          const createOrderResponse = await executeBridge(bridgePayloadBase)
+          const orderId = (createOrderResponse.bridge_id || "").trim()
+          if (!orderId) {
+            throw new Error("Garden order id is missing. Please retry bridge creation.")
+          }
+
+          if (sourceChain === "ethereum") {
+            notifications.addNotification({
+              type: "info",
+              title: "Wallet signature required",
+              message: "Confirm Garden source transaction in MetaMask.",
+            })
+            if (createOrderResponse.evm_approval_transaction) {
+              await sendEvmTransactionFromWallet(createOrderResponse.evm_approval_transaction)
+            }
+            if (!createOrderResponse.evm_initiate_transaction) {
+              throw new Error("Garden initiate transaction is missing for Ethereum source flow.")
+            }
+            onchainTxHash = await sendEvmTransactionFromWallet(
+              createOrderResponse.evm_initiate_transaction
+            )
+          } else {
+            notifications.addNotification({
+              type: "info",
+              title: "Wallet signature required",
+              message: "Confirm Garden source transaction in your Starknet wallet.",
+            })
+            const starknetCalls: Array<{
+              contractAddress: string
+              entrypoint: string
+              calldata: string[]
+            }> = []
+            if (createOrderResponse.starknet_approval_transaction) {
+              starknetCalls.push({
+                contractAddress: createOrderResponse.starknet_approval_transaction.to,
+                entrypoint: createOrderResponse.starknet_approval_transaction.selector,
+                calldata: createOrderResponse.starknet_approval_transaction.calldata || [],
+              })
+            }
+            if (createOrderResponse.starknet_initiate_transaction) {
+              starknetCalls.push({
+                contractAddress: createOrderResponse.starknet_initiate_transaction.to,
+                entrypoint: createOrderResponse.starknet_initiate_transaction.selector,
+                calldata: createOrderResponse.starknet_initiate_transaction.calldata || [],
+              })
+            }
+            if (!starknetCalls.length) {
+              throw new Error("Garden initiate transaction is missing for Starknet source flow.")
+            }
+            onchainTxHash = await invokeStarknetCallsFromWallet(starknetCalls, starknetProviderHint)
+          }
+
+          notifications.addNotification({
+            type: "info",
+            title: "Bridge pending",
+            message: `Bridge ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+            txHash: onchainTxHash,
+            txNetwork,
+          })
+
+          response = await executeBridge({
+            ...bridgePayloadBase,
+            existing_bridge_id: orderId,
+            onchain_tx_hash: onchainTxHash || undefined,
           })
         } else {
           notifications.addNotification({
@@ -1962,24 +2459,23 @@ export function TradingInterface() {
             txHash: onchainTxHash,
             txNetwork,
           })
+          response = await executeBridge({
+            ...bridgePayloadBase,
+            onchain_tx_hash: onchainTxHash || undefined,
+          })
         }
-
-        const response = await executeBridge({
-          from_chain: sourceChain,
-          to_chain: toChain,
-          token: fromToken.symbol,
-          to_token: toToken.symbol,
-          estimated_out_amount: quote?.toAmount || toAmount || undefined,
-          amount: fromAmount,
-          recipient,
-          xverse_user_id:
-            sourceChain === "bitcoin" || toChain === "bitcoin" ? xverseHint : undefined,
-          onchain_tx_hash: onchainTxHash || undefined,
-          mode: mevProtection ? "private" : "transparent",
-        })
         const normalizedStatus = (response.status || "").toLowerCase()
         const isBridgeFinalized = normalizedStatus === "completed" || normalizedStatus === "success"
         tradeFinalized = isBridgeFinalized
+        if (response.privacy_tx_hash) {
+          notifications.addNotification({
+            type: "info",
+            title: "Garaga verification submitted",
+            message: `Privacy tx ${response.privacy_tx_hash.slice(0, 12)}... was submitted on Starknet.`,
+            txHash: response.privacy_tx_hash,
+            txNetwork: "starknet",
+          })
+        }
 
         if (sourceChain === "bitcoin" && response.deposit_address) {
           const parsedAmountSats = Number.parseInt(String(response.deposit_amount || "0"), 10)
@@ -2069,7 +2565,6 @@ export function TradingInterface() {
           })
         }
 
-        const isGardenProvider = ((quote?.provider || "").trim().toLowerCase() === "garden")
         if (!isBridgeFinalized && isGardenProvider && response.bridge_id && sourceChain !== "bitcoin") {
           void pollGardenBridgeOrder(response.bridge_id, toChain)
         }
@@ -2079,7 +2574,7 @@ export function TradingInterface() {
             title: isBridgeFinalized ? "Bridge completed" : "Bridge submitted",
             message: isBridgeFinalized
               ? `Bridge ${fromAmount} ${fromToken.symbol} to ${toToken.symbol} completed.`
-              : `Bridge ${fromAmount} ${fromToken.symbol} is still processing settlement to Starknet (~5-20 min).`,
+              : `Bridge ${fromAmount} ${fromToken.symbol} is still processing settlement to ${toToken.network}.`,
             txHash: onchainTxHash || undefined,
             txNetwork,
           })
@@ -2107,7 +2602,8 @@ export function TradingInterface() {
           title: "Wallet signature required",
           message: "Confirm swap transaction in your Starknet wallet.",
         })
-        const onchainTxHash = await submitOnchainSwapTx()
+        const onchainTxHash = await submitOnchainSwapTx(tradePrivacyPayload, effectiveHideBalance)
+        submittedSwapTxHash = onchainTxHash
 
         notifications.addNotification({
           type: "info",
@@ -2128,6 +2624,8 @@ export function TradingInterface() {
           recipient,
           onchain_tx_hash: onchainTxHash || undefined,
           mode: mevProtection ? "private" : "transparent",
+          hide_balance: effectiveHideBalance,
+          privacy: effectiveHideBalance ? tradePrivacyPayload : undefined,
         })
         notifications.addNotification({
           type: "success",
@@ -2136,6 +2634,15 @@ export function TradingInterface() {
           txHash: onchainTxHash,
           txNetwork: "starknet",
         })
+        if (response.privacy_tx_hash) {
+          notifications.addNotification({
+            type: "info",
+            title: "Garaga verification submitted",
+            message: `Privacy tx ${response.privacy_tx_hash.slice(0, 12)}... was submitted on Starknet.`,
+            txHash: response.privacy_tx_hash,
+            txNetwork: "starknet",
+          })
+        }
       }
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       const [nftState, rewardsState] = await Promise.allSettled([
@@ -2169,6 +2676,24 @@ export function TradingInterface() {
             "We could not resolve your BTC address. Check the Xverse User ID (if used) or enter a receive address manually.",
         })
       }
+      const timeoutCode =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code || "").toUpperCase()
+          : ""
+      const isTimeoutError =
+        timeoutCode === "TIMEOUT" ||
+        (error instanceof Error && error.message.toLowerCase().includes("timeout"))
+      if (!isCrossChain && submittedSwapTxHash && isTimeoutError) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Swap still processing",
+          message: `Swap sudah submit on-chain (${submittedSwapTxHash.slice(0, 10)}...), tapi respons backend timeout. Cek explorer atau riwayat transaksi.`,
+          txHash: submittedSwapTxHash,
+          txNetwork: "starknet",
+        })
+        setSwapState("success")
+        return
+      }
       notifications.addNotification({
         type: "error",
         title: "Trade failed",
@@ -2176,6 +2701,10 @@ export function TradingInterface() {
       })
       setSwapState("error")
     } finally {
+      if (hideBalanceOnchain) {
+        clearTradePrivacyPayload()
+        setHasTradePrivacyPayload(false)
+      }
       setTimeout(() => {
         setSwapState("idle")
       }, 2500)
@@ -2202,16 +2731,37 @@ export function TradingInterface() {
             <span className="text-[10px] text-muted-foreground">
               WS: {priceStatus.websocket}
             </span>
-            {/* Privacy Mode - Eye Icon to hide/show balance */}
+            {/* Visual privacy - eye icon hides/shows displayed balances only */}
             <button 
-              onClick={() => setBalanceHidden(!balanceHidden)}
-              className="p-2 rounded-lg hover:bg-surface/50 transition-colors group"
-              title={balanceHidden ? "Show balances" : "Hide balances"}
+              onClick={() => {
+                const next = !balanceHidden
+                setBalanceHidden(next)
+                if (next) {
+                  clearTradePrivacyPayload()
+                  void resolveHideBalancePrivacyPayload()
+                }
+                refreshTradePrivacyPayload()
+              }}
+              className={cn(
+                "p-2 rounded-lg transition-colors group border",
+                !balanceHidden
+                  ? "border-border text-muted-foreground hover:bg-surface/50"
+                  : hasTradePrivacyPayload
+                  ? "bg-primary/20 border-primary/50 text-primary"
+                  : "bg-warning/10 border-warning/40 text-warning hover:bg-warning/20"
+              )}
+              title={
+                !balanceHidden
+                  ? "Hide balances"
+                  : hasTradePrivacyPayload
+                  ? "Show balances (on-chain hide active)"
+                  : "Show balances (Garaga payload will be prepared automatically)"
+              }
             >
               {balanceHidden ? (
-                <EyeOff className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
+                <EyeOff className="h-4 w-4" />
               ) : (
-                <Eye className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
+                <Eye className="h-4 w-4" />
               )}
             </button>
           </div>
@@ -2342,6 +2892,22 @@ export function TradingInterface() {
               <p className="text-xs text-muted-foreground">
                 Aktif hanya di Private Mode. Saat mode biasa, selalu Disabled.
               </p>
+            )}
+
+            {hideBalanceOnchain && (
+              hasTradePrivacyPayload ? (
+                <p className="text-xs text-warning">
+                  On-chain Hide Balance aktif (ikon mata kanan atas).
+                </p>
+              ) : (
+                <p className="text-xs text-warning">
+                  {isAutoPrivacyProvisioning
+                    ? "Menyiapkan payload Garaga otomatis..."
+                    : DEV_AUTO_GARAGA_PAYLOAD_ENABLED
+                    ? "Hide Balance aktif. Sistem akan auto-generate payload mock (dev mode) saat execute."
+                    : "Hide Balance aktif. Sistem akan menyiapkan payload Garaga otomatis saat Execute Trade."}
+                </p>
+              )
             )}
 
             {/* Slippage Tolerance */}

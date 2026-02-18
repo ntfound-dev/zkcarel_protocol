@@ -144,6 +144,7 @@ pub struct BridgeQuoteRequest {
     pub from_chain: String,
     pub to_chain: String,
     pub token: String,
+    pub to_token: Option<String>,
     pub amount: String,
 }
 

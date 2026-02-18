@@ -84,6 +84,10 @@ Optional (defaults apply if empty):
 - `SUMO_LOGIN_API_KEY`, `SUMO_LOGIN_API_URL`
 - `XVERSE_API_KEY`, `XVERSE_API_URL`
 - `PRIVACY_VERIFIER_ROUTERS` (map verifier -> router address)
+- `PRIVACY_AUTO_GARAGA_PROVER_CMD` (wajib; prover bridge command per-request, baca JSON dari stdin, output JSON berisi `nullifier`, `commitment`, `proof[]`, `public_inputs[]`)
+- `PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS` (timeout command prover, default `45000`)
+- `GARAGA_PROVE_CMD` (wajib; command prover real yang dijalankan oleh script bridge per request)
+- `GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX` + `GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX` (default `0` + `1`, harus match urutan public input circuit)
 - `SOCIAL_TASKS_JSON` (dynamic social task catalog tanpa ubah frontend)
   Example:
   ```json
@@ -104,6 +108,45 @@ Optional (defaults apply if empty):
 
 Testnet template:
 - Copy `.env.testnet.example` and fill deployed contract addresses + keys.
+- Hide Balance supports 2 modes:
+  - Dev shared mode: team pakai `garaga_payload.json` + dynamic binding (mudah dipakai semua developer).
+  - Strict production mode: prover real per-request (tanpa fallback static payload).
+
+One-click auto prover command (dev shared mode):
+```bash
+# backend-rust/.env
+PRIVACY_AUTO_GARAGA_PROVER_CMD="python3 scripts/garaga_auto_prover.py"
+PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS=45000
+GARAGA_PRECOMPUTED_PAYLOAD_PATH=garaga_payload.json
+GARAGA_DYNAMIC_BINDING=true
+GARAGA_PROVE_CMD=
+GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX=0
+GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX=1
+```
+
+One-click auto prover command (strict real per-request mode):
+```bash
+# backend-rust/.env
+PRIVACY_AUTO_GARAGA_PROVER_CMD="python3 scripts/garaga_auto_prover.py"
+PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS=45000
+
+# Script input/output paths
+GARAGA_VK_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_vk_bls12381.json
+GARAGA_PROOF_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_proof_bls12381.json
+GARAGA_PUBLIC_INPUTS_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_public_bls12381.json
+GARAGA_PROVE_CMD="python3 /abs/path/to/your_real_prover.py"
+GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX=0
+GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX=1
+```
+`GARAGA_PROVE_CMD` menerima env:
+- `GARAGA_CONTEXT_PATH` (JSON context request dari frontend/backend)
+- `GARAGA_PROOF_PATH`
+- `GARAGA_PUBLIC_INPUTS_PATH`
+- `GARAGA_OUTPUT_DIR`
+
+Contract expectation (router strict check):
+- `public_inputs[0] == nullifier`
+- `public_inputs[1] == commitment`
 
 **Run Locally**
 1. Start PostgreSQL + Redis (system services) or use docker-compose.
@@ -114,6 +157,15 @@ cd backend-rust
 cargo run
 ```
 Migrations run automatically at startup.
+
+**Quick Start (from repo root)**
+```bash
+./scripts/quick-start.sh
+```
+Stop:
+```bash
+./scripts/quick-stop.sh
+```
 
 **Local Dev Without Docker (Recommended for low‑spec PC)**
 Start services:
@@ -185,9 +237,15 @@ docker compose up --build backend postgres redis
 - Orders: `POST /api/v1/limit-order/create`, `GET /api/v1/limit-order/list`
 - Social: `GET /api/v1/social/tasks`, `POST /api/v1/social/verify`
 - Admin manual: `POST /api/v1/admin/points/reset` (header `x-admin-key`)
-- AI: `POST /api/v1/ai/execute`, `GET /api/v1/ai/pending`
+- AI:
+  - `GET /api/v1/ai/config` (runtime config untuk frontend: apakah executor terkonfigurasi + alamat executor)
+  - `POST /api/v1/ai/prepare-action`
+  - `POST /api/v1/ai/execute`
+  - `GET /api/v1/ai/pending`
 - Webhook: `POST /api/v1/webhooks/register`
-- Privacy: `POST /api/v1/privacy/submit` (auto‑detects V1 `ZkPrivacyRouter` vs V2 `PrivacyRouter`)
+- Privacy:
+  - `POST /api/v1/privacy/submit` (manual submit payload)
+  - `POST /api/v1/privacy/auto-submit` (auto-prepare payload dari file config backend, opsional auto submit on-chain)
 - Private BTC swap: `POST /api/v1/private-btc-swap/initiate`, `POST /api/v1/private-btc-swap/finalize`
 - Dark pool: `POST /api/v1/dark-pool/order`, `POST /api/v1/dark-pool/match`
 - Private payments: `POST /api/v1/private-payments/submit`, `POST /api/v1/private-payments/finalize`
@@ -212,6 +270,11 @@ docker compose up --build backend postgres redis
 - Rewards conversion (`/api/v1/rewards/convert`) uses on-chain `PointStorage.convert_points_to_carel(...)` when `POINT_STORAGE_ADDRESS` is configured.
 - Event indexer reads contract addresses from `.env` and skips placeholder `0x0000...` entries. Populate `BRIDGE_AGGREGATOR_ADDRESS`, `SNAPSHOT_DISTRIBUTOR_ADDRESS`, `LIMIT_ORDER_BOOK_ADDRESS`, plus optional `STAKING_CAREL_ADDRESS`/`REFERRAL_SYSTEM_ADDRESS` to enable indexing.
 - Private flow supports verifier selector per request: `garaga|tongo|semaphore`. If omitted, default is `garaga`.
+- Hide Balance auto-flow:
+  - frontend bisa minta payload ke `POST /api/v1/privacy/auto-submit`,
+  - backend prioritas jalankan `PRIVACY_AUTO_GARAGA_PROVER_CMD` (jika di-set),
+  - fallback ke file payload real (bukan `0x1`) dari env `PRIVACY_AUTO_GARAGA_*`,
+  - payload dikembalikan ke frontend untuk dipakai di call `submit_private_action` saat execute swap/bridge.
 - Bridge flow validates on-chain tx hash receipt for source Starknet/Ethereum. Source BTC native (Garden order-first) can proceed without user tx hash at submit time.
 - AI assistant:
   - level 1: free,
@@ -219,6 +282,9 @@ docker compose up --build backend postgres redis
   - level 3: 2 CAREL,
   - fee level 2/3 diproses on-chain lewat `AIExecutor.submit_action(...)`,
   - kontrak AI executor saat ini menarik fee lalu `burn(fee)` CAREL.
+- Frontend dapat auto-resolve executor address via endpoint `GET /api/v1/ai/config`.
+  - Jika `AI_EXECUTOR_ADDRESS` kosong/placeholder (`0x0000...`), endpoint akan menandai `executor_configured=false`.
+  - Ini dipakai UI untuk menampilkan error setup yang lebih jelas sebelum user submit action on-chain.
 - AI action guard per level aktif:
   - level 1 hanya read-only query (price/balance/points/market),
   - level 2 hanya swap/bridge,

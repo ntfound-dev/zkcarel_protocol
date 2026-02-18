@@ -1,12 +1,10 @@
 use super::{require_starknet_user, require_user, AppState};
-use crate::services::onchain::{
-    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
-};
+use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader};
 use crate::services::privacy_verifier::{
-    parse_privacy_verifier_kind, resolve_privacy_router_for_verifier, PrivacyVerifierKind,
+    parse_privacy_verifier_kind, resolve_privacy_router_for_verifier,
 };
 use crate::{
-    constants::{token_address_for, CONTRACT_SWAP_AGGREGATOR, DEX_EKUBO, DEX_HAIKO},
+    constants::{token_address_for, DEX_EKUBO, DEX_HAIKO},
     // 1. IMPORT MODUL HASH AGAR TERPAKAI
     crypto::hash,
     error::{AppError, Result},
@@ -20,10 +18,9 @@ use crate::{
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use starknet_core::types::{
-    Call, ExecutionResult, Felt, FunctionCall, InvokeTransaction, Transaction,
-    TransactionFinalityStatus,
+    ExecutionResult, Felt, FunctionCall, InvokeTransaction, Transaction, TransactionFinalityStatus,
 };
-use starknet_core::utils::get_selector_from_name;
+use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -114,10 +111,48 @@ pub struct ExecuteSwapResponse {
     pub to_amount: String,
     pub actual_rate: String,
     pub fee_paid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy_tx_hash: Option<String>,
 }
 
 fn is_deadline_valid(deadline: i64, now: i64) -> bool {
     deadline >= now
+}
+
+async fn invalidate_cached_nft_discount(contract: &str, user: &str) {
+    let key = nft_discount_cache_key(contract, user);
+    let cache = nft_discount_cache();
+    let mut guard = cache.write().await;
+    guard.remove(&key);
+}
+
+async fn has_remaining_nft_usage(
+    reader: &OnchainReader,
+    contract_address: Felt,
+    user_felt: Felt,
+) -> Result<bool> {
+    let storage_key = get_storage_var_address("user_nft", &[user_felt])
+        .map_err(|e| AppError::Internal(format!("Storage key resolution error: {}", e)))?;
+    let token_raw = reader.get_storage_at(contract_address, storage_key).await?;
+    let token_id = felt_to_u128(&token_raw).unwrap_or(0);
+    if token_id == 0 {
+        return Ok(false);
+    }
+
+    let info_call = FunctionCall {
+        contract_address,
+        entry_point_selector: get_selector_from_name("get_nft_info")
+            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?,
+        calldata: vec![Felt::from(token_id), Felt::from(0_u8)],
+    };
+    let info = reader.call(info_call).await?;
+    if info.len() < 7 {
+        return Ok(false);
+    }
+
+    let max_usage = u256_from_felts(&info[3], &info[4]).unwrap_or(0);
+    let used_in_period = u256_from_felts(&info[5], &info[6]).unwrap_or(0);
+    Ok(max_usage > 0 && used_in_period < max_usage)
 }
 
 fn base_fee(amount_in: f64) -> f64 {
@@ -125,7 +160,7 @@ fn base_fee(amount_in: f64) -> f64 {
 }
 
 fn mev_fee_for_mode(mode: &str, amount_in: f64) -> f64 {
-    if mode == "private" {
+    if mode.eq_ignore_ascii_case("private") {
         amount_in * 0.01
     } else {
         0.0
@@ -154,7 +189,14 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
     if let Some(cached) =
         get_cached_nft_discount(&cache_key, Duration::from_secs(NFT_DISCOUNT_CACHE_TTL_SECS)).await
     {
-        return cached.clamp(0.0, 100.0);
+        if cached <= 0.0 {
+            return 0.0;
+        }
+        tracing::debug!(
+            "Ignoring positive NFT discount cache in swap for strict usage revalidation user={} cached={}",
+            user_address,
+            cached
+        );
     }
 
     let reader = match OnchainReader::from_config(&state.config) {
@@ -164,19 +206,6 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
                 "Failed to initialize on-chain reader for NFT discount in swap: {}",
                 err
             );
-            if let Some(stale) = get_cached_nft_discount(
-                &cache_key,
-                Duration::from_secs(NFT_DISCOUNT_CACHE_STALE_SECS),
-            )
-            .await
-            {
-                tracing::debug!(
-                    "Using stale NFT discount cache in swap for user={} discount={}",
-                    user_address,
-                    stale
-                );
-                return stale.clamp(0.0, 100.0);
-            }
             return 0.0;
         }
     };
@@ -233,19 +262,6 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
                 user_address,
                 err
             );
-            if let Some(stale) = get_cached_nft_discount(
-                &cache_key,
-                Duration::from_secs(NFT_DISCOUNT_CACHE_STALE_SECS),
-            )
-            .await
-            {
-                tracing::debug!(
-                    "Using stale NFT discount cache in swap for user={} discount={}",
-                    user_address,
-                    stale
-                );
-                return stale.clamp(0.0, 100.0);
-            }
             return 0.0;
         }
         Err(_) => {
@@ -253,19 +269,6 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
                 "Timeout on-chain NFT discount check in swap for user={}",
                 user_address
             );
-            if let Some(stale) = get_cached_nft_discount(
-                &cache_key,
-                Duration::from_secs(NFT_DISCOUNT_CACHE_STALE_SECS),
-            )
-            .await
-            {
-                tracing::debug!(
-                    "Using stale NFT discount cache in swap for user={} discount={}",
-                    user_address,
-                    stale
-                );
-                return stale.clamp(0.0, 100.0);
-            }
             return 0.0;
         }
     };
@@ -276,6 +279,38 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
 
     let is_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
     if !is_active {
+        cache_nft_discount(&cache_key, 0.0).await;
+        return 0.0;
+    }
+
+    let has_remaining_usage = match timeout(
+        Duration::from_millis(ONCHAIN_DISCOUNT_TIMEOUT_MS),
+        has_remaining_nft_usage(&reader, contract_address, user_felt),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "Failed to validate NFT usage window in swap for user={}: {}",
+                user_address,
+                err
+            );
+            return 0.0;
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Timeout while validating NFT usage window in swap for user={}",
+                user_address
+            );
+            return 0.0;
+        }
+    };
+    if !has_remaining_usage {
+        tracing::info!(
+            "NFT discount exhausted or unavailable in swap for user={}",
+            user_address
+        );
         cache_nft_discount(&cache_key, 0.0).await;
         return 0.0;
     }
@@ -297,8 +332,8 @@ fn normalize_usd_volume(usd_in: f64, usd_out: f64) -> f64 {
     }
 }
 
-fn is_private_trade(mode: &str, hide_balance: bool) -> bool {
-    hide_balance || mode.eq_ignore_ascii_case("private")
+fn should_run_privacy_verification(hide_balance: bool) -> bool {
+    hide_balance
 }
 
 fn fallback_price_for(token: &str) -> f64 {
@@ -463,6 +498,45 @@ fn felt_hex(value: Felt) -> String {
     value.to_string()
 }
 
+fn felt_debug(value: Felt) -> String {
+    format!("{} ({:#x})", value, value)
+}
+
+fn is_transient_starknet_route_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("error sending request")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("gateway")
+        || lower.contains("temporarily unavailable")
+}
+
+async fn call_swap_route_with_retry(
+    reader: &OnchainReader,
+    call: FunctionCall,
+) -> Result<Vec<Felt>> {
+    let mut last_error: Option<AppError> = None;
+    for attempt in 0..3 {
+        match reader.call(call.clone()).await {
+            Ok(raw) => return Ok(raw),
+            Err(err) => {
+                let message = err.to_string();
+                let transient = is_transient_starknet_route_error(&message);
+                last_error = Some(err);
+                if transient && attempt < 2 {
+                    sleep(Duration::from_millis(350 * (attempt as u64 + 1))).await;
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| AppError::BadRequest("Failed to call Starknet swap route".to_string())))
+}
+
 fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     let raw = felt_to_u128(value).map_err(|_| {
         AppError::BadRequest(format!(
@@ -591,15 +665,11 @@ fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     parse_execute_calls_inline(calldata)
 }
 
-fn configured_swap_contract(state: &AppState) -> Result<Option<Felt>> {
+fn configured_swap_contract(_state: &AppState) -> Result<Option<Felt>> {
     let mut candidates = vec![
         std::env::var("STARKNET_SWAP_CONTRACT_ADDRESS").ok(),
-        std::env::var("NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS").ok(),
         std::env::var("SWAP_AGGREGATOR_ADDRESS").ok(),
-        std::env::var("CAREL_PROTOCOL_ADDRESS").ok(),
-        std::env::var("NEXT_PUBLIC_CAREL_PROTOCOL_ADDRESS").ok(),
-        Some(state.config.limit_order_book_address.clone()),
-        Some(CONTRACT_SWAP_AGGREGATOR.to_string()),
+        std::env::var("NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS").ok(),
     ];
     for candidate in candidates.drain(..).flatten() {
         let trimmed = candidate.trim();
@@ -727,13 +797,11 @@ fn configured_token_candidates(state: &AppState, token: &str) -> Vec<Felt> {
     candidates
 }
 
-fn resolve_primary_token_address(state: &AppState, token: &str) -> Result<Felt> {
-    configured_token_candidates(state, token)
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            AppError::BadRequest(format!("Token address is not configured for {}", token))
-        })
+fn is_no_active_dex_found_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("no active dex found")
+        || message.contains("no active dex")
+        || message.contains("dex not active")
 }
 
 fn parse_onchain_route(raw: &[Felt]) -> Result<OnchainSwapRoute> {
@@ -874,48 +942,118 @@ async fn fetch_onchain_swap_context(
 ) -> Result<OnchainSwapContext> {
     let swap_contract = configured_swap_contract(state)?.ok_or_else(|| {
         AppError::BadRequest(
-            "STARKNET_SWAP_CONTRACT_ADDRESS is not configured for on-chain swap".to_string(),
+            "Swap contract is not configured for on-chain swap. Set STARKNET_SWAP_CONTRACT_ADDRESS (or SWAP_AGGREGATOR_ADDRESS).".to_string(),
         )
     })?;
-    let from_token_felt = resolve_primary_token_address(state, from_token)?;
-    let to_token_felt = resolve_primary_token_address(state, to_token)?;
+    let from_token_candidates = configured_token_candidates(state, from_token);
+    if from_token_candidates.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "Token address is not configured for {}",
+            from_token
+        )));
+    }
+    let to_token_candidates = configured_token_candidates(state, to_token);
+    if to_token_candidates.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "Token address is not configured for {}",
+            to_token
+        )));
+    }
     let (amount_low, amount_high) =
         parse_decimal_to_u256_parts(amount, token_decimals(from_token))?;
+    tracing::debug!(
+        "Using swap contract for route lookup: {}",
+        felt_debug(swap_contract)
+    );
 
     let reader = OnchainReader::from_config(&state.config)?;
     let route_selector = get_selector_from_name("get_best_swap_route")
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
-    let route_raw = reader
-        .call(FunctionCall {
-            contract_address: swap_contract,
-            entry_point_selector: route_selector,
-            calldata: vec![from_token_felt, to_token_felt, amount_low, amount_high],
-        })
-        .await
-        .map_err(|err| {
-            let message = err.to_string();
-            if message.to_ascii_lowercase().contains("no active dex found") {
-                AppError::BadRequest(
-                    "Swap aggregator on-chain belum siap: belum ada DEX router aktif / oracle quote."
-                        .to_string(),
-                )
-            } else {
-                AppError::BadRequest(format!(
-                    "Failed to fetch on-chain swap route from configured contract: {}",
-                    message
-                ))
-            }
-        })?;
-    let route = parse_onchain_route(&route_raw)?;
+    let mut saw_no_active_dex = false;
+    let mut first_error: Option<AppError> = None;
 
-    Ok(OnchainSwapContext {
-        swap_contract,
-        from_token: from_token_felt,
-        to_token: to_token_felt,
-        amount_low,
-        amount_high,
-        route,
-    })
+    for from_token_felt in &from_token_candidates {
+        for to_token_felt in &to_token_candidates {
+            let route_raw = match call_swap_route_with_retry(
+                &reader,
+                FunctionCall {
+                    contract_address: swap_contract,
+                    entry_point_selector: route_selector,
+                    calldata: vec![
+                        from_token_felt.clone(),
+                        to_token_felt.clone(),
+                        amount_low,
+                        amount_high,
+                    ],
+                },
+            )
+            .await
+            {
+                Ok(raw) => raw,
+                Err(err) => {
+                    let message = err.to_string();
+                    if is_no_active_dex_found_error(&message) {
+                        saw_no_active_dex = true;
+                        continue;
+                    }
+                    if first_error.is_none() {
+                        first_error = Some(AppError::BadRequest(format!(
+                            "Failed to fetch on-chain swap route: {} (swap_contract={}, from_token={}, to_token={}). If this is RPC/network related, set STARKNET_API_RPC_URL to a healthy Starknet Sepolia endpoint and retry. If you see EntrypointNotFound, check STARKNET_SWAP_CONTRACT_ADDRESS/SWAP_AGGREGATOR_ADDRESS and restart backend.",
+                            message,
+                            felt_debug(swap_contract),
+                            felt_debug(from_token_felt.clone()),
+                            felt_debug(to_token_felt.clone())
+                        )));
+                    }
+                    continue;
+                }
+            };
+
+            match parse_onchain_route(&route_raw) {
+                Ok(route) => {
+                    tracing::debug!(
+                        "Resolved on-chain swap route with token addresses: {} -> {}",
+                        felt_hex(from_token_felt.clone()),
+                        felt_hex(to_token_felt.clone())
+                    );
+                    return Ok(OnchainSwapContext {
+                        swap_contract,
+                        from_token: from_token_felt.clone(),
+                        to_token: to_token_felt.clone(),
+                        amount_low,
+                        amount_high,
+                        route,
+                    });
+                }
+                Err(err) => {
+                    if first_error.is_none() {
+                        first_error = Some(AppError::BadRequest(format!(
+                            "{} (from_token={}, to_token={})",
+                            err,
+                            felt_hex(from_token_felt.clone()),
+                            felt_hex(to_token_felt.clone())
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    if saw_no_active_dex {
+        return Err(AppError::BadRequest(
+            "Swap aggregator on-chain is not ready: no active DEX router / oracle quote."
+                .to_string(),
+        ));
+    }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    Err(AppError::BadRequest(
+        format!(
+            "Failed to fetch on-chain swap route from configured contract {}",
+            felt_debug(swap_contract)
+        ),
+    ))
 }
 
 fn build_onchain_swap_wallet_calls(
@@ -1071,24 +1209,7 @@ fn verify_swap_invoke_payload(
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
     let swap_selectors = [swap_selector, execute_swap_selector];
 
-    let invoke = match tx {
-        Transaction::Invoke(invoke) => invoke,
-        _ => {
-            return Err(AppError::BadRequest(
-                "onchain_tx_hash must be an INVOKE transaction".to_string(),
-            ));
-        }
-    };
-
-    let (sender, calldata) = match invoke {
-        InvokeTransaction::V1(tx) => (tx.sender_address, tx.calldata.as_slice()),
-        InvokeTransaction::V3(tx) => (tx.sender_address, tx.calldata.as_slice()),
-        InvokeTransaction::V0(_) => {
-            return Err(AppError::BadRequest(
-                "onchain_tx_hash uses unsupported INVOKE v0".to_string(),
-            ));
-        }
-    };
+    let (sender, calldata) = extract_invoke_sender_and_calldata(tx)?;
 
     if !allowed_senders.iter().any(|candidate| *candidate == sender) {
         let expected = allowed_senders
@@ -1206,6 +1327,125 @@ fn verify_swap_invoke_payload(
     Err(AppError::BadRequest(
         "onchain_tx_hash swap call does not match requested token pair".to_string(),
     ))
+}
+
+fn extract_invoke_sender_and_calldata(tx: &Transaction) -> Result<(Felt, &[Felt])> {
+    let invoke = match tx {
+        Transaction::Invoke(invoke) => invoke,
+        _ => {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash must be an INVOKE transaction".to_string(),
+            ));
+        }
+    };
+
+    match invoke {
+        InvokeTransaction::V1(tx) => Ok((tx.sender_address, tx.calldata.as_slice())),
+        InvokeTransaction::V3(tx) => Ok((tx.sender_address, tx.calldata.as_slice())),
+        InvokeTransaction::V0(_) => Err(AppError::BadRequest(
+            "onchain_tx_hash uses unsupported INVOKE v0".to_string(),
+        )),
+    }
+}
+
+fn verify_hide_balance_privacy_call_in_invoke_payload(
+    tx: &Transaction,
+    expected_router: Felt,
+    expected_nullifier: Felt,
+    expected_commitment: Felt,
+    expected_proof: &[Felt],
+    expected_public_inputs: &[Felt],
+) -> Result<()> {
+    let submit_selector = get_selector_from_name("submit_private_action")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let (_, calldata) = extract_invoke_sender_and_calldata(tx)?;
+    let calls = parse_execute_calls(calldata).map_err(|err| {
+        AppError::BadRequest(format!(
+            "Failed to parse invoke calldata for hide_balance privacy verification: {}",
+            err
+        ))
+    })?;
+
+    let matched = calls
+        .into_iter()
+        .find(|call| call.to == expected_router && call.selector == submit_selector)
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "onchain_tx_hash does not include submit_private_action call to configured privacy router"
+                    .to_string(),
+            )
+        })?;
+
+    let mut expected = Vec::with_capacity(4 + expected_proof.len() + expected_public_inputs.len());
+    expected.push(expected_nullifier);
+    expected.push(expected_commitment);
+    expected.push(Felt::from(expected_proof.len() as u64));
+    expected.extend_from_slice(expected_proof);
+    expected.push(Felt::from(expected_public_inputs.len() as u64));
+    expected.extend_from_slice(expected_public_inputs);
+
+    if matched.calldata != expected {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash privacy call payload does not match submitted Hide Balance proof payload"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn verify_onchain_hide_balance_privacy_tx_hash(
+    state: &AppState,
+    tx_hash: &str,
+    payload: Option<&PrivacyVerificationPayload>,
+) -> Result<()> {
+    let verifier = parse_privacy_verifier_kind(payload.and_then(|p| p.verifier.as_deref()))?;
+    let router = resolve_privacy_router_for_verifier(&state.config, verifier)?;
+    let expected_router = parse_felt(&router)?;
+    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(tx_hash, payload)?;
+
+    let expected_nullifier = parse_felt(&nullifier)?;
+    let expected_commitment = parse_felt(&commitment)?;
+    let expected_proof: Vec<Felt> = proof
+        .iter()
+        .map(|value| parse_felt(value))
+        .collect::<Result<Vec<_>>>()?;
+    let expected_public_inputs: Vec<Felt> = public_inputs
+        .iter()
+        .map(|value| parse_felt(value))
+        .collect::<Result<Vec<_>>>()?;
+
+    let reader = OnchainReader::from_config(&state.config)?;
+    let tx_hash_felt = parse_felt(tx_hash)?;
+    let mut last_rpc_error = String::new();
+
+    for attempt in 0..5 {
+        let tx = match reader.get_transaction(&tx_hash_felt).await {
+            Ok(tx) => tx,
+            Err(err) => {
+                last_rpc_error = err.to_string();
+                if attempt < 4 {
+                    sleep(Duration::from_millis(1000)).await;
+                    continue;
+                }
+                break;
+            }
+        };
+
+        verify_hide_balance_privacy_call_in_invoke_payload(
+            &tx,
+            expected_router,
+            expected_nullifier,
+            expected_commitment,
+            &expected_proof,
+            &expected_public_inputs,
+        )?;
+        return Ok(());
+    }
+
+    Err(AppError::BadRequest(format!(
+        "Failed to verify hide_balance privacy call in onchain_tx_hash: {}",
+        last_rpc_error
+    )))
 }
 
 async fn verify_onchain_swap_tx_hash(
@@ -1349,9 +1589,7 @@ fn resolve_privacy_inputs(
     payload: Option<&PrivacyVerificationPayload>,
 ) -> Result<(String, String, Vec<String>, Vec<String>)> {
     let payload = payload.ok_or_else(|| {
-        AppError::BadRequest(
-            "privacy payload is required when mode=private or hide_balance=true".to_string(),
-        )
+        AppError::BadRequest("privacy payload is required when hide_balance=true".to_string())
     })?;
 
     let nullifier = payload
@@ -1374,7 +1612,7 @@ fn resolve_privacy_inputs(
         .filter(|items| !items.is_empty())
         .ok_or_else(|| {
             AppError::BadRequest(
-                "privacy.proof must be provided and non-empty in private mode".to_string(),
+                "privacy.proof must be provided and non-empty when hide_balance=true".to_string(),
             )
         })?;
     let public_inputs = payload
@@ -1383,50 +1621,25 @@ fn resolve_privacy_inputs(
         .filter(|items| !items.is_empty())
         .ok_or_else(|| {
             AppError::BadRequest(
-                "privacy.public_inputs must be provided and non-empty in private mode".to_string(),
+                "privacy.public_inputs must be provided and non-empty when hide_balance=true"
+                    .to_string(),
             )
         })?;
+    if is_dummy_garaga_payload(&proof, &public_inputs) {
+        return Err(AppError::BadRequest(
+            "privacy.proof/public_inputs dummy payload (0x1) is not allowed; submit a real Garaga proof"
+                .to_string(),
+        ));
+    }
     Ok((nullifier, commitment, proof, public_inputs))
 }
 
-async fn verify_private_trade_with_verifier(
-    state: &AppState,
-    seed: &str,
-    payload: Option<&PrivacyVerificationPayload>,
-    verifier: PrivacyVerifierKind,
-) -> Result<String> {
-    let router = resolve_privacy_router_for_verifier(&state.config, verifier)?;
-    let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-        return Err(AppError::BadRequest(format!(
-            "On-chain invoker is not configured for '{}' verification",
-            verifier.as_str()
-        )));
-    };
-
-    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(seed, payload)?;
-
-    let to = parse_felt(&router)?;
-    let selector = get_selector_from_name("submit_private_action")
-        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
-
-    let mut calldata = vec![parse_felt(&nullifier)?, parse_felt(&commitment)?];
-    calldata.push(Felt::from(proof.len() as u64));
-    for item in proof {
-        calldata.push(parse_felt(&item)?);
+fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
+    if proof.len() != 1 || public_inputs.len() != 1 {
+        return false;
     }
-    calldata.push(Felt::from(public_inputs.len() as u64));
-    for item in public_inputs {
-        calldata.push(parse_felt(&item)?);
-    }
-
-    let tx_hash = invoker
-        .invoke(Call {
-            to,
-            selector,
-            calldata,
-        })
-        .await?;
-    Ok(tx_hash.to_string())
+    proof[0].trim().eq_ignore_ascii_case("0x1")
+        && public_inputs[0].trim().eq_ignore_ascii_case("0x1")
 }
 
 /// POST /api/v1/swap/quote
@@ -1620,26 +1833,23 @@ pub async fn execute_swap(
     )
     .await?;
     let is_user_signed_onchain = true;
-    let should_hide = is_private_trade(&req.mode, req.hide_balance.unwrap_or(false));
+    let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
 
     // 4. Use wallet-submitted onchain tx hash when available; otherwise fallback.
     let tx_hash = onchain_tx_hash;
 
     let mut privacy_verification_tx: Option<String> = None;
+    let privacy_payload = req.privacy.as_ref();
     if should_hide {
-        let verifier =
-            parse_privacy_verifier_kind(req.privacy.as_ref().and_then(|p| p.verifier.as_deref()))?;
-        let privacy_tx =
-            verify_private_trade_with_verifier(&state, &tx_hash, req.privacy.as_ref(), verifier)
-                .await
-                .map_err(|e| {
-                    AppError::BadRequest(format!(
-                        "Privacy verification failed via '{}': {}",
-                        verifier.as_str(),
-                        e
-                    ))
-                })?;
-        privacy_verification_tx = Some(privacy_tx);
+        verify_onchain_hide_balance_privacy_tx_hash(&state, &tx_hash, privacy_payload).await?;
+        privacy_verification_tx = Some(tx_hash.clone());
+        if let Some(ref privacy_tx_hash) = privacy_verification_tx {
+            tracing::info!(
+                "Hide-balance privacy verification included in same swap tx tx_hash={} privacy_tx_hash={}",
+                tx_hash,
+                privacy_tx_hash
+            );
+        }
     }
 
     let gas_optimizer = GasOptimizer::new(state.config.clone());
@@ -1676,7 +1886,12 @@ pub async fn execute_swap(
         state.db.mark_transaction_private(&tx_hash).await?;
     }
     if nft_discount_percent > 0.0 {
-        if let Err(err) = consume_nft_usage_if_active(&state.config, &user_address, "swap").await {
+        let consume_result =
+            consume_nft_usage_if_active(&state.config, &user_address, "swap").await;
+        if let Some(contract) = discount_contract_address(&state) {
+            invalidate_cached_nft_discount(contract, &user_address).await;
+        }
+        if let Err(err) = consume_result {
             tracing::warn!(
                 "Failed to consume NFT discount usage after swap success: user={} tx_hash={} err={}",
                 user_address,
@@ -1702,7 +1917,7 @@ pub async fn execute_swap(
             ),
             Some(serde_json::json!({
                 "tx_hash": tx_hash.clone(),
-                "privacy_tx_hash": privacy_verification_tx,
+                "privacy_tx_hash": privacy_verification_tx.clone(),
                 "from_token": req.from_token.clone(),
                 "to_token": req.to_token.clone(),
                 "amount_in": amount_in,
@@ -1737,6 +1952,7 @@ pub async fn execute_swap(
         to_amount: expected_out.to_string(),
         actual_rate: (expected_out / amount_in).to_string(),
         fee_paid: total_fee.to_string(),
+        privacy_tx_hash: privacy_verification_tx,
     })))
 }
 
@@ -1754,10 +1970,18 @@ mod tests {
     fn mev_fee_for_mode_only_private() {
         // Memastikan fee MEV hanya untuk mode private
         assert!((mev_fee_for_mode("private", 100.0) - 1.0).abs() < 1e-9);
+        assert!((mev_fee_for_mode("PRIVATE", 100.0) - 1.0).abs() < 1e-9);
         assert!((mev_fee_for_mode("transparent", 100.0) - 0.0).abs() < 1e-9);
     }
 
     #[test]
+    fn privacy_verification_depends_on_hide_balance_only() {
+        assert!(should_run_privacy_verification(true));
+        assert!(!should_run_privacy_verification(false));
+    }
+
+    #[test]
+    
     fn estimated_time_for_dex_defaults() {
         // Memastikan estimasi waktu untuk DEX yang tidak dikenal
         assert_eq!(estimated_time_for_dex("UNKNOWN"), "~2-3 min");

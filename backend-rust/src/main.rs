@@ -44,6 +44,36 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting CAREL Backend Server");
     tracing::info!("Environment: {}", config.environment);
     tracing::info!("API Version: {}", API_VERSION);
+    let api_rpc = std::env::var("STARKNET_API_RPC_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| config.starknet_rpc_url.clone());
+    tracing::info!("Starknet API RPC URL: {}", api_rpc);
+    tracing::info!(
+        "Auto Garaga Prover Command Configured: {}",
+        config
+            .privacy_auto_garaga_prover_cmd
+            .as_ref()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    );
+    tracing::info!("Auto Garaga Strict Mode: prover command per-request (no static payload fallback)");
+    tracing::info!(
+        "Auto Garaga Prover Timeout (ms): {}",
+        config.privacy_auto_garaga_prover_timeout_ms
+    );
+    let swap_contract = std::env::var("STARKNET_SWAP_CONTRACT_ADDRESS")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("SWAP_AGGREGATOR_ADDRESS")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        });
+    tracing::info!(
+        "Swap Contract Configured: {}",
+        swap_contract.as_ref().is_some()
+    );
 
     // Initialize database
     let db = Database::new(&config).await?;
@@ -251,6 +281,10 @@ fn build_router(state: api::AppState) -> Router {
             "/api/v1/privacy/submit",
             post(api::privacy::submit_private_action),
         )
+        .route(
+            "/api/v1/privacy/auto-submit",
+            post(api::privacy::auto_submit_private_action),
+        )
         // Private BTC swap
         .route(
             "/api/v1/private-btc-swap/initiate",
@@ -359,6 +393,7 @@ fn build_router(state: api::AppState) -> Router {
             "/api/v1/ai/prepare-action",
             post(api::ai::prepare_action_signature),
         )
+        .route("/api/v1/ai/config", get(api::ai::get_runtime_config))
         .route("/api/v1/ai/execute", post(api::ai::execute_command))
         .route("/api/v1/ai/pending", get(api::ai::get_pending_actions))
         // WebSocket endpoints

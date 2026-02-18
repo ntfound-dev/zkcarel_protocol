@@ -65,6 +65,8 @@ fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("too many requests")
         || lower.contains("429")
+        || lower.contains("cu limit exceeded")
+        || lower.contains("request too fast")
         || lower.contains("timeout")
         || lower.contains("timed out")
         || lower.contains("gateway")

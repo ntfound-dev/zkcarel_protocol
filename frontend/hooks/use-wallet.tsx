@@ -302,22 +302,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             USDT_DECIMALS
           )
         }
-        // Backend can temporarily return 0/null during RPC hiccups.
-        // For WBTC, verify via direct Starknet wallet read and keep the higher value.
-        if (resolved.WBTC === null || resolved.WBTC <= 0) {
-          const walletWbtcBalance = await fetchStarknetTokenBalance(
-            starknet,
-            effectiveStarknetAddress,
-            WBTC_TOKEN_ADDRESS,
-            WBTC_DECIMALS
-          )
-          if (typeof walletWbtcBalance === "number" && Number.isFinite(walletWbtcBalance)) {
-            if (resolved.WBTC === null) {
-              resolved.WBTC = walletWbtcBalance
-            } else {
-              resolved.WBTC = Math.max(resolved.WBTC, walletWbtcBalance)
-            }
-          }
+        // Use direct Starknet wallet read as source-of-truth for WBTC whenever possible.
+        const walletWbtcBalance = await fetchStarknetTokenBalance(
+          starknet,
+          effectiveStarknetAddress,
+          WBTC_TOKEN_ADDRESS,
+          WBTC_DECIMALS
+        )
+        if (typeof walletWbtcBalance === "number" && Number.isFinite(walletWbtcBalance)) {
+          resolved.WBTC = walletWbtcBalance
         }
       }
 

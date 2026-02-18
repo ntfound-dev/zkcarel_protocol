@@ -6,13 +6,21 @@ This checklist assumes `scarb` + `sncast` are installed and a funded testnet acc
 
 ```bash
 export NET=sepolia
-export STARKNET_RPC_URL=https://starknet-sepolia.infura.io/v3/<INFURA_KEY>
+export STARKNET_RPC_URL=https://api.zan.top/public/starknet-sepolia/rpc/v0_10
 ```
 
 Set oracle addresses (Pragma is required for PriceOracle reads):
 ```bash
 export PRAGMA_ORACLE_ADDRESS=0x36031daa264c24520b11d93af622c848b2499b66b41d611bac95e13cfca131a
 export CHAINLINK_ORACLE_ADDRESS=0x0
+```
+
+RPC compatibility note:
+- For large verifier declaration, prefer RPC `starknet_specVersion=0.10.0`.
+- Older RPC (`0.8.1`) may fail with `Invalid block id` or `Mismatch compiled class hash`.
+- If you have multiple `sncast` versions, use explicit binary:
+```bash
+/home/frend/.local/bin/sncast --version
 ```
 
 ## 2) Build
@@ -42,6 +50,41 @@ scarb build
 14. **PrivatePayments**: `PrivatePayments(admin=ADMIN, verifier=GaragaAdapter)`
 15. **AnonymousCredentials**: `AnonymousCredentials(admin=ADMIN, verifier=GaragaAdapter)`
 16. **DCA Orders** (limit order book): `DCAOrders(owner=ADMIN)`
+
+### Optional: Deploy Garaga Real Verifier (BLS) + Wire V1 Router
+Use this if you want real proof verification for Hide Balance flow (not mock verifier):
+
+```bash
+cd smartcontract/garaga_real_bls
+RPC=https://api.zan.top/public/starknet-sepolia/rpc/v0_10
+SN=/home/frend/.local/bin/sncast
+
+# 1) Declare verifier class (generated project in garaga_real_bls)
+$SN --wait -a sepolia -p sepolia declare \
+  --contract-name Groth16VerifierBLS12_381 \
+  --url $RPC
+
+# 2) Deploy verifier instance
+$SN --wait -a sepolia -p sepolia deploy \
+  --class-hash 0x<CLASS_HASH_FROM_DECLARE> \
+  --url $RPC
+```
+
+After deploy, wire addresses:
+```bash
+GARAGA_VERIFIER=0x<DEPLOYED_VERIFIER_ADDRESS>
+GARAGA_ADAPTER=0x<GARAGA_ADAPTER_ADDRESS>
+ZK_ROUTER=0x<ZK_PRIVACY_ROUTER_ADDRESS>
+
+# adapter -> verifier real
+$SN --wait -a sepolia -p sepolia invoke --contract-address $GARAGA_ADAPTER --function set_verifier --calldata $GARAGA_VERIFIER --url $RPC
+
+# mode 5 = verify_groth16_proof_bls12_381(...) returning Option<Span<u256>>
+$SN --wait -a sepolia -p sepolia invoke --contract-address $GARAGA_ADAPTER --function set_verification_mode --calldata 5 --url $RPC
+
+# V1 router -> adapter
+$SN --wait -a sepolia -p sepolia invoke --contract-address $ZK_ROUTER --function set_verifier --calldata $GARAGA_ADAPTER --url $RPC
+```
 
 ## 4) Export addresses
 
@@ -103,3 +146,5 @@ export PRIVACY_WIRE_EXTERNAL=1
 - The mock verifier makes proof checks always `true` (testnet only).
 - `batch_submit_actions` is enabled only when signature verification + fees are disabled.
 - If you want strict TWAP window, we can re-enable ring buffer (gas will increase).
+- V1 `ZkPrivacyRouter.submit_private_action` now enforces binding: `public_inputs[0] == nullifier` and `public_inputs[1] == commitment`.
+- For frontend Hide Balance on-chain flow, set `NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL=false`, hard reload frontend, submit real proof first via Privacy Router, then execute swap/bridge.

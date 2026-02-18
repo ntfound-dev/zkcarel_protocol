@@ -369,10 +369,14 @@ fn test_user_limit_order_flow() {
     let keeper: ContractAddress = 0x666.try_into().unwrap();
     let dispatcher = deploy_keeper_network(owner);
     let order_value: u256 = 20_000;
+    let order_id: felt252 = 1;
+    let token_in: ContractAddress = 0x111.try_into().unwrap();
+    let token_out: ContractAddress = 0x222.try_into().unwrap();
 
     start_cheat_caller_address(dispatcher.contract_address, keeper);
     dispatcher.register_keeper();
-    dispatcher.execute_limit_order(1, order_value);
+    dispatcher.create_limit_order(order_id, token_in, token_out, order_value, 1_u256, 9_999_999_999);
+    dispatcher.execute_limit_order(order_id, order_value);
     let claimed = dispatcher.claim_earnings();
     stop_cheat_caller_address(dispatcher.contract_address);
 

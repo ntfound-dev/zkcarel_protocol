@@ -4,14 +4,23 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { ShieldCheck, Send, Database, Hash } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { submitPrivacyAction, type PrivacyActionPayload } from "@/lib/api"
+import {
+  submitPrivacyAction,
+  type PrivacyActionPayload,
+  type PrivacyVerificationPayload,
+} from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
 
 const parseList = (value: string) =>
   value
-    .split(",")
+    .split(/[\n,]+/)
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
+
+const isDummyGaragaPayload = (proof: string[], publicInputs: string[]) => {
+  if (proof.length !== 1 || publicInputs.length !== 1) return false
+  return proof[0].toLowerCase() === "0x1" && publicInputs[0].toLowerCase() === "0x1"
+}
 
 type PrivacyHistoryStatus = "pending" | "confirmed" | "failed"
 
@@ -25,6 +34,7 @@ type PrivacyHistoryItem = {
 }
 
 const HISTORY_KEY = "privacy_history_v2"
+const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v1"
 
 const shortHash = (hash: string) => {
   if (!hash) return ""
@@ -99,14 +109,67 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
     })
   }
 
+  const buildTradePrivacyPayload = (
+    payload: PrivacyActionPayload
+  ): PrivacyVerificationPayload | null => {
+    const proof = Array.isArray(payload.proof)
+      ? payload.proof.map((item) => item.trim()).filter((item) => item.length > 0)
+      : []
+    const publicInputs = Array.isArray(payload.public_inputs)
+      ? payload.public_inputs
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+      : []
+    if (!proof.length || !publicInputs.length) return null
+    if (isDummyGaragaPayload(proof, publicInputs)) return null
+
+    const nullifier =
+      payload.nullifier?.trim() ||
+      payload.nullifiers?.find((item) => item.trim().length > 0)?.trim()
+    const commitment =
+      payload.commitment?.trim() ||
+      payload.commitments?.find((item) => item.trim().length > 0)?.trim()
+    if (!nullifier || !commitment) return null
+
+    return {
+      verifier: "garaga",
+      nullifier,
+      commitment,
+      proof,
+      public_inputs: publicInputs,
+    }
+  }
+
   const handleSubmit = async () => {
+    const parsedProof = parseList(proof)
+    const parsedPublicInputs = parseList(publicInputs)
+    if (!parsedProof.length || !parsedPublicInputs.length) {
+      notifications.addNotification({
+        type: "error",
+        title: "Payload belum lengkap",
+        message: "proof dan public_inputs wajib diisi (bukan kosong).",
+      })
+      return
+    }
+    if (isDummyGaragaPayload(parsedProof, parsedPublicInputs)) {
+      notifications.addNotification({
+        type: "error",
+        title: "Dummy proof ditolak",
+        message:
+          "Payload Garaga dummy (proof/public_inputs = 0x1) tidak diizinkan di mode strict. Masukkan proof real.",
+      })
+      return
+    }
+
     const shared: Pick<PrivacyActionPayload, "proof" | "public_inputs"> = {
-      proof: parseList(proof),
-      public_inputs: parseList(publicInputs),
+      proof: parsedProof,
+      public_inputs: parsedPublicInputs,
     }
 
     let payload: PrivacyActionPayload
     if (mode === "v2") {
+      const parsedNullifiers = parseList(nullifiers)
+      const parsedCommitments = parseList(commitments)
       if (!actionType || !oldRoot || !newRoot) {
         notifications.addNotification({
           type: "error",
@@ -115,12 +178,20 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
         })
         return
       }
+      if (!parsedNullifiers.length || !parsedCommitments.length) {
+        notifications.addNotification({
+          type: "error",
+          title: "Privacy V2",
+          message: "nullifiers dan commitments wajib diisi minimal 1 item.",
+        })
+        return
+      }
       payload = {
         action_type: actionType,
         old_root: oldRoot,
         new_root: newRoot,
-        nullifiers: parseList(nullifiers),
-        commitments: parseList(commitments),
+        nullifiers: parsedNullifiers,
+        commitments: parsedCommitments,
         ...shared,
       }
     } else {
@@ -147,6 +218,28 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
         message: "Mengirim privacy action ke backend...",
       })
       const result = await submitPrivacyAction(payload)
+      const tradePayload = buildTradePrivacyPayload(payload)
+      if (tradePayload && typeof window !== "undefined") {
+        window.localStorage.setItem(
+          TRADE_PRIVACY_PAYLOAD_KEY,
+          JSON.stringify(tradePayload)
+        )
+        window.dispatchEvent(new Event("trade-privacy-payload-updated"))
+        notifications.addNotification({
+          type: "success",
+          title: "Trade payload updated",
+          message: "Hide Balance payload saved for Unified Trade.",
+        })
+      } else {
+        notifications.addNotification({
+          type: "info",
+          title: "Trade payload not updated",
+          message:
+            mode === "v2"
+              ? "V2 submitted, tapi payload trade tidak tersimpan. Pastikan nullifiers, commitments, proof, dan public_inputs valid (bukan dummy)."
+              : "V1 submitted, tapi payload trade tidak tersimpan. Pastikan nullifier, commitment, proof, dan public_inputs valid (bukan dummy).",
+        })
+      }
       pushHistory({
         id: result.tx_hash,
         mode,

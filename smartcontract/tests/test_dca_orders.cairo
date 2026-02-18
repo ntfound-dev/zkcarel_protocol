@@ -52,7 +52,10 @@ mod tests {
         dispatcher.register_keeper();
 
         let order_value: u256 = 10000;
-        let order_id: u64 = 1;
+        let order_id: felt252 = 1;
+        let token_in: ContractAddress = 0x111.try_into().unwrap();
+        let token_out: ContractAddress = 0x222.try_into().unwrap();
+        dispatcher.create_limit_order(order_id, token_in, token_out, order_value, 1_u256, 9_999_999_999);
         dispatcher.execute_limit_order(order_id, order_value);
 
         let stats = dispatcher.get_keeper_stats(keeper);
@@ -68,7 +71,12 @@ mod tests {
 
         start_cheat_caller_address(dispatcher.contract_address, keeper);
         dispatcher.register_keeper();
-        dispatcher.execute_limit_order(1, 20000);
+        let order_id: felt252 = 1;
+        let order_value: u256 = 20000;
+        let token_in: ContractAddress = 0x111.try_into().unwrap();
+        let token_out: ContractAddress = 0x222.try_into().unwrap();
+        dispatcher.create_limit_order(order_id, token_in, token_out, order_value, 1_u256, 9_999_999_999);
+        dispatcher.execute_limit_order(order_id, order_value);
 
         let claimed = dispatcher.claim_earnings();
         assert!(claimed == 20, "Claimed amount wrong");

@@ -534,6 +534,7 @@ pub async fn link_wallet_address(
             "Wallet address is required".to_string(),
         ));
     }
+    validate_link_wallet_address(chain, wallet_address)?;
 
     state
         .db
@@ -580,6 +581,49 @@ fn normalize_wallet_chain(chain: &str) -> Option<&'static str> {
         "bitcoin" | "btc" => Some("bitcoin"),
         _ => None,
     }
+}
+
+fn is_valid_evm_address(value: &str) -> bool {
+    let normalized = value.trim();
+    normalized.starts_with("0x")
+        && normalized.len() == 42
+        && normalized[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn looks_like_btc_address(value: &str) -> bool {
+    let normalized = value.trim();
+    if normalized.len() < 14 || normalized.len() > 90 {
+        return false;
+    }
+    let lower = normalized.to_ascii_lowercase();
+    lower.starts_with("bc1")
+        || lower.starts_with("tb1")
+        || lower.starts_with('1')
+        || lower.starts_with('3')
+        || lower.starts_with('m')
+        || lower.starts_with('n')
+        || lower.starts_with('2')
+}
+
+fn validate_link_wallet_address(chain: &str, wallet_address: &str) -> Result<()> {
+    let is_valid = match chain {
+        "starknet" => parse_felt(wallet_address).is_ok(),
+        "evm" => is_valid_evm_address(wallet_address),
+        "bitcoin" => looks_like_btc_address(wallet_address),
+        _ => false,
+    };
+
+    if is_valid {
+        return Ok(());
+    }
+
+    let message = match chain {
+        "starknet" => "Invalid Starknet wallet address format",
+        "evm" => "Invalid EVM wallet address format (expected 0x + 40 hex chars)",
+        "bitcoin" => "Invalid Bitcoin wallet address format",
+        _ => "Invalid wallet address format",
+    };
+    Err(AppError::BadRequest(message.to_string()))
 }
 
 fn clean_address(value: Option<String>) -> Option<String> {

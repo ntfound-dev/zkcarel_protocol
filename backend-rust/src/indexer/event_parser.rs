@@ -209,6 +209,8 @@ mod tests {
                 "0x1000".to_string(),
                 "0x2000".to_string(),
             ],
+            transaction_hash: None,
+            block_number: None,
         };
 
         let parsed = parser.parse_event(&event);
@@ -226,6 +228,8 @@ mod tests {
             from_address: "0x123".to_string(),
             keys: vec![],
             data: vec![],
+            transaction_hash: None,
+            block_number: None,
         };
         assert!(parser.parse_event(&event).is_none());
     }

@@ -32,6 +32,7 @@ NEXT_PUBLIC_BTC_VAULT_ADDRESS=tb1qxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS=0x...
 NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY=0
 NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS=0x...
+NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS=0x...
 NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS=0x8453FC6Cd1bCfE8D4dFC069C400B433054d47bDc
 NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS=0x0000000000000000000000000000000000455448
 NEXT_PUBLIC_TOKEN_CAREL_ADDRESS=0x...
@@ -43,6 +44,7 @@ NEXT_PUBLIC_TOKEN_USDC_ADDRESS=0x...
 NEXT_PUBLIC_TOKEN_USDT_ADDRESS=0x...
 NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS=0x...
 NEXT_PUBLIC_DEV_WALLET_ADDRESS=0x...
+NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL=false
 ```
 Catatan:
 - Jika `NEXT_PUBLIC_BACKEND_WS_URL` tidak diisi, WebSocket memakai `NEXT_PUBLIC_BACKEND_URL` dan otomatis mengganti `http` -> `ws`.
@@ -56,6 +58,9 @@ Catatan:
 - Flow BTC native via Garden bersifat order-first: klik execute untuk membuat order, lalu kirim BTC ke `deposit_address` yang dikembalikan backend (`result.to`). Tidak perlu input txid BTC di form sebelum order dibuat.
 - `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` dipakai untuk submit transaksi swap langsung dari wallet Starknet.
 - Flow swap Starknet sekarang memakai calldata dari backend (`onchain_calls`) dan wallet men-submit multicall `approve + execute_swap` ke kontrak swap real.
+- `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` wajib untuk flow `Hide Balance` on-chain (`submit_private_action` + swap).
+- `NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL` default `false`. Set `true` hanya untuk test lokal dengan mock payload Garaga.
+- Untuk flow one-click `Hide Balance`, frontend akan memanggil backend `POST /api/v1/privacy/auto-submit` saat payload belum ada. Backend harus dikonfigurasi dengan file proof real (`PRIVACY_AUTO_GARAGA_*`).
 - Jika backend mengembalikan error aggregator belum siap (DEX router/oracle belum aktif), UI tidak akan mengizinkan execute swap.
 - `NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY` opsional (`1/true` atau `0/false`). Jika aktif, UI akan memblokir execute swap karena kontrak dianggap event-only (belum transfer token real).
 - Nilai `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` harus mengarah ke kontrak swap **real token transfer** (bukan kontrak event-only). Jika masih menunjuk ke `CAREL_PROTOCOL_ADDRESS` event-only, UI/backend akan memblokir execute agar tidak misleading.
@@ -64,6 +69,40 @@ Catatan:
 - `NEXT_PUBLIC_TOKEN_*_ADDRESS` dipakai sebagai mapping token saat membangun calldata on-chain.
 - `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` dipakai untuk mint NFT discount langsung on-chain dari wallet.
 - `NEXT_PUBLIC_DEV_WALLET_ADDRESS` dipakai untuk rename display-name berbayar (transfer 1 CAREL on-chain).
+- `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` opsional:
+  - jika diisi, frontend langsung pakai value ini untuk `submit_action`;
+  - jika kosong, frontend akan auto-fetch dari backend `GET /api/v1/ai/config`.
+
+## Hide Balance (Garaga Real) Checklist
+Gunakan checklist ini untuk swap/bridge private on-chain (bukan mock, one-click).
+
+1. Frontend env:
+```bash
+NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS=0x...
+NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL=false
+```
+2. Di backend, set salah satu konfigurasi auto payload:
+   - `PRIVACY_AUTO_GARAGA_PAYLOAD_FILE=/path/payload.json` (berisi `proof[]` + `public_inputs[]`), atau
+   - `PRIVACY_AUTO_GARAGA_PROOF_FILE` + `PRIVACY_AUTO_GARAGA_PUBLIC_INPUTS_FILE`.
+3. Restart backend dan hard reload frontend (Ctrl+Shift+R), tetap di browser profile yang sama.
+4. User cukup klik icon `Hide Balance` lalu `Execute Trade`:
+   - frontend auto minta payload ke backend,
+   - payload disimpan ke localStorage,
+   - swap/bridge lanjut tanpa isi manual form Privacy Router.
+5. Verifikasi cepat di browser console:
+```js
+JSON.parse(localStorage.getItem("trade_privacy_garaga_payload_v1") || "null")
+```
+   - Harus berisi `nullifier`, `commitment`, `proof[]`, `public_inputs[]`.
+   - Jika `proof/public_inputs` = `["0x1"]`, payload dianggap dummy dan akan ditolak untuk mode real.
+
+Troubleshooting:
+- Jika muncul pesan payload belum siap, cek backend env `PRIVACY_AUTO_GARAGA_*` dan pastikan file JSON valid.
+- Jika di explorer field `proof` / `public_inputs` terlihat `["0x1"]`, payload masih dummy/mock. Pastikan autofill dev OFF dan kirim proof real.
+- Jika error ini "kumat lagi", penyebab paling umum:
+  - backend auto payload belum terkonfigurasi atau file tidak bisa dibaca,
+  - cache/localStorage browser terhapus,
+  - pindah browser/profile/tab private window.
 
 ## Build Production
 ```bash
@@ -114,7 +153,12 @@ public/           # Static assets
 - Wallet: frontend memakai injected Starknet wallet (Argent X/Braavos). Jika tidak ada, pengguna perlu connect wallet untuk mengakses fitur on-chain.
 - Wallet SDK: memakai `@starknet-io/get-starknet` untuk Starknet, MetaMask (EVM) via `window.ethereum`, serta wallet BTC native testnet (UniSat/Xverse).
 - Network enforcement: wallet di-validate ke `Starknet Sepolia`, `Ethereum Sepolia (11155111)`, dan `Bitcoin native testnet` (alamat testnet).
-- AI Tier 2/3 membutuhkan `action_id` on-chain. Frontend bisa membuat `action_id` via wallet kalau `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` diisi.
+- AI Tier 2/3 membutuhkan `action_id` on-chain.
+- Frontend mendukung auto-setup action_id:
+  - cek pending action,
+  - jika belum ada, call `POST /api/v1/ai/prepare-action`,
+  - lalu wallet sign `submit_action` ke kontrak executor.
+- Executor address tidak wajib hardcoded di env frontend; bisa auto-resolve dari backend runtime config (`GET /api/v1/ai/config`).
 - Jika `signature_verification` pada AI executor aktif, backend harus mengisi `AI_SIGNATURE_VERIFIER_ADDRESS` agar endpoint prepare signature berjalan.
 - AI level model di UI:
   - Level 1: FREE (basic queries, price check)

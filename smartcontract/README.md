@@ -170,6 +170,30 @@ smartcontract/
 **User Scenario Tests**
 - `tests/test_user_scenarios.cairo`: end-to-end user flows (bridge, swap, limit order/keeper execution, points lifecycle, NFT discount, referral, staking, governance, timelock, treasury, private payments, dark pool, AI executor).
 
+**Testing (Scarb / Snforge)**
+- Run all tests:
+```bash
+cd smartcontract
+scarb test
+```
+- Run focused suites:
+```bash
+scarb test test_dca_orders
+scarb test test_user_limit_order_flow
+```
+- Snapshot status on **February 18, 2026** (current branch local run):
+  - `scarb test` => `159 passed, 7 failed`
+  - `scarb test test_dca_orders` => `5 passed, 0 failed`
+  - `scarb test test_user_limit_order_flow` => `1 passed, 0 failed`
+- Current known failing suites from full run:
+  - `test_swap_aggregator::test_execute_swap_with_mev_protection`
+  - `test_user_scenarios::test_user_ai_executor_flow`
+  - `test_user_scenarios::test_user_staking_flow`
+  - `test_user_scenarios::test_user_treasury_flow`
+  - `test_user_scenarios::test_user_swap_flow`
+  - `test_discount_soulbound::test_duplicate_mint_prevention`
+  - `test_discount_soulbound::test_usage_cycle_and_autoburn`
+
 **Configuration**
 - `smartcontract/.env` used by scripts for deploy and tokenomics.
 - Testnet wallets are created by `scripts/01_setup_testnet.sh`.
@@ -230,6 +254,7 @@ bash scripts/03_fill_env_from_wallets.sh
 - Privacy submissions:
   - V2 (recommended): `PrivacyRouter.submit_action(action_type, old_root, new_root, nullifiers, commitments, public_inputs, proof)`
   - V1 (legacy): `ZkPrivacyRouter.submit_private_action(nullifier, commitment, proof, public_inputs)`
+    - Strict binding: `public_inputs[0]` must equal `nullifier` and `public_inputs[1]` must equal `commitment`.
 - AI level 2/3: backend must validate `action_id` is pending on-chain via `AIExecutor.get_pending_actions_page(...)` before serving response.
 - Environment variables expected by backend:
   - `POINT_STORAGE_ADDRESS`
@@ -253,6 +278,10 @@ Optional Garaga verifier mode before deploy adapters:
 - `GARAGA_VERIFICATION_MODE=1` `verify_ultra_starknet_honk_proof(full_proof_with_hints)`
 - `GARAGA_VERIFICATION_MODE=2` `verify_groth16_proof_bn254(full_proof_with_hints)`
 - `GARAGA_VERIFICATION_MODE=3` `verify_groth16_proof_bls12_381(full_proof_with_hints)`
+- `GARAGA_VERIFICATION_MODE=4` `verify_groth16_proof_bn254(full_proof_with_hints) -> Option<Span<u256>>`
+- `GARAGA_VERIFICATION_MODE=5` `verify_groth16_proof_bls12_381(full_proof_with_hints) -> Option<Span<u256>>`
+  - Recommended for Garaga-generated verifier contracts that return `Option<Span<u256>>`.
+  - This repo keeps the generated real verifier project in `smartcontract/garaga_real_bls`.
 7. Deploy price oracle and set token configs
 ```bash
 bash scripts/05_deploy_price_oracle.sh
@@ -277,6 +306,8 @@ scarb test
 - Merkle roots must be submitted by backend signer to `SnapshotDistributor`.
 - Referral points can be synced on-chain by backend to `ReferralSystem.record_referee_points`.
 - Backend signer address must match on-chain signer configuration.
+- For V1 Hide Balance flow, frontend/backend must submit `submit_private_action` first, then execute swap/bridge.
+- V1 router now rejects payload if `public_inputs` is not bound to `(nullifier, commitment)` in index `[0,1]`.
 
 **Security Notes**
 - Use multisig for admin roles.

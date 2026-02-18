@@ -1,5 +1,7 @@
 use serde::Deserialize;
 use std::env;
+use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -39,6 +41,11 @@ pub struct Config {
     pub bridge_aggregator_address: String,
     pub zk_privacy_router_address: String,
     pub privacy_router_address: Option<String>,
+    pub privacy_auto_garaga_payload_file: Option<String>,
+    pub privacy_auto_garaga_proof_file: Option<String>,
+    pub privacy_auto_garaga_public_inputs_file: Option<String>,
+    pub privacy_auto_garaga_prover_cmd: Option<String>,
+    pub privacy_auto_garaga_prover_timeout_ms: u64,
     pub private_btc_swap_address: String,
     pub dark_pool_address: String,
     pub private_payments_address: String,
@@ -112,7 +119,36 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
-        dotenv::dotenv().ok();
+        load_env_override(&[".env", "backend-rust/.env"]);
+
+        let privacy_auto_garaga_payload_file = env::var("PRIVACY_AUTO_GARAGA_PAYLOAD_FILE")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                for candidate in ["garaga_payload.json", "backend-rust/garaga_payload.json"] {
+                    if Path::new(candidate).is_file() {
+                        return Some(candidate.to_string());
+                    }
+                }
+                None
+            });
+
+        let privacy_auto_garaga_prover_cmd = env::var("PRIVACY_AUTO_GARAGA_PROVER_CMD")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                for candidate in [
+                    "scripts/garaga_auto_prover.py",
+                    "backend-rust/scripts/garaga_auto_prover.py",
+                ] {
+                    if Path::new(candidate).is_file() {
+                        return Some(format!("python3 {}", candidate));
+                    }
+                }
+                None
+            });
 
         Ok(Config {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
@@ -157,6 +193,18 @@ impl Config {
             bridge_aggregator_address: env::var("BRIDGE_AGGREGATOR_ADDRESS")?,
             zk_privacy_router_address: env::var("ZK_PRIVACY_ROUTER_ADDRESS")?,
             privacy_router_address: env::var("PRIVACY_ROUTER_ADDRESS").ok(),
+            privacy_auto_garaga_payload_file,
+            privacy_auto_garaga_proof_file: env::var("PRIVACY_AUTO_GARAGA_PROOF_FILE").ok(),
+            privacy_auto_garaga_public_inputs_file: env::var(
+                "PRIVACY_AUTO_GARAGA_PUBLIC_INPUTS_FILE",
+            )
+            .ok(),
+            privacy_auto_garaga_prover_cmd,
+            privacy_auto_garaga_prover_timeout_ms: env::var(
+                "PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS",
+            )
+            .unwrap_or_else(|_| "45000".to_string())
+            .parse()?,
             private_btc_swap_address: env::var("PRIVATE_BTC_SWAP_ADDRESS")?,
             dark_pool_address: env::var("DARK_POOL_ADDRESS")?,
             private_payments_address: env::var("PRIVATE_PAYMENTS_ADDRESS")?,
@@ -386,6 +434,11 @@ impl Config {
         let _ = &self.xverse_api_key;
         let _ = &self.xverse_api_url;
         let _ = &self.privacy_verifier_routers;
+        let _ = &self.privacy_auto_garaga_payload_file;
+        let _ = &self.privacy_auto_garaga_proof_file;
+        let _ = &self.privacy_auto_garaga_public_inputs_file;
+        let _ = &self.privacy_auto_garaga_prover_cmd;
+        let _ = &self.privacy_auto_garaga_prover_timeout_ms;
         let _ = &self.stripe_secret_key;
         let _ = &self.moonpay_api_key;
         let _ = &self.starknet_chain_id;
@@ -405,6 +458,37 @@ impl Config {
         }
         let chain = self.starknet_chain_id.to_ascii_uppercase();
         chain.contains("SEPOLIA") || chain.contains("GOERLI")
+    }
+}
+
+fn load_env_override(paths: &[&str]) {
+    for path in paths {
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((raw_key, raw_value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = raw_key.trim();
+            if key.is_empty() {
+                continue;
+            }
+            let mut value = raw_value.trim().to_string();
+            if (value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\''))
+            {
+                value = value[1..value.len().saturating_sub(1)].to_string();
+            }
+            unsafe {
+                env::set_var(key, value);
+            }
+        }
+        return;
     }
 }
 

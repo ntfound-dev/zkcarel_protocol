@@ -4,7 +4,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Bot, User, Send, X, Minus, ChevronUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { executeAiCommand, getAiPendingActions, prepareAiAction } from "@/lib/api"
+import { executeAiCommand, getAiPendingActions, prepareAiAction, getAiRuntimeConfig } from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
 import { invokeStarknetCallFromWallet, toHexFelt } from "@/lib/onchain-trade"
@@ -36,7 +36,7 @@ const aiTiers = [
 const sampleMessages = [
   {
     role: "assistant" as const,
-    content: "Hello! I'm your ZK AI Assistant. How can I help you today?",
+    content: "Hello! I'm your CAREL AI Assistant. How can I help you today?",
   },
 ]
 
@@ -61,7 +61,7 @@ const quickPromptsByTier: Record<number, string[]> = {
   ],
 }
 
-const STARKNET_AI_EXECUTOR_ADDRESS =
+const STATIC_STARKNET_AI_EXECUTOR_ADDRESS =
   process.env.NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS ||
   process.env.NEXT_PUBLIC_AI_EXECUTOR_ADDRESS ||
   ""
@@ -74,7 +74,7 @@ function encodeShortByteArray(value: string): Array<string | number> {
   const byteLen = new TextEncoder().encode(normalized).length
   if (byteLen === 0) return [0, 0, 0]
   if (byteLen > 31) {
-    throw new Error("AI action payload terlalu panjang. Maksimal 31 bytes.")
+    throw new Error("AI action payload is too long. Maximum 31 bytes.")
   }
   return [0, toHexFelt(normalized), byteLen]
 }
@@ -125,11 +125,21 @@ export function FloatingAIAssistant() {
   const [isLoadingActions, setIsLoadingActions] = React.useState(false)
   const [isCreatingAction, setIsCreatingAction] = React.useState(false)
   const [isAutoPreparingAction, setIsAutoPreparingAction] = React.useState(false)
+  const [runtimeExecutorAddress, setRuntimeExecutorAddress] = React.useState("")
+  const [isResolvingExecutor, setIsResolvingExecutor] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
   const requiresActionId = selectedTier >= 2
   const parsedActionId = Number(actionId)
   const hasValidActionId = !requiresActionId || (Number.isFinite(parsedActionId) && parsedActionId > 0)
   const quickPrompts = quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
+  const staticExecutorAddress = React.useMemo(
+    () => STATIC_STARKNET_AI_EXECUTOR_ADDRESS.trim(),
+    []
+  )
+  const effectiveExecutorAddress = React.useMemo(
+    () => staticExecutorAddress || runtimeExecutorAddress.trim(),
+    [staticExecutorAddress, runtimeExecutorAddress]
+  )
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -138,6 +148,49 @@ export function FloatingAIAssistant() {
   React.useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  const ensureExecutorAddress = React.useCallback(async (): Promise<string> => {
+    if (effectiveExecutorAddress) return effectiveExecutorAddress
+    setIsResolvingExecutor(true)
+    try {
+      const runtimeConfig = await getAiRuntimeConfig()
+      const resolved = (runtimeConfig.executor_address || "").trim()
+      if (!runtimeConfig.executor_configured || !resolved) {
+        throw new Error(
+          "AI executor is not configured yet. Set AI_EXECUTOR_ADDRESS in backend env, or NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS in frontend env, then restart services."
+        )
+      }
+      setRuntimeExecutorAddress(resolved)
+      return resolved
+    } finally {
+      setIsResolvingExecutor(false)
+    }
+  }, [effectiveExecutorAddress])
+
+  React.useEffect(() => {
+    if (!isOpen || selectedTier < 2 || effectiveExecutorAddress || isResolvingExecutor) return
+    let cancelled = false
+    setIsResolvingExecutor(true)
+    void getAiRuntimeConfig()
+      .then((runtimeConfig) => {
+        if (cancelled) return
+        const resolved = (runtimeConfig.executor_address || "").trim()
+        if (runtimeConfig.executor_configured && resolved) {
+          setRuntimeExecutorAddress(resolved)
+        }
+      })
+      .catch(() => {
+        // Silent: explicit notification is shown only when user triggers on-chain setup.
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsResolvingExecutor(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen, selectedTier, effectiveExecutorAddress, isResolvingExecutor])
 
   const loadPendingActions = async (silent = false): Promise<number[]> => {
     const response = await getAiPendingActions(0, 50)
@@ -259,12 +312,17 @@ export function FloatingAIAssistant() {
   const createOnchainActionId = async (): Promise<number | null> => {
     if (!requiresActionId) return null
     if (isCreatingAction) return null
-    if (!STARKNET_AI_EXECUTOR_ADDRESS) {
+    let executorAddress = ""
+    try {
+      executorAddress = await ensureExecutorAddress()
+    } catch (error) {
       notifications.addNotification({
         type: "error",
         title: "AI executor not configured",
         message:
-          "Set NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS in frontend/.env.local then restart frontend.",
+          error instanceof Error
+            ? error.message
+            : "AI executor is not configured. Please set backend/frontend executor address first.",
       })
       return null
     }
@@ -301,7 +359,7 @@ export function FloatingAIAssistant() {
       const submitOnchainAction = async () =>
         invokeStarknetCallFromWallet(
           {
-            contractAddress: STARKNET_AI_EXECUTOR_ADDRESS,
+            contractAddress: executorAddress,
             entrypoint: "submit_action",
             calldata: [actionType, ...encodeShortByteArray(payload), 0],
           },
@@ -416,7 +474,7 @@ export function FloatingAIAssistant() {
   return (
     <div className={cn(
       "fixed bottom-6 right-6 z-50 glass-strong border border-primary/30 rounded-2xl shadow-xl transition-all duration-300 overflow-hidden",
-      isMinimized ? "w-72 h-14" : "w-80 sm:w-96 h-[500px]"
+      isMinimized ? "w-80 h-14" : "w-[94vw] max-w-[560px] h-[78vh] max-h-[760px]"
     )}>
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-border bg-surface/50">
@@ -425,7 +483,7 @@ export function FloatingAIAssistant() {
             <Bot className="h-4 w-4 text-primary-foreground" />
           </div>
           <div>
-            <p className="text-sm font-medium text-foreground">ZK AI Assistant</p>
+            <p className="text-sm font-medium text-foreground">CAREL AI Assistant</p>
             <p className="text-xs text-muted-foreground">
               {aiTiers[selectedTier - 1].name} • {aiTiers[selectedTier - 1].costLabel}
             </p>
@@ -518,21 +576,21 @@ export function FloatingAIAssistant() {
                               setIsAutoPreparingAction(false)
                             }
                           }}
-                          disabled={isCreatingAction || isLoadingActions || isAutoPreparingAction}
+                          disabled={isCreatingAction || isLoadingActions || isAutoPreparingAction || isResolvingExecutor}
                           className="text-[11px] text-primary hover:underline disabled:opacity-50"
                         >
                           {isAutoPreparingAction ? "Preparing..." : "Auto Setup On-Chain"}
                         </button>
                         <button
                           onClick={fetchPendingActions}
-                          disabled={isLoadingActions || isCreatingAction || isAutoPreparingAction}
+                          disabled={isLoadingActions || isCreatingAction || isAutoPreparingAction || isResolvingExecutor}
                           className="text-[11px] text-primary hover:underline disabled:opacity-50"
                         >
                           {isLoadingActions ? "Loading..." : "Fetch pending action_id"}
                         </button>
                         <button
                           onClick={createOnchainActionId}
-                          disabled={isCreatingAction || isLoadingActions || isAutoPreparingAction}
+                          disabled={isCreatingAction || isLoadingActions || isAutoPreparingAction || isResolvingExecutor}
                           className="text-[11px] text-primary hover:underline disabled:opacity-50"
                         >
                           {isCreatingAction ? "Submitting..." : "Create on-chain action_id"}
@@ -557,11 +615,18 @@ export function FloatingAIAssistant() {
                         ))}
                       </div>
                     )}
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {effectiveExecutorAddress
+                        ? "Executor ready."
+                        : isResolvingExecutor
+                          ? "Resolving executor address..."
+                          : "Executor address will be auto-resolved from backend config."}
+                    </p>
                   </div>
                 )}
                 <div className="mt-2 rounded-md border border-border/60 bg-surface/40 p-2 text-[10px] text-muted-foreground leading-relaxed">
                   <p className="text-foreground font-medium mb-1">Beginner Tutorial</p>
-                  <p>Level 1: Ask balance, points, market only.</p>
+                  <p>Level 1: Chat freely + ask read-only queries (price, balance, points, market).</p>
                   <p>Level 2: Click <span className="text-primary">Auto Setup On-Chain</span>, sign wallet once, then send swap/bridge command.</p>
                   <p>Level 3: Same setup as Level 2, then use portfolio/alert commands.</p>
                 </div>
@@ -616,13 +681,13 @@ export function FloatingAIAssistant() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
                 placeholder="Ask anything..."
-                disabled={isSending}
+                disabled={isSending || isResolvingExecutor}
                 className="flex-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none transition-all"
               />
               <Button 
                 onClick={handleSend}
                 size="sm"
-                disabled={isSending || !input.trim() || isCreatingAction || isAutoPreparingAction}
+                disabled={isSending || !input.trim() || isCreatingAction || isAutoPreparingAction || isResolvingExecutor}
                 className="bg-gradient-to-r from-primary to-accent hover:opacity-90 text-primary-foreground"
               >
                 {isSending ? (

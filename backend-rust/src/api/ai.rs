@@ -47,6 +47,12 @@ pub struct PendingActionsResponse {
     pub pending: Vec<u64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AIRuntimeConfigResponse {
+    pub executor_configured: bool,
+    pub executor_address: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PrepareAIActionRequest {
     pub level: u8,
@@ -83,9 +89,12 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
     let scope = classify_command_scope(command);
     match level {
         1 => {
-            if scope != AIGuardScope::ReadOnly {
+            if matches!(
+                scope,
+                AIGuardScope::SwapBridge | AIGuardScope::PortfolioAlert
+            ) {
                 return Err(AppError::BadRequest(
-                    "Level 1 is read-only: price, balance, points, and market queries only."
+                    "Level 1 supports chat + read-only queries only. Swap/bridge/stake/portfolio actions require higher tier."
                         .to_string(),
                 ));
             }
@@ -442,6 +451,19 @@ pub async fn get_pending_actions(
     })))
 }
 
+/// GET /api/v1/ai/config
+pub async fn get_runtime_config(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<AIRuntimeConfigResponse>>> {
+    let contract = state.config.ai_executor_address.trim();
+    let configured = !contract.is_empty() && !contract.starts_with("0x0000");
+    let response = AIRuntimeConfigResponse {
+        executor_configured: configured,
+        executor_address: configured.then(|| contract.to_string()),
+    };
+    Ok(Json(ApiResponse::success(response)))
+}
+
 async fn ensure_onchain_action(
     config: &crate::config::Config,
     user_address: &str,
@@ -529,6 +551,22 @@ mod tests {
         assert_eq!(action_type_for_level(2), Some(0));
         assert_eq!(action_type_for_level(3), Some(5));
         assert_eq!(action_type_for_level(1), None);
+    }
+
+    #[test]
+    fn level_1_allows_generic_chat_prompt() {
+        // Memastikan level 1 tetap bisa dipakai untuk chat umum/non-trading
+        assert!(ensure_ai_level_scope(1, "hello, can we chat?").is_ok());
+    }
+
+    #[test]
+    fn level_1_rejects_swap_execution_scope() {
+        // Memastikan level 1 tetap memblokir intent eksekusi trading
+        let err = ensure_ai_level_scope(1, "swap 1 STRK to CAREL").expect_err("must reject");
+        assert!(err
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("supports chat + read-only"));
     }
 
     #[test]

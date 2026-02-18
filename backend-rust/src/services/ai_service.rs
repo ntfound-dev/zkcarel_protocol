@@ -287,8 +287,8 @@ pub enum AIGuardScope {
 pub fn classify_command_scope(command: &str) -> AIGuardScope {
     let intent = parse_intent_from_command(command);
     match intent.action.as_str() {
-        "check_balance" | "check_points" | "market_analysis" => AIGuardScope::ReadOnly,
-        "swap" | "bridge" => AIGuardScope::SwapBridge,
+        "check_balance" | "check_points" | "market_analysis" | "tutorial" => AIGuardScope::ReadOnly,
+        "swap" | "bridge" | "stake" => AIGuardScope::SwapBridge,
         "portfolio_management" | "alerts" => AIGuardScope::PortfolioAlert,
         _ => AIGuardScope::Unknown,
     }
@@ -333,9 +333,7 @@ impl AIService {
             "alerts" => self.execute_alerts_command().await?,
             "tutorial" => self.execute_tutorial_command(level).await?,
             _ => AIResponse {
-                message:
-                    "I'm not sure what you want to do. Try asking about swaps, balances, or points."
-                        .to_string(),
+                message: "I can chat and help with market, balance, points, swap, bridge, and portfolio guidance. Tell me what you want to do.".to_string(),
                 actions: vec![],
                 data: None,
             },

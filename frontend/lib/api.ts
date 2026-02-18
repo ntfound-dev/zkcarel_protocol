@@ -118,6 +118,7 @@ export interface ExecuteSwapResponse {
   to_amount: string
   actual_rate: string
   fee_paid: string
+  privacy_tx_hash?: string
 }
 
 export interface BridgeQuoteResponse {
@@ -138,8 +139,33 @@ export interface ExecuteBridgeResponse {
   amount: string
   estimated_receive: string
   estimated_time: string
+  privacy_tx_hash?: string
   deposit_address?: string
   deposit_amount?: string
+  evm_approval_transaction?: {
+    to: string
+    value: string
+    data: string
+    chain_id?: number
+    gas_limit?: number
+  }
+  evm_initiate_transaction?: {
+    to: string
+    value: string
+    data: string
+    chain_id?: number
+    gas_limit?: number
+  }
+  starknet_approval_transaction?: {
+    to: string
+    selector: string
+    calldata: string[]
+  }
+  starknet_initiate_transaction?: {
+    to: string
+    selector: string
+    calldata: string[]
+  }
 }
 
 export interface BridgeStatusResponse {
@@ -295,6 +321,11 @@ export interface PendingActionsResponse {
   pending: number[]
 }
 
+export interface AiRuntimeConfigResponse {
+  executor_configured: boolean
+  executor_address?: string | null
+}
+
 export interface PrepareAiActionResponse {
   tx_hash: string
   action_type: number
@@ -306,6 +337,17 @@ export interface PrepareAiActionResponse {
 
 export interface PrivacySubmitResponse {
   tx_hash: string
+}
+
+export interface PrivacyAutoSubmitResponse {
+  payload: {
+    verifier: string
+    nullifier: string
+    commitment: string
+    proof: string[]
+    public_inputs: string[]
+  }
+  tx_hash?: string
 }
 
 export type PrivacyVerificationPayload = {
@@ -901,6 +943,7 @@ export async function executeSwap(payload: {
     body: JSON.stringify(payload),
     context: "Swap execute",
     suppressErrorNotification: true,
+    timeoutMs: 120000,
   })
 }
 
@@ -908,6 +951,7 @@ export async function getBridgeQuote(payload: {
   from_chain: string
   to_chain: string
   token: string
+  to_token?: string
   amount: string
 }) {
   return apiFetch<BridgeQuoteResponse>("/api/v1/bridge/quote", {
@@ -926,6 +970,8 @@ export async function executeBridge(payload: {
   estimated_out_amount?: string
   amount: string
   recipient: string
+  source_owner?: string
+  existing_bridge_id?: string
   xverse_user_id?: string
   onchain_tx_hash?: string
   mode?: string
@@ -937,6 +983,7 @@ export async function executeBridge(payload: {
     body: JSON.stringify(payload),
     context: "Bridge execute",
     suppressErrorNotification: true,
+    timeoutMs: 120000,
   })
 }
 
@@ -1237,6 +1284,13 @@ export async function getAiPendingActions(offset = 0, limit = 10) {
   return apiFetch<PendingActionsResponse>(`/api/v1/ai/pending?${params.toString()}`)
 }
 
+export async function getAiRuntimeConfig() {
+  return apiFetch<AiRuntimeConfigResponse>("/api/v1/ai/config", {
+    context: "AI runtime config",
+    suppressErrorNotification: true,
+  })
+}
+
 export async function prepareAiAction(payload: {
   level: number
   context?: string
@@ -1256,6 +1310,28 @@ export async function submitPrivacyAction(payload: PrivacyActionPayload) {
     body: JSON.stringify(payload),
     context: "Privacy submit",
     suppressErrorNotification: true,
+  })
+}
+
+export async function autoSubmitPrivacyAction(payload?: {
+  verifier?: string
+  submit_onchain?: boolean
+  tx_context?: {
+    flow?: string
+    from_token?: string
+    to_token?: string
+    amount?: string
+    recipient?: string
+    from_network?: string
+    to_network?: string
+  }
+}) {
+  return apiFetch<PrivacyAutoSubmitResponse>("/api/v1/privacy/auto-submit", {
+    method: "POST",
+    body: JSON.stringify(payload ?? {}),
+    context: "Privacy auto submit",
+    suppressErrorNotification: true,
+    timeoutMs: 120000,
   })
 }
 
@@ -1301,7 +1377,7 @@ export async function getOnchainBalances(payload: {
     body: JSON.stringify(normalizedPayload),
     context: "Onchain balances",
     suppressErrorNotification: true,
-    timeoutMs: 9000,
+    timeoutMs: 30000,
   })
     .then((data) => {
       onchainBalancesCache.set(cacheKey, {

@@ -187,10 +187,18 @@ impl GardenClient {
                     &["amount"],
                 ],
             );
+            let approval_raw = pick_value_by_path(&body, &["result", "approval_transaction"])
+                .or_else(|| pick_value_by_path(&body, &["approval_transaction"]));
+            let initiate_raw = pick_value_by_path(&body, &["result", "initiate_transaction"])
+                .or_else(|| pick_value_by_path(&body, &["initiate_transaction"]));
             return Ok(GardenOrderSubmission {
                 order_id: id,
                 deposit_address,
                 deposit_amount,
+                evm_approval_transaction: approval_raw.and_then(parse_evm_transaction),
+                evm_initiate_transaction: initiate_raw.and_then(parse_evm_transaction),
+                starknet_approval_transaction: approval_raw.and_then(parse_starknet_transaction),
+                starknet_initiate_transaction: initiate_raw.and_then(parse_starknet_transaction),
             });
         }
 
@@ -531,6 +539,10 @@ pub struct GardenOrderSubmission {
     pub order_id: String,
     pub deposit_address: Option<String>,
     pub deposit_amount: Option<String>,
+    pub evm_approval_transaction: Option<GardenEvmTransaction>,
+    pub evm_initiate_transaction: Option<GardenEvmTransaction>,
+    pub starknet_approval_transaction: Option<GardenStarknetTransaction>,
+    pub starknet_initiate_transaction: Option<GardenStarknetTransaction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -542,6 +554,22 @@ pub struct GardenOrderStatus {
     pub destination_initiate_tx_hash: Option<String>,
     pub destination_redeem_tx_hash: Option<String>,
     pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GardenEvmTransaction {
+    pub to: String,
+    pub value: String,
+    pub data: String,
+    pub chain_id: Option<u64>,
+    pub gas_limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GardenStarknetTransaction {
+    pub to: String,
+    pub selector: String,
+    pub calldata: Vec<String>,
 }
 
 #[cfg(test)]
@@ -709,6 +737,55 @@ fn pick_string_non_empty(body: &Value, paths: &[&[&str]]) -> Option<String> {
     })
 }
 
+fn pick_string_list(body: &Value, paths: &[&[&str]]) -> Option<Vec<String>> {
+    for path in paths {
+        if let Some(value) = pick_value_by_path(body, path) {
+            let list = match value {
+                Value::Array(items) => items
+                    .iter()
+                    .filter_map(value_to_string)
+                    .map(|item| item.trim().to_string())
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
+            if !list.is_empty() {
+                return Some(list);
+            }
+        }
+    }
+    None
+}
+
+fn parse_evm_transaction(value: &Value) -> Option<GardenEvmTransaction> {
+    let to = pick_string_non_empty(value, &[&["to"]])?;
+    let value_hex =
+        pick_string_non_empty(value, &[&["value"]]).unwrap_or_else(|| "0x0".to_string());
+    let data = pick_string_non_empty(value, &[&["data"]]).unwrap_or_else(|| "0x".to_string());
+    let chain_id =
+        pick_u128(value, &[&["chain_id"], &["chainId"]]).and_then(|raw| u64::try_from(raw).ok());
+    let gas_limit =
+        pick_u128(value, &[&["gas_limit"], &["gasLimit"]]).and_then(|raw| u64::try_from(raw).ok());
+    Some(GardenEvmTransaction {
+        to,
+        value: value_hex,
+        data,
+        chain_id,
+        gas_limit,
+    })
+}
+
+fn parse_starknet_transaction(value: &Value) -> Option<GardenStarknetTransaction> {
+    let to = pick_string_non_empty(value, &[&["to"]])?;
+    let selector = pick_string_non_empty(value, &[&["selector"]])?;
+    let calldata = pick_string_list(value, &[&["calldata"]]).unwrap_or_default();
+    Some(GardenStarknetTransaction {
+        to,
+        selector,
+        calldata,
+    })
+}
+
 fn value_to_u128(value: &Value) -> Option<u128> {
     if let Some(raw) = value.as_u64() {
         return Some(raw as u128);
@@ -719,6 +796,11 @@ fn value_to_u128(value: &Value) -> Option<u128> {
         }
     }
     if let Some(raw) = value.as_str() {
+        if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            if let Ok(parsed) = u128::from_str_radix(hex, 16) {
+                return Some(parsed);
+            }
+        }
         if let Ok(parsed) = raw.parse::<u128>() {
             return Some(parsed);
         }

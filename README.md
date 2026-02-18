@@ -32,6 +32,8 @@ Rules:
 - Fee AI Level 2/3 dibayar on-chain via kontrak `AIExecutor`.
 - Pembayaran CAREL untuk AI diproses sebagai fee dan diburn oleh kontrak (sesuai logic executor aktif).
 - Akses Level 2/3 memerlukan `action_id` on-chain valid.
+- Frontend mendukung auto-setup `action_id` (prepare signature + submit action via wallet).
+- Alamat executor AI bisa diambil otomatis dari backend runtime config (`GET /api/v1/ai/config`) jika env frontend tidak diisi.
 
 ## Rewards Distribution
 - Early testnet memakai pool distribusi sebesar **3% total supply CAREL**.
@@ -114,6 +116,24 @@ npm run dev
 Default akses:
 - Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:8080` (mengikuti `backend-rust/.env`)
+
+## Quick Demo
+Untuk demo cepat tanpa setup manual banyak terminal:
+
+```bash
+./scripts/quick-start.sh
+```
+
+Stop semua service:
+
+```bash
+./scripts/quick-stop.sh
+```
+
+Catatan:
+- Pastikan PostgreSQL + Redis sudah jalan (`sudo service postgresql start && sudo service redis-server start`).
+- Mode `Hide Balance` pada konfigurasi repo ini sudah diset ke **developer-shared mode** agar tetap bisa dipakai saat demo (tidak perlu setup prover real di mesin demo).
+- Untuk production, ganti ke strict real prover per-request di `backend-rust/.env`.
 
 ## Technical Docs
 - Backend technical/API/config: `backend-rust/README.md`

@@ -121,6 +121,15 @@ pub mod ZkPrivacyRouter {
             public_inputs: Span<felt252>
         ) {
             assert!(!self.nullifiers.entry(nullifier).read(), "Nullifier already used");
+            assert!(public_inputs.len() >= 2, "public_inputs must include nullifier+commitment");
+            assert!(
+                *public_inputs.at(0_usize) == nullifier,
+                "public_inputs[0] must equal nullifier"
+            );
+            assert!(
+                *public_inputs.at(1_usize) == commitment,
+                "public_inputs[1] must equal commitment"
+            );
             let verifier = self.verifier.read();
             assert!(!verifier.is_zero(), "Verifier not set");
 

@@ -79,8 +79,11 @@ export async function invokeStarknetCallsFromWallet(
     entrypoint: call.entrypoint,
     calldata: call.calldata.map((item) => toHexFelt(item)),
   }))
+  const requiresStrictWalletInvoke =
+    normalizedCalls.length > 2 ||
+    normalizedCalls.some((call) => call.entrypoint === "submit_private_action")
   const account = injected.account as InjectedStarknet["account"] | undefined
-  if (account?.execute) {
+  if (account?.execute && !requiresStrictWalletInvoke) {
     const attempts = [
       normalizedCalls.map((call) => ({
         contractAddress: call.contractAddress,
@@ -90,6 +93,16 @@ export async function invokeStarknetCallsFromWallet(
       normalizedCalls.map((call) => ({
         contract_address: call.contractAddress,
         entry_point: call.entrypoint,
+        calldata: call.calldata,
+      })),
+      normalizedCalls.map((call) => ({
+        contractAddress: call.contractAddress,
+        selector: call.entrypoint,
+        calldata: call.calldata,
+      })),
+      normalizedCalls.map((call) => ({
+        contract_address: call.contractAddress,
+        selector: call.entrypoint,
         calldata: call.calldata,
       })),
     ]
@@ -118,6 +131,16 @@ export async function invokeStarknetCallsFromWallet(
     entrypoint: call.entrypoint,
     calldata: call.calldata,
   }))
+  const invokeCallsSelectorSnake = normalizedCalls.map((call) => ({
+    contract_address: call.contractAddress,
+    selector: call.entrypoint,
+    calldata: call.calldata,
+  }))
+  const invokeCallsSelectorCamel = normalizedCalls.map((call) => ({
+    contractAddress: call.contractAddress,
+    selector: call.entrypoint,
+    calldata: call.calldata,
+  }))
 
   const requestPayloads: Array<{ type: string; params: unknown }> = [
     { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsSnake } },
@@ -125,6 +148,10 @@ export async function invokeStarknetCallsFromWallet(
     { type: "starknet_addInvokeTransaction", params: [{ calls: invokeCallsSnake }] },
     { type: "starknet_addInvokeTransaction", params: { calls: invokeCallsSnake } },
     { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsCamel } },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsSelectorSnake } },
+    { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsSelectorSnake }] },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsSelectorCamel } },
+    { type: "starknet_addInvokeTransaction", params: [{ calls: invokeCallsSelectorSnake }] },
   ]
 
   for (const payload of requestPayloads) {
@@ -181,6 +208,73 @@ export async function sendEvmNativeTransferFromWallet(
   const normalized = extractTxHash(txHash)
   if (!normalized) {
     throw new Error("Failed to get tx hash from MetaMask transaction.")
+  }
+  return normalized
+}
+
+export async function sendEvmTransactionFromWallet(tx: {
+  to: string
+  value?: string
+  data?: string
+  chain_id?: number
+  gas_limit?: number
+}): Promise<string> {
+  const recipient = normalizeEvmAddress(tx.to)
+  if (!recipient) {
+    throw new Error("Garden EVM transaction has invalid recipient address.")
+  }
+  if (typeof tx.chain_id === "number" && tx.chain_id > 0 && tx.chain_id !== EVM_SEPOLIA_CHAIN_ID) {
+    throw new Error(`Unsupported Garden EVM chain_id ${tx.chain_id}. Expected ${EVM_SEPOLIA_CHAIN_ID}.`)
+  }
+
+  const evm = getInjectedEvmMetaMask()
+  if (!evm) {
+    throw new Error("MetaMask not detected. Install MetaMask for Ethereum bridge signature.")
+  }
+  const from = await requestEvmAccount(evm)
+  await ensureEvmSepolia(evm)
+
+  const valueRaw = (tx.value || "").trim()
+  const value = valueRaw ? toHexFelt(valueRaw) : "0x0"
+  const dataRaw = (tx.data || "").trim()
+  const data = dataRaw
+    ? dataRaw.startsWith("0x") || dataRaw.startsWith("0X")
+      ? `0x${dataRaw.slice(2)}`
+      : `0x${dataRaw}`
+    : undefined
+
+  const payload: Record<string, unknown> = {
+    from,
+    to: recipient,
+    value,
+  }
+  if (data && data.length > 2) {
+    payload.data = data
+  }
+  if (typeof tx.gas_limit === "number" && Number.isFinite(tx.gas_limit) && tx.gas_limit > 0) {
+    payload.gas = `0x${Math.trunc(tx.gas_limit).toString(16)}`
+  }
+
+  const txHash = await evm.request({
+    method: "eth_sendTransaction",
+    params: [payload],
+  })
+  const normalized = extractTxHash(txHash)
+  if (!normalized) {
+    throw new Error("Failed to get tx hash from Garden EVM transaction.")
+  }
+  return normalized
+}
+
+export async function getConnectedEvmAddressFromWallet(): Promise<string> {
+  const evm = getInjectedEvmMetaMask()
+  if (!evm) {
+    throw new Error("MetaMask not detected. Install MetaMask for Ethereum bridge signature.")
+  }
+  const account = await requestEvmAccount(evm)
+  const normalized = normalizeEvmAddress(account)
+  if (!normalized) {
+    throw new Error("MetaMask returned invalid EVM account address.")
   }
   return normalized
 }

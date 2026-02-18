@@ -27,10 +27,26 @@ pub mod GaragaVerifierAdapter {
         fn verify_groth16_proof_bn254(self: @TContractState, full_proof_with_hints: Span<felt252>) -> bool;
     }
 
+    /// Garaga maintained Groth16 BN254 verifier interface (returns optional output).
+    #[starknet::interface]
+    pub trait IGaragaGroth16Bn254VerifierWithOutput<TContractState> {
+        fn verify_groth16_proof_bn254(
+            self: @TContractState, full_proof_with_hints: Span<felt252>
+        ) -> Option<Span<u256>>;
+    }
+
     /// Garaga generated Groth16 BLS12-381 verifier interface.
     #[starknet::interface]
     pub trait IGaragaGroth16Bls12381Verifier<TContractState> {
         fn verify_groth16_proof_bls12_381(self: @TContractState, full_proof_with_hints: Span<felt252>) -> bool;
+    }
+
+    /// Garaga maintained Groth16 BLS12-381 verifier interface (returns optional output).
+    #[starknet::interface]
+    pub trait IGaragaGroth16Bls12381VerifierWithOutput<TContractState> {
+        fn verify_groth16_proof_bls12_381(
+            self: @TContractState, full_proof_with_hints: Span<felt252>
+        ) -> Option<Span<u256>>;
     }
 
     /// Admin interface for selecting Garaga verifier function mode.
@@ -44,6 +60,8 @@ pub mod GaragaVerifierAdapter {
     const MODE_ULTRA_STARKNET_HONK: u8 = 1;
     const MODE_GROTH16_BN254: u8 = 2;
     const MODE_GROTH16_BLS12_381: u8 = 3;
+    const MODE_GROTH16_BN254_OUTPUT: u8 = 4;
+    const MODE_GROTH16_BLS12_381_OUTPUT: u8 = 5;
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
 
@@ -105,6 +123,18 @@ pub mod GaragaVerifierAdapter {
                 let verifier = IGaragaGroth16Bls12381VerifierDispatcher { contract_address: verifier_address };
                 return verifier.verify_groth16_proof_bls12_381(proof);
             }
+            if mode == MODE_GROTH16_BN254_OUTPUT {
+                let verifier = IGaragaGroth16Bn254VerifierWithOutputDispatcher {
+                    contract_address: verifier_address
+                };
+                return verifier.verify_groth16_proof_bn254(proof).is_some();
+            }
+            if mode == MODE_GROTH16_BLS12_381_OUTPUT {
+                let verifier = IGaragaGroth16Bls12381VerifierWithOutputDispatcher {
+                    contract_address: verifier_address
+                };
+                return verifier.verify_groth16_proof_bls12_381(proof).is_some();
+            }
 
             let verifier = IGaragaVerifierDispatcher { contract_address: verifier_address };
             verifier.verify_proof(proof, public_inputs)
@@ -125,7 +155,7 @@ pub mod GaragaVerifierAdapter {
     impl ModeAdminImpl of IGaragaVerifierModeAdmin<ContractState> {
         fn set_verification_mode(ref self: ContractState, mode: u8) {
             self.ownable.assert_only_owner();
-            assert!(mode <= MODE_GROTH16_BLS12_381, "Unsupported mode");
+            assert!(mode <= MODE_GROTH16_BLS12_381_OUTPUT, "Unsupported mode");
             self.verification_mode.write(mode);
             self.emit(Event::VerificationModeUpdated(VerificationModeUpdated { mode }));
         }
