@@ -40,6 +40,7 @@ pub struct Config {
     pub ai_signature_verifier_address: Option<String>,
     pub bridge_aggregator_address: String,
     pub zk_privacy_router_address: String,
+    pub battleship_garaga_address: Option<String>,
     pub privacy_router_address: Option<String>,
     pub privacy_auto_garaga_payload_file: Option<String>,
     pub privacy_auto_garaga_proof_file: Option<String>,
@@ -192,6 +193,9 @@ impl Config {
             ai_signature_verifier_address: env::var("AI_SIGNATURE_VERIFIER_ADDRESS").ok(),
             bridge_aggregator_address: env::var("BRIDGE_AGGREGATOR_ADDRESS")?,
             zk_privacy_router_address: env::var("ZK_PRIVACY_ROUTER_ADDRESS")?,
+            battleship_garaga_address: env::var("BATTLESHIP_GARAGA_ADDRESS")
+                .ok()
+                .or_else(|| env::var("BATTLESHIP_CONTRACT_ADDRESS").ok()),
             privacy_router_address: env::var("PRIVACY_ROUTER_ADDRESS").ok(),
             privacy_auto_garaga_payload_file,
             privacy_auto_garaga_proof_file: env::var("PRIVACY_AUTO_GARAGA_PROOF_FILE").ok(),

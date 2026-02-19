@@ -17,6 +17,7 @@ import {
   getGardenOrderById,
   getOwnedNfts,
   getPortfolioBalance,
+  preparePrivateExecution,
   getRewardsPoints,
   getSwapQuote,
   type NFTItem,
@@ -136,7 +137,18 @@ const DEV_AUTO_GARAGA_PAYLOAD_ENABLED =
   process.env.NODE_ENV !== "production" &&
   (process.env.NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL || "false").toLowerCase() === "true"
 const HIDE_BALANCE_FALLBACK_TO_PUBLIC_ENABLED =
-  (process.env.NEXT_PUBLIC_HIDE_BALANCE_FALLBACK_TO_PUBLIC || "true").toLowerCase() === "true"
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_FALLBACK_TO_PUBLIC || "false").toLowerCase() === "true"
+const PRIVATE_ACTION_EXECUTOR_ADDRESS =
+  (process.env.NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED || "false").toLowerCase() ===
+    "true" && PRIVATE_ACTION_EXECUTOR_ADDRESS.length > 0
+const HIDE_BALANCE_RELAYER_POOL_ENABLED =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "true").toLowerCase() === "true"
+const BRIDGE_TO_STRK_DISABLED_MESSAGE =
+  "Bridge to STRK is currently disabled. Use Starknet L2 Swap for STRK pairs."
+const UNSUPPORTED_BRIDGE_PAIR_MESSAGE =
+  "Bridge pair is not supported on current testnet routes. Supported pairs: ETH↔BTC, BTC↔WBTC, ETH↔WBTC."
 
 const CAREL_PROTOCOL_ADDRESS = process.env.NEXT_PUBLIC_CAREL_PROTOCOL_ADDRESS || ""
 const STARKNET_SWAP_CONTRACT_ADDRESS =
@@ -168,11 +180,11 @@ const STARKNET_TOKEN_ADDRESS: Record<string, string> = {
     "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545",
   BTC:
     process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
-    "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5",
+    "",
   WBTC:
     process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
     process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
-    "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5",
+    "",
   ETH: process.env.NEXT_PUBLIC_TOKEN_ETH_ADDRESS || "0x3",
   STRK:
     process.env.NEXT_PUBLIC_TOKEN_STRK_ADDRESS ||
@@ -197,6 +209,27 @@ const chainFromNetwork = (network: string) => {
   if (key.includes("ethereum")) return "ethereum"
   if (key.includes("starknet")) return "starknet"
   return key
+}
+
+const isBridgeToStrkDisabledRoute = (fromChain: string, toChain: string, toSymbol: string) =>
+  fromChain !== "starknet" && toChain === "starknet" && toSymbol.trim().toUpperCase() === "STRK"
+
+const isBridgePairSupportedForCurrentRoutes = (
+  fromChain: string,
+  toChain: string,
+  fromSymbol: string,
+  toSymbol: string
+) => {
+  const from = fromSymbol.trim().toUpperCase()
+  const to = toSymbol.trim().toUpperCase()
+  return (
+    (fromChain === "ethereum" && toChain === "bitcoin" && from === "ETH" && to === "BTC") ||
+    (fromChain === "bitcoin" && toChain === "ethereum" && from === "BTC" && to === "ETH") ||
+    (fromChain === "bitcoin" && toChain === "starknet" && from === "BTC" && to === "WBTC") ||
+    (fromChain === "starknet" && toChain === "bitcoin" && from === "WBTC" && to === "BTC") ||
+    (fromChain === "ethereum" && toChain === "starknet" && from === "ETH" && to === "WBTC") ||
+    (fromChain === "starknet" && toChain === "ethereum" && from === "WBTC" && to === "ETH")
+  )
 }
 
 const convertAmountByUsdPrice = (
@@ -877,7 +910,7 @@ export function TradingInterface() {
   }, [resolveTokenBalance, resolveTokenPrice])
 
   const [fromTokenSymbol, setFromTokenSymbol] = React.useState("ETH")
-  const [toTokenSymbol, setToTokenSymbol] = React.useState("STRK")
+  const [toTokenSymbol, setToTokenSymbol] = React.useState("WBTC")
   const fromToken = React.useMemo(() => {
     return (
       tokens.find((token) => token.symbol === fromTokenSymbol) ||
@@ -888,7 +921,7 @@ export function TradingInterface() {
   const toToken = React.useMemo(() => {
     return (
       tokens.find((token) => token.symbol === toTokenSymbol) ||
-      tokens.find((token) => token.symbol === "STRK") ||
+      tokens.find((token) => token.symbol === "WBTC") ||
       tokens[1] ||
       tokens[0]
     )
@@ -902,6 +935,7 @@ export function TradingInterface() {
   const [quoteError, setQuoteError] = React.useState<string | null>(null)
   const [liquidityMaxFromQuote, setLiquidityMaxFromQuote] = React.useState<number | null>(null)
   const quoteCacheRef = React.useRef<Map<string, QuoteCacheEntry>>(new Map())
+  const quoteRequestSeqRef = React.useRef(0)
   const [activeNft, setActiveNft] = React.useState<NFTItem | null>(null)
   const [stakePointsMultiplier, setStakePointsMultiplier] = React.useState(1)
   
@@ -910,8 +944,11 @@ export function TradingInterface() {
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
-  // Unified toggle: when user hides balances, on-chain hide flow is expected as well.
-  const hideBalanceOnchain = balanceHidden
+  // Hide Balance (Garaga) is only enabled for Starknet <-> Starknet swap flow.
+  const hideBalanceSupportedForCurrentPair =
+    chainFromNetwork(fromToken.network) === "starknet" &&
+    chainFromNetwork(toToken.network) === "starknet"
+  const hideBalanceOnchain = hideBalanceSupportedForCurrentPair && balanceHidden
   
   // Settings state
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -931,6 +968,12 @@ export function TradingInterface() {
     setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
   }, [])
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
+    const cachedPayload = loadTradePrivacyPayload()
+    if (cachedPayload) {
+      setHasTradePrivacyPayload(true)
+      return cachedPayload
+    }
+
     if (autoPrivacyPayloadPromiseRef.current) {
       return autoPrivacyPayloadPromiseRef.current
     }
@@ -1074,6 +1117,11 @@ export function TradingInterface() {
   const toPrice = toToken.price
   const fromChain = sourceChain
   const toChain = targetChain
+  const bridgeToStrkDisabled =
+    isCrossChain && isBridgeToStrkDisabledRoute(fromChain, toChain, toSymbol)
+  const bridgePairSupported =
+    !isCrossChain ||
+    isBridgePairSupportedForCurrentRoutes(fromChain, toChain, fromSymbol, toSymbol)
   const btcVaultExplorerUrl = React.useMemo(() => {
     if (!BTC_VAULT_ADDRESS) return ""
     const base = BTC_TESTNET_EXPLORER_BASE_URL.replace(/\/$/, "")
@@ -1104,6 +1152,13 @@ export function TradingInterface() {
     if (isReceiveAddressManual) return
     setReceiveAddress(preferredReceiveAddress)
   }, [preferredReceiveAddress, isReceiveAddressManual])
+
+  React.useEffect(() => {
+    if (hideBalanceSupportedForCurrentPair || !balanceHidden) return
+    setBalanceHidden(false)
+    clearTradePrivacyPayload()
+    setHasTradePrivacyPayload(false)
+  }, [hideBalanceSupportedForCurrentPair, balanceHidden])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -1238,6 +1293,20 @@ export function TradingInterface() {
       setLiquidityMaxFromQuote(null)
       return
     }
+    if (bridgeToStrkDisabled) {
+      setToAmount("")
+      setQuote(null)
+      setQuoteError(BRIDGE_TO_STRK_DISABLED_MESSAGE)
+      setLiquidityMaxFromQuote(null)
+      return
+    }
+    if (isCrossChain && !bridgePairSupported) {
+      setToAmount("")
+      setQuote(null)
+      setQuoteError(UNSUPPORTED_BRIDGE_PAIR_MESSAGE)
+      setLiquidityMaxFromQuote(null)
+      return
+    }
     const slippageValue = Number(customSlippage || slippage || "0.5")
     const tradeMode = mevProtection ? "private" : "transparent"
     const quoteCacheKey = [
@@ -1252,13 +1321,15 @@ export function TradingInterface() {
     ].join("|")
 
     let cancelled = false
+    const requestSeq = ++quoteRequestSeqRef.current
+    const isStale = () => cancelled || requestSeq !== quoteRequestSeqRef.current
     const timer = setTimeout(async () => {
       setIsQuoteLoading(true)
       setQuoteError(null)
       const now = Date.now()
       const cached = quoteCacheRef.current.get(quoteCacheKey)
       if (cached && cached.expiresAt > now) {
-        if (!cancelled) {
+        if (!isStale()) {
           setToAmount(cached.toAmount)
           setQuote(cached.quote)
           setQuoteError(cached.quoteError)
@@ -1297,7 +1368,7 @@ export function TradingInterface() {
             to_token: toSymbol,
             amount: fromAmount,
           })
-          if (cancelled) return
+          if (isStale()) return
           let protocolFee = Number(response.fee || 0)
           let networkFee = 0
           if (fromChain === "ethereum" && toChain === "starknet" && fromSymbol.toUpperCase() === "ETH") {
@@ -1305,13 +1376,14 @@ export function TradingInterface() {
               estimateStarkgateDepositFeeWei(STARKGATE_ETH_BRIDGE_ADDRESS),
               estimateEvmNetworkFeeWei(BigInt(210000)),
             ])
-            if (!cancelled && estimatedFeeWei !== null) {
+            if (!isStale() && estimatedFeeWei !== null) {
               protocolFee = bigintWeiToUnitNumber(estimatedFeeWei, 18)
             }
-            if (!cancelled && estimatedNetworkFeeWei !== null) {
+            if (!isStale() && estimatedNetworkFeeWei !== null) {
               networkFee = bigintWeiToUnitNumber(estimatedNetworkFeeWei, 18)
             }
           }
+          if (isStale()) return
           const mevFee = mevProtection ? amountValue * MEV_FEE_RATE : 0
           const bridgeFee = protocolFee + networkFee + mevFee
           const estimatedReceiveRaw = Number(response.estimated_receive || 0)
@@ -1382,7 +1454,7 @@ export function TradingInterface() {
             slippage: slippageValue,
             mode: tradeMode,
           })
-          if (cancelled) return
+          if (isStale()) return
           const onchainCalls =
             Array.isArray(response.onchain_calls) && response.onchain_calls.length > 0
               ? response.onchain_calls
@@ -1457,14 +1529,14 @@ export function TradingInterface() {
           saveQuoteToCache(swapQuote, swapQuote.toAmount, null)
         }
       } catch (error) {
-        if (cancelled) return
+        if (isStale()) return
         const message = error instanceof Error ? error.message : "Failed to fetch quote"
         setQuoteError(message)
         setLiquidityMaxFromQuote(parseLiquidityMaxFromQuoteError(message, fromSymbol))
         setToAmount("")
         setQuote(null)
       } finally {
-        if (!cancelled) {
+        if (!isStale()) {
           setIsQuoteLoading(false)
         }
       }
@@ -1476,6 +1548,8 @@ export function TradingInterface() {
     }
   }, [
     fromAmount,
+    bridgeToStrkDisabled,
+    bridgePairSupported,
     fromChain,
     fromPrice,
     fromSymbol,
@@ -1660,11 +1734,11 @@ export function TradingInterface() {
   const fromTokenLiveBalance = (() => {
     const symbol = fromToken.symbol.toUpperCase()
     if (!shouldRequireLiveStarknetBalance) return null
-    if (symbol === "STRK") return wallet.onchainBalance.STRK_L2
-    if (symbol === "CAREL") return wallet.onchainBalance.CAREL
-    if (symbol === "USDC") return wallet.onchainBalance.USDC
-    if (symbol === "USDT") return wallet.onchainBalance.USDT
-    if (symbol === "WBTC") return wallet.onchainBalance.WBTC
+    if (symbol === "STRK") return wallet.onchainBalance.STRK_L2 ?? wallet.balance.STRK ?? null
+    if (symbol === "CAREL") return wallet.onchainBalance.CAREL ?? wallet.balance.CAREL ?? null
+    if (symbol === "USDC") return wallet.onchainBalance.USDC ?? wallet.balance.USDC ?? null
+    if (symbol === "USDT") return wallet.onchainBalance.USDT ?? wallet.balance.USDT ?? null
+    if (symbol === "WBTC") return wallet.onchainBalance.WBTC ?? wallet.balance.WBTC ?? null
     return null
   })()
   const onchainBalanceUnavailable =
@@ -1697,6 +1771,8 @@ export function TradingInterface() {
     if (onchainBalanceUnavailable) return
     const parsed = Number.parseFloat(fromAmount || "0")
     if (!Number.isFinite(parsed) || parsed <= 0) return
+    // Keep manual input editable even when balance/liquidity currently resolves to 0.
+    if (maxExecutableFromAllLimits <= 0) return
     if (parsed <= maxExecutableFromAllLimits + 1e-12) return
     const clamped = sanitizeDecimalInput(
       String(Math.max(0, maxExecutableFromAllLimits)),
@@ -1828,6 +1904,17 @@ export function TradingInterface() {
         "On-chain swap signing currently supports Starknet pairs only. Use Starknet ↔ Starknet pair or bridge mode."
       )
     }
+    if (
+      fromToken.symbol.toUpperCase() === "WBTC" ||
+      toToken.symbol.toUpperCase() === "WBTC"
+    ) {
+      const wbtcAddress = resolveTokenAddress("WBTC")
+      if (!wbtcAddress) {
+        throw new Error(
+          "NEXT_PUBLIC_TOKEN_WBTC_ADDRESS is not set. Configure the real Starknet WBTC token address."
+        )
+      }
+    }
     if (isSwapContractEventOnly) {
       throw new Error(
         "Current swap contract is event-only and does not move real tokens yet. Enable/deploy the real swap router first."
@@ -1889,14 +1976,87 @@ export function TradingInterface() {
           "Garaga payload belum siap untuk Hide Balance. Coba lagi, atau cek backend auto-proof config."
         )
       }
-      const hasPrivacyCall = preparedCalls.some(
-        (call) =>
-          call.entrypoint === "submit_private_action" &&
-          isSameFeltAddress(call.contractAddress, STARKNET_ZK_PRIVACY_ROUTER_ADDRESS)
-      )
-      if (!hasPrivacyCall) {
-        const privacyCall = buildHideBalancePrivacyCall(resolvedPayload)
-        preparedCalls = [privacyCall, ...preparedCalls]
+
+      let usedPrivateExecutor = false
+      if (HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED) {
+        const swapActionIndex = preparedCalls.findIndex((call) => call.entrypoint === "execute_swap")
+        if (swapActionIndex >= 0) {
+          try {
+            const swapActionCall = preparedCalls[swapActionIndex]
+            const preparedPrivate = await preparePrivateExecution({
+              verifier: (resolvedPayload.verifier || "garaga").trim() || "garaga",
+              flow: "swap",
+              action_entrypoint: swapActionCall.entrypoint,
+              action_calldata: swapActionCall.calldata,
+              tx_context: {
+                flow: "swap",
+                from_token: fromToken.symbol,
+                to_token: toToken.symbol,
+                amount: fromAmount,
+                recipient: receiveAddress || undefined,
+                from_network: fromToken.network,
+                to_network: toToken.network,
+              },
+            })
+            const preparedPayload: PrivacyVerificationPayload = {
+              verifier: (preparedPrivate.payload?.verifier || "garaga").trim() || "garaga",
+              nullifier: preparedPrivate.payload?.nullifier?.trim(),
+              commitment: preparedPrivate.payload?.commitment?.trim(),
+              proof: normalizeHexArray(preparedPrivate.payload?.proof),
+              public_inputs: normalizeHexArray(preparedPrivate.payload?.public_inputs),
+            }
+            persistTradePrivacyPayload(preparedPayload)
+            setHasTradePrivacyPayload(true)
+
+            const prefixCalls =
+              swapActionIndex > 0 ? preparedCalls.slice(0, swapActionIndex) : []
+            const executorCalls = preparedPrivate.onchain_calls
+              .filter(
+                (call) =>
+                  call &&
+                  typeof call.contract_address === "string" &&
+                  typeof call.entrypoint === "string" &&
+                  Array.isArray(call.calldata)
+              )
+              .map((call) => ({
+                contractAddress: call.contract_address.trim(),
+                entrypoint: call.entrypoint.trim(),
+                calldata: call.calldata.map((item) => String(item)),
+              }))
+              .filter(
+                (call) =>
+                  !!call.contractAddress &&
+                  !!call.entrypoint &&
+                  call.calldata.every((item) => typeof item === "string" && item.trim().length > 0)
+              )
+            if (!executorCalls.length) {
+              throw new Error("prepare-private-execution returned empty onchain_calls")
+            }
+            preparedCalls = [...prefixCalls, ...executorCalls]
+            usedPrivateExecutor = true
+          } catch (error) {
+            notifications.addNotification({
+              type: "warning",
+              title: "Private executor fallback",
+              message:
+                error instanceof Error
+                  ? `Using legacy privacy call path: ${error.message}`
+                  : "Using legacy privacy call path.",
+            })
+          }
+        }
+      }
+
+      if (!usedPrivateExecutor) {
+        const hasPrivacyCall = preparedCalls.some(
+          (call) =>
+            call.entrypoint === "submit_private_action" &&
+            isSameFeltAddress(call.contractAddress, STARKNET_ZK_PRIVACY_ROUTER_ADDRESS)
+        )
+        if (!hasPrivacyCall) {
+          const privacyCall = buildHideBalancePrivacyCall(resolvedPayload)
+          preparedCalls = [privacyCall, ...preparedCalls]
+        }
       }
     }
 
@@ -1927,6 +2087,7 @@ export function TradingInterface() {
       mevProtection,
       notifications,
       quote,
+      receiveAddress,
       starknetProviderHint,
       toToken.network,
       toToken.symbol,
@@ -1937,6 +2098,12 @@ export function TradingInterface() {
   const submitOnchainBridgeTx = React.useCallback(async () => {
     const fromChain = chainFromNetwork(fromToken.network)
     const toChain = chainFromNetwork(toToken.network)
+    if (isBridgeToStrkDisabledRoute(fromChain, toChain, toToken.symbol)) {
+      throw new Error(BRIDGE_TO_STRK_DISABLED_MESSAGE)
+    }
+    if (!isBridgePairSupportedForCurrentRoutes(fromChain, toChain, fromToken.symbol, toToken.symbol)) {
+      throw new Error(UNSUPPORTED_BRIDGE_PAIR_MESSAGE)
+    }
     const recipient = (receiveAddress || preferredReceiveAddress).trim()
     if (fromChain === "ethereum") {
       if (fromToken.symbol.toUpperCase() !== "ETH") {
@@ -2019,6 +2186,7 @@ export function TradingInterface() {
     receiveAddress,
     starknetProviderHint,
     toToken.network,
+    toToken.symbol,
   ])
 
   const handleExecuteTrade = () => {
@@ -2318,6 +2486,12 @@ export function TradingInterface() {
         const recipient = (receiveAddress || preferredReceiveAddress).trim()
         const sourceChain = chainFromNetwork(fromToken.network)
         const toChain = chainFromNetwork(toToken.network)
+        if (isBridgeToStrkDisabledRoute(sourceChain, toChain, toToken.symbol)) {
+          throw new Error(BRIDGE_TO_STRK_DISABLED_MESSAGE)
+        }
+        if (!isBridgePairSupportedForCurrentRoutes(sourceChain, toChain, fromToken.symbol, toToken.symbol)) {
+          throw new Error(UNSUPPORTED_BRIDGE_PAIR_MESSAGE)
+        }
         const xverseHint = xverseUserId.trim() || undefined
         const recipientFallbackFromXverse =
           toChain === "bitcoin" && !recipient ? xverseHint : undefined
@@ -2597,41 +2771,79 @@ export function TradingInterface() {
         const slippageValue = Number(activeSlippage || "0.5")
         const minAmountOut = (Number.parseFloat(toAmount || "0") * (1 - slippageValue / 100)).toFixed(6)
         const deadline = Math.floor(Date.now() / 1000) + 60 * 20
-        notifications.addNotification({
-          type: "info",
-          title: "Wallet signature required",
-          message: "Confirm swap transaction in your Starknet wallet.",
-        })
-        const onchainTxHash = await submitOnchainSwapTx(tradePrivacyPayload, effectiveHideBalance)
-        submittedSwapTxHash = onchainTxHash
-
-        notifications.addNotification({
-          type: "info",
-          title: "Swap pending",
-          message: `Swap ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
-          txHash: onchainTxHash,
-          txNetwork: "starknet",
-        })
-
         const recipient = (receiveAddress || preferredReceiveAddress).trim() || undefined
-        const response = await executeSwap({
-          from_token: fromToken.symbol,
-          to_token: toToken.symbol,
-          amount: fromAmount,
-          min_amount_out: minAmountOut,
-          slippage: slippageValue,
-          deadline,
-          recipient,
-          onchain_tx_hash: onchainTxHash || undefined,
-          mode: mevProtection ? "private" : "transparent",
-          hide_balance: effectiveHideBalance,
-          privacy: effectiveHideBalance ? tradePrivacyPayload : undefined,
-        })
+        const submittedPrivacyPayload =
+          effectiveHideBalance ? loadTradePrivacyPayload() || tradePrivacyPayload : undefined
+        let response: Awaited<ReturnType<typeof executeSwap>>
+        let finalTxHash: string | undefined
+
+        if (effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED) {
+          notifications.addNotification({
+            type: "info",
+            title: "Submitting private swap",
+            message: "Submitting hide-mode swap through Starknet relayer pool.",
+          })
+          response = await executeSwap({
+            from_token: fromToken.symbol,
+            to_token: toToken.symbol,
+            amount: fromAmount,
+            min_amount_out: minAmountOut,
+            slippage: slippageValue,
+            deadline,
+            recipient,
+            mode: mevProtection ? "private" : "transparent",
+            hide_balance: true,
+            privacy: submittedPrivacyPayload,
+          })
+          finalTxHash = response.tx_hash
+          submittedSwapTxHash = response.tx_hash || null
+          if (finalTxHash) {
+            notifications.addNotification({
+              type: "info",
+              title: "Private swap pending",
+              message: `Hide swap ${fromAmount} ${fromToken.symbol} submitted (${finalTxHash.slice(0, 10)}...).`,
+              txHash: finalTxHash,
+              txNetwork: "starknet",
+            })
+          }
+        } else {
+          notifications.addNotification({
+            type: "info",
+            title: "Wallet signature required",
+            message: "Confirm swap transaction in your Starknet wallet.",
+          })
+          const onchainTxHash = await submitOnchainSwapTx(tradePrivacyPayload, effectiveHideBalance)
+          submittedSwapTxHash = onchainTxHash
+          finalTxHash = onchainTxHash
+
+          notifications.addNotification({
+            type: "info",
+            title: "Swap pending",
+            message: `Swap ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+            txHash: onchainTxHash,
+            txNetwork: "starknet",
+          })
+
+          response = await executeSwap({
+            from_token: fromToken.symbol,
+            to_token: toToken.symbol,
+            amount: fromAmount,
+            min_amount_out: minAmountOut,
+            slippage: slippageValue,
+            deadline,
+            recipient,
+            onchain_tx_hash: onchainTxHash || undefined,
+            mode: mevProtection ? "private" : "transparent",
+            hide_balance: effectiveHideBalance,
+            privacy: submittedPrivacyPayload,
+          })
+        }
+
         notifications.addNotification({
           type: "success",
           title: "Swap completed",
           message: `Swap ${fromAmount} ${fromToken.symbol} → ${response.to_amount} ${toToken.symbol}`,
-          txHash: onchainTxHash,
+          txHash: finalTxHash,
           txNetwork: "starknet",
         })
         if (response.privacy_tx_hash) {
@@ -2731,39 +2943,40 @@ export function TradingInterface() {
             <span className="text-[10px] text-muted-foreground">
               WS: {priceStatus.websocket}
             </span>
-            {/* Visual privacy - eye icon hides/shows displayed balances only */}
-            <button 
-              onClick={() => {
-                const next = !balanceHidden
-                setBalanceHidden(next)
-                if (next) {
-                  clearTradePrivacyPayload()
-                  void resolveHideBalancePrivacyPayload()
+            {hideBalanceSupportedForCurrentPair && (
+              <button 
+                onClick={() => {
+                  const next = !balanceHidden
+                  setBalanceHidden(next)
+                  if (next) {
+                    clearTradePrivacyPayload()
+                    void resolveHideBalancePrivacyPayload()
+                  }
+                  refreshTradePrivacyPayload()
+                }}
+                className={cn(
+                  "p-2 rounded-lg transition-colors group border",
+                  !balanceHidden
+                    ? "border-border text-muted-foreground hover:bg-surface/50"
+                    : hasTradePrivacyPayload
+                    ? "bg-primary/20 border-primary/50 text-primary"
+                    : "bg-warning/10 border-warning/40 text-warning hover:bg-warning/20"
+                )}
+                title={
+                  !balanceHidden
+                    ? "Hide balances"
+                    : hasTradePrivacyPayload
+                    ? "Show balances (on-chain hide active)"
+                    : "Show balances (Garaga payload will be prepared automatically)"
                 }
-                refreshTradePrivacyPayload()
-              }}
-              className={cn(
-                "p-2 rounded-lg transition-colors group border",
-                !balanceHidden
-                  ? "border-border text-muted-foreground hover:bg-surface/50"
-                  : hasTradePrivacyPayload
-                  ? "bg-primary/20 border-primary/50 text-primary"
-                  : "bg-warning/10 border-warning/40 text-warning hover:bg-warning/20"
-              )}
-              title={
-                !balanceHidden
-                  ? "Hide balances"
-                  : hasTradePrivacyPayload
-                  ? "Show balances (on-chain hide active)"
-                  : "Show balances (Garaga payload will be prepared automatically)"
-              }
-            >
-              {balanceHidden ? (
-                <EyeOff className="h-4 w-4" />
-              ) : (
-                <Eye className="h-4 w-4" />
-              )}
-            </button>
+              >
+                {balanceHidden ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+            )}
           </div>
         </div>
 
@@ -2783,8 +2996,8 @@ export function TradingInterface() {
           {fromToken.symbol === "BTC" && !wallet.btcAddress && (
             <div className="px-3 py-2 rounded-lg bg-warning/10 border border-warning/30">
               <p className="text-xs text-foreground">
-                Source BTC membutuhkan wallet BTC testnet (UniSat/Xverse). Untuk cepat test STRK,
-                gunakan pair ETH ↔ STRK.
+                Source BTC membutuhkan wallet BTC testnet (UniSat/Xverse). Untuk quick test tanpa
+                wallet BTC, gunakan pair ETH ↔ WBTC.
               </p>
             </div>
           )}

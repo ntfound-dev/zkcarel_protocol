@@ -57,10 +57,21 @@ async fn main() -> anyhow::Result<()> {
             .map(|v| !v.trim().is_empty())
             .unwrap_or(false)
     );
-    tracing::info!("Auto Garaga Strict Mode: prover command per-request (no static payload fallback)");
+    tracing::info!(
+        "Auto Garaga Strict Mode: prover command per-request (no static payload fallback)"
+    );
     tracing::info!(
         "Auto Garaga Prover Timeout (ms): {}",
         config.privacy_auto_garaga_prover_timeout_ms
+    );
+    tracing::info!(
+        "Battleship Contract Configured: {}{}",
+        config.battleship_garaga_address.as_ref().is_some(),
+        config
+            .battleship_garaga_address
+            .as_ref()
+            .map(|addr| format!(" ({addr})"))
+            .unwrap_or_default()
     );
     let swap_contract = std::env::var("STARKNET_SWAP_CONTRACT_ADDRESS")
         .ok()
@@ -202,6 +213,7 @@ fn build_router(state: api::AppState) -> Router {
         .route("/api/v1/stake/pools", get(api::stake::get_pools))
         .route("/api/v1/stake/deposit", post(api::stake::deposit))
         .route("/api/v1/stake/withdraw", post(api::stake::withdraw))
+        .route("/api/v1/stake/claim", post(api::stake::claim))
         .route("/api/v1/stake/positions", get(api::stake::get_positions))
         // Portfolio
         .route(
@@ -284,6 +296,10 @@ fn build_router(state: api::AppState) -> Router {
         .route(
             "/api/v1/privacy/auto-submit",
             post(api::privacy::auto_submit_private_action),
+        )
+        .route(
+            "/api/v1/privacy/prepare-private-execution",
+            post(api::privacy::prepare_private_execution),
         )
         // Private BTC swap
         .route(
@@ -396,6 +412,26 @@ fn build_router(state: api::AppState) -> Router {
         .route("/api/v1/ai/config", get(api::ai::get_runtime_config))
         .route("/api/v1/ai/execute", post(api::ai::execute_command))
         .route("/api/v1/ai/pending", get(api::ai::get_pending_actions))
+        // DeFi Futures (Battleship with Garaga payload flow)
+        .route(
+            "/api/v1/battleship/create",
+            post(api::battleship::create_game),
+        )
+        .route("/api/v1/battleship/join", post(api::battleship::join_game))
+        .route(
+            "/api/v1/battleship/place-ships",
+            post(api::battleship::place_ships),
+        )
+        .route("/api/v1/battleship/fire", post(api::battleship::fire_shot))
+        .route("/api/v1/battleship/respond", post(api::battleship::respond_shot))
+        .route(
+            "/api/v1/battleship/claim-timeout",
+            post(api::battleship::claim_timeout),
+        )
+        .route(
+            "/api/v1/battleship/state/{game_id}",
+            get(api::battleship::get_state),
+        )
         // WebSocket endpoints
         .route("/ws/notifications", get(websocket::notifications::handler))
         .route("/ws/prices", get(websocket::prices::handler))

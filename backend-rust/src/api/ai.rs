@@ -100,7 +100,10 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
             }
         }
         2 => {
-            if !matches!(scope, AIGuardScope::ReadOnly | AIGuardScope::SwapBridge) {
+            if !matches!(
+                scope,
+                AIGuardScope::ReadOnly | AIGuardScope::SwapBridge | AIGuardScope::Unknown
+            ) {
                 return Err(AppError::BadRequest(
                     "Level 2 supports read-only + swap/bridge commands.".to_string(),
                 ));
@@ -109,7 +112,10 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
         3 => {
             if !matches!(
                 scope,
-                AIGuardScope::ReadOnly | AIGuardScope::SwapBridge | AIGuardScope::PortfolioAlert
+                AIGuardScope::ReadOnly
+                    | AIGuardScope::SwapBridge
+                    | AIGuardScope::PortfolioAlert
+                    | AIGuardScope::Unknown
             ) {
                 return Err(AppError::BadRequest(
                     "Level 3 supports all AI commands: read-only, swap/bridge, portfolio, and alerts."
@@ -122,6 +128,16 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn requires_onchain_action_id(level: u8, command: &str) -> bool {
+    if level < 2 {
+        return false;
+    }
+    matches!(
+        classify_command_scope(command),
+        AIGuardScope::SwapBridge | AIGuardScope::PortfolioAlert
+    )
 }
 
 fn ai_level_limit(state: &AppState, level: u8) -> u32 {
@@ -225,7 +241,8 @@ pub async fn execute_command(
     }
     ensure_ai_level_scope(level, &command)?;
 
-    if level >= 2 {
+    let needs_onchain_action = requires_onchain_action_id(level, &command);
+    if needs_onchain_action {
         let Some(action_id) = req.action_id else {
             return Err(crate::error::AppError::BadRequest(
                 "Missing on-chain AI action_id".into(),
@@ -233,7 +250,7 @@ pub async fn execute_command(
         };
         ensure_onchain_action(&config, &user_address, action_id).await?;
     }
-    enforce_ai_rate_limit(&state, &user_address, level, level >= 2).await?;
+    enforce_ai_rate_limit(&state, &user_address, level, needs_onchain_action).await?;
 
     let ai_response = service
         .execute_command(&user_address, &command, level)
@@ -567,6 +584,34 @@ mod tests {
             .to_string()
             .to_ascii_lowercase()
             .contains("supports chat + read-only"));
+    }
+
+    #[test]
+    fn level_2_allows_generic_chat_prompt() {
+        // Memastikan level 2 tetap bisa dipakai ngobrol umum tanpa intent trading.
+        assert!(ensure_ai_level_scope(2, "hello, can we chat about strategy?").is_ok());
+    }
+
+    #[test]
+    fn level_3_allows_generic_chat_prompt() {
+        // Memastikan level 3 tetap menerima prompt umum/non-intent.
+        assert!(ensure_ai_level_scope(3, "what do you think about market mood today?").is_ok());
+    }
+
+    #[test]
+    fn requires_onchain_action_only_for_execution_scopes() {
+        // Memastikan action_id hanya diwajibkan untuk scope eksekusi.
+        assert!(!requires_onchain_action_id(1, "hello"));
+        assert!(!requires_onchain_action_id(2, "check my balance"));
+        assert!(!requires_onchain_action_id(3, "beginner tutorial"));
+        assert!(requires_onchain_action_id(2, "swap 1 STRK to CAREL"));
+        assert!(requires_onchain_action_id(
+            2,
+            "create limit order 10 STRK to USDC at 1.2"
+        ));
+        assert!(requires_onchain_action_id(2, "unstake 50 USDT"));
+        assert!(requires_onchain_action_id(2, "claim rewards USDT"));
+        assert!(requires_onchain_action_id(3, "set price alert for STRK"));
     }
 
     #[test]

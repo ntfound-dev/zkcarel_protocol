@@ -31,6 +31,8 @@ Environment:
                                 GARAGA_PROOF_PATH, GARAGA_PUBLIC_INPUTS_PATH
 - GARAGA_PRECOMPUTED_PAYLOAD_PATH (optional; JSON containing proof/public_inputs.
                                    If set, skip `garaga calldata` and read payload directly.)
+- GARAGA_ALLOW_PRECOMPUTED_PAYLOAD (default: false; must be true/1/yes to allow
+                                    GARAGA_PRECOMPUTED_PAYLOAD_PATH in non-strict mode)
 - GARAGA_DYNAMIC_BINDING         (default: false; generate fresh nullifier/commitment
                                   and overwrite binding slots in public_inputs.
                                   Useful for shared developer payload mode.)
@@ -325,6 +327,13 @@ def main() -> None:
     precomputed_payload_path = (
         Path(precomputed_payload_raw).expanduser() if precomputed_payload_raw else None
     )
+    allow_precomputed_payload = bool_env("GARAGA_ALLOW_PRECOMPUTED_PAYLOAD", False)
+    if precomputed_payload_path is not None and not allow_precomputed_payload:
+        fail(
+            "GARAGA_PRECOMPUTED_PAYLOAD_PATH is disabled in strict mode. "
+            "Set GARAGA_PROVE_CMD for real per-request prover, "
+            "or explicitly set GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=true for developer mode."
+        )
     precomputed_payload = maybe_load_precomputed_payload(precomputed_payload_path)
 
     prove_cmd = os.getenv("GARAGA_PROVE_CMD", "").strip()

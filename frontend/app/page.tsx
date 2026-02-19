@@ -11,6 +11,7 @@ import { FeaturedCards, type SelectableFeatureId } from "@/components/featured-c
 import { TradingInterface } from "@/components/trading-interface"
 import { LimitOrder } from "@/components/limit-order"
 import { StakeEarn } from "@/components/stake-earn"
+import { DefiFuturesBattleship } from "@/components/defi-futures-battleship"
 import { PortfolioDashboard } from "@/components/portfolio-dashboard"
 import { Leaderboard } from "@/components/leaderboard"
 import { RewardsHub } from "@/components/rewards-hub"
@@ -73,6 +74,11 @@ export default function CarelProtocolApp() {
                       {activeFeature === "stake-earn" && (
                         <section id="stake">
                           <StakeEarn />
+                        </section>
+                      )}
+                      {activeFeature === "defi-futures" && (
+                        <section id="defi-futures">
+                          <DefiFuturesBattleship />
                         </section>
                       )}
                     </section>

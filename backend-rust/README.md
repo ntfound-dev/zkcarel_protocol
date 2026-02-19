@@ -2,6 +2,10 @@
 
 This backend is built with Rust + Axum for HTTP APIs and WebSocket. PostgreSQL is used for primary data storage, Redis for cache/session, and multiple background services run on startup.
 
+## README Scope
+- Dokumen ini fokus ke **teknis backend**: API, service, config, deployment, observability, troubleshooting.
+- Untuk konteks produk, business model, dan roadmap level monorepo, lihat `README.md` di root.
+
 **Architecture Summary**
 - **HTTP API (Axum)**: Auth, swap, bridge, limit order, staking, portfolio, rewards, NFT, referral, social, faucet, deposit, notifications, transactions, charts, webhooks, AI.
 - **WebSocket**: `notifications`, `prices`, `orders`.
@@ -84,10 +88,17 @@ Optional (defaults apply if empty):
 - `SUMO_LOGIN_API_KEY`, `SUMO_LOGIN_API_URL`
 - `XVERSE_API_KEY`, `XVERSE_API_URL`
 - `PRIVACY_VERIFIER_ROUTERS` (map verifier -> router address)
-- `PRIVACY_AUTO_GARAGA_PROVER_CMD` (wajib; prover bridge command per-request, baca JSON dari stdin, output JSON berisi `nullifier`, `commitment`, `proof[]`, `public_inputs[]`)
+- `PRIVACY_AUTO_GARAGA_PROVER_CMD` (wajib; prover command per-request, baca JSON dari stdin, output JSON berisi `nullifier`, `commitment`, `proof[]`, `public_inputs[]`)
 - `PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS` (timeout command prover, default `45000`)
 - `GARAGA_PROVE_CMD` (wajib; command prover real yang dijalankan oleh script bridge per request)
 - `GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX` + `GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX` (default `0` + `1`, harus match urutan public input circuit)
+- `GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX` (default `2`, dipakai flow hide executor untuk bind intent hash)
+- `BATTLESHIP_GARAGA_ADDRESS` (opsional; alamat kontrak `BattleshipGaraga` untuk target integrasi on-chain mode game)
+- `PRIVATE_ACTION_EXECUTOR_ADDRESS` (opsional tapi direkomendasikan; alamat hide executor on-chain: `PrivateActionExecutor` v1 atau `ShieldedPoolV2`)
+- `HIDE_BALANCE_EXECUTOR_KIND` (default `private_action_executor_v1`; set `shielded_pool_v2` jika executor yang dipakai adalah `ShieldedPoolV2`)
+- `HIDE_BALANCE_RELAYER_POOL_ENABLED` (default `true`; berlaku untuk hide-mode `swap` + `limit order` + `stake` via backend relayer/pool, tanpa `onchain_tx_hash` dari wallet user)
+- `STAKING_STABLECOIN_ADDRESS` (opsional tapi direkomendasikan; target staking relayer untuk `USDC/USDT/STRK`)
+- `STAKING_BTC_ADDRESS` (opsional tapi direkomendasikan; target staking relayer untuk `WBTC`)
 - `SOCIAL_TASKS_JSON` (dynamic social task catalog tanpa ubah frontend)
   Example:
   ```json
@@ -111,13 +122,30 @@ Testnet template:
 - Hide Balance supports 2 modes:
   - Dev shared mode: team pakai `garaga_payload.json` + dynamic binding (mudah dipakai semua developer).
   - Strict production mode: prover real per-request (tanpa fallback static payload).
+- Relayer/pool mode: backend submit call hide executor dari akun relayer, bukan dari wallet user (`swap|limit|stake`).
+  - `PrivateActionExecutor` v1: `submit_private_intent + execute_private_*`
+  - `ShieldedPoolV2`: `submit_private_action + execute_private_*`
+
+Current Sepolia wiring used by this repo (latest):
+- `PRIVATE_ACTION_EXECUTOR_ADDRESS=0x07e18b8314a17989a74ba12e6a68856a9e4791ce254d8491ad2b4addc7e5bf8e`
+- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2`
+- `ZK_PRIVACY_ROUTER_ADDRESS=0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f`
+- `BATTLESHIP_GARAGA_ADDRESS=0x04ea26d455d6d79f185a728ac59cac029a6a5bf2a3ca3b4b75f04b4e8c267dd2`
+- `STARKNET_SWAP_CONTRACT_ADDRESS=0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28`
+- `LIMIT_ORDER_BOOK_ADDRESS=0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a`
+- `STAKING_CAREL_ADDRESS=0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb`
+- `STAKING_STABLECOIN_ADDRESS=0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff`
+- `STAKING_BTC_ADDRESS=0x030098330968d105bf0a0068011b3f166e595582828dbbfaf8e5e204420b1f3b`
 
 One-click auto prover command (dev shared mode):
 ```bash
 # backend-rust/.env
 PRIVACY_AUTO_GARAGA_PROVER_CMD="python3 scripts/garaga_auto_prover.py"
 PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS=45000
+HIDE_BALANCE_RELAYER_POOL_ENABLED=true
+HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2
 GARAGA_PRECOMPUTED_PAYLOAD_PATH=garaga_payload.json
+GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=true
 GARAGA_DYNAMIC_BINDING=true
 GARAGA_PROVE_CMD=
 GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX=0
@@ -134,6 +162,8 @@ PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS=45000
 GARAGA_VK_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_vk_bls12381.json
 GARAGA_PROOF_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_proof_bls12381.json
 GARAGA_PUBLIC_INPUTS_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_public_bls12381.json
+GARAGA_PRECOMPUTED_PAYLOAD_PATH=
+GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=false
 GARAGA_PROVE_CMD="python3 /abs/path/to/your_real_prover.py"
 GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX=0
 GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX=1
@@ -246,6 +276,14 @@ docker compose up --build backend postgres redis
 - Privacy:
   - `POST /api/v1/privacy/submit` (manual submit payload)
   - `POST /api/v1/privacy/auto-submit` (auto-prepare payload dari file config backend, opsional auto submit on-chain)
+  - `POST /api/v1/privacy/prepare-private-execution` (prepare hide-mode calldata untuk `PrivateActionExecutor`: `submit_private_intent + execute_private_*` untuk flow `swap|limit|stake`)
+- Battleship:
+  - `POST /api/v1/battleship/create`
+  - `POST /api/v1/battleship/join`
+  - `POST /api/v1/battleship/place-ships`
+  - `POST /api/v1/battleship/fire`
+  - `POST /api/v1/battleship/claim-timeout`
+  - `GET /api/v1/battleship/state/{game_id}`
 - Private BTC swap: `POST /api/v1/private-btc-swap/initiate`, `POST /api/v1/private-btc-swap/finalize`
 - Dark pool: `POST /api/v1/dark-pool/order`, `POST /api/v1/dark-pool/match`
 - Private payments: `POST /api/v1/private-payments/submit`, `POST /api/v1/private-payments/finalize`
@@ -271,11 +309,16 @@ docker compose up --build backend postgres redis
 - Event indexer reads contract addresses from `.env` and skips placeholder `0x0000...` entries. Populate `BRIDGE_AGGREGATOR_ADDRESS`, `SNAPSHOT_DISTRIBUTOR_ADDRESS`, `LIMIT_ORDER_BOOK_ADDRESS`, plus optional `STAKING_CAREL_ADDRESS`/`REFERRAL_SYSTEM_ADDRESS` to enable indexing.
 - Private flow supports verifier selector per request: `garaga|tongo|semaphore`. If omitted, default is `garaga`.
 - Hide Balance auto-flow:
-  - frontend bisa minta payload ke `POST /api/v1/privacy/auto-submit`,
+  - frontend bisa minta payload ke `POST /api/v1/privacy/auto-submit` (UI saat ini dipakai untuk swap Starknet ↔ Starknet),
   - backend prioritas jalankan `PRIVACY_AUTO_GARAGA_PROVER_CMD` (jika di-set),
   - fallback ke file payload real (bukan `0x1`) dari env `PRIVACY_AUTO_GARAGA_*`,
-  - payload dikembalikan ke frontend untuk dipakai di call `submit_private_action` saat execute swap/bridge.
+  - payload dikembalikan ke frontend untuk dipakai di call `submit_private_action` saat execute swap.
+- Bridge policy saat ini:
+  - destination `STRK` untuk route cross-chain diblokir (`Bridge -> STRK` disabled),
+  - pair terkait `STRK` seperti `STRK/WBTC` harus lewat Swap di Starknet L2.
+  - pair bridge yang didukung pada testnet saat ini: `ETH<->BTC`, `BTC<->WBTC`, `ETH<->WBTC`.
 - Bridge flow validates on-chain tx hash receipt for source Starknet/Ethereum. Source BTC native (Garden order-first) can proceed without user tx hash at submit time.
+- Battleship API saat ini state game disimpan di backend memory store (`OnceLock<RwLock<...>>`) untuk gameplay cepat. Kontrak `BattleshipGaraga` sudah tersedia di Sepolia untuk wiring on-chain tahap berikutnya.
 - AI assistant:
   - level 1: free,
   - level 2: 1 CAREL,

@@ -27,21 +27,30 @@ import {
   AlertCircle,
   Gift,
   Sparkles,
+  Eye,
+  EyeOff,
 } from "lucide-react"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
 import {
+  autoSubmitPrivacyAction,
   cancelLimitOrder,
   createLimitOrder,
   getMarketDepth,
   getOwnedNfts,
   getPortfolioBalance,
+  preparePrivateExecution,
   getRewardsPoints,
   getTokenOHLCV,
   listLimitOrders,
   type NFTItem,
+  type PrivacyVerificationPayload,
 } from "@/lib/api"
-import { decimalToU256Parts, invokeStarknetCallFromWallet, toHexFelt } from "@/lib/onchain-trade"
+import {
+  decimalToU256Parts,
+  invokeStarknetCallsFromWallet,
+  toHexFelt,
+} from "@/lib/onchain-trade"
 import { useLivePrices } from "@/hooks/use-live-prices"
 import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 
@@ -128,6 +137,105 @@ const TOKEN_DECIMALS: Record<string, number> = {
   USDC: 6,
 }
 
+const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v2"
+const DEV_AUTO_GARAGA_PAYLOAD_ENABLED =
+  process.env.NODE_ENV !== "production" &&
+  (process.env.NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL || "false").toLowerCase() === "true"
+const STARKNET_ZK_PRIVACY_ROUTER_ADDRESS =
+  process.env.NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS ||
+  process.env.NEXT_PUBLIC_PRIVACY_ROUTER_ADDRESS ||
+  ""
+const PRIVATE_ACTION_EXECUTOR_ADDRESS =
+  (process.env.NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED || "false").toLowerCase() ===
+    "true" && PRIVATE_ACTION_EXECUTOR_ADDRESS.length > 0
+const HIDE_BALANCE_RELAYER_POOL_ENABLED =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "true").toLowerCase() === "true"
+
+const normalizeHexArray = (values?: string[] | null): string[] => {
+  if (!Array.isArray(values)) return []
+  return values
+    .map((value) => (typeof value === "string" ? value.trim() : String(value ?? "").trim()))
+    .filter((value) => value.length > 0)
+}
+
+const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
+  if (typeof window === "undefined") return undefined
+  try {
+    const raw = window.localStorage.getItem(TRADE_PRIVACY_PAYLOAD_KEY)
+    if (!raw) return undefined
+    const parsed = JSON.parse(raw) as PrivacyVerificationPayload
+    const nullifier = parsed.nullifier?.trim()
+    const commitment = parsed.commitment?.trim()
+    const proof = normalizeHexArray(parsed.proof)
+    const publicInputs = normalizeHexArray(parsed.public_inputs)
+    if (!nullifier || !commitment || proof.length === 0 || publicInputs.length === 0) return undefined
+    if (
+      proof.length === 1 &&
+      publicInputs.length === 1 &&
+      proof[0]?.toLowerCase() === "0x1" &&
+      publicInputs[0]?.toLowerCase() === "0x1"
+    ) {
+      window.localStorage.removeItem(TRADE_PRIVACY_PAYLOAD_KEY)
+      return undefined
+    }
+    return {
+      verifier: (parsed.verifier || "garaga").trim() || "garaga",
+      nullifier,
+      commitment,
+      proof,
+      public_inputs: publicInputs,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(payload))
+  window.dispatchEvent(new Event("trade-privacy-payload-updated"))
+}
+
+const randomHexFelt = () => {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+  return `0x${hex.replace(/^0+/, "") || "1"}`
+}
+
+const createDevTradePrivacyPayload = (): PrivacyVerificationPayload => ({
+  verifier: "garaga",
+  nullifier: randomHexFelt(),
+  commitment: randomHexFelt(),
+  proof: ["0x1"],
+  public_inputs: ["0x1"],
+})
+
+const buildHideBalancePrivacyCall = (payload: PrivacyVerificationPayload) => {
+  const router = STARKNET_ZK_PRIVACY_ROUTER_ADDRESS.trim()
+  if (!router) {
+    throw new Error(
+      "NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS is not configured. Hide Balance requires privacy router address."
+    )
+  }
+  const nullifier = payload.nullifier?.trim() || ""
+  const commitment = payload.commitment?.trim() || ""
+  const proof = normalizeHexArray(payload.proof)
+  const publicInputs = normalizeHexArray(payload.public_inputs)
+  if (!nullifier || !commitment || !proof.length || !publicInputs.length) {
+    throw new Error(
+      "Hide Balance requires complete Garaga payload (nullifier, commitment, proof, public_inputs)."
+    )
+  }
+  return {
+    contractAddress: router,
+    entrypoint: "submit_private_action",
+    calldata: [nullifier, commitment, String(proof.length), ...proof, String(publicInputs.length), ...publicInputs],
+  }
+}
+
 const formatDateTime = (value: string) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
@@ -183,6 +291,10 @@ export function LimitOrder() {
   const [showConfirmDialog, setShowConfirmDialog] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [submitSuccess, setSubmitSuccess] = React.useState(false)
+  const [balanceHidden, setBalanceHidden] = React.useState(false)
+  const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
+  const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
+  const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
   const [chartCandles, setChartCandles] = React.useState<ChartCandle[]>([])
   const [activeNftDiscount, setActiveNftDiscount] = React.useState<NFTItem | null>(null)
   const [stakePointsMultiplier, setStakePointsMultiplier] = React.useState(1)
@@ -196,6 +308,95 @@ export function LimitOrder() {
     }
     return "starknet"
   }, [wallet.provider])
+
+  const refreshTradePrivacyPayload = React.useCallback(() => {
+    setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
+  }, [])
+
+  const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
+    if (autoPrivacyPayloadPromiseRef.current) return autoPrivacyPayloadPromiseRef.current
+
+    const task = (async () => {
+      if (DEV_AUTO_GARAGA_PAYLOAD_ENABLED) {
+        const generated = createDevTradePrivacyPayload()
+        persistTradePrivacyPayload(generated)
+        setHasTradePrivacyPayload(true)
+        return generated
+      }
+
+      if (!wallet.isConnected) return undefined
+
+      setIsAutoPrivacyProvisioning(true)
+      try {
+        const response = await autoSubmitPrivacyAction({
+          verifier: "garaga",
+          submit_onchain: false,
+          tx_context: {
+            flow: "limit_order",
+            from_token: orderType === "buy" ? payToken.symbol : selectedToken.symbol,
+            to_token: orderType === "buy" ? selectedToken.symbol : receiveToken.symbol,
+            amount,
+            from_network: "starknet",
+            to_network: "starknet",
+          },
+        })
+        const payload: PrivacyVerificationPayload = {
+          verifier: (response.payload?.verifier || "garaga").trim() || "garaga",
+          nullifier: response.payload?.nullifier?.trim(),
+          commitment: response.payload?.commitment?.trim(),
+          proof: normalizeHexArray(response.payload?.proof),
+          public_inputs: normalizeHexArray(response.payload?.public_inputs),
+        }
+        const proof = normalizeHexArray(payload.proof)
+        const publicInputs = normalizeHexArray(payload.public_inputs)
+        if (!payload.nullifier || !payload.commitment || !proof.length || !publicInputs.length) {
+          throw new Error("Auto Garaga payload is incomplete from backend.")
+        }
+        if (
+          proof.length === 1 &&
+          publicInputs.length === 1 &&
+          proof[0]?.toLowerCase() === "0x1" &&
+          publicInputs[0]?.toLowerCase() === "0x1"
+        ) {
+          throw new Error("Auto Garaga payload from backend is still dummy (0x1).")
+        }
+        const normalizedPayload: PrivacyVerificationPayload = {
+          verifier: payload.verifier,
+          nullifier: payload.nullifier,
+          commitment: payload.commitment,
+          proof,
+          public_inputs: publicInputs,
+        }
+        persistTradePrivacyPayload(normalizedPayload)
+        setHasTradePrivacyPayload(true)
+        return normalizedPayload
+      } catch (error) {
+        notifications.addNotification({
+          type: "error",
+          title: "Auto Garaga payload failed",
+          message: error instanceof Error ? error.message : "Unable to prepare Garaga payload automatically.",
+        })
+        return undefined
+      } finally {
+        setIsAutoPrivacyProvisioning(false)
+      }
+    })()
+
+    autoPrivacyPayloadPromiseRef.current = task
+    try {
+      return await task
+    } finally {
+      autoPrivacyPayloadPromiseRef.current = null
+    }
+  }, [
+    amount,
+    notifications,
+    orderType,
+    payToken.symbol,
+    receiveToken.symbol,
+    selectedToken.symbol,
+    wallet.isConnected,
+  ])
 
   React.useEffect(() => {
     let active = true
@@ -289,6 +490,14 @@ export function LimitOrder() {
       window.clearInterval(timer)
     }
   }, [wallet.isConnected, wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
+
+  React.useEffect(() => {
+    refreshTradePrivacyPayload()
+    window.addEventListener("trade-privacy-payload-updated", refreshTradePrivacyPayload)
+    return () => {
+      window.removeEventListener("trade-privacy-payload-updated", refreshTradePrivacyPayload)
+    }
+  }, [refreshTradePrivacyPayload])
 
   const intervalForPeriod = (period: string) => {
     switch (period) {
@@ -470,11 +679,30 @@ export function LimitOrder() {
       : null
   const bids = orderBook.bids
   const asks = orderBook.asks
+  const resolveAvailableBalance = React.useCallback(
+    (symbol: string) => {
+      const upper = symbol.toUpperCase()
+      if (upper === "STRK") return wallet.onchainBalance.STRK_L2 ?? wallet.balance.STRK ?? 0
+      if (upper === "CAREL") return wallet.onchainBalance.CAREL ?? wallet.balance.CAREL ?? 0
+      if (upper === "USDC") return wallet.onchainBalance.USDC ?? wallet.balance.USDC ?? 0
+      if (upper === "USDT") return wallet.onchainBalance.USDT ?? wallet.balance.USDT ?? 0
+      if (upper === "WBTC") return wallet.onchainBalance.WBTC ?? wallet.balance.WBTC ?? 0
+      if (upper === "BTC") return wallet.onchainBalance.BTC ?? wallet.balance.BTC ?? 0
+      return wallet.balance[upper] ?? 0
+    },
+    [
+      wallet.balance,
+      wallet.onchainBalance.BTC,
+      wallet.onchainBalance.CAREL,
+      wallet.onchainBalance.STRK_L2,
+      wallet.onchainBalance.USDC,
+      wallet.onchainBalance.USDT,
+      wallet.onchainBalance.WBTC,
+    ]
+  )
 
   const handleAmountPreset = (percent: number) => {
-    const balance = orderType === "buy"
-      ? (wallet.balance[payToken.symbol] ?? 0)
-      : (wallet.balance[selectedToken.symbol] ?? 0)
+    const balance = orderType === "buy" ? resolveAvailableBalance(payToken.symbol) : resolveAvailableBalance(selectedToken.symbol)
     setAmount((balance * percent / 100).toString())
   }
 
@@ -513,6 +741,7 @@ export function LimitOrder() {
     }
     setIsSubmitting(true)
     try {
+      const effectiveHideBalance = balanceHidden
       const fromToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
       const toToken = orderType === "buy" ? selectedToken.symbol : receiveToken.symbol
       if (fromToken.toUpperCase() === toToken.toUpperCase()) {
@@ -532,36 +761,102 @@ export function LimitOrder() {
       const [amountLow, amountHigh] = decimalToU256Parts(amount, TOKEN_DECIMALS[fromToken.toUpperCase()] || 18)
       const [priceLow, priceHigh] = decimalToU256Parts(price, 18)
       const expiryTs = Math.floor(Date.now() / 1000) + expiryToSeconds(expiry)
+      const resolvedPrivacyPayload = effectiveHideBalance
+        ? await resolveHideBalancePrivacyPayload()
+        : undefined
+      if (effectiveHideBalance && !resolvedPrivacyPayload) {
+        throw new Error("Garaga payload is not ready for Hide Balance. Check backend auto-proof config.")
+      }
 
-      notifications.addNotification({
-        type: "info",
-        title: "Wallet signature required",
-        message: "Confirm create limit order transaction in your Starknet wallet.",
-      })
-      const onchainTxHash = await invokeStarknetCallFromWallet(
-        {
-          contractAddress: STARKNET_LIMIT_ORDER_BOOK_ADDRESS,
-          entrypoint: "create_limit_order",
-          calldata: [
-            clientOrderId,
-            fromTokenAddress,
-            toTokenAddress,
-            amountLow,
-            amountHigh,
-            priceLow,
-            priceHigh,
-            toHexFelt(expiryTs),
-          ],
-        },
-        starknetProviderHint
-      )
-      notifications.addNotification({
-        type: "info",
-        title: "Order pending",
-        message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} submitted on-chain.`,
-        txHash: onchainTxHash,
-        txNetwork: "starknet",
-      })
+      const createOrderCall = {
+        contractAddress: STARKNET_LIMIT_ORDER_BOOK_ADDRESS,
+        entrypoint: "create_limit_order",
+        calldata: [
+          clientOrderId,
+          fromTokenAddress,
+          toTokenAddress,
+          amountLow,
+          amountHigh,
+          priceLow,
+          priceHigh,
+          toHexFelt(expiryTs),
+        ],
+      }
+      let payloadForBackend = resolvedPrivacyPayload
+      let preparedCalls = [createOrderCall]
+      if (effectiveHideBalance && resolvedPrivacyPayload) {
+        let usedPrivateExecutor = false
+        if (HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED) {
+          try {
+            const preparedPrivate = await preparePrivateExecution({
+              verifier: (resolvedPrivacyPayload.verifier || "garaga").trim() || "garaga",
+              flow: "limit",
+              action_entrypoint: createOrderCall.entrypoint,
+              action_calldata: createOrderCall.calldata,
+              tx_context: {
+                flow: "limit_order",
+                from_token: fromToken,
+                to_token: toToken,
+                amount,
+                from_network: "starknet",
+                to_network: "starknet",
+              },
+            })
+            payloadForBackend = {
+              verifier: (preparedPrivate.payload?.verifier || "garaga").trim() || "garaga",
+              nullifier: preparedPrivate.payload?.nullifier?.trim(),
+              commitment: preparedPrivate.payload?.commitment?.trim(),
+              proof: normalizeHexArray(preparedPrivate.payload?.proof),
+              public_inputs: normalizeHexArray(preparedPrivate.payload?.public_inputs),
+            }
+            persistTradePrivacyPayload(payloadForBackend)
+            setHasTradePrivacyPayload(true)
+            preparedCalls = preparedPrivate.onchain_calls.map((call) => ({
+              contractAddress: call.contract_address,
+              entrypoint: call.entrypoint,
+              calldata: call.calldata.map((item) => String(item)),
+            }))
+            usedPrivateExecutor = preparedCalls.length > 0
+          } catch (error) {
+            notifications.addNotification({
+              type: "warning",
+              title: "Private executor fallback",
+              message:
+                error instanceof Error
+                  ? `Using legacy privacy call path: ${error.message}`
+                  : "Using legacy privacy call path.",
+            })
+          }
+        }
+        if (!usedPrivateExecutor) {
+          preparedCalls = [buildHideBalancePrivacyCall(resolvedPrivacyPayload), createOrderCall]
+        }
+      }
+      let onchainTxHash: string | undefined
+      if (!(effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED)) {
+        notifications.addNotification({
+          type: "info",
+          title: "Wallet signature required",
+          message: "Confirm create limit order transaction in your Starknet wallet.",
+        })
+        onchainTxHash = await invokeStarknetCallsFromWallet(
+          preparedCalls,
+          starknetProviderHint
+        )
+        notifications.addNotification({
+          type: "info",
+          title: "Order pending",
+          message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} submitted on-chain.`,
+          txHash: onchainTxHash,
+          txNetwork: "starknet",
+        })
+      } else {
+        notifications.addNotification({
+          type: "info",
+          title: "Submitting private order",
+          message: "Submitting hide-mode limit order via Starknet relayer pool.",
+        })
+      }
       const response = await createLimitOrder({
         from_token: fromToken,
         to_token: toToken,
@@ -571,7 +866,18 @@ export function LimitOrder() {
         recipient: null,
         client_order_id: clientOrderId,
         onchain_tx_hash: onchainTxHash,
+        hide_balance: effectiveHideBalance,
+        privacy: effectiveHideBalance ? payloadForBackend : undefined,
       })
+      if (response.privacy_tx_hash) {
+        notifications.addNotification({
+          type: "info",
+          title: "Garaga verification submitted",
+          message: `Privacy tx ${response.privacy_tx_hash.slice(0, 12)}... was submitted on Starknet.`,
+          txHash: response.privacy_tx_hash,
+          txNetwork: "starknet",
+        })
+      }
 
       const newOrder: UiOrder = {
         id: response.order_id,
@@ -590,7 +896,7 @@ export function LimitOrder() {
         type: "success",
         title: "Order created",
         message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} created successfully`,
-        txHash: onchainTxHash,
+        txHash: onchainTxHash || response.privacy_tx_hash,
         txNetwork: "starknet",
       })
     } catch (error) {
@@ -612,25 +918,93 @@ export function LimitOrder() {
 
   const cancelOrder = async (orderId: string) => {
     try {
+      const effectiveHideBalance = balanceHidden
       if (!STARKNET_LIMIT_ORDER_BOOK_ADDRESS) {
         throw new Error(
           "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS is not set. Configure the limit order contract address in frontend/.env.local."
         )
       }
-      notifications.addNotification({
-        type: "info",
-        title: "Wallet signature required",
-        message: "Confirm cancel limit order transaction in your Starknet wallet.",
+      const resolvedPrivacyPayload = effectiveHideBalance
+        ? await resolveHideBalancePrivacyPayload()
+        : undefined
+      if (effectiveHideBalance && !resolvedPrivacyPayload) {
+        throw new Error("Garaga payload is not ready for Hide Balance. Check backend auto-proof config.")
+      }
+      const cancelCall = {
+        contractAddress: STARKNET_LIMIT_ORDER_BOOK_ADDRESS,
+        entrypoint: "cancel_limit_order",
+        calldata: [orderId],
+      }
+      let payloadForBackend = resolvedPrivacyPayload
+      let preparedCalls = [cancelCall]
+      if (effectiveHideBalance && resolvedPrivacyPayload) {
+        let usedPrivateExecutor = false
+        if (HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED) {
+          try {
+            const preparedPrivate = await preparePrivateExecution({
+              verifier: (resolvedPrivacyPayload.verifier || "garaga").trim() || "garaga",
+              flow: "limit",
+              action_entrypoint: cancelCall.entrypoint,
+              action_calldata: cancelCall.calldata,
+              tx_context: {
+                flow: "limit_order_cancel",
+                from_network: "starknet",
+                to_network: "starknet",
+              },
+            })
+            payloadForBackend = {
+              verifier: (preparedPrivate.payload?.verifier || "garaga").trim() || "garaga",
+              nullifier: preparedPrivate.payload?.nullifier?.trim(),
+              commitment: preparedPrivate.payload?.commitment?.trim(),
+              proof: normalizeHexArray(preparedPrivate.payload?.proof),
+              public_inputs: normalizeHexArray(preparedPrivate.payload?.public_inputs),
+            }
+            persistTradePrivacyPayload(payloadForBackend)
+            setHasTradePrivacyPayload(true)
+            preparedCalls = preparedPrivate.onchain_calls.map((call) => ({
+              contractAddress: call.contract_address,
+              entrypoint: call.entrypoint,
+              calldata: call.calldata.map((item) => String(item)),
+            }))
+            usedPrivateExecutor = preparedCalls.length > 0
+          } catch (error) {
+            notifications.addNotification({
+              type: "warning",
+              title: "Private executor fallback",
+              message:
+                error instanceof Error
+                  ? `Using legacy privacy call path: ${error.message}`
+                  : "Using legacy privacy call path.",
+            })
+          }
+        }
+        if (!usedPrivateExecutor) {
+          preparedCalls = [buildHideBalancePrivacyCall(resolvedPrivacyPayload), cancelCall]
+        }
+      }
+      let onchainTxHash: string | undefined
+      if (!(effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED)) {
+        notifications.addNotification({
+          type: "info",
+          title: "Wallet signature required",
+          message: "Confirm cancel limit order transaction in your Starknet wallet.",
+        })
+        onchainTxHash = await invokeStarknetCallsFromWallet(
+          preparedCalls,
+          starknetProviderHint
+        )
+      } else {
+        notifications.addNotification({
+          type: "info",
+          title: "Submitting private cancel",
+          message: "Submitting hide-mode cancel via Starknet relayer pool.",
+        })
+      }
+      await cancelLimitOrder(orderId, {
+        onchain_tx_hash: onchainTxHash,
+        hide_balance: effectiveHideBalance,
+        privacy: effectiveHideBalance ? payloadForBackend : undefined,
       })
-      const onchainTxHash = await invokeStarknetCallFromWallet(
-        {
-          contractAddress: STARKNET_LIMIT_ORDER_BOOK_ADDRESS,
-          entrypoint: "cancel_limit_order",
-          calldata: [orderId],
-        },
-        starknetProviderHint
-      )
-      await cancelLimitOrder(orderId, { onchain_tx_hash: onchainTxHash })
       setOrders((prev) => prev.filter((order) => order.id !== orderId))
       notifications.addNotification({
         type: "success",
@@ -914,6 +1288,36 @@ export function LimitOrder() {
             {/* Order Form */}
             <div className="p-6 rounded-2xl glass-strong border border-border">
               <Tabs value={orderType} onValueChange={(value) => setOrderType(value as "buy" | "sell")}>
+                <div className="mb-4 rounded-lg border border-border bg-surface/40 px-3 py-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Hide Balance</p>
+                      <p className="text-[11px] text-muted-foreground">Enable Garaga privacy proof for this limit order.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setBalanceHidden((prev) => !prev)}
+                      className={cn(
+                        "inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors",
+                        balanceHidden
+                          ? "border-primary/70 bg-primary/20 text-primary"
+                          : "border-border bg-surface text-muted-foreground"
+                      )}
+                    >
+                      {balanceHidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {balanceHidden && (
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      {hasTradePrivacyPayload
+                        ? "Garaga payload is ready."
+                        : isAutoPrivacyProvisioning
+                        ? "Preparing Garaga payload..."
+                        : "Garaga payload will be auto-prepared on submit."}
+                    </p>
+                  )}
+                </div>
+
                 <TabsList className="grid w-full grid-cols-2 mb-6">
                   <TabsTrigger value="buy" className="data-[state=active]:bg-success/20 data-[state=active]:text-success">
                     Buy
@@ -1023,7 +1427,7 @@ export function LimitOrder() {
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-foreground">Amount</label>
                       <span className="text-xs text-muted-foreground">
-                        Balance: {(wallet.balance[payToken.symbol] ?? 0).toLocaleString()} {payToken.symbol}
+                        Balance: {balanceHidden ? "••••••" : resolveAvailableBalance(payToken.symbol).toLocaleString()} {payToken.symbol}
                       </span>
                     </div>
                     <input
@@ -1143,10 +1547,40 @@ export function LimitOrder() {
                     </div>
                   )}
 
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between rounded-lg border border-border bg-surface/40 px-3 py-2">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Hide Balance</p>
+                        <p className="text-[11px] text-muted-foreground">Add Garaga privacy proof in the same on-chain transaction.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setBalanceHidden((prev) => !prev)}
+                        className={cn(
+                          "inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors",
+                          balanceHidden
+                            ? "border-primary/70 bg-primary/20 text-primary"
+                            : "border-border bg-surface text-muted-foreground"
+                        )}
+                      >
+                        {balanceHidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    {balanceHidden && (
+                      <p className="text-[11px] text-muted-foreground">
+                        {hasTradePrivacyPayload
+                          ? "Garaga payload is ready."
+                          : isAutoPrivacyProvisioning
+                          ? "Preparing Garaga payload..."
+                          : "Garaga payload will be auto-prepared on submit."}
+                      </p>
+                    )}
+                  </div>
+
                   {/* Submit Button */}
                   <Button 
                     onClick={handleSubmitOrder}
-                    disabled={!price || !amount || isBtcBuyComingSoon}
+                    disabled={!price || !amount || isBtcBuyComingSoon || isAutoPrivacyProvisioning}
                     className="w-full py-6 bg-success hover:bg-success/90 text-success-foreground font-bold"
                   >
                     {isBtcBuyComingSoon ? "Coming Soon (BTC Buy)" : "Create Buy Order"}
@@ -1241,7 +1675,7 @@ export function LimitOrder() {
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-foreground">Amount</label>
                       <span className="text-xs text-muted-foreground">
-                        Balance: {(wallet.balance[selectedToken.symbol] ?? 0).toLocaleString()} {selectedToken.symbol}
+                        Balance: {balanceHidden ? "••••••" : resolveAvailableBalance(selectedToken.symbol).toLocaleString()} {selectedToken.symbol}
                       </span>
                     </div>
                     <input
@@ -1333,10 +1767,40 @@ export function LimitOrder() {
                     </div>
                   )}
 
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between rounded-lg border border-border bg-surface/40 px-3 py-2">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Hide Balance</p>
+                        <p className="text-[11px] text-muted-foreground">Add Garaga privacy proof in the same on-chain transaction.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setBalanceHidden((prev) => !prev)}
+                        className={cn(
+                          "inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors",
+                          balanceHidden
+                            ? "border-primary/70 bg-primary/20 text-primary"
+                            : "border-border bg-surface text-muted-foreground"
+                        )}
+                      >
+                        {balanceHidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    {balanceHidden && (
+                      <p className="text-[11px] text-muted-foreground">
+                        {hasTradePrivacyPayload
+                          ? "Garaga payload is ready."
+                          : isAutoPrivacyProvisioning
+                          ? "Preparing Garaga payload..."
+                          : "Garaga payload will be auto-prepared on submit."}
+                      </p>
+                    )}
+                  </div>
+
                   {/* Submit Button */}
                   <Button 
                     onClick={handleSubmitOrder}
-                    disabled={!price || !amount}
+                    disabled={!price || !amount || isAutoPrivacyProvisioning}
                     className="w-full py-6 bg-destructive hover:bg-destructive/90 text-destructive-foreground font-bold"
                   >
                     Create Sell Order
@@ -1487,6 +1951,12 @@ export function LimitOrder() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Expiry</span>
                     <span className="font-medium text-foreground">{expiryOptions.find(e => e.value === expiry)?.label}</span>
+                  </div>
+                  <div className="flex justify-between mt-2">
+                    <span className="text-muted-foreground">Hide Balance</span>
+                    <span className={cn("font-medium", balanceHidden ? "text-primary" : "text-muted-foreground")}>
+                      {balanceHidden ? "ON" : "OFF"}
+                    </span>
                   </div>
                 </div>
 

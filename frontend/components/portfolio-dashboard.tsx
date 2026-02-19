@@ -41,6 +41,7 @@ type PortfolioSnapshot = {
 
 const assetMeta: Record<string, { name: string; icon: string }> = {
   BTC: { name: "Bitcoin", icon: "₿" },
+  WBTC: { name: "Wrapped Bitcoin", icon: "₿" },
   ETH: { name: "Ethereum", icon: "Ξ" },
   CAREL: { name: "Carel Protocol", icon: "◇" },
   STRK: { name: "StarkNet", icon: "◈" },
@@ -78,7 +79,28 @@ const formatUsd = (value: number) => {
   })}`
 }
 
+const formatUsdCompact = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return "$0"
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
 const formatPercent = (value: number) => `${sanitizePercent(value)}%`
+
+const formatTokenAmount = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return "0"
+  if (value >= 1000) {
+    return value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  }
+  if (value >= 1) {
+    return value.toLocaleString(undefined, { maximumFractionDigits: 4 })
+  }
+  return value.toLocaleString(undefined, { maximumFractionDigits: 8 })
+}
 
 
 type ChartPoint = { label: string; value: number }
@@ -179,13 +201,13 @@ function AssetRow({ asset }: { asset: PortfolioAsset }) {
   
   return (
     <div className="flex items-center justify-between py-3 border-b border-border last:border-0 hover:bg-primary/5 px-2 -mx-2 rounded-lg transition-colors">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 min-w-0">
         <div className="w-10 h-10 rounded-full bg-surface flex items-center justify-center text-xl border border-border">
           {asset.icon}
         </div>
-        <div>
-          <p className="font-medium text-foreground">{asset.symbol}</p>
-          <p className="text-xs text-muted-foreground">{asset.name}</p>
+        <div className="min-w-0">
+          <p className="font-medium text-foreground truncate">{asset.symbol}</p>
+          <p className="text-xs text-muted-foreground truncate">{asset.name}</p>
         </div>
       </div>
       <div className="flex items-center gap-6">
@@ -198,8 +220,8 @@ function AssetRow({ asset }: { asset: PortfolioAsset }) {
           </div>
           <p className="text-xs text-muted-foreground mt-1 text-center">{formatPercent(asset.percent)}</p>
         </div>
-        <div className="text-right min-w-[100px]">
-          <p className="font-medium text-foreground">{formatUsd(asset.value)}</p>
+        <div className="text-right min-w-[110px] shrink-0">
+          <p className="font-medium text-foreground break-words">{formatUsd(asset.value)}</p>
           <p className={cn(
             "text-xs flex items-center justify-end gap-1",
             isPositive ? "text-success" : "text-destructive"
@@ -221,6 +243,12 @@ type UiTransaction = {
   value: string
   time: string
   status: string
+  visibility: "Hide" | "Public"
+  amountIn: number
+  amountOut: number
+  tokenIn: string
+  tokenOut: string
+  usdValue: number
 }
 
 export function PortfolioDashboard() {
@@ -295,15 +323,20 @@ export function PortfolioDashboard() {
   React.useEffect(() => {
     if (!detailsOpen) return
     let active = true
+    let pollingTimer: number | undefined
+
     const formatRelativeTime = (iso: string) => {
       const date = new Date(iso)
-      const diffMs = Date.now() - date.getTime()
-      const minutes = Math.floor(diffMs / 60000)
+      const timeMs = date.getTime()
+      if (!Number.isFinite(timeMs) || Number.isNaN(timeMs)) return "—"
+      const safeDiffMs = Math.max(0, Date.now() - timeMs)
+      const minutes = Math.floor(safeDiffMs / 60000)
+      if (minutes < 1) return "just now"
       if (minutes < 60) return `${minutes} min ago`
       const hours = Math.floor(minutes / 60)
-      if (hours < 24) return `${hours} hours ago`
+      if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`
       const days = Math.floor(hours / 24)
-      return `${days} days ago`
+      return `${days} day${days === 1 ? "" : "s"} ago`
     }
 
     const parseNumber = (value?: string | number | null) => {
@@ -312,24 +345,42 @@ export function PortfolioDashboard() {
       return Number.isFinite(parsed) ? parsed : 0
     }
 
-    ;(async () => {
+    const loadTransactions = async () => {
       try {
-        const response = await getTransactionsHistory({ page: 1, limit: 5 })
+        const response = await getTransactionsHistory({ page: 1, limit: 20 })
         if (!active) return
         const mapped = response.items.map((tx: Transaction) => {
-          const tokenLabel = tx.token_out
-            ? `${tx.token_in || ""} → ${tx.token_out}`
-            : tx.token_in || tx.tx_type
+	          const txType = (tx.tx_type || "").trim()
+	          const txTypeLower = txType.toLowerCase()
+	          const blockNumber = Number(tx.block_number || 0)
+	          const hasOnchainBlock = Number.isFinite(blockNumber) && blockNumber > 0
+	          const isCompleted = hasOnchainBlock || Boolean(tx.processed)
+	          const tokenLabel = tx.token_out
+	            ? `${tx.token_in || ""} → ${tx.token_out}`
+	            : tx.token_in || tx.tx_type
+          const amountIn = parseNumber(tx.amount_in)
+          const amountOut = parseNumber(tx.amount_out)
           const amount = parseNumber(tx.amount_in || tx.amount_out || 0)
           const usdValue = parseNumber(tx.usd_value)
+          const tokenIn = String(tx.token_in || "").toUpperCase()
+          const tokenOut = String(tx.token_out || "").toUpperCase()
+          const visibility: UiTransaction["visibility"] = txTypeLower.includes("private")
+            ? "Hide"
+            : "Public"
           return {
             id: tx.tx_hash,
-            type: tx.tx_type.toUpperCase(),
+            type: txType.toUpperCase(),
             asset: tokenLabel.trim() || tx.tx_type,
             amount: amount ? amount.toString() : "—",
             value: usdValue ? `$${usdValue.toLocaleString()}` : "—",
             time: formatRelativeTime(tx.timestamp),
-            status: tx.processed ? "Completed" : "Pending",
+	            status: isCompleted ? "Completed" : "Pending",
+            visibility,
+            amountIn,
+            amountOut,
+            tokenIn,
+            tokenOut,
+            usdValue,
           }
         })
         setTransactions(mapped)
@@ -337,12 +388,18 @@ export function PortfolioDashboard() {
         if (!active) return
         setTransactions([])
       }
-    })()
+    }
+
+    void loadTransactions()
+    pollingTimer = window.setInterval(() => {
+      void loadTransactions()
+    }, 12000)
 
     return () => {
       active = false
+      if (pollingTimer) window.clearInterval(pollingTimer)
     }
-  }, [detailsOpen, analytics?.portfolio.total_value_usd])
+  }, [detailsOpen])
 
   const safeNumber = (value: string | number | undefined, fallback: number) => {
     if (value === undefined) return fallback
@@ -393,7 +450,7 @@ export function PortfolioDashboard() {
         const overrideAmount = onchainAmountOverride[symbol]
         const backendAmount = Number(item.amount || 0)
         const amount = chainLinked
-          ? (overrideAmount !== null && Number.isFinite(overrideAmount) ? overrideAmount : 0)
+          ? (overrideAmount !== null && Number.isFinite(overrideAmount) ? overrideAmount : backendAmount)
           : backendAmount
         const backendValue = Number(item.value_usd || 0)
         const fallbackPrice = Number(item.price || 0)
@@ -450,6 +507,13 @@ export function PortfolioDashboard() {
 
   const isPositive = hasAnalytics ? displayData.pnl >= 0 : true
   const pnlSign = displayData.pnl >= 0 ? "+" : "-"
+  const txSummary = React.useMemo(() => {
+    const pending = transactions.filter((tx) => tx.status === "Pending").length
+    const inbound = transactions.filter((tx) => tx.amountOut > 0).length
+    const outbound = transactions.filter((tx) => tx.amountIn > 0).length
+    const hide = transactions.filter((tx) => tx.visibility === "Hide").length
+    return { pending, inbound, outbound, hide }
+  }, [transactions])
 
   return (
     <section id="portfolio" className="py-12">
@@ -540,7 +604,7 @@ export function PortfolioDashboard() {
 
       {/* Portfolio Details Dialog */}
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent className="glass-strong border-border max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="glass-strong bg-background/95 backdrop-blur-xl border-border max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-foreground flex items-center gap-2">
               <PieChart className="h-5 w-5 text-primary" />
@@ -551,31 +615,61 @@ export function PortfolioDashboard() {
           <div className="space-y-6 py-4">
             {/* Summary Stats */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="p-4 rounded-xl bg-surface/50 border border-border">
+              <div className="p-4 rounded-xl bg-surface/50 border border-border min-w-0">
                 <p className="text-xs text-muted-foreground">Total Value</p>
-                <p className="text-lg font-bold text-foreground">
-                  {hasAnalytics ? formatUsd(displayData.totalValue) : "—"}
+                <p
+                  className="text-base md:text-lg font-bold text-foreground truncate"
+                  title={hasAnalytics ? formatUsd(displayData.totalValue) : "—"}
+                >
+                  {hasAnalytics ? formatUsdCompact(displayData.totalValue) : "—"}
                 </p>
               </div>
-              <div className="p-4 rounded-xl bg-surface/50 border border-border">
+              <div className="p-4 rounded-xl bg-surface/50 border border-border min-w-0">
                 <p className="text-xs text-muted-foreground">Total PnL</p>
-                <p className={cn("text-lg font-bold", isPositive ? "text-success" : "text-destructive")}>
-                  {hasAnalytics ? `${pnlSign}${formatUsd(Math.abs(displayData.pnl))}` : "—"}
+                <p
+                  className={cn(
+                    "text-base md:text-lg font-bold truncate",
+                    isPositive ? "text-success" : "text-destructive"
+                  )}
+                  title={hasAnalytics ? `${pnlSign}${formatUsd(Math.abs(displayData.pnl))}` : "—"}
+                >
+                  {hasAnalytics ? `${pnlSign}${formatUsdCompact(Math.abs(displayData.pnl))}` : "—"}
                 </p>
               </div>
-              <div className="p-4 rounded-xl bg-surface/50 border border-border">
+              <div className="p-4 rounded-xl bg-surface/50 border border-border min-w-0">
                 <p className="text-xs text-muted-foreground">Assets</p>
                 <p className="text-lg font-bold text-foreground">
                   {hasAnalytics ? displayData.assets.length : "—"}
                 </p>
               </div>
-              <div className="p-4 rounded-xl bg-surface/50 border border-border">
+              <div className="p-4 rounded-xl bg-surface/50 border border-border min-w-0">
                 <p className="text-xs text-muted-foreground">Best Performer</p>
                 <p className={cn(
-                  "text-lg font-bold",
+                  "text-base md:text-lg font-bold truncate",
                   bestPerformer && bestPerformer.change >= 0 ? "text-success" : "text-destructive"
-                )}>
+                )} title={bestPerformer ? `${bestPerformer.symbol} ${bestPerformer.change >= 0 ? "+" : ""}${formatPercent(bestPerformer.change)}` : "—"}>
                   {bestPerformer ? `${bestPerformer.symbol} ${bestPerformer.change >= 0 ? "+" : ""}${formatPercent(bestPerformer.change)}` : "—"}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div className="p-2 rounded-lg bg-success/10 border border-success/30 text-center">
+                <p className="text-[10px] text-muted-foreground">In</p>
+                <p className="text-sm font-semibold text-success">{txSummary.inbound}</p>
+              </div>
+              <div className="p-2 rounded-lg bg-destructive/10 border border-destructive/30 text-center">
+                <p className="text-[10px] text-muted-foreground">Out</p>
+                <p className="text-sm font-semibold text-destructive">{txSummary.outbound}</p>
+              </div>
+              <div className="p-2 rounded-lg bg-secondary/10 border border-secondary/30 text-center">
+                <p className="text-[10px] text-muted-foreground">Pending</p>
+                <p className="text-sm font-semibold text-secondary">{txSummary.pending}</p>
+              </div>
+              <div className="p-2 rounded-lg bg-primary/10 border border-primary/30 text-center min-w-0">
+                <p className="text-[10px] text-muted-foreground">Hide Tx</p>
+                <p className="text-sm font-semibold text-primary">
+                  {txSummary.hide}
                 </p>
               </div>
             </div>
@@ -589,17 +683,17 @@ export function PortfolioDashboard() {
                 ) : (
                   displayData.assets.map((asset) => (
                     <div key={asset.symbol} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
                         <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-lg border border-border">
                           {asset.icon}
                         </div>
-                        <div>
-                          <p className="font-medium text-foreground">{asset.symbol}</p>
-                          <p className="text-xs text-muted-foreground">{asset.name}</p>
+                        <div className="min-w-0">
+                          <p className="font-medium text-foreground truncate">{asset.symbol}</p>
+                          <p className="text-xs text-muted-foreground truncate">{asset.name}</p>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className="font-medium text-foreground">{formatUsd(asset.value)}</p>
+                      <div className="text-right min-w-[96px] shrink-0">
+                        <p className="font-medium text-foreground break-words">{formatUsd(asset.value)}</p>
                         {asset.change !== 0 && (
                           <p className={cn("text-xs", asset.change >= 0 ? "text-success" : "text-destructive")}>
                             {asset.change >= 0 ? "+" : ""}{formatPercent(asset.change)}
@@ -614,35 +708,74 @@ export function PortfolioDashboard() {
 
             {/* Transaction History */}
             <div>
-              <h3 className="text-sm font-medium text-foreground mb-3">Recent Transactions</h3>
-              <div className="space-y-2">
-                {transactions.length === 0 ? (
-                  <div className="text-center py-6 text-muted-foreground">No recent transactions</div>
-                ) : (
-                  transactions.map((tx) => (
-                    <div key={tx.id} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
-                      <div className="flex items-center gap-3">
-                        <div className={cn(
-                          "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
-                          (tx.type.toLowerCase() === "buy" || tx.type.toLowerCase() === "stake") && "bg-success/20 text-success",
-                          (tx.type.toLowerCase() === "sell" || tx.type.toLowerCase() === "unstake") && "bg-destructive/20 text-destructive",
-                          (tx.type.toLowerCase() === "swap" || tx.type.toLowerCase() === "bridge" || tx.type.toLowerCase() === "claim") && "bg-secondary/20 text-secondary"
-                        )}>
-                          {tx.type[0]}
-                        </div>
-                        <div>
-                          <p className="font-medium text-foreground">{tx.type} {tx.asset}</p>
-                          <p className="text-xs text-muted-foreground">{tx.time}</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-medium text-foreground">{tx.value}</p>
-                        <p className="text-xs text-success">{tx.status}</p>
-                      </div>
-                    </div>
-                  ))
-                )}
+              <div className="mb-3">
+                <h3 className="text-sm font-medium text-foreground">Recent Transactions</h3>
+                <p className="text-[11px] text-muted-foreground">
+                  Shows latest on-chain records with IN/OUT movement and pending status.
+                </p>
               </div>
+	              <div className="space-y-2">
+	                {transactions.length === 0 ? (
+	                  <div className="text-center py-6 text-muted-foreground">No recent transactions</div>
+	                ) : (
+	                  transactions.map((tx) => {
+	                    const txKind = tx.type.toLowerCase().replace(/^private_/, "")
+	                    return (
+	                      <div key={tx.id} className="flex items-center justify-between p-3 rounded-lg bg-surface/30 border border-border">
+	                        <div className="flex items-center gap-3 min-w-0">
+	                          <div className={cn(
+	                            "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
+	                            (txKind === "buy" || txKind === "stake") && "bg-success/20 text-success",
+	                            (txKind === "sell" || txKind === "unstake") && "bg-destructive/20 text-destructive",
+	                            (txKind === "swap" || txKind === "bridge" || txKind === "claim" || txKind === "limit_order") && "bg-secondary/20 text-secondary"
+	                          )}>
+	                            {tx.type[0]}
+	                          </div>
+	                          <div className="min-w-0">
+	                            <p className="font-medium text-foreground truncate" title={`${tx.type} ${tx.asset}`}>
+	                              {tx.type} {tx.asset}
+	                            </p>
+	                            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+	                              {tx.amountIn > 0 && (
+	                                <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-destructive">
+	                                  OUT {formatTokenAmount(tx.amountIn)} {tx.tokenIn || "?"}
+	                                </span>
+	                              )}
+	                              {tx.amountOut > 0 && (
+	                                <span className="rounded bg-success/15 px-1.5 py-0.5 text-success">
+	                                  IN {formatTokenAmount(tx.amountOut)} {tx.tokenOut || "?"}
+	                                </span>
+	                              )}
+	                            </div>
+	                            <p className="text-xs text-muted-foreground">{tx.time}</p>
+	                          </div>
+	                        </div>
+	                        <div className="text-right shrink-0 min-w-[110px]">
+	                          <p className="font-medium text-foreground">{tx.value}</p>
+	                          <div className="mt-1 flex items-center justify-end gap-1">
+	                            <span className={cn(
+	                              "text-[10px] rounded px-1.5 py-0.5 border",
+	                              tx.visibility === "Hide"
+	                                ? "border-primary/40 bg-primary/15 text-primary"
+	                                : "border-border bg-surface/60 text-muted-foreground"
+	                            )}>
+	                              {tx.visibility}
+	                            </span>
+	                            <span className={cn(
+	                              "text-[10px] rounded px-1.5 py-0.5 border",
+	                              tx.status === "Completed"
+	                                ? "border-success/40 bg-success/15 text-success"
+	                                : "border-secondary/40 bg-secondary/15 text-secondary"
+	                            )}>
+	                              {tx.status}
+	                            </span>
+	                          </div>
+	                        </div>
+	                      </div>
+	                    )
+	                  })
+	                )}
+	              </div>
             </div>
           </div>
         </DialogContent>

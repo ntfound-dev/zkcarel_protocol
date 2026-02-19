@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     constants::{BRIDGE_ATOMIQ, BRIDGE_GARDEN, BRIDGE_LAYERSWAP, BRIDGE_STARKGATE},
-    error::Result,
+    error::{AppError, Result},
     integrations::bridge::{AtomiqClient, GardenClient, LayerSwapClient},
 };
 
@@ -134,6 +134,96 @@ fn bridge_score(route: &BridgeRoute, is_testnet: bool) -> f64 {
     score * env_factor
 }
 
+fn compact_error_message(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn humanize_bridge_provider_error(
+    provider: &str,
+    err: &AppError,
+    from_chain: &str,
+    to_chain: &str,
+    from_token: &str,
+    requested_to_token: Option<&str>,
+) -> String {
+    let raw = compact_error_message(&err.to_string());
+    let lower = raw.to_ascii_lowercase();
+
+    if provider == BRIDGE_GARDEN {
+        let to_token = requested_to_token
+            .map(normalize_token_symbol)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| garden_destination_token(to_chain, from_token, requested_to_token));
+
+        if lower.contains("invalid to_asset") {
+            return format!(
+                "{}: destination token {} is not available on {} for this route.",
+                provider, to_token, to_chain
+            );
+        }
+
+        if lower.contains("invalid from_asset") {
+            return format!(
+                "{}: source token {} is not available on {} for this route.",
+                provider,
+                normalize_token_symbol(from_token),
+                from_chain
+            );
+        }
+
+        if lower.contains("garden quote returned 400") {
+            return format!(
+                "{}: route {} -> {} is currently unsupported by provider API.",
+                provider, from_chain, to_chain
+            );
+        }
+    }
+
+    format!("{}: {}", provider, raw)
+}
+
+fn bridge_to_strk_is_disabled(
+    from_chain: &str,
+    to_chain: &str,
+    requested_to_token: Option<&str>,
+) -> bool {
+    from_chain != "starknet"
+        && to_chain == "starknet"
+        && requested_to_token.map(normalize_token_symbol).as_deref() == Some("STRK")
+}
+
+fn normalize_bridge_token_for_chain(chain: &str, token: &str) -> String {
+    let normalized = normalize_token_symbol(token);
+    if chain == "bitcoin" && normalized == "WBTC" {
+        return "BTC".to_string();
+    }
+    normalized
+}
+
+fn bridge_pair_supported_for_current_routes(
+    from_chain: &str,
+    to_chain: &str,
+    from_token: &str,
+    requested_to_token: Option<&str>,
+) -> bool {
+    let from = normalize_bridge_token_for_chain(from_chain, from_token);
+    let resolved_to = requested_to_token
+        .map(normalize_token_symbol)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| garden_destination_token(to_chain, from_token, requested_to_token));
+    let to = normalize_bridge_token_for_chain(to_chain, &resolved_to);
+
+    matches!(
+        (from_chain, to_chain, from.as_str(), to.as_str()),
+        ("ethereum", "bitcoin", "ETH", "BTC")
+            | ("bitcoin", "ethereum", "BTC", "ETH")
+            | ("bitcoin", "starknet", "BTC", "WBTC")
+            | ("starknet", "bitcoin", "WBTC", "BTC")
+            | ("ethereum", "starknet", "ETH", "WBTC")
+            | ("starknet", "ethereum", "WBTC", "ETH")
+    )
+}
+
 /// Route Optimizer - Selects best bridge/swap routes
 pub struct RouteOptimizer {
     config: Config,
@@ -161,6 +251,27 @@ impl RouteOptimizer {
         let normalized_to_token = to_token
             .map(normalize_token_symbol)
             .filter(|value| !value.is_empty());
+        if bridge_to_strk_is_disabled(
+            &from_chain_normalized,
+            &to_chain_normalized,
+            normalized_to_token.as_deref(),
+        ) {
+            return Err(crate::error::AppError::BadRequest(
+                "Bridge to STRK is currently disabled. Use Starknet L2 Swap for STRK pairs."
+                    .to_string(),
+            ));
+        }
+        if !bridge_pair_supported_for_current_routes(
+            &from_chain_normalized,
+            &to_chain_normalized,
+            &normalized_from_token,
+            normalized_to_token.as_deref(),
+        ) {
+            return Err(crate::error::AppError::BadRequest(
+                "Bridge pair is not supported on current testnet routes. Supported pairs: ETH<->BTC, BTC<->WBTC, ETH<->WBTC."
+                    .to_string(),
+            ));
+        }
         let is_cross_token_bridge = normalized_to_token
             .as_deref()
             .map(|value| value != normalized_from_token.as_str())
@@ -218,7 +329,14 @@ impl RouteOptimizer {
                         amount,
                         err
                     );
-                    provider_errors.push(format!("{}: {}", provider, err));
+                    provider_errors.push(humanize_bridge_provider_error(
+                        &provider,
+                        &err,
+                        &from_chain_normalized,
+                        &to_chain_normalized,
+                        token,
+                        normalized_to_token.as_deref(),
+                    ));
                 }
             }
         }
@@ -477,5 +595,95 @@ mod tests {
         let main_score = bridge_score(&route, false);
         let test_score = bridge_score(&route, true);
         assert!(test_score < main_score);
+    }
+
+    #[test]
+    fn humanize_garden_invalid_to_asset_error() {
+        let err = AppError::ExternalAPI(
+            "Garden quote returned 400 Bad Request: {\"status\":\"Error\",\"error\":\"invalid to_asset\"}"
+                .to_string(),
+        );
+        let msg = humanize_bridge_provider_error(
+            BRIDGE_GARDEN,
+            &err,
+            "ethereum",
+            "starknet",
+            "ETH",
+            Some("STRK"),
+        );
+        assert_eq!(
+            msg,
+            "Garden: destination token STRK is not available on starknet for this route."
+        );
+    }
+
+    #[test]
+    fn bridge_to_strk_policy_blocks_cross_chain_destination() {
+        assert!(bridge_to_strk_is_disabled(
+            "ethereum",
+            "starknet",
+            Some("STRK")
+        ));
+        assert!(bridge_to_strk_is_disabled(
+            "bitcoin",
+            "starknet",
+            Some("strk")
+        ));
+        assert!(!bridge_to_strk_is_disabled(
+            "starknet",
+            "starknet",
+            Some("STRK")
+        ));
+        assert!(!bridge_to_strk_is_disabled(
+            "ethereum",
+            "starknet",
+            Some("USDC")
+        ));
+    }
+
+    #[test]
+    fn bridge_pair_matrix_allows_expected_routes() {
+        assert!(bridge_pair_supported_for_current_routes(
+            "ethereum",
+            "bitcoin",
+            "ETH",
+            Some("BTC")
+        ));
+        assert!(bridge_pair_supported_for_current_routes(
+            "bitcoin",
+            "ethereum",
+            "BTC",
+            Some("ETH")
+        ));
+        assert!(bridge_pair_supported_for_current_routes(
+            "bitcoin",
+            "starknet",
+            "BTC",
+            Some("WBTC")
+        ));
+        assert!(bridge_pair_supported_for_current_routes(
+            "starknet",
+            "bitcoin",
+            "WBTC",
+            Some("BTC")
+        ));
+        assert!(bridge_pair_supported_for_current_routes(
+            "ethereum",
+            "starknet",
+            "ETH",
+            Some("WBTC")
+        ));
+        assert!(bridge_pair_supported_for_current_routes(
+            "starknet",
+            "ethereum",
+            "WBTC",
+            Some("ETH")
+        ));
+        assert!(!bridge_pair_supported_for_current_routes(
+            "ethereum",
+            "starknet",
+            "ETH",
+            Some("STRK")
+        ));
     }
 }

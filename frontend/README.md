@@ -1,6 +1,10 @@
-# ZkCarel Frontend
+# CAREL Protocol Frontend
 
-Frontend web app untuk ZkCarel (Next.js App Router). Terhubung ke backend via REST + WebSocket dan menampilkan swap, bridge, limit order, staking, portfolio, leaderboard, rewards, dan referral.
+Frontend web app untuk CAREL Protocol (Next.js App Router). Terhubung ke backend via REST + WebSocket dan menampilkan swap, bridge, limit order, staking, portfolio, leaderboard, rewards, dan referral.
+
+## README Scope
+- Dokumen ini fokus ke **teknis frontend**: setup, env vars, integrasi API/WS, wallet flow, build/deploy.
+- Untuk konteks produk, business model, dan roadmap level monorepo, lihat `README.md` di root.
 
 ## Prasyarat
 - Node.js >= 20.9.0
@@ -33,6 +37,9 @@ NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS=0x...
 NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY=0
 NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS=0x...
 NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS=0x...
+NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS=0x...
+NEXT_PUBLIC_HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED=true
+NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true
 NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS=0x8453FC6Cd1bCfE8D4dFC069C400B433054d47bDc
 NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS=0x0000000000000000000000000000000000455448
 NEXT_PUBLIC_TOKEN_CAREL_ADDRESS=0x...
@@ -58,15 +65,24 @@ Catatan:
 - Flow BTC native via Garden bersifat order-first: klik execute untuk membuat order, lalu kirim BTC ke `deposit_address` yang dikembalikan backend (`result.to`). Tidak perlu input txid BTC di form sebelum order dibuat.
 - `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` dipakai untuk submit transaksi swap langsung dari wallet Starknet.
 - Flow swap Starknet sekarang memakai calldata dari backend (`onchain_calls`) dan wallet men-submit multicall `approve + execute_swap` ke kontrak swap real.
-- `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` wajib untuk flow `Hide Balance` on-chain (`submit_private_action` + swap).
+- `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` wajib untuk flow `Hide Balance` on-chain pada **Swap / Limit Order / Stake di Starknet** (`submit_private_action` + action call).
+- `NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS` menunjuk ke hide executor aktif (`PrivateActionExecutor` v1 atau `ShieldedPoolV2`).
+- `NEXT_PUBLIC_HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED`:
+  - `false` untuk mode relayer/pool (direkomendasikan demo) agar backend yang submit transaksi hide.
+  - `true` jika mau jalur wallet-to-executor langsung dari frontend.
+- `NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true` mengaktifkan jalur relayer/pool untuk hide mode `swap`, `limit order`, dan `stake` (backend submit on-chain, bukan wallet user).
+  - Untuk stake multi-pool relayer, pastikan class `PrivateActionExecutor` terbaru sudah dideploy (punya `preview_stake_target_intent_hash_with_approval` + `execute_private_stake_with_target_and_approval`).
 - `NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL` default `false`. Set `true` hanya untuk test lokal dengan mock payload Garaga.
-- Untuk flow one-click `Hide Balance`, frontend akan memanggil backend `POST /api/v1/privacy/auto-submit` saat payload belum ada. Backend harus dikonfigurasi dengan file proof real (`PRIVACY_AUTO_GARAGA_*`).
+- Untuk flow one-click `Hide Balance` (swap/limit/stake Starknet relayer mode, plus fallback wallet path), frontend akan memanggil backend `POST /api/v1/privacy/auto-submit` saat payload belum ada. Backend harus dikonfigurasi dengan file proof real (`PRIVACY_AUTO_GARAGA_*`).
+- Bridge ke target `STRK` saat ini dimatikan. Untuk pair seperti `STRK/WBTC`, gunakan mode **Swap** di Starknet L2 (bukan Bridge).
+- Pair bridge yang didukung pada testnet saat ini: `ETH↔BTC`, `BTC↔WBTC`, dan `ETH↔WBTC`.
 - Jika backend mengembalikan error aggregator belum siap (DEX router/oracle belum aktif), UI tidak akan mengizinkan execute swap.
 - `NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY` opsional (`1/true` atau `0/false`). Jika aktif, UI akan memblokir execute swap karena kontrak dianggap event-only (belum transfer token real).
 - Nilai `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` harus mengarah ke kontrak swap **real token transfer** (bukan kontrak event-only). Jika masih menunjuk ke `CAREL_PROTOCOL_ADDRESS` event-only, UI/backend akan memblokir execute agar tidak misleading.
 - `NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS` dipakai untuk submit transaksi bridge langsung dari wallet Starknet.
 - `NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS` dan `NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS` dipakai untuk bridge langsung ETH Sepolia -> Starknet via StarkGate (MetaMask sign tx ke kontrak StarkGate).
 - `NEXT_PUBLIC_TOKEN_*_ADDRESS` dipakai sebagai mapping token saat membangun calldata on-chain.
+- `NEXT_PUBLIC_TOKEN_WBTC_ADDRESS` wajib diisi untuk pair yang melibatkan `WBTC` agar swap memakai token address real (UI akan blokir execute jika kosong).
 - `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` dipakai untuk mint NFT discount langsung on-chain dari wallet.
 - `NEXT_PUBLIC_DEV_WALLET_ADDRESS` dipakai untuk rename display-name berbayar (transfer 1 CAREL on-chain).
 - `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` opsional:
@@ -74,24 +90,30 @@ Catatan:
   - jika kosong, frontend akan auto-fetch dari backend `GET /api/v1/ai/config`.
 
 ## Hide Balance (Garaga Real) Checklist
-Gunakan checklist ini untuk swap/bridge private on-chain (bukan mock, one-click).
+Gunakan checklist ini untuk **swap/limit order/stake Starknet private on-chain** (bukan mock, one-click).
+Catatan:
+- Mode Hide relayer/pool saat ini tersedia untuk Swap, Limit Order, dan Stake di Starknet L2 (STRK), tidak untuk Bridge.
+- Bridge ke `STRK` nonaktif sementara. Jika butuh `STRK <-> WBTC`, lakukan lewat Swap Starknet.
 
 1. Frontend env:
 ```bash
 NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS=0x...
+NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS=0x046a57b936093f3c5c7ea40512d8ca7a00e080b2881735f16a1a8760236d104c
+NEXT_PUBLIC_HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED=false
+NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true
 NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL=false
 ```
 2. Di backend, set salah satu konfigurasi auto payload:
    - `PRIVACY_AUTO_GARAGA_PAYLOAD_FILE=/path/payload.json` (berisi `proof[]` + `public_inputs[]`), atau
    - `PRIVACY_AUTO_GARAGA_PROOF_FILE` + `PRIVACY_AUTO_GARAGA_PUBLIC_INPUTS_FILE`.
 3. Restart backend dan hard reload frontend (Ctrl+Shift+R), tetap di browser profile yang sama.
-4. User cukup klik icon `Hide Balance` lalu `Execute Trade`:
+4. User cukup klik icon `Hide Balance` lalu submit action on-chain (Swap / Create-Cancel Limit Order / Stake-Unstake):
    - frontend auto minta payload ke backend,
    - payload disimpan ke localStorage,
-   - swap/bridge lanjut tanpa isi manual form Privacy Router.
+   - action lanjut tanpa isi manual form Privacy Router.
 5. Verifikasi cepat di browser console:
 ```js
-JSON.parse(localStorage.getItem("trade_privacy_garaga_payload_v1") || "null")
+JSON.parse(localStorage.getItem("trade_privacy_garaga_payload_v2") || "null")
 ```
    - Harus berisi `nullifier`, `commitment`, `proof[]`, `public_inputs[]`.
    - Jika `proof/public_inputs` = `["0x1"]`, payload dianggap dummy dan akan ditolak untuk mode real.

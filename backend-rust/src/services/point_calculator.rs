@@ -5,10 +5,11 @@ use crate::{
     config::Config,
     constants::{
         EPOCH_DURATION_SECONDS, MULTIPLIER_TIER_1, MULTIPLIER_TIER_2, MULTIPLIER_TIER_3,
-        MULTIPLIER_TIER_4, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_CAREL, POINTS_MIN_STAKE_LP,
-        POINTS_MIN_STAKE_STABLECOIN, POINTS_MIN_STAKE_STRK, POINTS_MIN_USD_BRIDGE_BTC,
-        POINTS_MIN_USD_BRIDGE_ETH, POINTS_MIN_USD_LIMIT_ORDER, POINTS_MIN_USD_SWAP,
-        POINTS_MIN_USD_SWAP_TESTNET, POINTS_MULTIPLIER_STAKE_BTC,
+        MULTIPLIER_TIER_4, POINTS_BATTLE_HIT, POINTS_BATTLE_LOSS, POINTS_BATTLE_MISS,
+        POINTS_BATTLE_TIMEOUT_WIN, POINTS_BATTLE_WIN, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_CAREL,
+        POINTS_MIN_STAKE_LP, POINTS_MIN_STAKE_STABLECOIN, POINTS_MIN_STAKE_STRK,
+        POINTS_MIN_USD_BRIDGE_BTC, POINTS_MIN_USD_BRIDGE_ETH, POINTS_MIN_USD_LIMIT_ORDER,
+        POINTS_MIN_USD_SWAP, POINTS_MIN_USD_SWAP_TESTNET, POINTS_MULTIPLIER_STAKE_BTC,
         POINTS_MULTIPLIER_STAKE_CAREL_TIER_1, POINTS_MULTIPLIER_STAKE_CAREL_TIER_2,
         POINTS_MULTIPLIER_STAKE_CAREL_TIER_3, POINTS_MULTIPLIER_STAKE_LP,
         POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_ETH,
@@ -159,6 +160,9 @@ impl PointCalculator {
             "limit_order" => self.calculate_limit_order_points(tx).await?,
             "bridge" => self.calculate_bridge_points(tx).await?,
             "stake" => self.calculate_stake_points(tx).await?,
+            "battle_hit" | "battle_miss" | "battle_win" | "battle_loss" | "battle_tmo_win" => {
+                self.calculate_battleship_points(tx)
+            }
             _ => 0.0,
         };
 
@@ -198,6 +202,11 @@ impl PointCalculator {
                     )
                     .await?;
             }
+            "battle_hit" | "battle_miss" | "battle_win" | "battle_loss" | "battle_tmo_win" => {
+                self.db
+                    .add_social_points(&tx.user_address, current_epoch, points_decimal)
+                    .await?;
+            }
             _ => {}
         }
 
@@ -225,8 +234,14 @@ impl PointCalculator {
             );
         }
 
-        self.apply_referral_bonus(&tx.user_address, current_epoch, prev_total, new_total)
-            .await?;
+        let eligible_for_referral = matches!(
+            tx.tx_type.as_str(),
+            "swap" | "limit_order" | "bridge" | "stake"
+        );
+        if eligible_for_referral {
+            self.apply_referral_bonus(&tx.user_address, current_epoch, prev_total, new_total)
+                .await?;
+        }
 
         sqlx::query(
             "UPDATE transactions SET points_earned = $1, processed = true WHERE tx_hash = $2",
@@ -306,6 +321,17 @@ impl PointCalculator {
             usd_value * POINTS_PER_USD_STAKE * multiplier,
         )
         .await
+    }
+
+    fn calculate_battleship_points(&self, tx: &crate::models::Transaction) -> f64 {
+        match tx.tx_type.as_str() {
+            "battle_hit" => POINTS_BATTLE_HIT,
+            "battle_miss" => POINTS_BATTLE_MISS,
+            "battle_win" => POINTS_BATTLE_WIN,
+            "battle_loss" => POINTS_BATTLE_LOSS,
+            "battle_tmo_win" => POINTS_BATTLE_TIMEOUT_WIN,
+            _ => 0.0,
+        }
     }
 
     async fn apply_nft_discount_bonus(&self, user_address: &str, base_points: f64) -> Result<f64> {

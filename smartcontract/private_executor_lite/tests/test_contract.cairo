@@ -3,7 +3,7 @@
 //! Fast unit test suite for executor logic.
 //! The heavy verifier fork test is split into `tests/test_verifier_fork.cairo`.
 
-use garaga_real_bls::private_action_executor::{
+use private_executor_lite::private_action_executor::{
     IPrivateActionExecutorDispatcher, IPrivateActionExecutorDispatcherTrait,
 };
 use snforge_std::{
@@ -27,7 +27,7 @@ pub mod MockExecutorVerifier {
     }
 
     #[abi(embed_v0)]
-    impl VerifierImpl of garaga_real_bls::private_action_executor::IGroth16VerifierBlsOutput<
+    impl VerifierImpl of private_executor_lite::private_action_executor::IGroth16VerifierBlsOutput<
         ContractState,
     > {
         fn verify_groth16_proof_bls12_381(
@@ -126,15 +126,15 @@ fn test_private_action_executor_submit_and_execute_swap() {
     let public_inputs = array![nullifier, commitment, intent_hash];
     executor.submit_private_intent(nullifier, commitment, proof.span(), public_inputs.span());
 
-    assert(executor.is_nullifier_used(nullifier), "Nullifier must be used");
-    assert(!executor.is_commitment_executed(commitment), "Commitment should not be executed yet");
+    assert(executor.is_nullifier_used(nullifier), 'NULL_USED');
+    assert(!executor.is_commitment_executed(commitment), 'COMMIT_PENDING');
 
     start_cheat_caller_address(executor.contract_address, relayer);
     executor.execute_private_swap(commitment, selector, calldata.span());
     stop_cheat_caller_address(executor.contract_address);
 
-    assert(executor.is_commitment_executed(commitment), "Commitment must be executed");
-    assert(target.get_mark() == 0xabcdef, "Target call not forwarded");
+    assert(executor.is_commitment_executed(commitment), 'COMMIT_EXEC');
+    assert(target.get_mark() == 0xabcdef, 'TARGET_MARK');
 }
 
 #[test]
@@ -154,8 +154,8 @@ fn test_private_action_executor_submit_and_execute_limit_order() {
     executor.execute_private_limit_order(commitment, selector, calldata.span());
     stop_cheat_caller_address(executor.contract_address);
 
-    assert(executor.is_commitment_executed(commitment), "Limit commitment must be executed");
-    assert(target.get_mark() == 0x777, "Limit target call not forwarded");
+    assert(executor.is_commitment_executed(commitment), 'LIMIT_EXEC');
+    assert(target.get_mark() == 0x777, 'LIMIT_MARK');
 }
 
 #[test]
@@ -175,8 +175,8 @@ fn test_private_action_executor_submit_and_execute_stake() {
     executor.execute_private_stake(commitment, selector, calldata.span());
     stop_cheat_caller_address(executor.contract_address);
 
-    assert(executor.is_commitment_executed(commitment), "Stake commitment must be executed");
-    assert(target.get_mark() == 0x888, "Stake target call not forwarded");
+    assert(executor.is_commitment_executed(commitment), 'STAKE_EXEC');
+    assert(target.get_mark() == 0x888, 'STAKE_MARK');
 }
 
 #[test]
@@ -196,8 +196,8 @@ fn test_private_action_executor_submitter_can_execute_without_relayer() {
     executor.execute_private_swap(commitment, selector, calldata.span());
     stop_cheat_caller_address(executor.contract_address);
 
-    assert(executor.is_commitment_executed(commitment), "Owner commitment must be executed");
-    assert(target.get_mark() == 0x909, "Owner target call not forwarded");
+    assert(executor.is_commitment_executed(commitment), 'OWNER_EXEC');
+    assert(target.get_mark() == 0x909, 'OWNER_MARK');
 }
 
 #[test]

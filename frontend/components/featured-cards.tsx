@@ -2,10 +2,11 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { ArrowRightLeft, TrendingUp, Coins, ChevronLeft, ChevronRight, Users, ExternalLink } from "lucide-react"
+import { ArrowRightLeft, TrendingUp, Coins, ChevronLeft, ChevronRight, Users, ExternalLink, Gamepad2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ReferralLog } from "@/components/referral-log"
 import { getPortfolioAnalytics, getReferralStats, getRewardsPoints, getStakePools, listLimitOrders } from "@/lib/api"
+import { useWallet } from "@/hooks/use-wallet"
 
 // Animated counter for dynamic stats - starts at 0 on server, animates on client
 function useAnimatedValue(end: number, duration: number = 1500) {
@@ -51,10 +52,15 @@ function useAnimatedValue(end: number, duration: number = 1500) {
     return () => observer.disconnect()
   }, [end, duration, hasAnimated, mounted])
 
+  React.useEffect(() => {
+    if (!mounted || !hasAnimated) return
+    setValue(Math.floor(end))
+  }, [end, mounted, hasAnimated])
+
   return { value, ref }
 }
-export type SelectableFeatureId = "swap-bridge" | "limit-order" | "stake-earn"
-type FeatureId = SelectableFeatureId | "referral"
+export type SelectableFeatureId = "swap-bridge" | "limit-order" | "stake-earn" | "defi-futures"
+type FeatureId = SelectableFeatureId | "referral" | "defi-futures"
 
 interface FeaturedCardsProps {
   onSelectFeature?: (featureId: SelectableFeatureId) => void
@@ -62,12 +68,13 @@ interface FeaturedCardsProps {
 }
 
 export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: FeaturedCardsProps = {}) {
+  const wallet = useWallet()
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = React.useState(false)
   const [canScrollRight, setCanScrollRight] = React.useState(true)
   const [referralOpen, setReferralOpen] = React.useState(false)
   const [swapStats, setSwapStats] = React.useState<{ volume?: number; trades?: number }>({})
-  const [limitStats, setLimitStats] = React.useState<{ activeOrders?: number }>({})
+  const [limitStats, setLimitStats] = React.useState<{ activeOrders?: number; successRate?: number }>({})
   const [stakeStats, setStakeStats] = React.useState<{ tvl?: number; maxApy?: number }>({})
   const [referralStats, setReferralStats] = React.useState<{ totalReferrals?: number; referralPoints?: number }>({})
 
@@ -87,10 +94,30 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
 
   React.useEffect(() => {
     let active = true
-    ;(async () => {
-      const [analyticsRes, limitRes, poolsRes, referralRes, pointsRes] = await Promise.allSettled([
+
+    const fetchStats = async () => {
+      if (!active) return
+      if (!wallet.isConnected) {
+        setSwapStats({})
+        setLimitStats({})
+        setStakeStats({})
+        setReferralStats({})
+        return
+      }
+
+      const [
+        analyticsRes,
+        activeLimitRes,
+        filledLimitRes,
+        cancelledLimitRes,
+        poolsRes,
+        referralRes,
+        pointsRes,
+      ] = await Promise.allSettled([
         getPortfolioAnalytics(),
         listLimitOrders(1, 1, "active"),
+        listLimitOrders(1, 1, "filled"),
+        listLimitOrders(1, 1, "cancelled"),
         getStakePools(),
         getReferralStats(),
         getRewardsPoints(),
@@ -105,12 +132,33 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
           volume: Number.isFinite(volume) ? volume : undefined,
           trades: Number.isFinite(trades) ? trades : undefined,
         })
+      } else {
+        setSwapStats({})
       }
 
-      if (limitRes.status === "fulfilled") {
-        const total = Number(limitRes.value.total)
-        setLimitStats({ activeOrders: Number.isFinite(total) ? total : undefined })
-      }
+      const activeOrders =
+        activeLimitRes.status === "fulfilled"
+          ? Number(activeLimitRes.value.total)
+          : undefined
+      const filledOrders =
+        filledLimitRes.status === "fulfilled"
+          ? Number(filledLimitRes.value.total)
+          : undefined
+      const cancelledOrders =
+        cancelledLimitRes.status === "fulfilled"
+          ? Number(cancelledLimitRes.value.total)
+          : undefined
+      const closedOrders =
+        (Number.isFinite(filledOrders) ? (filledOrders as number) : 0) +
+        (Number.isFinite(cancelledOrders) ? (cancelledOrders as number) : 0)
+      const successRate =
+        closedOrders > 0 && Number.isFinite(filledOrders)
+          ? ((filledOrders as number) / closedOrders) * 100
+          : undefined
+      setLimitStats({
+        activeOrders: Number.isFinite(activeOrders) ? activeOrders : undefined,
+        successRate: Number.isFinite(successRate) ? successRate : undefined,
+      })
 
       if (poolsRes.status === "fulfilled") {
         const totalTvl = poolsRes.value.reduce((acc, pool) => acc + (Number(pool.tvl_usd) || 0), 0)
@@ -119,27 +167,40 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
           tvl: Number.isFinite(totalTvl) ? totalTvl : undefined,
           maxApy: Number.isFinite(maxApy) ? maxApy : undefined,
         })
+      } else {
+        setStakeStats({})
       }
 
+      let totalReferrals: number | undefined
+      let referralPoints: number | undefined
       if (referralRes.status === "fulfilled") {
-        setReferralStats((prev) => ({
-          ...prev,
-          totalReferrals: referralRes.value.total_referrals,
-        }))
+        const total = Number(referralRes.value.total_referrals)
+        const rewards = Number(referralRes.value.total_rewards)
+        totalReferrals = Number.isFinite(total) ? total : undefined
+        referralPoints = Number.isFinite(rewards) ? rewards : undefined
       }
-
       if (pointsRes.status === "fulfilled") {
-        setReferralStats((prev) => ({
-          ...prev,
-          referralPoints: Number(pointsRes.value.referral_points) || 0,
-        }))
+        const epochReferralPoints = Number(pointsRes.value.referral_points)
+        if (Number.isFinite(epochReferralPoints)) {
+          referralPoints = Math.max(referralPoints || 0, epochReferralPoints)
+        }
       }
-    })()
+      setReferralStats({
+        totalReferrals,
+        referralPoints,
+      })
+    }
+
+    void fetchStats()
+    const timer = window.setInterval(() => {
+      void fetchStats()
+    }, 30000)
 
     return () => {
       active = false
+      window.clearInterval(timer)
     }
-  }, [])
+  }, [wallet.address, wallet.isConnected, wallet.token])
 
   const scroll = (direction: 'left' | 'right') => {
     if (scrollContainerRef.current) {
@@ -176,7 +237,7 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
       gradient: "from-secondary via-primary to-accent",
       stats: [
         { label: "Active Orders", value: "—", numericValue: limitStats.activeOrders },
-        { label: "Success Rate", value: "—" },
+        { label: "Success Rate", value: "—", numericValue: limitStats.successRate, suffix: "%" },
       ],
       cta: "Open",
     },
@@ -204,6 +265,19 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
       ],
       isReferral: true,
       cta: "View Log",
+    },
+    {
+      id: "defi-futures",
+      title: "Battleship",
+      description:
+        "Private strategy game with ZK fairness. Reward points are tuned lower for balanced progression.",
+      icon: Gamepad2,
+      gradient: "from-primary via-secondary to-success",
+      stats: [
+        { label: "Win Reward", value: "+20 pts" },
+        { label: "Hit Reward", value: "+3 pts" },
+      ],
+      cta: "Open",
     },
   ], [swapStats, limitStats, stakeStats, referralStats])
 
@@ -306,6 +380,10 @@ function FeatureCard({
 }) {
   const stat1 = useAnimatedValue(feature.stats[0]?.numericValue || 0)
   const stat2 = useAnimatedValue(feature.stats[1]?.numericValue || 0)
+  const cardRef = React.useCallback((node: HTMLDivElement | null) => {
+    stat1.ref.current = node
+    stat2.ref.current = node
+  }, [stat1.ref, stat2.ref])
   
   const formatValue = (stat: Feature['stats'][0], animatedValue: number) => {
     if (stat.numericValue === undefined || stat.numericValue === null) return stat.value
@@ -328,7 +406,7 @@ function FeatureCard({
 
   const cardBody = (
     <div 
-      ref={stat1.ref}
+      ref={cardRef}
       className={cn(
         "relative h-full p-6 rounded-2xl border border-border glass overflow-hidden transition-all duration-300",
         !feature.comingSoon && "hover:border-primary/50 hover:shadow-lg hover:shadow-primary/20 hover:-translate-y-1",

@@ -210,14 +210,16 @@ impl AnalyticsService {
             r#"
             SELECT 
                 COUNT(*) AS total_trades,
-                COALESCE(SUM(usd_value), 0)::FLOAT AS total_volume,
-                COALESCE(AVG(usd_value), 0)::FLOAT AS avg_trade_size,
+                COALESCE(SUM(COALESCE(usd_value, 0)), 0)::FLOAT AS total_volume,
+                COALESCE(AVG(usd_value) FILTER (WHERE usd_value IS NOT NULL), 0)::FLOAT AS avg_trade_size,
                 COALESCE(MAX(usd_value), 0)::FLOAT AS best_trade,
                 COALESCE(MIN(usd_value), 0)::FLOAT AS worst_trade,
-                COALESCE(AVG(CASE WHEN usd_value >= 0 THEN 1 ELSE 0 END), 0)::FLOAT * 100 AS win_rate
+                COALESCE(
+                    AVG(CASE WHEN usd_value >= 0 THEN 1 ELSE 0 END) FILTER (WHERE usd_value IS NOT NULL),
+                    0
+                )::FLOAT * 100 AS win_rate
             FROM transactions
             WHERE LOWER(user_address) = ANY($1)
-              AND usd_value IS NOT NULL
             "#,
         )
         .bind(normalized_addresses)

@@ -22,14 +22,14 @@ const aiTiers = [
     name: "Level 2",
     cost: 1,
     costLabel: "1 CAREL",
-    description: "Auto swap/bridge execution",
+    description: "Auto swap/bridge/stake/limit execution",
   },
   {
     id: 3,
     name: "Level 3",
     cost: 2,
     costLabel: "2 CAREL",
-    description: "Portfolio management, alerts",
+    description: "Advanced execution, portfolio, alerts",
   },
 ]
 
@@ -48,16 +48,19 @@ const quickPromptsByTier: Record<number, string[]> = {
     "beginner tutorial",
   ],
   2: [
-    "swap 25 STRK to CAREL",
-    "bridge 10 USDT to STRK",
+    "swap 25 STRK to WBTC",
+    "bridge 0.01 ETH to BTC",
+    "stake 100 USDT",
+    "create limit order 10 STRK to USDC at 1.2",
     "check my balance",
-    "beginner tutorial",
   ],
   3: [
     "rebalance my portfolio",
-    "create price alerts for STRK",
+    "create price alerts for WBTC",
+    "unstake 50 USDT",
+    "claim rewards USDT",
+    "cancel order",
     "check my balance",
-    "beginner tutorial",
   ],
 }
 
@@ -68,6 +71,10 @@ const STATIC_STARKNET_AI_EXECUTOR_ADDRESS =
 
 const AI_ACTION_TYPE_SWAP = 0
 const AI_ACTION_TYPE_MULTI_STEP = 5
+const TIER2_ONCHAIN_COMMAND_REGEX =
+  /\b(swap|bridge|stake|unstake|claim|limit(?:\s|-)?order|cancel\s+order)\b/i
+const TIER3_ONCHAIN_COMMAND_REGEX =
+  /\b(swap|bridge|stake|unstake|claim|limit(?:\s|-)?order|cancel\s+order|portfolio|rebalance|alert|price alert)\b/i
 
 function encodeShortByteArray(value: string): Array<string | number> {
   const normalized = value.trim()
@@ -81,6 +88,14 @@ function encodeShortByteArray(value: string): Array<string | number> {
 
 function actionTypeForTier(tier: number): number {
   return tier >= 3 ? AI_ACTION_TYPE_MULTI_STEP : AI_ACTION_TYPE_SWAP
+}
+
+function requiresOnchainActionForCommand(tier: number, command: string): boolean {
+  if (tier < 2) return false
+  const normalized = command.trim()
+  if (!normalized) return false
+  if (tier === 2) return TIER2_ONCHAIN_COMMAND_REGEX.test(normalized)
+  return TIER3_ONCHAIN_COMMAND_REGEX.test(normalized)
 }
 
 function isInvalidUserSignatureError(error: unknown): boolean {
@@ -122,15 +137,14 @@ export function FloatingAIAssistant() {
   const [isSending, setIsSending] = React.useState(false)
   const [actionId, setActionId] = React.useState("")
   const [pendingActions, setPendingActions] = React.useState<number[]>([])
-  const [isLoadingActions, setIsLoadingActions] = React.useState(false)
   const [isCreatingAction, setIsCreatingAction] = React.useState(false)
   const [isAutoPreparingAction, setIsAutoPreparingAction] = React.useState(false)
   const [runtimeExecutorAddress, setRuntimeExecutorAddress] = React.useState("")
   const [isResolvingExecutor, setIsResolvingExecutor] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
-  const requiresActionId = selectedTier >= 2
   const parsedActionId = Number(actionId)
-  const hasValidActionId = !requiresActionId || (Number.isFinite(parsedActionId) && parsedActionId > 0)
+  const hasValidActionId = Number.isFinite(parsedActionId) && parsedActionId > 0
+  const commandNeedsAction = requiresOnchainActionForCommand(selectedTier, input)
   const quickPrompts = quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
   const staticExecutorAddress = React.useMemo(
     () => STATIC_STARKNET_AI_EXECUTOR_ADDRESS.trim(),
@@ -199,15 +213,15 @@ export function FloatingAIAssistant() {
     if (!silent && pending.length === 0) {
       notifications.addNotification({
         type: "info",
-        title: "AI Actions",
-        message: "No pending on-chain action found for this account.",
+        title: "On-chain setup",
+        message: "No pending setup found for this account yet.",
       })
     }
     return pending
   }
 
-  const resolveActionId = async (): Promise<number> => {
-    if (!requiresActionId) return 0
+  const resolveActionId = async (requiredForCommand: boolean): Promise<number> => {
+    if (!requiredForCommand) return 0
     if (hasValidActionId) return Math.floor(parsedActionId)
 
     setIsAutoPreparingAction(true)
@@ -218,8 +232,8 @@ export function FloatingAIAssistant() {
         setActionId(String(latest))
         notifications.addNotification({
           type: "success",
-          title: "Action ready",
-          message: `Using pending action_id ${latest}.`,
+          title: "On-chain setup ready",
+          message: "Using latest pending setup from your account.",
         })
         return latest
       }
@@ -230,7 +244,7 @@ export function FloatingAIAssistant() {
       }
 
       throw new Error(
-        "No valid on-chain action_id found. Click 'Auto Setup On-Chain', sign once in wallet, then retry."
+        "No valid on-chain setup found. Click 'Auto Setup On-Chain', sign once in wallet, then retry."
       )
     } finally {
       setIsAutoPreparingAction(false)
@@ -242,21 +256,23 @@ export function FloatingAIAssistant() {
     if (!command || isSending) return
 
     let actionIdValue: number | undefined
-    if (selectedTier >= 2) {
+    const commandNeedsOnchainAction = requiresOnchainActionForCommand(selectedTier, command)
+    if (commandNeedsOnchainAction) {
       try {
-        actionIdValue = await resolveActionId()
+        actionIdValue = await resolveActionId(true)
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to resolve on-chain action."
         notifications.addNotification({
           type: "error",
-          title: "AI Tier requires action_id",
+          title: "On-chain setup required",
           message,
         })
         setMessages((prev) => [
           ...prev,
           {
             role: "assistant",
-            content: `I need a valid on-chain action for Tier ${selectedTier}. Use Auto Setup On-Chain, sign in wallet, then send the command again.`,
+            content:
+              "This command needs one on-chain setup signature first. Click Auto Setup On-Chain, confirm in wallet, then retry.",
           },
         ])
         return
@@ -272,7 +288,7 @@ export function FloatingAIAssistant() {
         command,
         context: `tier:${selectedTier}`,
         level: selectedTier,
-        action_id: actionIdValue,
+        action_id: commandNeedsOnchainAction ? actionIdValue : undefined,
       })
       setMessages((prev) => [...prev, { role: "assistant", content: response.response }])
     } catch (error) {
@@ -294,23 +310,8 @@ export function FloatingAIAssistant() {
     }
   }
 
-  const fetchPendingActions = async () => {
-    setIsLoadingActions(true)
-    try {
-      await loadPendingActions(false)
-    } catch (error) {
-      notifications.addNotification({
-        type: "error",
-        title: "AI Actions",
-        message: error instanceof Error ? error.message : "Failed to load pending actions.",
-      })
-    } finally {
-      setIsLoadingActions(false)
-    }
-  }
-
   const createOnchainActionId = async (): Promise<number | null> => {
-    if (!requiresActionId) return null
+    if (selectedTier < 2) return null
     if (isCreatingAction) return null
     let executorAddress = ""
     try {
@@ -397,8 +398,8 @@ export function FloatingAIAssistant() {
 
       notifications.addNotification({
         type: "info",
-        title: "AI action submitted",
-        message: "Waiting for action_id to appear in pending list...",
+        title: "On-chain setup submitted",
+        message: "Waiting for setup to appear in pending list...",
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
@@ -415,8 +416,8 @@ export function FloatingAIAssistant() {
             setActionId(String(discovered))
             notifications.addNotification({
               type: "success",
-              title: "Action ready",
-              message: `action_id ${discovered} is ready for Tier ${selectedTier}.`,
+              title: "On-chain setup ready",
+              message: `Setup is ready for Tier ${selectedTier}.`,
               txHash: onchainTxHash,
               txNetwork: "starknet",
             })
@@ -433,8 +434,8 @@ export function FloatingAIAssistant() {
         setActionId(String(latest))
         notifications.addNotification({
           type: "success",
-          title: "Action ready",
-          message: `Using latest pending action_id ${latest}.`,
+          title: "On-chain setup ready",
+          message: "Using latest pending setup from your account.",
           txHash: onchainTxHash,
           txNetwork: "starknet",
         })
@@ -442,8 +443,8 @@ export function FloatingAIAssistant() {
       }
       notifications.addNotification({
         type: "info",
-        title: "Action not detected yet",
-        message: "Click 'Fetch pending action_id' and select the newest ID.",
+        title: "Setup not detected yet",
+        message: "Please retry Auto Setup On-Chain in a few seconds.",
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
@@ -474,7 +475,7 @@ export function FloatingAIAssistant() {
   return (
     <div className={cn(
       "fixed bottom-6 right-6 z-50 glass-strong border border-primary/30 rounded-2xl shadow-xl transition-all duration-300 overflow-hidden",
-      isMinimized ? "w-80 h-14" : "w-[94vw] max-w-[560px] h-[78vh] max-h-[760px]"
+      isMinimized ? "w-80 h-14" : "w-[94vw] max-w-[560px] h-[76vh] max-h-[740px]"
     )}>
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-border bg-surface/50">
@@ -531,90 +532,54 @@ export function FloatingAIAssistant() {
                   {aiTiers[selectedTier - 1].description}
                 </p>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  Beginner mode: use quick prompts, then confirm only when wallet asks.
+                  Chat is available at every level. Wallet signature appears only for on-chain commands.
                 </p>
                 {selectedTier >= 2 && (
-                  <div className="mt-2">
-                    <label className="text-[11px] text-muted-foreground block mb-1">
-                      Action ID (on-chain, required for Tier 2/3)
-                    </label>
-                    <input
-                      type="number"
-                      value={actionId}
-                      onChange={(e) => setActionId(e.target.value)}
-                      placeholder="Optional: leave empty and use Auto Setup"
-                      className="w-full px-2 py-1.5 rounded-md bg-surface border border-border text-foreground text-xs placeholder:text-muted-foreground focus:border-primary focus:outline-none transition-all"
-                      min={1}
-                    />
-                    <div className="flex items-center justify-between mt-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          onClick={async () => {
-                            setIsAutoPreparingAction(true)
-                            try {
-                              const pending = await loadPendingActions(true)
-                              const latest = pickLatestPendingAction(pending)
-                              if (latest && latest > 0) {
-                                setActionId(String(latest))
+                  <div className="mt-2 rounded-md border border-border/60 bg-surface/40 p-2">
+                    <p className="text-[11px] text-foreground font-medium">On-chain setup</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      No manual ID needed. For on-chain commands, AI auto-prepares setup and asks one wallet signature.
+                    </p>
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={async () => {
+                          setIsAutoPreparingAction(true)
+                          try {
+                            const pending = await loadPendingActions(true)
+                            const latest = pickLatestPendingAction(pending)
+                            if (latest && latest > 0) {
+                              setActionId(String(latest))
+                              notifications.addNotification({
+                                type: "success",
+                                title: "On-chain setup ready",
+                                message: "Using latest pending setup from your account.",
+                              })
+                            } else {
+                              const created = await createOnchainActionId()
+                              if (!created) {
                                 notifications.addNotification({
-                                  type: "success",
-                                  title: "Action ready",
-                                  message: `Using pending action_id ${latest}.`,
+                                  type: "info",
+                                  title: "No action available",
+                                  message:
+                                    "No pending action found yet. Please sign one on-chain action first.",
                                 })
-                              } else {
-                                const created = await createOnchainActionId()
-                                if (!created) {
-                                  notifications.addNotification({
-                                    type: "info",
-                                    title: "No action available",
-                                    message:
-                                      "No pending action found yet. Please sign one on-chain action first.",
-                                  })
-                                }
                               }
-                            } finally {
-                              setIsAutoPreparingAction(false)
                             }
-                          }}
-                          disabled={isCreatingAction || isLoadingActions || isAutoPreparingAction || isResolvingExecutor}
-                          className="text-[11px] text-primary hover:underline disabled:opacity-50"
-                        >
-                          {isAutoPreparingAction ? "Preparing..." : "Auto Setup On-Chain"}
-                        </button>
-                        <button
-                          onClick={fetchPendingActions}
-                          disabled={isLoadingActions || isCreatingAction || isAutoPreparingAction || isResolvingExecutor}
-                          className="text-[11px] text-primary hover:underline disabled:opacity-50"
-                        >
-                          {isLoadingActions ? "Loading..." : "Fetch pending action_id"}
-                        </button>
-                        <button
-                          onClick={createOnchainActionId}
-                          disabled={isCreatingAction || isLoadingActions || isAutoPreparingAction || isResolvingExecutor}
-                          className="text-[11px] text-primary hover:underline disabled:opacity-50"
-                        >
-                          {isCreatingAction ? "Submitting..." : "Create on-chain action_id"}
-                        </button>
-                      </div>
+                          } finally {
+                            setIsAutoPreparingAction(false)
+                          }
+                        }}
+                        disabled={isCreatingAction || isAutoPreparingAction || isResolvingExecutor}
+                        className="text-[11px] text-primary hover:underline disabled:opacity-50"
+                      >
+                        {isAutoPreparingAction ? "Preparing..." : "Auto Setup On-Chain"}
+                      </button>
                       {pendingActions.length > 0 && (
                         <span className="text-[10px] text-muted-foreground">
                           {pendingActions.length} pending
                         </span>
                       )}
                     </div>
-                    {pendingActions.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {pendingActions.map((id) => (
-                          <button
-                            key={id}
-                            onClick={() => setActionId(String(id))}
-                            className="px-2 py-0.5 rounded-full text-[10px] bg-primary/10 text-primary hover:bg-primary/20"
-                          >
-                            {id}
-                          </button>
-                        ))}
-                      </div>
-                    )}
                     <p className="mt-1 text-[10px] text-muted-foreground">
                       {effectiveExecutorAddress
                         ? "Executor ready."
@@ -626,9 +591,11 @@ export function FloatingAIAssistant() {
                 )}
                 <div className="mt-2 rounded-md border border-border/60 bg-surface/40 p-2 text-[10px] text-muted-foreground leading-relaxed">
                   <p className="text-foreground font-medium mb-1">Beginner Tutorial</p>
-                  <p>Level 1: Chat freely + ask read-only queries (price, balance, points, market).</p>
-                  <p>Level 2: Click <span className="text-primary">Auto Setup On-Chain</span>, sign wallet once, then send swap/bridge command.</p>
-                  <p>Level 3: Same setup as Level 2, then use portfolio/alert commands.</p>
+                  <ul className="space-y-0.5 list-disc pl-4">
+                    <li>Level 1: Chat freely + read-only queries (price, balance, points, market).</li>
+                    <li>Level 2: For swap/bridge/stake/limit, click <span className="text-primary">Auto Setup On-Chain</span> once.</li>
+                    <li>Level 3: Same flow, plus unstake/claim/portfolio/alert commands.</li>
+                  </ul>
                 </div>
               </div>
               
@@ -697,9 +664,9 @@ export function FloatingAIAssistant() {
                 )}
               </Button>
             </div>
-            {requiresActionId && !hasValidActionId && (
+            {selectedTier >= 2 && commandNeedsAction && (
               <p className="mt-1 text-[10px] text-muted-foreground">
-                No worries: click "Auto Setup On-Chain". Action ID can be filled automatically.
+                This prompt needs on-chain setup. AI will auto-prepare and request wallet signature.
               </p>
             )}
           </div>

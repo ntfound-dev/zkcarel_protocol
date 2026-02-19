@@ -1,15 +1,10 @@
 [package]
-name = "garaga_real_bls"
+name = "private_executor_lite"
 version = "0.1.0"
 edition = "2024_07"
 
 [dependencies]
-garaga = { git = "https://github.com/keep-starknet-strange/garaga.git", tag = "v0.18.2" }
 starknet = "2.15.0"
-
-[cairo]
-sierra-replace-ids = false
-inlining-strategy = 2
 
 [dev-dependencies]
 snforge_std = "0.55.0"

@@ -1,24 +1,33 @@
-use super::{require_starknet_user, require_user, AppState};
-use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader};
-use crate::services::privacy_verifier::{
-    parse_privacy_verifier_kind, resolve_privacy_router_for_verifier,
+use super::{
+    onchain_privacy::{
+        verify_onchain_hide_balance_invoke_tx, HideBalanceFlow,
+        PrivacyVerificationPayload as OnchainPrivacyPayload,
+    },
+    privacy::{
+        bind_intent_hash_into_payload, ensure_public_inputs_bind_nullifier_commitment,
+        generate_auto_garaga_payload, AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
+    },
+    require_starknet_user, require_user, AppState,
+};
+use crate::services::onchain::{
+    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
 };
 use crate::{
     constants::{token_address_for, DEX_EKUBO, DEX_HAIKO},
-    // 1. IMPORT MODUL HASH AGAR TERPAKAI
-    crypto::hash,
     error::{AppError, Result},
     models::{ApiResponse, StarknetWalletCall, SwapQuoteRequest, SwapQuoteResponse},
     services::gas_optimizer::GasOptimizer,
     services::nft_discount::consume_nft_usage_if_active,
     services::notification_service::NotificationType,
+    services::privacy_verifier::parse_privacy_verifier_kind,
     services::LiquidityAggregator,
     services::NotificationService,
 };
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use starknet_core::types::{
-    ExecutionResult, Felt, FunctionCall, InvokeTransaction, Transaction, TransactionFinalityStatus,
+    Call, ExecutionResult, Felt, FunctionCall, InvokeTransaction, Transaction,
+    TransactionFinalityStatus,
 };
 use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
 use std::collections::HashMap;
@@ -113,6 +122,329 @@ pub struct ExecuteSwapResponse {
     pub fee_paid: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy_tx_hash: Option<String>,
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn hide_balance_relayer_pool_enabled() -> bool {
+    env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", true)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HideExecutorKind {
+    PrivateActionExecutorV1,
+    ShieldedPoolV2,
+}
+
+fn hide_executor_kind() -> HideExecutorKind {
+    let raw = std::env::var("HIDE_BALANCE_EXECUTOR_KIND")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(raw.as_str(), "shielded_pool_v2" | "shielded-v2" | "v2") {
+        HideExecutorKind::ShieldedPoolV2
+    } else {
+        HideExecutorKind::PrivateActionExecutorV1
+    }
+}
+
+fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Result<Felt> {
+    for raw in [
+        std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
+        std::env::var("NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
+        config.privacy_router_address.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with("0x0000") {
+            continue;
+        }
+        return parse_felt(trimmed);
+    }
+    Err(AppError::BadRequest(
+        "PrivateActionExecutor is not configured. Set PRIVATE_ACTION_EXECUTOR_ADDRESS.".to_string(),
+    ))
+}
+
+fn normalize_hex_items(items: &[String]) -> Vec<String> {
+    items
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn payload_from_request(
+    payload: Option<&PrivacyVerificationPayload>,
+    verifier: &str,
+) -> Option<AutoPrivacyPayloadResponse> {
+    let payload = payload?;
+    let nullifier = payload.nullifier.as_deref()?.trim();
+    let commitment = payload.commitment.as_deref()?.trim();
+    if nullifier.is_empty() || commitment.is_empty() {
+        return None;
+    }
+    let proof = normalize_hex_items(payload.proof.as_ref()?);
+    let public_inputs = normalize_hex_items(payload.public_inputs.as_ref()?);
+    if proof.is_empty() || public_inputs.is_empty() {
+        return None;
+    }
+    if proof.len() == 1
+        && public_inputs.len() == 1
+        && proof[0].eq_ignore_ascii_case("0x1")
+        && public_inputs[0].eq_ignore_ascii_case("0x1")
+    {
+        return None;
+    }
+    Some(AutoPrivacyPayloadResponse {
+        verifier: payload
+            .verifier
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(verifier)
+            .to_string(),
+        nullifier: nullifier.to_string(),
+        commitment: commitment.to_string(),
+        proof,
+        public_inputs,
+    })
+}
+
+fn build_swap_executor_action_calldata(
+    context: &OnchainSwapContext,
+    mev_protected: bool,
+) -> Vec<Felt> {
+    let mev_flag = if mev_protected { Felt::ONE } else { Felt::ZERO };
+    vec![
+        context.route.dex_id,
+        context.route.expected_amount_out_low,
+        context.route.expected_amount_out_high,
+        context.route.min_amount_out_low,
+        context.route.min_amount_out_high,
+        context.from_token,
+        context.to_token,
+        context.amount_low,
+        context.amount_high,
+        mev_flag,
+    ]
+}
+
+fn build_submit_private_intent_call(
+    executor: Felt,
+    payload: &AutoPrivacyPayloadResponse,
+) -> Result<Call> {
+    let selector_name = match hide_executor_kind() {
+        HideExecutorKind::PrivateActionExecutorV1 => "submit_private_intent",
+        HideExecutorKind::ShieldedPoolV2 => "submit_private_action",
+    };
+    let selector = get_selector_from_name(selector_name)
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let proof: Vec<Felt> = payload
+        .proof
+        .iter()
+        .map(|felt| parse_felt(felt))
+        .collect::<Result<Vec<_>>>()?;
+    let public_inputs: Vec<Felt> = payload
+        .public_inputs
+        .iter()
+        .map(|felt| parse_felt(felt))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut calldata: Vec<Felt> = Vec::with_capacity(4 + proof.len() + public_inputs.len());
+    calldata.push(parse_felt(payload.nullifier.trim())?);
+    calldata.push(parse_felt(payload.commitment.trim())?);
+    calldata.push(Felt::from(proof.len() as u64));
+    calldata.extend(proof);
+    calldata.push(Felt::from(public_inputs.len() as u64));
+    calldata.extend(public_inputs);
+
+    Ok(Call {
+        to: executor,
+        selector,
+        calldata,
+    })
+}
+
+fn build_execute_private_swap_with_payout_call(
+    executor: Felt,
+    payload: &AutoPrivacyPayloadResponse,
+    action_target: Felt,
+    action_selector: Felt,
+    action_calldata: &[Felt],
+    approval_token: Felt,
+    payout_token: Felt,
+    recipient: Felt,
+    min_payout_low: Felt,
+    min_payout_high: Felt,
+) -> Result<Call> {
+    let selector = get_selector_from_name("execute_private_swap_with_payout")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + action_calldata.len());
+    calldata.push(parse_felt(payload.commitment.trim())?);
+    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
+        calldata.push(action_target);
+    }
+    calldata.push(action_selector);
+    calldata.push(Felt::from(action_calldata.len() as u64));
+    calldata.extend_from_slice(action_calldata);
+    calldata.push(approval_token);
+    calldata.push(payout_token);
+    calldata.push(recipient);
+    calldata.push(min_payout_low);
+    calldata.push(min_payout_high);
+
+    Ok(Call {
+        to: executor,
+        selector,
+        calldata,
+    })
+}
+
+fn build_shielded_set_asset_rule_call(
+    executor: Felt,
+    token: Felt,
+    amount_low: Felt,
+    amount_high: Felt,
+) -> Result<Call> {
+    let selector = get_selector_from_name("set_asset_rule")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    Ok(Call {
+        to: executor,
+        selector,
+        calldata: vec![token, amount_low, amount_high],
+    })
+}
+
+fn build_shielded_deposit_fixed_call(
+    executor: Felt,
+    token: Felt,
+    note_commitment: Felt,
+) -> Result<Call> {
+    let selector = get_selector_from_name("deposit_fixed")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    Ok(Call {
+        to: executor,
+        selector,
+        calldata: vec![token, note_commitment],
+    })
+}
+
+fn build_erc20_approve_call(
+    token: Felt,
+    spender: Felt,
+    amount_low: Felt,
+    amount_high: Felt,
+) -> Result<Call> {
+    let selector = get_selector_from_name("approve")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    Ok(Call {
+        to: token,
+        selector,
+        calldata: vec![spender, amount_low, amount_high],
+    })
+}
+
+async fn shielded_note_registered(
+    state: &AppState,
+    executor: Felt,
+    note_commitment: Felt,
+) -> Result<bool> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let selector = get_selector_from_name("is_note_registered")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: executor,
+            entry_point_selector: selector,
+            calldata: vec![note_commitment],
+        })
+        .await?;
+    let flag = out.first().copied().unwrap_or(Felt::ZERO);
+    Ok(flag != Felt::ZERO)
+}
+
+async fn shielded_fixed_amount(
+    state: &AppState,
+    executor: Felt,
+    token: Felt,
+) -> Result<(Felt, Felt)> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let selector = get_selector_from_name("fixed_amount")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: executor,
+            entry_point_selector: selector,
+            calldata: vec![token],
+        })
+        .await?;
+    if out.len() < 2 {
+        return Err(AppError::BadRequest(
+            "ShieldedPoolV2 fixed_amount returned invalid response".to_string(),
+        ));
+    }
+    Ok((out[0], out[1]))
+}
+
+async fn compute_swap_payout_intent_hash_on_executor(
+    state: &AppState,
+    executor: Felt,
+    action_target: Felt,
+    action_selector: Felt,
+    action_calldata: &[Felt],
+    approval_token: Felt,
+    payout_token: Felt,
+    recipient: Felt,
+    min_payout_low: Felt,
+    min_payout_high: Felt,
+) -> Result<String> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let selector_name = match hide_executor_kind() {
+        HideExecutorKind::PrivateActionExecutorV1 => "preview_swap_payout_intent_hash",
+        HideExecutorKind::ShieldedPoolV2 => "preview_swap_payout_action_hash",
+    };
+    let selector = get_selector_from_name(selector_name)
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + action_calldata.len());
+    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
+        calldata.push(action_target);
+    }
+    calldata.push(action_selector);
+    calldata.push(Felt::from(action_calldata.len() as u64));
+    calldata.extend_from_slice(action_calldata);
+    calldata.push(approval_token);
+    calldata.push(payout_token);
+    calldata.push(recipient);
+    calldata.push(min_payout_low);
+    calldata.push(min_payout_high);
+
+    let out = reader
+        .call(FunctionCall {
+            contract_address: executor,
+            entry_point_selector: selector,
+            calldata,
+        })
+        .await?;
+    let intent_hash = out.first().ok_or_else(|| {
+        AppError::BadRequest("PrivateActionExecutor preview returned empty response".to_string())
+    })?;
+    Ok(intent_hash.to_string())
 }
 
 fn is_deadline_valid(deadline: i64, now: i64) -> bool {
@@ -390,7 +722,7 @@ struct OnchainSwapContext {
     route: OnchainSwapRoute,
 }
 
-fn token_decimals(symbol: &str) -> u32 {
+pub(crate) fn token_decimals(symbol: &str) -> u32 {
     match symbol.to_ascii_uppercase().as_str() {
         "BTC" | "WBTC" => 8,
         "USDT" | "USDC" => 6,
@@ -465,7 +797,7 @@ fn parse_decimal_to_scaled_u128(raw: &str, decimals: u32) -> Result<u128> {
         .ok_or_else(|| AppError::BadRequest("Amount is too large".to_string()))
 }
 
-fn parse_decimal_to_u256_parts(raw: &str, decimals: u32) -> Result<(Felt, Felt)> {
+pub(crate) fn parse_decimal_to_u256_parts(raw: &str, decimals: u32) -> Result<(Felt, Felt)> {
     let scaled = parse_decimal_to_scaled_u128(raw, decimals)?;
     Ok((Felt::from(scaled), Felt::ZERO))
 }
@@ -1048,12 +1380,10 @@ async fn fetch_onchain_swap_context(
     if let Some(err) = first_error {
         return Err(err);
     }
-    Err(AppError::BadRequest(
-        format!(
-            "Failed to fetch on-chain swap route from configured contract {}",
-            felt_debug(swap_contract)
-        ),
-    ))
+    Err(AppError::BadRequest(format!(
+        "Failed to fetch on-chain swap route from configured contract {}",
+        felt_debug(swap_contract)
+    )))
 }
 
 fn build_onchain_swap_wallet_calls(
@@ -1348,106 +1678,6 @@ fn extract_invoke_sender_and_calldata(tx: &Transaction) -> Result<(Felt, &[Felt]
     }
 }
 
-fn verify_hide_balance_privacy_call_in_invoke_payload(
-    tx: &Transaction,
-    expected_router: Felt,
-    expected_nullifier: Felt,
-    expected_commitment: Felt,
-    expected_proof: &[Felt],
-    expected_public_inputs: &[Felt],
-) -> Result<()> {
-    let submit_selector = get_selector_from_name("submit_private_action")
-        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
-    let (_, calldata) = extract_invoke_sender_and_calldata(tx)?;
-    let calls = parse_execute_calls(calldata).map_err(|err| {
-        AppError::BadRequest(format!(
-            "Failed to parse invoke calldata for hide_balance privacy verification: {}",
-            err
-        ))
-    })?;
-
-    let matched = calls
-        .into_iter()
-        .find(|call| call.to == expected_router && call.selector == submit_selector)
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "onchain_tx_hash does not include submit_private_action call to configured privacy router"
-                    .to_string(),
-            )
-        })?;
-
-    let mut expected = Vec::with_capacity(4 + expected_proof.len() + expected_public_inputs.len());
-    expected.push(expected_nullifier);
-    expected.push(expected_commitment);
-    expected.push(Felt::from(expected_proof.len() as u64));
-    expected.extend_from_slice(expected_proof);
-    expected.push(Felt::from(expected_public_inputs.len() as u64));
-    expected.extend_from_slice(expected_public_inputs);
-
-    if matched.calldata != expected {
-        return Err(AppError::BadRequest(
-            "onchain_tx_hash privacy call payload does not match submitted Hide Balance proof payload"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
-async fn verify_onchain_hide_balance_privacy_tx_hash(
-    state: &AppState,
-    tx_hash: &str,
-    payload: Option<&PrivacyVerificationPayload>,
-) -> Result<()> {
-    let verifier = parse_privacy_verifier_kind(payload.and_then(|p| p.verifier.as_deref()))?;
-    let router = resolve_privacy_router_for_verifier(&state.config, verifier)?;
-    let expected_router = parse_felt(&router)?;
-    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(tx_hash, payload)?;
-
-    let expected_nullifier = parse_felt(&nullifier)?;
-    let expected_commitment = parse_felt(&commitment)?;
-    let expected_proof: Vec<Felt> = proof
-        .iter()
-        .map(|value| parse_felt(value))
-        .collect::<Result<Vec<_>>>()?;
-    let expected_public_inputs: Vec<Felt> = public_inputs
-        .iter()
-        .map(|value| parse_felt(value))
-        .collect::<Result<Vec<_>>>()?;
-
-    let reader = OnchainReader::from_config(&state.config)?;
-    let tx_hash_felt = parse_felt(tx_hash)?;
-    let mut last_rpc_error = String::new();
-
-    for attempt in 0..5 {
-        let tx = match reader.get_transaction(&tx_hash_felt).await {
-            Ok(tx) => tx,
-            Err(err) => {
-                last_rpc_error = err.to_string();
-                if attempt < 4 {
-                    sleep(Duration::from_millis(1000)).await;
-                    continue;
-                }
-                break;
-            }
-        };
-
-        verify_hide_balance_privacy_call_in_invoke_payload(
-            &tx,
-            expected_router,
-            expected_nullifier,
-            expected_commitment,
-            &expected_proof,
-            &expected_public_inputs,
-        )?;
-        return Ok(());
-    }
-
-    Err(AppError::BadRequest(format!(
-        "Failed to verify hide_balance privacy call in onchain_tx_hash: {}",
-        last_rpc_error
-    )))
-}
-
 async fn verify_onchain_swap_tx_hash(
     state: &AppState,
     tx_hash: &str,
@@ -1582,64 +1812,6 @@ fn normalize_onchain_tx_hash(tx_hash: Option<&str>) -> Result<Option<String>> {
         ));
     }
     Ok(Some(raw.to_ascii_lowercase()))
-}
-
-fn resolve_privacy_inputs(
-    seed: &str,
-    payload: Option<&PrivacyVerificationPayload>,
-) -> Result<(String, String, Vec<String>, Vec<String>)> {
-    let payload = payload.ok_or_else(|| {
-        AppError::BadRequest("privacy payload is required when hide_balance=true".to_string())
-    })?;
-
-    let nullifier = payload
-        .nullifier
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| seed.to_string());
-    let commitment = payload
-        .commitment
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| hash::hash_string(&format!("commitment:{seed}")));
-    let proof = payload
-        .proof
-        .clone()
-        .filter(|items| !items.is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "privacy.proof must be provided and non-empty when hide_balance=true".to_string(),
-            )
-        })?;
-    let public_inputs = payload
-        .public_inputs
-        .clone()
-        .filter(|items| !items.is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "privacy.public_inputs must be provided and non-empty when hide_balance=true"
-                    .to_string(),
-            )
-        })?;
-    if is_dummy_garaga_payload(&proof, &public_inputs) {
-        return Err(AppError::BadRequest(
-            "privacy.proof/public_inputs dummy payload (0x1) is not allowed; submit a real Garaga proof"
-                .to_string(),
-        ));
-    }
-    Ok((nullifier, commitment, proof, public_inputs))
-}
-
-fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
-    if proof.len() != 1 || public_inputs.len() != 1 {
-        return false;
-    }
-    proof[0].trim().eq_ignore_ascii_case("0x1")
-        && public_inputs[0].trim().eq_ignore_ascii_case("0x1")
 }
 
 /// POST /api/v1/swap/quote
@@ -1816,41 +1988,189 @@ pub async fn execute_swap(
         );
     }
 
-    let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-    let onchain_tx_hash = onchain_tx_hash.ok_or_else(|| {
-        AppError::BadRequest(
-            "Swap requires onchain_tx_hash. Frontend must submit user-signed Starknet tx."
-                .to_string(),
-        )
-    })?;
-    let onchain_block_number = verify_onchain_swap_tx_hash(
-        &state,
-        &onchain_tx_hash,
-        &auth_subject,
-        &user_address,
-        &req.from_token,
-        &req.to_token,
-    )
-    .await?;
-    let is_user_signed_onchain = true;
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
+    let use_relayer_pool_hide = should_hide && hide_balance_relayer_pool_enabled();
 
-    // 4. Use wallet-submitted onchain tx hash when available; otherwise fallback.
-    let tx_hash = onchain_tx_hash;
+    let (tx_hash, onchain_block_number, is_user_signed_onchain, privacy_verification_tx) =
+        if use_relayer_pool_hide {
+            let executor = resolve_private_action_executor_felt(&state.config)?;
+            let verifier_kind = parse_privacy_verifier_kind(
+                req.privacy
+                    .as_ref()
+                    .and_then(|payload| payload.verifier.as_deref()),
+            )?;
+            let tx_context = AutoPrivacyTxContext {
+                flow: Some("swap".to_string()),
+                from_token: Some(req.from_token.clone()),
+                to_token: Some(req.to_token.clone()),
+                amount: Some(req.amount.clone()),
+                recipient: Some(final_recipient.to_string()),
+                from_network: Some("starknet".to_string()),
+                to_network: Some("starknet".to_string()),
+            };
 
-    let mut privacy_verification_tx: Option<String> = None;
-    let privacy_payload = req.privacy.as_ref();
-    if should_hide {
-        verify_onchain_hide_balance_privacy_tx_hash(&state, &tx_hash, privacy_payload).await?;
-        privacy_verification_tx = Some(tx_hash.clone());
-        if let Some(ref privacy_tx_hash) = privacy_verification_tx {
-            tracing::info!(
-                "Hide-balance privacy verification included in same swap tx tx_hash={} privacy_tx_hash={}",
-                tx_hash,
-                privacy_tx_hash
+            let mut payload = if let Some(request_payload) =
+                payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
+            {
+                request_payload
+            } else {
+                generate_auto_garaga_payload(
+                    &state.config,
+                    &user_address,
+                    verifier_kind.as_str(),
+                    Some(&tx_context),
+                )
+                .await?
+            };
+            ensure_public_inputs_bind_nullifier_commitment(
+                &payload.nullifier,
+                &payload.commitment,
+                &payload.public_inputs,
+                "swap hide payload",
+            )?;
+
+            let action_selector = get_selector_from_name("execute_swap")
+                .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+            let action_calldata = build_swap_executor_action_calldata(
+                &onchain_context,
+                req.mode.eq_ignore_ascii_case("private"),
             );
-        }
-    }
+            let recipient_felt = parse_felt(final_recipient)?;
+            let intent_hash = compute_swap_payout_intent_hash_on_executor(
+                &state,
+                executor,
+                onchain_context.swap_contract,
+                action_selector,
+                &action_calldata,
+                onchain_context.from_token,
+                onchain_context.to_token,
+                recipient_felt,
+                onchain_context.route.min_amount_out_low,
+                onchain_context.route.min_amount_out_high,
+            )
+            .await?;
+            bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
+            ensure_public_inputs_bind_nullifier_commitment(
+                &payload.nullifier,
+                &payload.commitment,
+                &payload.public_inputs,
+                "swap hide payload (bound)",
+            )?;
+
+            let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
+                return Err(AppError::BadRequest(
+                    "On-chain relayer account is not configured for hide mode".to_string(),
+                ));
+            };
+            let mut relayer_calls: Vec<Call> = Vec::new();
+            if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
+                let commitment_felt = parse_felt(payload.commitment.trim())?;
+                let note_registered =
+                    shielded_note_registered(&state, executor, commitment_felt).await?;
+                if !note_registered {
+                    let (fixed_low, fixed_high) =
+                        shielded_fixed_amount(&state, executor, onchain_context.from_token).await?;
+                    if fixed_low != onchain_context.amount_low
+                        || fixed_high != onchain_context.amount_high
+                    {
+                        relayer_calls.push(build_shielded_set_asset_rule_call(
+                            executor,
+                            onchain_context.from_token,
+                            onchain_context.amount_low,
+                            onchain_context.amount_high,
+                        )?);
+                    }
+                    relayer_calls.push(build_erc20_approve_call(
+                        onchain_context.from_token,
+                        executor,
+                        onchain_context.amount_low,
+                        onchain_context.amount_high,
+                    )?);
+                    relayer_calls.push(build_shielded_deposit_fixed_call(
+                        executor,
+                        onchain_context.from_token,
+                        commitment_felt,
+                    )?);
+                }
+            }
+            let submit_call = build_submit_private_intent_call(executor, &payload)?;
+            let execute_call = build_execute_private_swap_with_payout_call(
+                executor,
+                &payload,
+                onchain_context.swap_contract,
+                action_selector,
+                &action_calldata,
+                onchain_context.from_token,
+                onchain_context.to_token,
+                recipient_felt,
+                onchain_context.route.min_amount_out_low,
+                onchain_context.route.min_amount_out_high,
+            )?;
+            relayer_calls.push(submit_call);
+            relayer_calls.push(execute_call);
+            let tx_hash_felt = invoker.invoke_many(relayer_calls).await?;
+            let tx_hash = format!("{:#x}", tx_hash_felt);
+            tracing::info!(
+                "Submitted hide swap via relayer pool user={} tx_hash={} executor={}",
+                user_address,
+                tx_hash,
+                felt_hex(executor)
+            );
+            (tx_hash.clone(), 0_i64, false, Some(tx_hash))
+        } else {
+            let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+            let onchain_tx_hash = onchain_tx_hash.ok_or_else(|| {
+                AppError::BadRequest(
+                    "Swap requires onchain_tx_hash. Frontend must submit user-signed Starknet tx."
+                        .to_string(),
+                )
+            })?;
+            let onchain_block_number = verify_onchain_swap_tx_hash(
+                &state,
+                &onchain_tx_hash,
+                &auth_subject,
+                &user_address,
+                &req.from_token,
+                &req.to_token,
+            )
+            .await?;
+
+            let mut privacy_verification_tx: Option<String> = None;
+            let privacy_payload = req.privacy.as_ref();
+            if should_hide {
+                let mapped_payload = privacy_payload.map(|payload| OnchainPrivacyPayload {
+                    verifier: payload.verifier.clone(),
+                    nullifier: payload.nullifier.clone(),
+                    commitment: payload.commitment.clone(),
+                    proof: payload.proof.clone(),
+                    public_inputs: payload.public_inputs.clone(),
+                });
+                verify_onchain_hide_balance_invoke_tx(
+                    &state,
+                    &onchain_tx_hash,
+                    &auth_subject,
+                    &user_address,
+                    mapped_payload.as_ref(),
+                    Some(HideBalanceFlow::Swap),
+                )
+                .await?;
+                privacy_verification_tx = Some(onchain_tx_hash.clone());
+                if let Some(ref privacy_tx_hash) = privacy_verification_tx {
+                    tracing::info!(
+                        "Hide-balance privacy verification included in same swap tx tx_hash={} privacy_tx_hash={}",
+                        onchain_tx_hash,
+                        privacy_tx_hash
+                    );
+                }
+            }
+
+            (
+                onchain_tx_hash,
+                onchain_block_number,
+                true,
+                privacy_verification_tx,
+            )
+        };
 
     let gas_optimizer = GasOptimizer::new(state.config.clone());
     let estimated_cost = gas_optimizer
@@ -1946,7 +2266,7 @@ pub async fn execute_swap(
         status: if is_user_signed_onchain {
             "submitted_onchain".to_string()
         } else {
-            "success".to_string()
+            "submitted_relayer".to_string()
         },
         from_amount: req.amount,
         to_amount: expected_out.to_string(),
@@ -1981,7 +2301,7 @@ mod tests {
     }
 
     #[test]
-    
+
     fn estimated_time_for_dex_defaults() {
         // Memastikan estimasi waktu untuk DEX yang tidak dikenal
         assert_eq!(estimated_time_for_dex("UNKNOWN"), "~2-3 min");

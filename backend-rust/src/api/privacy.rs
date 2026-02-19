@@ -1,6 +1,6 @@
 use crate::{
     error::{AppError, Result},
-    models::ApiResponse,
+    models::{ApiResponse, StarknetWalletCall},
     services::onchain::{parse_felt, OnchainInvoker},
     services::privacy_verifier::{
         parse_privacy_verifier_kind, resolve_privacy_router_for_verifier,
@@ -9,7 +9,7 @@ use crate::{
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use starknet_core::types::Call;
+use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
 use std::{process::Stdio, time::Duration};
 use tokio::{io::AsyncWriteExt, process::Command};
@@ -73,6 +73,59 @@ pub struct AutoPrivacyActionResponse {
     pub tx_hash: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PreparePrivateExecutionRequest {
+    pub verifier: Option<String>,
+    pub flow: String,
+    pub action_entrypoint: String,
+    pub action_calldata: Vec<String>,
+    #[serde(default)]
+    pub tx_context: Option<AutoPrivacyTxContext>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PreparePrivateExecutionResponse {
+    pub payload: AutoPrivacyPayloadResponse,
+    pub intent_hash: String,
+    pub onchain_calls: Vec<StarknetWalletCall>,
+}
+
+#[derive(Clone, Copy)]
+enum PrivateExecutionFlow {
+    Swap,
+    Limit,
+    Stake,
+}
+
+impl PrivateExecutionFlow {
+    fn parse(raw: &str) -> Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "swap" => Ok(Self::Swap),
+            "limit" | "limit_order" => Ok(Self::Limit),
+            "stake" => Ok(Self::Stake),
+            _ => Err(AppError::BadRequest(
+                "flow must be one of: swap, limit, stake".to_string(),
+            )),
+        }
+    }
+
+    fn preview_entrypoint(self) -> &'static str {
+        match self {
+            Self::Swap => "preview_swap_intent_hash",
+            Self::Limit => "preview_limit_intent_hash",
+            Self::Stake => "preview_stake_intent_hash",
+        }
+    }
+
+    fn execute_entrypoint(self) -> &'static str {
+        match self {
+            Self::Swap => "execute_private_swap",
+            Self::Limit => "execute_private_limit_order",
+            Self::Stake => "execute_private_stake",
+        }
+    }
+}
+
 /// POST /api/v1/privacy/submit
 pub async fn submit_private_action(
     State(state): State<AppState>,
@@ -125,6 +178,65 @@ pub async fn auto_submit_private_action(
         payload,
         tx_hash,
     })))
+}
+
+/// POST /api/v1/privacy/prepare-private-execution
+pub async fn prepare_private_execution(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PreparePrivateExecutionRequest>,
+) -> Result<Json<ApiResponse<PreparePrivateExecutionResponse>>> {
+    let user_address = require_user(&headers, &state).await?;
+    let verifier_kind = parse_privacy_verifier_kind(req.verifier.as_deref())?;
+    let flow = PrivateExecutionFlow::parse(&req.flow)?;
+    if req.action_calldata.is_empty() {
+        return Err(AppError::BadRequest(
+            "action_calldata must be non-empty".to_string(),
+        ));
+    }
+
+    let executor_address = resolve_private_action_executor_address(&state.config)?;
+    let action_selector = parse_selector_or_felt(&req.action_entrypoint)?;
+
+    let intent_hash = compute_intent_hash_on_executor(
+        &state,
+        &executor_address,
+        flow,
+        action_selector,
+        &req.action_calldata,
+    )
+    .await?;
+
+    let mut payload = generate_auto_garaga_payload(
+        &state.config,
+        &user_address,
+        verifier_kind.as_str(),
+        req.tx_context.as_ref(),
+    )
+    .await?;
+    bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
+    ensure_public_inputs_bind_nullifier_commitment(
+        &payload.nullifier,
+        &payload.commitment,
+        &payload.public_inputs,
+        "prepared private execution payload",
+    )?;
+
+    let onchain_calls = build_private_executor_wallet_calls(
+        &executor_address,
+        flow,
+        action_selector,
+        &req.action_calldata,
+        &payload,
+    )?;
+
+    Ok(Json(ApiResponse::success(
+        PreparePrivateExecutionResponse {
+            payload,
+            intent_hash,
+            onchain_calls,
+        },
+    )))
 }
 
 async fn submit_private_action_internal(
@@ -340,7 +452,7 @@ fn parse_action_type(value: &str) -> Result<starknet_core::types::Felt> {
     parse_felt(&format!("0x{hex}"))
 }
 
-async fn generate_auto_garaga_payload(
+pub(crate) async fn generate_auto_garaga_payload(
     config: &crate::config::Config,
     user_address: &str,
     verifier: &str,
@@ -538,7 +650,7 @@ fn extract_hex_array(value: &Value, keys: &[&str], field_label: &str) -> Result<
     )))
 }
 
-fn ensure_public_inputs_bind_nullifier_commitment(
+pub(crate) fn ensure_public_inputs_bind_nullifier_commitment(
     nullifier: &str,
     commitment: &str,
     public_inputs: &[String],
@@ -572,6 +684,135 @@ fn ensure_public_inputs_bind_nullifier_commitment(
         )));
     }
     Ok(())
+}
+
+fn intent_hash_public_input_index() -> Result<usize> {
+    let raw =
+        std::env::var("GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX").unwrap_or_else(|_| "2".to_string());
+    let parsed = raw.trim().parse::<usize>().map_err(|_| {
+        AppError::BadRequest(format!(
+            "GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX must be a non-negative integer, got '{}'",
+            raw
+        ))
+    })?;
+    Ok(parsed)
+}
+
+pub(crate) fn bind_intent_hash_into_payload(
+    payload: &mut AutoPrivacyPayloadResponse,
+    intent_hash: &str,
+) -> Result<()> {
+    let intent_hash_felt = parse_felt(intent_hash)?;
+    let index = intent_hash_public_input_index()?;
+    while payload.public_inputs.len() <= index {
+        payload.public_inputs.push("0x0".to_string());
+    }
+    payload.public_inputs[index] = intent_hash_felt.to_string();
+    Ok(())
+}
+
+fn parse_selector_or_felt(value: &str) -> Result<Felt> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(
+            "action_entrypoint must be non-empty".to_string(),
+        ));
+    }
+    if trimmed.starts_with("0x") || trimmed.chars().all(|c| c.is_ascii_digit()) {
+        return parse_felt(trimmed);
+    }
+    get_selector_from_name(trimmed)
+        .map_err(|e| AppError::Internal(format!("Selector error for '{}': {}", trimmed, e)))
+}
+
+fn resolve_private_action_executor_address(config: &crate::config::Config) -> Result<String> {
+    for raw in [
+        std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
+        std::env::var("NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
+        config.privacy_router_address.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with("0x0000") {
+            continue;
+        }
+        let _ = parse_felt(trimmed)?;
+        return Ok(trimmed.to_string());
+    }
+
+    Err(AppError::BadRequest(
+        "PrivateActionExecutor is not configured. Set PRIVATE_ACTION_EXECUTOR_ADDRESS.".to_string(),
+    ))
+}
+
+async fn compute_intent_hash_on_executor(
+    state: &AppState,
+    executor_address: &str,
+    flow: PrivateExecutionFlow,
+    action_selector: Felt,
+    action_calldata: &[String],
+) -> Result<String> {
+    let reader = crate::services::onchain::OnchainReader::from_config(&state.config)?;
+    let contract_address = parse_felt(executor_address)?;
+    let preview_selector = get_selector_from_name(flow.preview_entrypoint())
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let mut calldata: Vec<Felt> = Vec::with_capacity(2 + action_calldata.len());
+    calldata.push(action_selector);
+    calldata.push(Felt::from(action_calldata.len() as u64));
+    for felt in action_calldata {
+        calldata.push(parse_felt(felt)?);
+    }
+
+    let out = reader
+        .call(FunctionCall {
+            contract_address,
+            entry_point_selector: preview_selector,
+            calldata,
+        })
+        .await?;
+    let intent_hash = out.first().ok_or_else(|| {
+        AppError::BadRequest("PrivateActionExecutor preview returned empty response".to_string())
+    })?;
+    Ok(intent_hash.to_string())
+}
+
+fn build_private_executor_wallet_calls(
+    executor_address: &str,
+    flow: PrivateExecutionFlow,
+    action_selector: Felt,
+    action_calldata: &[String],
+    payload: &AutoPrivacyPayloadResponse,
+) -> Result<Vec<StarknetWalletCall>> {
+    let mut submit_calldata: Vec<String> =
+        Vec::with_capacity(4 + payload.proof.len() + payload.public_inputs.len());
+    submit_calldata.push(payload.nullifier.clone());
+    submit_calldata.push(payload.commitment.clone());
+    submit_calldata.push(format!("0x{:x}", payload.proof.len()));
+    submit_calldata.extend(payload.proof.iter().cloned());
+    submit_calldata.push(format!("0x{:x}", payload.public_inputs.len()));
+    submit_calldata.extend(payload.public_inputs.iter().cloned());
+
+    let mut execute_calldata: Vec<String> = Vec::with_capacity(3 + action_calldata.len());
+    execute_calldata.push(payload.commitment.clone());
+    execute_calldata.push(action_selector.to_string());
+    execute_calldata.push(format!("0x{:x}", action_calldata.len()));
+    execute_calldata.extend(action_calldata.iter().cloned());
+
+    Ok(vec![
+        StarknetWalletCall {
+            contract_address: executor_address.to_string(),
+            entrypoint: "submit_private_intent".to_string(),
+            calldata: submit_calldata,
+        },
+        StarknetWalletCall {
+            contract_address: executor_address.to_string(),
+            entrypoint: flow.execute_entrypoint().to_string(),
+            calldata: execute_calldata,
+        },
+    ])
 }
 
 fn privacy_binding_index(env_key: &str, default_value: usize) -> Result<usize> {

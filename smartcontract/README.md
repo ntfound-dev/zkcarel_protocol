@@ -3,15 +3,12 @@
 **Overview**
 This folder contains the Cairo contracts for CAREL Protocol. It covers tokenomics, governance, rewards, staking, swaps, bridges, NFT discounts, and privacy primitives. The contracts are designed to work with the backend services that provide points, Merkle snapshots, and off-chain routing.
 
+## README Scope
+- Dokumen ini fokus ke **teknis smart contract**: architecture, module contracts, test, deploy, integration notes.
+- Untuk konteks produk, business model, dan roadmap level monorepo, lihat `README.md` di root.
+
 **Internal-Asset Mode**
 - This branch is configured for **internal assets only**. External assets/integrations can be added later, but by default the protocol assumes internal assets (CAREL and protocol-wrapped assets).
-
-**Token Price Estimate (Docs/Pitch)**
-- Launch: $0.01
-- Year 1: $0.05–0.08
-- Year 2: $0.15–0.25
-- Year 3: $0.50+
-- Note: These are off-chain projections for docs/pitch only and are not enforced on-chain.
 
 **Architecture**
 - On-chain core: token, treasury, vesting, registry, fee collection.
@@ -80,6 +77,7 @@ smartcontract/
       private_swap.cairo
       router.cairo
     trading/
+      battleship_garaga.cairo
       dca_orders.cairo
       dark_pool.cairo
     utils/
@@ -107,6 +105,7 @@ smartcontract/
 - `src/bridge/*_adapter.cairo`: provider adapters (Atomiq/Garden/LayerSwap) — **optional/disabled for internal‑asset mode**.
 - `src/bridge/private_btc_swap.cairo`: confidential BTC swap commitments + proof verify.
 - `src/swap/private_swap.cairo`: private swap with nullifier protection.
+- `src/trading/battleship_garaga.cairo`: Battleship game contract with Garaga proof-gated actions (board commit/shot response/timeout).
 - `src/staking/*`: CAREL, BTC, LP, and stablecoin staking.
 - `src/nft/discount_soulbound.cairo`: soulbound discount NFT tiers with finite usage (no auto-reset), unlimited remint, and optional recharge.
 - `src/ai/ai_executor.cairo`: AI task execution with rate limits and optional fee.
@@ -167,15 +166,50 @@ smartcontract/
 8. Vesting / Tokenomics
 - `VestingManager` creates schedules per category and enforces supply cap.
 
+9. DeFi Futures: Battleship
+- `BattleshipGaraga` manages 5x5 game lifecycle (`create_game`, `join_game`, `fire_shot`, `respond_shot`, `claim_timeout`).
+- Proof checks via Garaga verifier binding (`nullifier`, action binding) to prevent replay.
+- Emits game events: create/join/board commit/shot result/game over/timeout.
+
 **User Scenario Tests**
 - `tests/test_user_scenarios.cairo`: end-to-end user flows (bridge, swap, limit order/keeper execution, points lifecycle, NFT discount, referral, staking, governance, timelock, treasury, private payments, dark pool, AI executor).
 
 **Testing (Scarb / Snforge)**
-- Run all tests:
+- Repo ini punya **2 project terpisah**:
+  - `smartcontract/` -> core protocol lama (`src/`, `tests/`).
+  - `smartcontract/garaga_real_bls/` -> verifier Garaga + `PrivateActionExecutor`.
+- Keduanya sengaja dipisah supaya build/test core tidak ketarik verifier heavy.
+
+- Untuk device low CPU/RAM, pakai project ringan:
+  - `smartcontract/private_executor_lite/` -> hanya `PrivateActionExecutor` (tanpa compile Groth16 verifier).
+  - Jalankan:
+```bash
+bash smartcontract/scripts/test_private_executor_lite.sh
+```
+
+- Run core tests (cepat, kontrak lama):
+```bash
+bash smartcontract/scripts/test_core_fast.sh
+```
+
+- Run Garaga fast tests:
+```bash
+bash smartcontract/scripts/test_garaga_fast.sh
+```
+- Run verifier fork test explicitly (lebih berat, butuh RPC):
+```bash
+bash smartcontract/scripts/test_garaga_fork.sh
+```
+
+- Manual mode (jika perlu):
 ```bash
 cd smartcontract
-scarb test
+asdf exec snforge test
+
+cd smartcontract/garaga_real_bls
+asdf exec snforge test
 ```
+
 - Run focused suites:
 ```bash
 scarb test test_dca_orders
@@ -282,6 +316,7 @@ Optional Garaga verifier mode before deploy adapters:
 - `GARAGA_VERIFICATION_MODE=5` `verify_groth16_proof_bls12_381(full_proof_with_hints) -> Option<Span<u256>>`
   - Recommended for Garaga-generated verifier contracts that return `Option<Span<u256>>`.
   - This repo keeps the generated real verifier project in `smartcontract/garaga_real_bls`.
+  - For stricter private execution binding (swap/limit/stake), use `smartcontract/garaga_real_bls/src/private_action_executor.cairo` and bind `nullifier/commitment/intent_hash` from verifier output before executing target action.
 7. Deploy price oracle and set token configs
 ```bash
 bash scripts/05_deploy_price_oracle.sh
@@ -290,6 +325,35 @@ bash scripts/05_deploy_price_oracle.sh
 ```bash
 bash scripts/07_wire_privacy_router_v2.sh
 ```
+
+## Active Contract Addresses and Logic (Battleship)
+Active addresses (Sepolia):
+- `BattleshipGaraga`: `0x04ea26d455d6d79f185a728ac59cac029a6a5bf2a3ca3b4b75f04b4e8c267dd2`
+- `Garaga Verifier (BLS)`: `0x0590a20b1dd4780104ddecd64abc7e20e135cc92ac61e449342ead831aadb261`
+- `PrivateActionExecutor`: `0x07e18b8314a17989a74ba12e6a68856a9e4791ce254d8491ad2b4addc7e5bf8e`
+- `ZkPrivacyRouter`: `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f`
+
+Alur logika on-chain `BattleshipGaraga`:
+1. `create_game(opponent, board_commitment, proof, public_inputs)`:
+   - validasi proof binding board + nullifier,
+   - simpan player A + board commitment.
+2. `join_game(game_id, board_commitment, proof, public_inputs)`:
+   - hanya opponent yang diundang,
+   - validasi proof + simpan board commitment player B,
+   - status pindah ke `PLAYING`.
+3. `fire_shot(game_id, x, y)`:
+   - hanya player yang sedang turn,
+   - koordinat tidak boleh duplikat,
+   - simpan pending shot.
+4. `respond_shot(game_id, is_hit, proof, public_inputs)`:
+   - responder (bukan shooter) wajib submit proof response,
+   - update hit counter + event `ShotResult`,
+   - cek win condition (total hit kapal lawan).
+5. `declare_ship_sunk(game_id, ship_size, proof, public_inputs)`:
+   - optional proof untuk deklarasi kapal tenggelam.
+6. `claim_timeout(game_id)`:
+   - lawan boleh claim jika giliran tidak merespons melebihi `timeout_blocks`,
+   - langsung set winner + event `GameOver`.
 External asset modules (bridge/BTC) are optional:
 ```bash
 export PRIVACY_WIRE_EXTERNAL=1

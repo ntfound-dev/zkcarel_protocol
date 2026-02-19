@@ -176,6 +176,15 @@ pub struct LimitOrder {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PrivacyVerificationPayload {
+    pub verifier: Option<String>,
+    pub nullifier: Option<String>,
+    pub commitment: Option<String>,
+    pub proof: Option<Vec<String>>,
+    pub public_inputs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateLimitOrderRequest {
     pub from_token: String,
     pub to_token: String,
@@ -185,6 +194,8 @@ pub struct CreateLimitOrderRequest {
     pub recipient: Option<String>,
     pub client_order_id: Option<String>,
     pub onchain_tx_hash: Option<String>,
+    pub hide_balance: Option<bool>,
+    pub privacy: Option<PrivacyVerificationPayload>,
 }
 
 // ==================== PRICE ====================

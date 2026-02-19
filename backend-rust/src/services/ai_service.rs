@@ -13,7 +13,8 @@ fn normalize_swap_delimiters(text: &str) -> String {
 
 fn normalize_token_symbol(word: &str) -> Option<&'static str> {
     match word {
-        "btc" | "bitcoin" | "wbtc" => Some("BTC"),
+        "btc" | "bitcoin" => Some("BTC"),
+        "wbtc" => Some("WBTC"),
         "eth" | "ethereum" | "weth" => Some("ETH"),
         "strk" | "starknet" => Some("STRK"),
         "carel" => Some("CAREL"),
@@ -118,29 +119,115 @@ fn fallback_price_for(token: &str) -> f64 {
 }
 
 fn extract_amount_from_text(text: &str) -> f64 {
+    fn parse_numeric_word(word: &str) -> Option<f64> {
+        let cleaned: String = word
+            .chars()
+            .filter(|ch| ch.is_ascii_digit() || *ch == '.' || *ch == ',')
+            .collect();
+        if cleaned.is_empty() {
+            return None;
+        }
+        let normalized = if cleaned.contains(',') && !cleaned.contains('.') {
+            cleaned.replace(',', ".")
+        } else {
+            cleaned.replace(',', "")
+        };
+        normalized.parse::<f64>().ok().filter(|value| *value > 0.0)
+    }
+
     text.split_whitespace()
-        .find_map(|word| {
-            let cleaned: String = word
-                .chars()
-                .filter(|ch| ch.is_ascii_digit() || *ch == '.' || *ch == ',')
-                .collect();
-            if cleaned.is_empty() {
-                return None;
-            }
-            let normalized = if cleaned.contains(',') && !cleaned.contains('.') {
-                cleaned.replace(',', ".")
-            } else {
-                cleaned.replace(',', "")
-            };
-            normalized.parse::<f64>().ok().filter(|value| *value > 0.0)
-        })
+        .find_map(parse_numeric_word)
         .unwrap_or(0.0)
+}
+
+fn extract_price_from_text(text: &str) -> f64 {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    for idx in 0..words.len() {
+        let marker = words[idx].trim().to_ascii_lowercase();
+        if marker == "at" || marker == "price" || marker == "@" {
+            if let Some(next) = words.get(idx + 1) {
+                let value = extract_amount_from_text(next);
+                if value > 0.0 {
+                    return value;
+                };
+            }
+        }
+    }
+    0.0
+}
+
+fn extract_expiry_from_text(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("30d") || lower.contains("30 days") {
+        return "30d".to_string();
+    }
+    if lower.contains("1d") || lower.contains("1 day") || lower.contains("24h") {
+        return "1d".to_string();
+    }
+    "7d".to_string()
+}
+
+fn parse_limit_order_parameters(text: &str) -> (String, String, f64, f64, String) {
+    let (from, to, amount) = parse_swap_parameters(text);
+    let price = extract_price_from_text(text);
+    let expiry = extract_expiry_from_text(text);
+    (from, to, amount, price, expiry)
 }
 
 fn parse_intent_from_command(command: &str) -> Intent {
     let command_lower = command.to_lowercase();
 
-    if contains_any_keyword(&command_lower, &["swap", "exchange", "tukar"]) {
+    if contains_any_keyword(
+        &command_lower,
+        &["cancel order", "cancel limit", "batalkan order"],
+    ) {
+        Intent {
+            action: "limit_order_cancel".to_string(),
+            parameters: serde_json::json!({}),
+        }
+    } else if contains_any_keyword(
+        &command_lower,
+        &["limit order", "place order", "buat order"],
+    ) {
+        let (from, to, amount, price, expiry) = parse_limit_order_parameters(&command_lower);
+        Intent {
+            action: "limit_order_create".to_string(),
+            parameters: serde_json::json!({
+                "from": from,
+                "to": to,
+                "amount": amount,
+                "price": price,
+                "expiry": expiry,
+            }),
+        }
+    } else if contains_any_keyword(
+        &command_lower,
+        &[
+            "claim rewards",
+            "claim reward",
+            "claim staking",
+            "klaim reward",
+            "klaim staking",
+        ],
+    ) {
+        Intent {
+            action: "claim_staking_rewards".to_string(),
+            parameters: serde_json::json!({
+                "token": extract_token_from_text(&command_lower),
+            }),
+        }
+    } else if contains_any_keyword(
+        &command_lower,
+        &["unstake", "withdraw stake", "cabut stake"],
+    ) {
+        Intent {
+            action: "unstake".to_string(),
+            parameters: serde_json::json!({
+                "token": extract_token_from_text(&command_lower),
+                "amount": extract_amount_from_text(&command_lower),
+            }),
+        }
+    } else if contains_any_keyword(&command_lower, &["swap", "exchange", "tukar"]) {
         let (from, to, amount) = parse_swap_parameters(&command_lower);
         Intent {
             action: "swap".to_string(),
@@ -288,7 +375,13 @@ pub fn classify_command_scope(command: &str) -> AIGuardScope {
     let intent = parse_intent_from_command(command);
     match intent.action.as_str() {
         "check_balance" | "check_points" | "market_analysis" | "tutorial" => AIGuardScope::ReadOnly,
-        "swap" | "bridge" | "stake" => AIGuardScope::SwapBridge,
+        "swap"
+        | "bridge"
+        | "stake"
+        | "unstake"
+        | "claim_staking_rewards"
+        | "limit_order_create"
+        | "limit_order_cancel" => AIGuardScope::SwapBridge,
         "portfolio_management" | "alerts" => AIGuardScope::PortfolioAlert,
         _ => AIGuardScope::Unknown,
     }
@@ -322,9 +415,13 @@ impl AIService {
         let mut response = match intent.action.as_str() {
             "swap" => self.execute_swap_command(&intent).await?,
             "bridge" => self.execute_bridge_command(&intent).await?,
+            "limit_order_create" => self.execute_limit_order_create_command(&intent).await?,
+            "limit_order_cancel" => self.execute_limit_order_cancel_command().await?,
             "check_balance" => self.execute_balance_command(user_address).await?,
             "check_points" => self.execute_points_command(user_address).await?,
             "stake" => self.execute_stake_command(&intent).await?,
+            "unstake" => self.execute_unstake_command(&intent).await?,
+            "claim_staking_rewards" => self.execute_stake_claim_command(&intent).await?,
             "market_analysis" => self.execute_market_analysis(&intent).await?,
             "portfolio_management" => {
                 self.execute_portfolio_management_command(user_address)
@@ -333,7 +430,7 @@ impl AIService {
             "alerts" => self.execute_alerts_command().await?,
             "tutorial" => self.execute_tutorial_command(level).await?,
             _ => AIResponse {
-                message: "I can chat and help with market, balance, points, swap, bridge, and portfolio guidance. Tell me what you want to do.".to_string(),
+                message: "I can chat and help with market, balance, points, swap, bridge, stake, unstake, claim rewards, and limit orders. Tell me what you want to do.".to_string(),
                 actions: vec![],
                 data: None,
             },
@@ -622,6 +719,130 @@ impl AIService {
         })
     }
 
+    async fn execute_unstake_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let token = intent
+            .parameters
+            .get("token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("the token");
+        let amount = intent
+            .parameters
+            .get("amount")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+
+        let message = if amount > 0.0 {
+            format!(
+                "Got it. I can help unstake {} {}. I'll prepare the unstake flow next.",
+                amount, token
+            )
+        } else {
+            format!(
+                "Got it. I can help unstake {}. Share amount too for faster execution.",
+                token
+            )
+        };
+
+        Ok(AIResponse {
+            message,
+            actions: vec!["prepare_unstake".to_string()],
+            data: Some(serde_json::json!({
+                "token": token,
+                "amount": amount,
+            })),
+        })
+    }
+
+    async fn execute_stake_claim_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let token = intent
+            .parameters
+            .get("token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let message = if token.is_empty() {
+            "I can help claim your staking rewards. If you want specific pool, add token name (e.g. claim rewards USDT).".to_string()
+        } else {
+            format!("I can help claim staking rewards for {}.", token)
+        };
+        Ok(AIResponse {
+            message,
+            actions: vec!["prepare_stake_claim".to_string()],
+            data: Some(serde_json::json!({
+                "token": token,
+            })),
+        })
+    }
+
+    async fn execute_limit_order_create_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let from = intent
+            .parameters
+            .get("from")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let to = intent
+            .parameters
+            .get("to")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let amount = intent
+            .parameters
+            .get("amount")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let price = intent
+            .parameters
+            .get("price")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let expiry = intent
+            .parameters
+            .get("expiry")
+            .and_then(|v| v.as_str())
+            .unwrap_or("7d");
+
+        if from.is_empty() || to.is_empty() || amount <= 0.0 || from == to {
+            return Ok(AIResponse {
+                message: "I need limit order details in this format: create limit order <amount> <FROM> to <TO> at <price>. Example: create limit order 10 STRK to USDC at 1.2".to_string(),
+                actions: vec![],
+                data: None,
+            });
+        }
+
+        let message = if price > 0.0 {
+            format!(
+                "I can place a limit order: {} {} -> {} at price {} (expiry {}).",
+                amount, from, to, price, expiry
+            )
+        } else {
+            format!(
+                "I can place a limit order: {} {} -> {} (expiry {}). Add 'at <price>' to set target price.",
+                amount, from, to, expiry
+            )
+        };
+
+        Ok(AIResponse {
+            message,
+            actions: vec!["prepare_limit_order".to_string()],
+            data: Some(serde_json::json!({
+                "from_token": from,
+                "to_token": to,
+                "amount": amount,
+                "price": price,
+                "expiry": expiry,
+            })),
+        })
+    }
+
+    async fn execute_limit_order_cancel_command(&self) -> Result<AIResponse> {
+        Ok(AIResponse {
+            message:
+                "I can help cancel your active limit order. Provide order id if you want a specific one."
+                    .to_string(),
+            actions: vec!["prepare_limit_order_cancel".to_string()],
+            data: None,
+        })
+    }
+
     async fn execute_market_analysis(&self, intent: &Intent) -> Result<AIResponse> {
         // Optionally use token parameter if provided
         let token_opt = intent.parameters.get("token").and_then(|v| v.as_str());
@@ -675,15 +896,15 @@ impl AIService {
         };
         Ok(AIResponse {
             message: format!(
-                "{level_hint} Beginner steps: 1) Connect wallet. 2) For Level 2/3 create one on-chain action_id. 3) Try: 'check my balance'. 4) Then try: 'swap 25 STRK to CAREL' or 'bridge 10 USDT to STRK'. 5) Confirm only in wallet popup."
+                "{level_hint} Beginner steps: 1) Connect wallet. 2) For on-chain commands click Auto Setup On-Chain once. 3) Try: 'check my balance'. 4) Then try swap/bridge/stake/limit commands. 5) Confirm only in wallet popup."
             ),
             actions: vec!["show_tutorial".to_string()],
             data: Some(serde_json::json!({
                 "steps": [
                     "Connect wallet",
-                    "Create/resolve on-chain action_id (Level 2/3)",
+                    "Run Auto Setup On-Chain once (Level 2/3)",
                     "Run read-only command",
-                    "Run swap/bridge command",
+                    "Run swap/bridge/stake/limit command",
                     "Confirm transaction in wallet"
                 ]
             })),
@@ -837,6 +1058,31 @@ mod tests {
     fn classify_command_scope_enforces_swap_bridge() {
         let scope = classify_command_scope("bridge 100 usdt to strk");
         assert_eq!(scope, AIGuardScope::SwapBridge);
+    }
+
+    #[test]
+    fn classify_command_scope_limit_order_is_onchain_scope() {
+        let scope = classify_command_scope("create limit order 10 strk to usdc at 1.2");
+        assert_eq!(scope, AIGuardScope::SwapBridge);
+    }
+
+    #[test]
+    fn parse_limit_order_parameters_reads_price_and_expiry() {
+        let (from, to, amount, price, expiry) =
+            parse_limit_order_parameters("create limit order 10 strk to usdc at 1.2 for 30d");
+        assert_eq!(from, "STRK");
+        assert_eq!(to, "USDC");
+        assert!((amount - 10.0).abs() < f64::EPSILON);
+        assert!((price - 1.2).abs() < f64::EPSILON);
+        assert_eq!(expiry, "30d");
+    }
+
+    #[test]
+    fn parse_intent_handles_unstake_and_claim() {
+        let unstake_intent = parse_intent_from_command("unstake 50 usdt");
+        assert_eq!(unstake_intent.action, "unstake");
+        let claim_intent = parse_intent_from_command("claim rewards usdt");
+        assert_eq!(claim_intent.action, "claim_staking_rewards");
     }
 
     #[test]

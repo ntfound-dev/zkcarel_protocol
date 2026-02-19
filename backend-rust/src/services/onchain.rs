@@ -20,10 +20,10 @@ pub struct OnchainReader {
     provider: JsonRpcClient<HttpTransport>,
 }
 
-const STARKNET_RPC_MAX_INFLIGHT_DEFAULT: usize = 12;
+const STARKNET_RPC_MAX_INFLIGHT_DEFAULT: usize = 6;
 const STARKNET_RPC_BREAKER_THRESHOLD: u32 = 3;
 const STARKNET_RPC_BREAKER_BASE_SECS: u64 = 2;
-const STARKNET_RPC_BREAKER_MAX_SECS: u64 = 60;
+const STARKNET_RPC_BREAKER_MAX_SECS: u64 = 180;
 
 #[derive(Default)]
 struct RpcCircuitBreaker {

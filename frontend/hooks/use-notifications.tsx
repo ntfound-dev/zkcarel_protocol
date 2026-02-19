@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useEffect, useMemo, useState, useCallback, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react"
 import {
   WS_BASE_URL,
   getNotifications,
@@ -122,6 +122,7 @@ function mapBackendNotification(notification: BackendNotification): Notification
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   const wallet = useWallet()
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const dedupeRef = useRef(new Map<string, number>())
 
   const unreadCount = useMemo(
     () => notifications.filter((n) => !n.read).length,
@@ -181,6 +182,27 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
   const addNotification = useCallback(
     (notification: Omit<Notification, "id" | "timestamp" | "read">) => {
+      const dedupeKey = [
+        notification.type,
+        notification.title.trim().toLowerCase(),
+        notification.message.trim().toLowerCase(),
+        (notification.txHash || "").trim().toLowerCase(),
+      ].join("|")
+      const now = Date.now()
+      const lastSeen = dedupeRef.current.get(dedupeKey) || 0
+      // Avoid accidental duplicate toast bursts from repeated local handlers.
+      if (now - lastSeen < 8000) {
+        return
+      }
+      dedupeRef.current.set(dedupeKey, now)
+      if (dedupeRef.current.size > 256) {
+        for (const [key, ts] of dedupeRef.current.entries()) {
+          if (now - ts > 120000) {
+            dedupeRef.current.delete(key)
+          }
+        }
+      }
+
       const txExplorerUrls =
         notification.txExplorerUrls && notification.txExplorerUrls.length > 0
           ? notification.txExplorerUrls

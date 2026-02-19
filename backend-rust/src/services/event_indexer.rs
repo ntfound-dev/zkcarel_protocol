@@ -12,7 +12,7 @@ use tokio::time::{interval, sleep, Duration};
 
 const INDEXER_DEFAULT_INITIAL_BACKFILL_BLOCKS: u64 = 128;
 const INDEXER_DEFAULT_MAX_BLOCKS_PER_TICK: u64 = 32;
-const INDEXER_TRANSIENT_BACKOFF_MAX_SECS: u64 = 90;
+const INDEXER_TRANSIENT_BACKOFF_MAX_SECS: u64 = 300;
 
 fn is_env_flag_enabled(name: &str) -> bool {
     std::env::var(name)

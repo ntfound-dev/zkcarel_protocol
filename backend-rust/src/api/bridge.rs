@@ -1571,7 +1571,7 @@ mod tests {
     }
 
     #[test]
-   
+
     fn find_linked_wallet_for_chain_skips_invalid_evm_wallet() {
         let now = Utc::now();
         let invalid_evm = LinkedWalletAddress {

@@ -601,6 +601,32 @@ impl Database {
 
         Ok(())
     }
+
+    pub async fn add_social_points(
+        &self,
+        address: &str,
+        epoch: i64,
+        amount: rust_decimal::Decimal,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO points
+                (user_address, epoch, social_points, total_points)
+            VALUES ($1, $2, $3, $3)
+            ON CONFLICT (user_address, epoch) DO UPDATE
+            SET social_points = points.social_points + EXCLUDED.social_points,
+                total_points = points.total_points + EXCLUDED.total_points,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(address)
+        .bind(epoch)
+        .bind(amount)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 // ==================== TRANSACTION QUERIES ====================
@@ -641,7 +667,17 @@ impl Database {
                  token_in, token_out, amount_in, amount_out,
                  usd_value, fee_paid, points_earned, timestamp)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-            ON CONFLICT (tx_hash) DO NOTHING
+            ON CONFLICT (tx_hash) DO UPDATE
+            SET
+                block_number = GREATEST(transactions.block_number, EXCLUDED.block_number),
+                token_in = COALESCE(transactions.token_in, EXCLUDED.token_in),
+                token_out = COALESCE(transactions.token_out, EXCLUDED.token_out),
+                amount_in = COALESCE(transactions.amount_in, EXCLUDED.amount_in),
+                amount_out = COALESCE(transactions.amount_out, EXCLUDED.amount_out),
+                usd_value = COALESCE(transactions.usd_value, EXCLUDED.usd_value),
+                fee_paid = COALESCE(transactions.fee_paid, EXCLUDED.fee_paid),
+                points_earned = COALESCE(transactions.points_earned, EXCLUDED.points_earned),
+                timestamp = GREATEST(transactions.timestamp, EXCLUDED.timestamp)
             "#,
         )
         .bind(&tx.tx_hash)

@@ -274,6 +274,7 @@ export interface LimitOrderResponse {
   order_id: string
   status: string
   created_at: string
+  privacy_tx_hash?: string
 }
 
 export interface LimitOrderItem {
@@ -288,6 +289,70 @@ export interface LimitOrderItem {
   recipient: string | null
   status: number
   created_at: string
+}
+
+export interface BattleshipCell {
+  x: number
+  y: number
+}
+
+export interface BattleshipShotRecord {
+  shooter: string
+  x: number
+  y: number
+  is_hit: boolean
+  timestamp: number
+  tx_hash?: string | null
+}
+
+export interface BattleshipPendingShot {
+  shooter: string
+  x: number
+  y: number
+}
+
+export interface BattleshipGameActionResponse {
+  game_id: string
+  status: string
+  message: string
+  tx_hash?: string
+  onchain_calls?: StarknetWalletCall[]
+  requires_wallet_signature?: boolean
+}
+
+export interface BattleshipFireShotResponse {
+  game_id: string
+  status: string
+  message: string
+  is_hit?: boolean | null
+  pending_response: boolean
+  next_turn?: string | null
+  winner?: string | null
+  tx_hash?: string
+  onchain_calls?: StarknetWalletCall[]
+  requires_wallet_signature?: boolean
+}
+
+export interface BattleshipGameStateResponse {
+  game_id: string
+  status: "WAITING" | "PLAYING" | "FINISHED" | string
+  creator: string
+  player_a: string
+  player_b?: string | null
+  current_turn?: string | null
+  winner?: string | null
+  your_address: string
+  your_ready: boolean
+  opponent_ready: boolean
+  your_hits_taken: number
+  opponent_hits_taken: number
+  your_board: BattleshipCell[]
+  your_shots: BattleshipCell[]
+  opponent_shots: BattleshipCell[]
+  shot_history: BattleshipShotRecord[]
+  timeout_in_seconds?: number | null
+  pending_shot?: BattleshipPendingShot | null
+  can_respond?: boolean
 }
 
 export interface StakingPool {
@@ -348,6 +413,18 @@ export interface PrivacyAutoSubmitResponse {
     public_inputs: string[]
   }
   tx_hash?: string
+}
+
+export interface PrivacyPreparePrivateExecutionResponse {
+  payload: {
+    verifier: string
+    nullifier: string
+    commitment: string
+    proof: string[]
+    public_inputs: string[]
+  }
+  intent_hash: string
+  onchain_calls: StarknetWalletCall[]
 }
 
 export type PrivacyVerificationPayload = {
@@ -1107,21 +1184,32 @@ export async function createLimitOrder(payload: {
   recipient?: string | null
   client_order_id?: string
   onchain_tx_hash?: string
+  hide_balance?: boolean
+  privacy?: PrivacyVerificationPayload
 }) {
   return apiFetch<LimitOrderResponse>("/api/v1/limit-order/create", {
     method: "POST",
     body: JSON.stringify(payload),
     context: "Create limit order",
     suppressErrorNotification: true,
+    timeoutMs: 120000,
   })
 }
 
-export async function cancelLimitOrder(orderId: string, payload?: { onchain_tx_hash?: string }) {
+export async function cancelLimitOrder(
+  orderId: string,
+  payload?: {
+    onchain_tx_hash?: string
+    hide_balance?: boolean
+    privacy?: PrivacyVerificationPayload
+  }
+) {
   return apiFetch<string>(`/api/v1/limit-order/${orderId}`, {
     method: "DELETE",
     body: JSON.stringify(payload || {}),
     context: "Cancel limit order",
     suppressErrorNotification: true,
+    timeoutMs: 120000,
   })
 }
 
@@ -1135,26 +1223,58 @@ export async function getStakePositions() {
   })
 }
 
-export async function stakeDeposit(payload: { pool_id: string; amount: string; onchain_tx_hash?: string }) {
-  return apiFetch<{ position_id: string; tx_hash: string; amount: number }>(
+export async function stakeDeposit(payload: {
+  pool_id: string
+  amount: string
+  onchain_tx_hash?: string
+  hide_balance?: boolean
+  privacy?: PrivacyVerificationPayload
+}) {
+  return apiFetch<{ position_id: string; tx_hash: string; amount: number; privacy_tx_hash?: string }>(
     "/api/v1/stake/deposit",
     {
       method: "POST",
       body: JSON.stringify(payload),
       context: "Stake deposit",
       suppressErrorNotification: true,
+      timeoutMs: 120000,
     }
   )
 }
 
-export async function stakeWithdraw(payload: { position_id: string; amount: string; onchain_tx_hash?: string }) {
-  return apiFetch<{ position_id: string; tx_hash: string; amount: number }>(
+export async function stakeWithdraw(payload: {
+  position_id: string
+  amount: string
+  onchain_tx_hash?: string
+  hide_balance?: boolean
+  privacy?: PrivacyVerificationPayload
+}) {
+  return apiFetch<{ position_id: string; tx_hash: string; amount: number; privacy_tx_hash?: string }>(
     "/api/v1/stake/withdraw",
     {
       method: "POST",
       body: JSON.stringify(payload),
       context: "Stake withdraw",
       suppressErrorNotification: true,
+      timeoutMs: 120000,
+    }
+  )
+}
+
+export async function stakeClaim(payload: {
+  position_id: string
+  onchain_tx_hash?: string
+  hide_balance?: boolean
+  privacy?: PrivacyVerificationPayload
+}) {
+  return apiFetch<{ position_id: string; tx_hash: string; claimed_token: string; privacy_tx_hash?: string }>(
+    "/api/v1/stake/claim",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      context: "Stake claim",
+      suppressErrorNotification: true,
+      timeoutMs: 120000,
     }
   )
 }
@@ -1333,6 +1453,131 @@ export async function autoSubmitPrivacyAction(payload?: {
     suppressErrorNotification: true,
     timeoutMs: 120000,
   })
+}
+
+export async function preparePrivateExecution(payload: {
+  verifier?: string
+  flow: "swap" | "limit" | "stake"
+  action_entrypoint: string
+  action_calldata: string[]
+  tx_context?: {
+    flow?: string
+    from_token?: string
+    to_token?: string
+    amount?: string
+    recipient?: string
+    from_network?: string
+    to_network?: string
+  }
+}) {
+  return apiFetch<PrivacyPreparePrivateExecutionResponse>(
+    "/api/v1/privacy/prepare-private-execution",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      context: "Prepare private execution",
+      suppressErrorNotification: true,
+      timeoutMs: 120000,
+    }
+  )
+}
+
+export async function createBattleshipGame(payload: {
+  opponent: string
+  cells: BattleshipCell[]
+  privacy?: PrivacyVerificationPayload
+  onchain_tx_hash?: string
+}) {
+  return apiFetch<BattleshipGameActionResponse>("/api/v1/battleship/create", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Create battleship game",
+    suppressErrorNotification: true,
+    timeoutMs: 120000,
+  })
+}
+
+export async function joinBattleshipGame(payload: {
+  game_id: string
+  cells: BattleshipCell[]
+  privacy?: PrivacyVerificationPayload
+  onchain_tx_hash?: string
+}) {
+  return apiFetch<BattleshipGameActionResponse>("/api/v1/battleship/join", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Join battleship game",
+    suppressErrorNotification: true,
+    timeoutMs: 120000,
+  })
+}
+
+export async function placeBattleshipShips(payload: {
+  game_id: string
+  cells: BattleshipCell[]
+  privacy?: PrivacyVerificationPayload
+  onchain_tx_hash?: string
+}) {
+  return apiFetch<BattleshipGameActionResponse>("/api/v1/battleship/place-ships", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Place battleship ships",
+    suppressErrorNotification: true,
+    timeoutMs: 120000,
+  })
+}
+
+export async function fireBattleshipShot(payload: {
+  game_id: string
+  x: number
+  y: number
+  onchain_tx_hash?: string
+}) {
+  return apiFetch<BattleshipFireShotResponse>("/api/v1/battleship/fire", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Fire battleship shot",
+    suppressErrorNotification: true,
+    timeoutMs: 120000,
+  })
+}
+
+export async function respondBattleshipShot(payload: {
+  game_id: string
+  is_hit?: boolean
+  privacy?: PrivacyVerificationPayload
+  onchain_tx_hash?: string
+}) {
+  return apiFetch<BattleshipFireShotResponse>("/api/v1/battleship/respond", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Respond battleship shot",
+    suppressErrorNotification: true,
+    timeoutMs: 120000,
+  })
+}
+
+export async function claimBattleshipTimeout(payload: {
+  game_id: string
+  onchain_tx_hash?: string
+}) {
+  return apiFetch<BattleshipGameActionResponse>("/api/v1/battleship/claim-timeout", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Claim battleship timeout",
+    suppressErrorNotification: true,
+    timeoutMs: 120000,
+  })
+}
+
+export async function getBattleshipState(gameId: string) {
+  return apiFetch<BattleshipGameStateResponse>(
+    `/api/v1/battleship/state/${encodeURIComponent(gameId)}`,
+    {
+      context: "Get battleship state",
+      suppressErrorNotification: true,
+    }
+  )
 }
 
 export async function getFaucetStatus() {

@@ -9,9 +9,6 @@ pub const TOKEN_STRK: &str = "0x04718f5a0Fc34cC1AF16A1cdee98fFB20C31f5cD61D6Ab07
 pub const TOKEN_USDT: &str = "0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5";
 pub const TOKEN_USDC: &str = "0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8";
 
-// Contract addresses
-pub const CONTRACT_SWAP_AGGREGATOR: &str = "0x0000000000000000000000000000000000001001";
-
 // Points configuration
 pub const POINTS_PER_USD_SWAP: f64 = 10.0;
 pub const POINTS_MIN_USD_SWAP: f64 = 1.0;
@@ -37,6 +34,11 @@ pub const POINTS_TELEGRAM_JOIN_GROUP: f64 = 5.0;
 pub const POINTS_DISCORD_JOIN: f64 = 5.0;
 pub const POINTS_DISCORD_VERIFY: f64 = 10.0;
 pub const POINTS_DISCORD_ROLE: f64 = 5.0;
+pub const POINTS_BATTLE_HIT: f64 = 3.0;
+pub const POINTS_BATTLE_MISS: f64 = 1.0;
+pub const POINTS_BATTLE_WIN: f64 = 20.0;
+pub const POINTS_BATTLE_LOSS: f64 = 2.0;
+pub const POINTS_BATTLE_TIMEOUT_WIN: f64 = 15.0;
 
 // Staking multipliers
 pub const MULTIPLIER_TIER_1: f64 = 1.0; // < 100 CAREL (no tier boost)

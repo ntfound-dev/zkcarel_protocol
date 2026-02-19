@@ -101,7 +101,10 @@ pub async fn reset_points(
             let tx_result = sqlx::query(
                 "DELETE FROM transactions
                  WHERE LOWER(user_address) = LOWER($1)
-                   AND tx_type IN ('swap', 'bridge', 'stake', 'unstake', 'limit_order')",
+                   AND tx_type IN (
+                       'swap', 'bridge', 'stake', 'unstake', 'limit_order',
+                       'battle_hit', 'battle_miss', 'battle_win', 'battle_loss', 'battle_tmo_win'
+                   )",
             )
             .bind(user_address)
             .execute(state.db.pool())
@@ -117,7 +120,10 @@ pub async fn reset_points(
         if clear_transactions {
             let tx_result = sqlx::query(
                 "DELETE FROM transactions
-                 WHERE tx_type IN ('swap', 'bridge', 'stake', 'unstake', 'limit_order')",
+                 WHERE tx_type IN (
+                     'swap', 'bridge', 'stake', 'unstake', 'limit_order',
+                     'battle_hit', 'battle_miss', 'battle_win', 'battle_loss', 'battle_tmo_win'
+                 )",
             )
             .execute(state.db.pool())
             .await?;

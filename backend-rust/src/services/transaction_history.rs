@@ -69,7 +69,29 @@ impl TransactionHistoryService {
         let offset = (page - 1) * limit;
 
         let mut query = String::from(
-            "SELECT * FROM transactions WHERE LOWER(user_address) = ANY($1) AND COALESCE(is_private, false) = false",
+            "SELECT
+                tx_hash,
+                block_number,
+                user_address,
+                CASE
+                    WHEN COALESCE(is_private, false)
+                        THEN CONCAT('private_', tx_type)
+                    ELSE tx_type
+                END AS tx_type,
+                token_in,
+                token_out,
+                amount_in,
+                amount_out,
+                usd_value,
+                fee_paid,
+                points_earned,
+                timestamp,
+                CASE
+                    WHEN block_number > 0 THEN true
+                    ELSE processed
+                END AS processed
+             FROM transactions
+             WHERE LOWER(user_address) = ANY($1)",
         );
         let mut param_count = 2;
 
@@ -135,7 +157,7 @@ impl TransactionHistoryService {
             return Ok(0);
         }
         let mut query = String::from(
-            "SELECT COUNT(*) as count FROM transactions WHERE LOWER(user_address) = ANY($1) AND COALESCE(is_private, false) = false",
+            "SELECT COUNT(*) as count FROM transactions WHERE LOWER(user_address) = ANY($1)",
         );
         let mut param_count = 2;
 
@@ -184,8 +206,29 @@ impl TransactionHistoryService {
             return Ok(Vec::new());
         }
         let transactions = sqlx::query_as::<_, Transaction>(
-            "SELECT * FROM transactions
-             WHERE LOWER(user_address) = ANY($1) AND COALESCE(is_private, false) = false
+            "SELECT
+                tx_hash,
+                block_number,
+                user_address,
+                CASE
+                    WHEN COALESCE(is_private, false)
+                        THEN CONCAT('private_', tx_type)
+                    ELSE tx_type
+                END AS tx_type,
+                token_in,
+                token_out,
+                amount_in,
+                amount_out,
+                usd_value,
+                fee_paid,
+                points_earned,
+                timestamp,
+                CASE
+                    WHEN block_number > 0 THEN true
+                    ELSE processed
+                END AS processed
+             FROM transactions
+             WHERE LOWER(user_address) = ANY($1)
              ORDER BY timestamp DESC LIMIT 10",
         )
         .bind(normalized_addresses)
