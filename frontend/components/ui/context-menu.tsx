@@ -6,12 +6,24 @@ import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `ContextMenu` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenu({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
   return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />
 }
 
+/**
+ * Handles `ContextMenuTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuTrigger({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Trigger>) {
@@ -20,6 +32,12 @@ function ContextMenuTrigger({
   )
 }
 
+/**
+ * Handles `ContextMenuGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuGroup({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Group>) {
@@ -28,6 +46,12 @@ function ContextMenuGroup({
   )
 }
 
+/**
+ * Handles `ContextMenuPortal` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuPortal({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Portal>) {
@@ -36,12 +60,24 @@ function ContextMenuPortal({
   )
 }
 
+/**
+ * Handles `ContextMenuSub` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuSub({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Sub>) {
   return <ContextMenuPrimitive.Sub data-slot="context-menu-sub" {...props} />
 }
 
+/**
+ * Handles `ContextMenuRadioGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuRadioGroup({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.RadioGroup>) {
@@ -53,6 +89,12 @@ function ContextMenuRadioGroup({
   )
 }
 
+/**
+ * Handles `ContextMenuSubTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuSubTrigger({
   className,
   inset,
@@ -77,6 +119,12 @@ function ContextMenuSubTrigger({
   )
 }
 
+/**
+ * Handles `ContextMenuSubContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuSubContent({
   className,
   ...props
@@ -93,6 +141,12 @@ function ContextMenuSubContent({
   )
 }
 
+/**
+ * Handles `ContextMenuContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuContent({
   className,
   ...props
@@ -111,6 +165,12 @@ function ContextMenuContent({
   )
 }
 
+/**
+ * Handles `ContextMenuItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuItem({
   className,
   inset,
@@ -134,6 +194,12 @@ function ContextMenuItem({
   )
 }
 
+/**
+ * Handles `ContextMenuCheckboxItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuCheckboxItem({
   className,
   children,
@@ -160,6 +226,12 @@ function ContextMenuCheckboxItem({
   )
 }
 
+/**
+ * Handles `ContextMenuRadioItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuRadioItem({
   className,
   children,
@@ -184,6 +256,12 @@ function ContextMenuRadioItem({
   )
 }
 
+/**
+ * Handles `ContextMenuLabel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuLabel({
   className,
   inset,
@@ -204,6 +282,12 @@ function ContextMenuLabel({
   )
 }
 
+/**
+ * Handles `ContextMenuSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuSeparator({
   className,
   ...props
@@ -217,6 +301,12 @@ function ContextMenuSeparator({
   )
 }
 
+/**
+ * Handles `ContextMenuShortcut` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ContextMenuShortcut({
   className,
   ...props

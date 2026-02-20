@@ -5,6 +5,12 @@ import * as TabsPrimitive from '@radix-ui/react-tabs'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Tabs` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Tabs({
   className,
   ...props
@@ -18,6 +24,12 @@ function Tabs({
   )
 }
 
+/**
+ * Handles `TabsList` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TabsList({
   className,
   ...props
@@ -34,6 +46,12 @@ function TabsList({
   )
 }
 
+/**
+ * Handles `TabsTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TabsTrigger({
   className,
   ...props
@@ -50,6 +68,12 @@ function TabsTrigger({
   )
 }
 
+/**
+ * Handles `TabsContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TabsContent({
   className,
   ...props

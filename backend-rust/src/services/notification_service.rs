@@ -16,6 +16,17 @@ pub struct NotificationService {
 }
 
 impl NotificationService {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self {
             db,
@@ -24,6 +35,17 @@ impl NotificationService {
         }
     }
 
+    /// Runs `send_notification` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn send_notification(
         &self,
         user_address: &str,
@@ -68,6 +90,17 @@ impl NotificationService {
         Ok(())
     }
 
+    /// Runs `register_connection` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn register_connection(
         &self,
         user_address: String,
@@ -82,11 +115,23 @@ impl NotificationService {
         }
     }
 
+    /// Runs `unregister_connection` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn unregister_connection(&self, user_address: &str) {
         let mut connections = self.connections.write().await;
         connections.remove(user_address);
     }
 
+    // Internal helper that runs side-effecting logic for `send_to_websocket`.
     async fn send_to_websocket(&self, user_address: &str, notification: Notification) {
         let connections = self.connections.read().await;
         if let Some(sender) = connections.get(user_address) {
@@ -94,6 +139,7 @@ impl NotificationService {
         }
     }
 
+    // Internal helper that runs side-effecting logic for `send_via_other_channels`.
     async fn send_via_other_channels(
         &self,
         user_address: &str,
@@ -119,6 +165,7 @@ impl NotificationService {
         Ok(())
     }
 
+    // Internal helper that fetches data for `get_user_preferences`.
     async fn get_user_preferences(&self, user_address: &str) -> Result<NotificationPreferences> {
         let prefs = sqlx::query_as::<_, NotificationPreferences>(
             "SELECT email_enabled, push_enabled, telegram_enabled, discord_enabled
@@ -130,6 +177,7 @@ impl NotificationService {
         Ok(prefs.unwrap_or_default())
     }
 
+    // Internal helper that runs side-effecting logic for `send_email`.
     async fn send_email(&self, user_address: &str, notification: &Notification) -> Result<()> {
         tracing::debug!(
             "Email notification to {}: {}",
@@ -139,6 +187,7 @@ impl NotificationService {
         Ok(())
     }
 
+    // Internal helper that runs side-effecting logic for `send_push`.
     async fn send_push(&self, user_address: &str, notification: &Notification) -> Result<()> {
         tracing::debug!(
             "Push notification to {}: {}",
@@ -148,6 +197,7 @@ impl NotificationService {
         Ok(())
     }
 
+    // Internal helper that runs side-effecting logic for `send_telegram`.
     async fn send_telegram(&self, user_address: &str, notification: &Notification) -> Result<()> {
         tracing::debug!(
             "Telegram notification to {}: {}",
@@ -157,6 +207,17 @@ impl NotificationService {
         Ok(())
     }
 
+    /// Fetches data for `get_user_notifications`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_user_notifications(
         &self,
         user_address: &str,
@@ -169,12 +230,34 @@ impl NotificationService {
             .await
     }
 
+    /// Updates state for `mark_as_read`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn mark_as_read(&self, notification_id: i64, user_address: &str) -> Result<()> {
         self.db
             .mark_notification_read(notification_id, user_address)
             .await
     }
 
+    /// Updates state for `mark_all_as_read`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn mark_all_as_read(&self, user_address: &str) -> Result<()> {
         sqlx::query(
             "UPDATE notifications SET read = true WHERE user_address = $1 AND read = false",
@@ -214,6 +297,7 @@ pub enum NotificationType {
 }
 
 impl ToString for NotificationType {
+    // Internal helper that supports `to_string` operations.
     fn to_string(&self) -> String {
         match self {
             Self::SwapCompleted => "swap.completed",
@@ -232,6 +316,17 @@ impl ToString for NotificationType {
 }
 
 impl NotificationType {
+    /// Handles `all` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn all() -> Vec<Self> {
         vec![
             Self::SwapCompleted,
@@ -253,6 +348,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `notification_type_to_string_maps` operations.
     fn notification_type_to_string_maps() {
         // Memastikan mapping enum ke string berjalan benar
         assert_eq!(
@@ -267,6 +363,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `notification_type_all_has_items` operations.
     fn notification_type_all_has_items() {
         // Memastikan daftar tipe notifikasi tidak kosong
         let all = NotificationType::all();

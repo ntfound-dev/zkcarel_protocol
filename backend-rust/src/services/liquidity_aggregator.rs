@@ -5,6 +5,7 @@ use crate::{
 };
 use std::collections::HashMap;
 
+// Internal helper that supports `score_route` operations.
 fn score_route(route: &SwapRoute) -> f64 {
     let amount_score = route.amount_out / route.amount_in;
     let impact_score = 1.0 / (1.0 + route.price_impact);
@@ -13,6 +14,7 @@ fn score_route(route: &SwapRoute) -> f64 {
     amount_score * 0.4 + impact_score * 0.3 + fee_score * 0.3
 }
 
+// Internal helper that supports `apply_env_factor` operations.
 fn apply_env_factor(score: f64, is_testnet: bool) -> f64 {
     if is_testnet {
         score * 0.99
@@ -29,6 +31,17 @@ pub struct LiquidityAggregator {
 }
 
 impl LiquidityAggregator {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(config: Config) -> Self {
         let mut dex_clients: HashMap<String, Box<dyn DEXClient>> = HashMap::new();
 
@@ -84,6 +97,7 @@ impl LiquidityAggregator {
             .ok_or(crate::error::AppError::InsufficientLiquidity)
     }
 
+    // Internal helper that supports `calculate_route_score` operations.
     fn calculate_route_score(&self, route: &SwapRoute) -> f64 {
         score_route(route)
     }
@@ -132,6 +146,17 @@ impl LiquidityAggregator {
         Ok(routes)
     }
 
+    /// Fetches data for `get_liquidity_depth`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_liquidity_depth(
         &self,
         from_token: &str,
@@ -158,9 +183,11 @@ impl LiquidityAggregator {
 
 #[async_trait::async_trait]
 pub trait DEXClient: Send + Sync {
+    // Internal helper that fetches data for `get_quote`.
     async fn get_quote(&self, from_token: &str, to_token: &str, amount_in: f64)
         -> Result<DEXQuote>;
 
+    // Internal helper that fetches data for `get_liquidity`.
     async fn get_liquidity(&self, from_token: &str, to_token: &str) -> Result<f64>;
 }
 
@@ -168,6 +195,7 @@ pub trait DEXClient: Send + Sync {
 
 struct EkuboClient;
 impl EkuboClient {
+    // Internal helper that constructs instances for `new`.
     fn new() -> Self {
         Self
     }
@@ -175,6 +203,7 @@ impl EkuboClient {
 
 #[async_trait::async_trait]
 impl DEXClient for EkuboClient {
+    // Internal helper that fetches data for `get_quote`.
     async fn get_quote(&self, from: &str, to: &str, amount: f64) -> Result<DEXQuote> {
         Ok(DEXQuote {
             amount_out: amount * 0.998,
@@ -185,6 +214,7 @@ impl DEXClient for EkuboClient {
         })
     }
 
+    // Internal helper that fetches data for `get_liquidity`.
     async fn get_liquidity(&self, _: &str, _: &str) -> Result<f64> {
         Ok(5_000_000.0)
     }
@@ -194,6 +224,7 @@ impl DEXClient for EkuboClient {
 
 struct HaikoClient;
 impl HaikoClient {
+    // Internal helper that constructs instances for `new`.
     fn new() -> Self {
         Self
     }
@@ -201,6 +232,7 @@ impl HaikoClient {
 
 #[async_trait::async_trait]
 impl DEXClient for HaikoClient {
+    // Internal helper that fetches data for `get_quote`.
     async fn get_quote(&self, from: &str, to: &str, amount: f64) -> Result<DEXQuote> {
         Ok(DEXQuote {
             amount_out: amount * 0.997,
@@ -211,6 +243,7 @@ impl DEXClient for HaikoClient {
         })
     }
 
+    // Internal helper that fetches data for `get_liquidity`.
     async fn get_liquidity(&self, _: &str, _: &str) -> Result<f64> {
         Ok(2_000_000.0)
     }
@@ -220,6 +253,7 @@ impl DEXClient for HaikoClient {
 
 struct AvnuClient;
 impl AvnuClient {
+    // Internal helper that constructs instances for `new`.
     fn new() -> Self {
         Self
     }
@@ -227,6 +261,7 @@ impl AvnuClient {
 
 #[async_trait::async_trait]
 impl DEXClient for AvnuClient {
+    // Internal helper that fetches data for `get_quote`.
     async fn get_quote(&self, from: &str, to: &str, amount: f64) -> Result<DEXQuote> {
         Ok(DEXQuote {
             amount_out: amount * 0.996,
@@ -237,6 +272,7 @@ impl DEXClient for AvnuClient {
         })
     }
 
+    // Internal helper that fetches data for `get_liquidity`.
     async fn get_liquidity(&self, _: &str, _: &str) -> Result<f64> {
         Ok(3_500_000.0)
     }
@@ -275,6 +311,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `score_route_increases_with_amount_out` operations.
     fn score_route_increases_with_amount_out() {
         // Memastikan skor naik jika amount_out lebih besar
         let route_low = SwapRoute {
@@ -294,6 +331,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `apply_env_factor_applies_discount` operations.
     fn apply_env_factor_applies_discount() {
         // Memastikan faktor testnet menurunkan skor
         let score = apply_env_factor(1.0, true);

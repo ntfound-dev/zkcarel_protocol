@@ -2,6 +2,8 @@ use starknet::ContractAddress;
 
 #[starknet::interface]
 pub trait IGroth16VerifierBlsOutput<TContractState> {
+    // Applies verify groth16 proof bls12 381 after input validation and commits the resulting state.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn verify_groth16_proof_bls12_381(
         self: @TContractState, full_proof_with_hints: Span<felt252>,
     ) -> Option<Span<u256>>;
@@ -9,11 +11,21 @@ pub trait IGroth16VerifierBlsOutput<TContractState> {
 
 #[starknet::interface]
 pub trait IShieldedPoolV2<TContractState> {
+    // Updates verifier configuration after access-control and invariant checks.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
+    // Updates relayer configuration after access-control and invariant checks.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn set_relayer(ref self: TContractState, relayer: ContractAddress);
+    // Updates asset rule configuration after access-control and invariant checks.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn set_asset_rule(ref self: TContractState, token: ContractAddress, fixed_amount: u256);
 
+    // Implements deposit fixed logic while keeping state transitions deterministic.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn deposit_fixed(ref self: TContractState, token: ContractAddress, note_commitment: felt252);
+    // Implements withdraw fixed logic while keeping state transitions deterministic.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn withdraw_fixed(
         ref self: TContractState,
         token: ContractAddress,
@@ -24,6 +36,8 @@ pub trait IShieldedPoolV2<TContractState> {
         public_inputs: Span<felt252>,
     );
 
+    // Applies submit private action after input validation and commits the resulting state.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn submit_private_action(
         ref self: TContractState,
         nullifier: felt252,
@@ -32,6 +46,8 @@ pub trait IShieldedPoolV2<TContractState> {
         public_inputs: Span<felt252>,
     );
 
+    // Applies execute private swap with payout after input validation and commits the resulting state.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn execute_private_swap_with_payout(
         ref self: TContractState,
         commitment: felt252,
@@ -44,6 +60,8 @@ pub trait IShieldedPoolV2<TContractState> {
         min_payout: u256,
     );
 
+    // Applies execute private swap with payout batch after input validation and commits the resulting state.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn execute_private_swap_with_payout_batch(
         ref self: TContractState,
         batch_id: felt252,
@@ -58,6 +76,8 @@ pub trait IShieldedPoolV2<TContractState> {
         min_payouts: Span<u256>,
     );
 
+    // Applies execute private limit order after input validation and commits the resulting state.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn execute_private_limit_order(
         ref self: TContractState,
         commitment: felt252,
@@ -67,6 +87,8 @@ pub trait IShieldedPoolV2<TContractState> {
         approval_token: ContractAddress,
     );
 
+    // Applies execute private limit order batch after input validation and commits the resulting state.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn execute_private_limit_order_batch(
         ref self: TContractState,
         batch_id: felt252,
@@ -78,6 +100,8 @@ pub trait IShieldedPoolV2<TContractState> {
         approval_token: ContractAddress,
     );
 
+    // Applies execute private stake after input validation and commits the resulting state.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn execute_private_stake(
         ref self: TContractState,
         commitment: felt252,
@@ -87,6 +111,8 @@ pub trait IShieldedPoolV2<TContractState> {
         approval_token: ContractAddress,
     );
 
+    // Applies execute private stake batch after input validation and commits the resulting state.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn execute_private_stake_batch(
         ref self: TContractState,
         batch_id: felt252,
@@ -98,6 +124,8 @@ pub trait IShieldedPoolV2<TContractState> {
         approval_token: ContractAddress,
     );
 
+    // Returns preview swap payout action hash from state without mutating storage.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn preview_swap_payout_action_hash(
         self: @TContractState,
         target: ContractAddress,
@@ -109,6 +137,8 @@ pub trait IShieldedPoolV2<TContractState> {
         min_payout: u256,
     ) -> felt252;
 
+    // Returns preview limit action hash from state without mutating storage.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn preview_limit_action_hash(
         self: @TContractState,
         target: ContractAddress,
@@ -117,6 +147,8 @@ pub trait IShieldedPoolV2<TContractState> {
         approval_token: ContractAddress,
     ) -> felt252;
 
+    // Returns preview stake action hash from state without mutating storage.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn preview_stake_action_hash(
         self: @TContractState,
         target: ContractAddress,
@@ -125,12 +157,26 @@ pub trait IShieldedPoolV2<TContractState> {
         approval_token: ContractAddress,
     ) -> felt252;
 
+    // Returns is nullifier used from state without mutating storage.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn is_nullifier_used(self: @TContractState, nullifier: felt252) -> bool;
+    // Returns is note registered from state without mutating storage.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn is_note_registered(self: @TContractState, note_commitment: felt252) -> bool;
+    // Returns is action pending from state without mutating storage.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn is_action_pending(self: @TContractState, commitment: felt252) -> bool;
+    // Returns is commitment executed from state without mutating storage.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn is_commitment_executed(self: @TContractState, commitment: felt252) -> bool;
+    // Returns get action hash from state without mutating storage.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn get_action_hash(self: @TContractState, commitment: felt252) -> felt252;
+    // Implements fixed amount logic while keeping state transitions deterministic.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn fixed_amount(self: @TContractState, token: ContractAddress) -> u256;
+    // Implements pool balance logic while keeping state transitions deterministic.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn pool_balance(self: @TContractState, token: ContractAddress) -> u256;
 }
 
@@ -154,11 +200,19 @@ pub mod ShieldedPoolV2 {
 
     #[starknet::interface]
     pub trait IERC20<TContractState> {
+        // Applies approve after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
+        // Applies transfer after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+        // Applies transfer from after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn transfer_from(
             ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256,
         ) -> bool;
+        // Implements balance of logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
     }
 
@@ -247,6 +301,8 @@ pub mod ShieldedPoolV2 {
     }
 
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn constructor(
         ref self: ContractState, admin: ContractAddress, verifier: ContractAddress, relayer: ContractAddress,
     ) {
@@ -258,6 +314,8 @@ pub mod ShieldedPoolV2 {
 
     #[abi(embed_v0)]
     impl ShieldedPoolV2Impl of IShieldedPoolV2<ContractState> {
+        // Updates verifier configuration after access-control and invariant checks.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self._assert_admin();
             assert!(!verifier.is_zero(), "Verifier required");
@@ -265,6 +323,8 @@ pub mod ShieldedPoolV2 {
             self.emit(Event::VerifierUpdated(VerifierUpdated { verifier }));
         }
 
+        // Updates relayer configuration after access-control and invariant checks.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn set_relayer(ref self: ContractState, relayer: ContractAddress) {
             self._assert_admin();
             assert!(!relayer.is_zero(), "Relayer required");
@@ -272,6 +332,8 @@ pub mod ShieldedPoolV2 {
             self.emit(Event::RelayerUpdated(RelayerUpdated { relayer }));
         }
 
+        // Updates asset rule configuration after access-control and invariant checks.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn set_asset_rule(ref self: ContractState, token: ContractAddress, fixed_amount: u256) {
             self._assert_admin();
             assert!(!token.is_zero(), "Token required");
@@ -280,6 +342,8 @@ pub mod ShieldedPoolV2 {
             self.emit(Event::AssetRuleUpdated(AssetRuleUpdated { token, fixed_amount }));
         }
 
+        // Implements deposit fixed logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn deposit_fixed(ref self: ContractState, token: ContractAddress, note_commitment: felt252) {
             assert!(!token.is_zero(), "Token required");
             assert!(note_commitment != 0, "note_commitment required");
@@ -303,6 +367,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Implements withdraw fixed logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn withdraw_fixed(
             ref self: ContractState,
             token: ContractAddress,
@@ -348,6 +414,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Applies submit private action after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn submit_private_action(
             ref self: ContractState,
             nullifier: felt252,
@@ -387,6 +455,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Applies execute private swap with payout after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn execute_private_swap_with_payout(
             ref self: ContractState,
             commitment: felt252,
@@ -428,6 +498,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Applies execute private swap with payout batch after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn execute_private_swap_with_payout_batch(
             ref self: ContractState,
             batch_id: felt252,
@@ -514,6 +586,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Applies execute private limit order after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn execute_private_limit_order(
             ref self: ContractState,
             commitment: felt252,
@@ -547,6 +621,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Applies execute private limit order batch after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn execute_private_limit_order_batch(
             ref self: ContractState,
             batch_id: felt252,
@@ -622,6 +698,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Applies execute private stake after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn execute_private_stake(
             ref self: ContractState,
             commitment: felt252,
@@ -654,6 +732,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Applies execute private stake batch after input validation and commits the resulting state.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn execute_private_stake_batch(
             ref self: ContractState,
             batch_id: felt252,
@@ -729,6 +809,8 @@ pub mod ShieldedPoolV2 {
                 );
         }
 
+        // Returns preview swap payout action hash from state without mutating storage.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn preview_swap_payout_action_hash(
             self: @ContractState,
             target: ContractAddress,
@@ -751,6 +833,8 @@ pub mod ShieldedPoolV2 {
                 )
         }
 
+        // Returns preview limit action hash from state without mutating storage.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn preview_limit_action_hash(
             self: @ContractState,
             target: ContractAddress,
@@ -764,6 +848,8 @@ pub mod ShieldedPoolV2 {
                 )
         }
 
+        // Returns preview stake action hash from state without mutating storage.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn preview_stake_action_hash(
             self: @ContractState,
             target: ContractAddress,
@@ -777,30 +863,44 @@ pub mod ShieldedPoolV2 {
                 )
         }
 
+        // Returns is nullifier used from state without mutating storage.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
             self.nullifier_used.read(nullifier)
         }
 
+        // Returns is note registered from state without mutating storage.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn is_note_registered(self: @ContractState, note_commitment: felt252) -> bool {
             self.note_registered.read(note_commitment)
         }
 
+        // Returns is action pending from state without mutating storage.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn is_action_pending(self: @ContractState, commitment: felt252) -> bool {
             self.action_pending.read(commitment)
         }
 
+        // Returns is commitment executed from state without mutating storage.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn is_commitment_executed(self: @ContractState, commitment: felt252) -> bool {
             self.commitment_executed.read(commitment)
         }
 
+        // Returns get action hash from state without mutating storage.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn get_action_hash(self: @ContractState, commitment: felt252) -> felt252 {
             self.action_hash_by_commitment.read(commitment)
         }
 
+        // Implements fixed amount logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn fixed_amount(self: @ContractState, token: ContractAddress) -> u256 {
             self.fixed_amount_by_token.read(token)
         }
 
+        // Implements pool balance logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn pool_balance(self: @ContractState, token: ContractAddress) -> u256 {
             let token_dispatcher = IERC20Dispatcher { contract_address: token };
             token_dispatcher.balance_of(starknet::get_contract_address())
@@ -809,10 +909,14 @@ pub mod ShieldedPoolV2 {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        // Implements assert admin logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _assert_admin(self: @ContractState) {
             assert!(get_caller_address() == self.admin.read(), "Only admin");
         }
 
+        // Implements assert relayer or admin logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _assert_relayer_or_admin(self: @ContractState) {
             let caller = get_caller_address();
             assert!(
@@ -821,6 +925,8 @@ pub mod ShieldedPoolV2 {
             );
         }
 
+        // Implements assert executor authorized logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _assert_executor_authorized(self: @ContractState, commitment: felt252) {
             let caller = get_caller_address();
             let owner = self.commitment_owner.read(commitment);
@@ -830,6 +936,8 @@ pub mod ShieldedPoolV2 {
             assert!(is_owner || is_relayer || is_admin, "Only relayer/admin/owner");
         }
 
+        // Implements approve if needed logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _approve_if_needed(
             self: @ContractState, approval_token: ContractAddress, target: ContractAddress,
         ) {
@@ -844,6 +952,8 @@ pub mod ShieldedPoolV2 {
             }
         }
 
+        // Implements verify bound public inputs or panic logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _verify_bound_public_inputs_or_panic(
             self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>, min_len: usize,
         ) {
@@ -894,6 +1004,8 @@ pub mod ShieldedPoolV2 {
             };
         }
 
+        // Implements compute swap payout action hash logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _compute_swap_payout_action_hash(
             self: @ContractState,
             target: ContractAddress,
@@ -925,6 +1037,8 @@ pub mod ShieldedPoolV2 {
             poseidon_hash_span(binding.span())
         }
 
+        // Implements compute generic action hash logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _compute_generic_action_hash(
             self: @ContractState,
             action_type: felt252,
@@ -946,6 +1060,8 @@ pub mod ShieldedPoolV2 {
             poseidon_hash_span(binding.span())
         }
 
+        // Implements execute single swap payout logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _execute_single_swap_payout(
             ref self: ContractState,
             commitment: felt252,
@@ -1003,6 +1119,8 @@ pub mod ShieldedPoolV2 {
             expected_hash
         }
 
+        // Implements execute single generic action logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _execute_single_generic_action(
             ref self: ContractState,
             commitment: felt252,
@@ -1044,10 +1162,14 @@ pub mod ShieldedPoolV2 {
         }
     }
 
+    // Implements is zero u256 logic while keeping state transitions deterministic.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn _is_zero_u256(value: u256) -> bool {
         value.low == 0 && value.high == 0
     }
 
+    // Implements u256 to felt logic while keeping state transitions deterministic.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn _u256_to_felt(value: u256) -> felt252 {
         const TWO_POW_128: felt252 = 0x100000000000000000000000000000000;
         let low_felt: felt252 = value.low.into();

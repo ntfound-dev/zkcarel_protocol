@@ -10,6 +10,7 @@ pub struct HealthResponse {
     pub redis: String,
 }
 
+// Internal helper that builds inputs for `build_health_response`.
 fn build_health_response(db_ok: bool, redis_ok: bool) -> HealthResponse {
     HealthResponse {
         status: "ok".to_string(),
@@ -27,6 +28,17 @@ fn build_health_response(db_ok: bool, redis_ok: bool) -> HealthResponse {
     }
 }
 
+/// Handles `health_check` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
     // 1. Cek koneksi Database (SQLx)
     // Menggunakan pool() untuk cek apakah database merespon
@@ -47,6 +59,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that builds inputs for `build_health_response_formats_status`.
     fn build_health_response_formats_status() {
         // Memastikan status koneksi dirender dengan benar
         let response = build_health_response(true, false);

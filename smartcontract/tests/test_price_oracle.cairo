@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    // Rule: Gunakan starknet secara langsung tanpa prefix core::
+    // Use `starknet` imports directly without the `core::` prefix.
     use starknet::ContractAddress;
     use snforge_std::{
         declare, ContractClassTrait, DeclareResultTrait, 
@@ -15,14 +15,18 @@ mod tests {
 
     #[starknet::interface]
     pub trait IMockPragma<TState> {
+        // Updates price configuration after access-control and invariant checks.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn set_price(ref self: TState, price: u128, timestamp: u64);
+        // Returns get data median from state without mutating storage.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn get_data_median(self: @TState, data_type: DataType) -> PragmaPricesResponse;
     }
 
     #[starknet::contract]
     pub mod MockPragma {
         use super::{DataType, PragmaPricesResponse};
-        // Rule: Gunakan starknet secara langsung untuk storage wildcard
+        // Use direct `starknet` imports for storage wildcard.
         use starknet::storage::*;
 
         #[storage]
@@ -33,11 +37,15 @@ mod tests {
 
         #[abi(embed_v0)]
         impl MockPragmaImpl of super::IMockPragma<ContractState> {
+            // Updates price configuration after access-control and invariant checks.
+            // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
             fn set_price(ref self: ContractState, price: u128, timestamp: u64) {
                 self.price.write(price);
                 self.timestamp.write(timestamp);
             }
 
+            // Returns get data median from state without mutating storage.
+            // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
             fn get_data_median(self: @ContractState, data_type: DataType) -> PragmaPricesResponse {
                 let _ = data_type;
                 PragmaPricesResponse {
@@ -51,12 +59,16 @@ mod tests {
         }
     }
 
+    // Deploys mock pragma fixture and returns handles used by dependent test flows.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn deploy_mock_pragma() -> ContractAddress {
         let contract = declare("MockPragma").expect('Mock declare failed');
         let (address, _) = contract.contract_class().deploy(@array![]).expect('Mock deploy failed');
         address
     }
 
+    // Deploys price oracle fixture and returns handles used by dependent test flows.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn deploy_price_oracle(pragma: ContractAddress, owner: ContractAddress) -> IPriceOracleDispatcher {
         let contract = declare("PriceOracle").expect('Oracle declare failed');
         let chainlink: ContractAddress = 0x0_felt252.try_into().unwrap();
@@ -71,13 +83,15 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates get price from pragma behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_get_price_from_pragma() {
         let owner: ContractAddress = 0x123_felt252.try_into().unwrap();
         let pragma_address = deploy_mock_pragma();
         let dispatcher = deploy_price_oracle(pragma_address, owner);
 
-        // Fix: Set timestamp ke 1500. 
-        // 1500 (now) - 1000 (price_ts) = 500. 500 < 600 (max_age), jadi harga VALID.
+        // Set timestamp to 1500.
+        // 1500 (now) - 1000 (price_ts) = 500. 500 < 600 (max_age), so price is valid.
         start_cheat_block_timestamp(dispatcher.contract_address, 1500);
 
         let mock_pragma = IMockPragmaDispatcher { contract_address: pragma_address };
@@ -91,12 +105,14 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates get price usd calculation behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_get_price_usd_calculation() {
         let owner: ContractAddress = 0x123_felt252.try_into().unwrap();
         let pragma_address = deploy_mock_pragma();
         let dispatcher = deploy_price_oracle(pragma_address, owner);
 
-        // Fix: Gunakan 1500 agar selisih waktu tidak melebihi max_price_age_seconds (600)
+        // Use 1500 so time delta does not exceed `max_price_age_seconds` (600).
         start_cheat_block_timestamp(dispatcher.contract_address, 1500);
 
         let mock_pragma = IMockPragmaDispatcher { contract_address: pragma_address };
@@ -114,6 +130,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected: "Contract is paused")]
+    // Test case: validates pause circuit breaker behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_pause_circuit_breaker() {
         let owner: ContractAddress = 0x123_felt252.try_into().unwrap();
         let pragma_address = deploy_mock_pragma();

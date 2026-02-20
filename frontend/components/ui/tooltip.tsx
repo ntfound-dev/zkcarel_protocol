@@ -5,6 +5,12 @@ import * as TooltipPrimitive from '@radix-ui/react-tooltip'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `TooltipProvider` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TooltipProvider({
   delayDuration = 0,
   ...props
@@ -18,6 +24,12 @@ function TooltipProvider({
   )
 }
 
+/**
+ * Handles `Tooltip` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Tooltip({
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
@@ -28,12 +40,24 @@ function Tooltip({
   )
 }
 
+/**
+ * Handles `TooltipTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TooltipTrigger({
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
   return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
 }
 
+/**
+ * Handles `TooltipContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TooltipContent({
   className,
   sideOffset = 0,

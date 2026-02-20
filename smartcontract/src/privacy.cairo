@@ -1,7 +1,5 @@
-/// @title Privacy Module
-/// @author CAREL Team
-/// @notice ZK/privacy routing integration points for CAREL protocol.
-/// @dev Keeps privacy adapters isolated from core protocol logic.
+// ZK/privacy routing integration points for CAREL protocol.
+// Keeps privacy adapters isolated from core protocol logic.
 pub mod zk_privacy_router;
 pub mod action_types;
 pub mod shielded_vault;

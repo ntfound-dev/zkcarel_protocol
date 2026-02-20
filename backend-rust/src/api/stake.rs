@@ -105,10 +105,12 @@ pub struct ClaimResponse {
 const STARKNET_ONCHAIN_STAKE_POOLS: &[&str] = &["CAREL", "USDC", "USDT", "WBTC", "STRK"];
 const BTC_GARDEN_POOL: &str = "BTC";
 
+// Internal helper that parses or transforms values for `normalize_pool_id`.
 fn normalize_pool_id(pool_id: &str) -> String {
     pool_id.trim().to_ascii_uppercase()
 }
 
+// Internal helper that fetches data for `resolve_onchain_block_number_best_effort`.
 async fn resolve_onchain_block_number_best_effort(state: &AppState, tx_hash: &str) -> i64 {
     let reader = match OnchainReader::from_config(&state.config) {
         Ok(reader) => reader,
@@ -167,6 +169,7 @@ async fn resolve_onchain_block_number_best_effort(state: &AppState, tx_hash: &st
     0
 }
 
+// Internal helper that fetches data for `resolve_pool_token`.
 fn resolve_pool_token(pool_id: &str) -> Option<&'static str> {
     match normalize_pool_id(pool_id).as_str() {
         "CAREL" => Some("CAREL"),
@@ -179,12 +182,14 @@ fn resolve_pool_token(pool_id: &str) -> Option<&'static str> {
     }
 }
 
+// Internal helper that checks conditions for `is_starknet_onchain_pool`.
 fn is_starknet_onchain_pool(token: &str) -> bool {
     STARKNET_ONCHAIN_STAKE_POOLS
         .iter()
         .any(|supported| supported.eq_ignore_ascii_case(token))
 }
 
+// Internal helper that parses or transforms values for `parse_pool_from_position_id`.
 fn parse_pool_from_position_id(position_id: &str) -> Option<String> {
     // New format: POS_<POOL>_<HASH>
     let mut parts = position_id.splitn(3, '_');
@@ -200,6 +205,7 @@ fn parse_pool_from_position_id(position_id: &str) -> Option<String> {
     resolve_pool_token(pool).map(|token| token.to_string())
 }
 
+// Internal helper that builds inputs for `build_position_id`.
 fn build_position_id(user_address: &str, pool_id: &str, now_ts: i64) -> String {
     let pos_data = format!("{}{}{}", user_address, pool_id, now_ts);
     format!(
@@ -209,6 +215,7 @@ fn build_position_id(user_address: &str, pool_id: &str, now_ts: i64) -> String {
     )
 }
 
+// Internal helper that supports `map_privacy_payload` operations.
 fn map_privacy_payload(
     payload: Option<&ModelPrivacyVerificationPayload>,
 ) -> Option<OnchainPrivacyPayload> {
@@ -236,6 +243,7 @@ enum StakeExecuteMode {
     ShieldedPoolV2,
 }
 
+// Internal helper that supports `env_flag` operations.
 fn env_flag(name: &str, default: bool) -> bool {
     std::env::var(name)
         .ok()
@@ -248,6 +256,7 @@ fn env_flag(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+// Internal helper that supports `hide_balance_relayer_pool_enabled` operations.
 fn hide_balance_relayer_pool_enabled() -> bool {
     env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", true)
 }
@@ -258,6 +267,7 @@ enum HideExecutorKind {
     ShieldedPoolV2,
 }
 
+// Internal helper that supports `hide_executor_kind` operations.
 fn hide_executor_kind() -> HideExecutorKind {
     let raw = std::env::var("HIDE_BALANCE_EXECUTOR_KIND")
         .unwrap_or_default()
@@ -270,6 +280,7 @@ fn hide_executor_kind() -> HideExecutorKind {
     }
 }
 
+// Internal helper that fetches data for `resolve_private_action_executor_felt`.
 fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Result<Felt> {
     for raw in [
         std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
@@ -290,6 +301,7 @@ fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Resul
     ))
 }
 
+// Internal helper that fetches data for `resolve_staking_target_felt`.
 fn resolve_staking_target_felt(state: &AppState, pool_token: &str) -> Result<Felt> {
     let normalized = pool_token.trim().to_ascii_uppercase();
     let candidates: Vec<Option<String>> = match normalized.as_str() {
@@ -328,6 +340,7 @@ fn resolve_staking_target_felt(state: &AppState, pool_token: &str) -> Result<Fel
     )))
 }
 
+// Internal helper that runs side-effecting logic for `stake_entrypoint_for_action`.
 fn stake_entrypoint_for_action(action: StakeAction) -> &'static str {
     match action {
         StakeAction::Deposit => "stake",
@@ -336,6 +349,7 @@ fn stake_entrypoint_for_action(action: StakeAction) -> &'static str {
     }
 }
 
+// Internal helper that builds inputs for `build_stake_action`.
 fn build_stake_action(
     pool_token: &str,
     action: StakeAction,
@@ -416,6 +430,7 @@ fn build_stake_action(
     }
 }
 
+// Internal helper that parses or transforms values for `normalize_hex_items`.
 fn normalize_hex_items(items: &[String]) -> Vec<String> {
     items
         .iter()
@@ -425,6 +440,7 @@ fn normalize_hex_items(items: &[String]) -> Vec<String> {
         .collect()
 }
 
+// Internal helper that supports `payload_from_request` operations.
 fn payload_from_request(
     payload: Option<&ModelPrivacyVerificationPayload>,
     verifier: &str,
@@ -462,6 +478,7 @@ fn payload_from_request(
     })
 }
 
+// Internal helper that supports `compute_stake_intent_hash_on_executor` operations.
 async fn compute_stake_intent_hash_on_executor(
     state: &AppState,
     executor: Felt,
@@ -593,6 +610,7 @@ async fn compute_stake_intent_hash_on_executor(
     Ok((intent_hash.to_string(), StakeExecuteMode::LegacyNoApproval))
 }
 
+// Internal helper that builds inputs for `build_submit_private_intent_call`.
 fn build_submit_private_intent_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
@@ -629,6 +647,7 @@ fn build_submit_private_intent_call(
     })
 }
 
+// Internal helper that builds inputs for `build_execute_private_stake_call`.
 fn build_execute_private_stake_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
@@ -674,6 +693,7 @@ fn build_execute_private_stake_call(
     })
 }
 
+// Internal helper that builds inputs for `build_shielded_set_asset_rule_call`.
 fn build_shielded_set_asset_rule_call(
     executor: Felt,
     token: Felt,
@@ -689,6 +709,7 @@ fn build_shielded_set_asset_rule_call(
     })
 }
 
+// Internal helper that builds inputs for `build_shielded_deposit_fixed_call`.
 fn build_shielded_deposit_fixed_call(
     executor: Felt,
     token: Felt,
@@ -703,6 +724,7 @@ fn build_shielded_deposit_fixed_call(
     })
 }
 
+// Internal helper that builds inputs for `build_erc20_approve_call`.
 fn build_erc20_approve_call(
     token: Felt,
     spender: Felt,
@@ -718,6 +740,7 @@ fn build_erc20_approve_call(
     })
 }
 
+// Internal helper that supports `shielded_note_registered` operations.
 async fn shielded_note_registered(
     state: &AppState,
     executor: Felt,
@@ -737,6 +760,7 @@ async fn shielded_note_registered(
     Ok(flag != Felt::ZERO)
 }
 
+// Internal helper that supports `shielded_fixed_amount` operations.
 async fn shielded_fixed_amount(
     state: &AppState,
     executor: Felt,
@@ -760,6 +784,7 @@ async fn shielded_fixed_amount(
     Ok((out[0], out[1]))
 }
 
+// Internal helper that supports `append_shielded_note_registration_calls` operations.
 async fn append_shielded_note_registration_calls(
     state: &AppState,
     relayer_calls: &mut Vec<Call>,
@@ -805,6 +830,7 @@ async fn append_shielded_note_registration_calls(
     Ok(())
 }
 
+// Internal helper that supports `fallback_price_for` operations.
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_uppercase().as_str() {
         "USDT" | "USDC" => 1.0,
@@ -815,10 +841,12 @@ fn fallback_price_for(token: &str) -> f64 {
 
 const CAREL_DECIMALS: f64 = 1_000_000_000_000_000_000.0;
 
+// Internal helper that supports `u128_to_token_amount` operations.
 fn u128_to_token_amount(value: u128) -> f64 {
     (value as f64) / CAREL_DECIMALS
 }
 
+// Internal helper that supports `latest_price` operations.
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     let token = token.to_uppercase();
     let mut candidates = vec![token.clone()];
@@ -844,6 +872,7 @@ async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     Ok(fallback_price_for(&token))
 }
 
+// Internal helper that supports `staking_contract_or_error` operations.
 fn staking_contract_or_error(state: &AppState) -> Result<&str> {
     let Some(contract) = state.config.staking_carel_address.as_deref() else {
         return Err(crate::error::AppError::BadRequest(
@@ -1657,6 +1686,7 @@ struct CarelStakeInfo {
     start_time: u64,
 }
 
+// Internal helper that fetches data for `fetch_carel_stake_info`.
 async fn fetch_carel_stake_info(
     reader: &OnchainReader,
     contract: &str,
@@ -1680,6 +1710,7 @@ async fn fetch_carel_stake_info(
     Ok(Some(CarelStakeInfo { amount, start_time }))
 }
 
+// Internal helper that fetches data for `fetch_carel_rewards`.
 async fn fetch_carel_rewards(
     reader: &OnchainReader,
     contract: &str,
@@ -1705,6 +1736,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that builds inputs for `build_position_id_has_prefix`.
     fn build_position_id_has_prefix() {
         // Memastikan position_id memiliki prefix POS_<POOL>_0x
         let id = build_position_id("0xabc", "CAREL", 1_700_000_000);
@@ -1712,6 +1744,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_onchain_tx_hash_rejects_non_hex`.
     fn normalize_onchain_tx_hash_rejects_non_hex() {
         // Memastikan hash non-hex ditolak
         let result = normalize_onchain_tx_hash(Some("0xZZ"));

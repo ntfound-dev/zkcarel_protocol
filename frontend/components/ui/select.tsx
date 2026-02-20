@@ -6,24 +6,48 @@ import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Select` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Select({
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />
 }
 
+/**
+ * Handles `SelectGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectGroup({
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Group>) {
   return <SelectPrimitive.Group data-slot="select-group" {...props} />
 }
 
+/**
+ * Handles `SelectValue` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectValue({
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Value>) {
   return <SelectPrimitive.Value data-slot="select-value" {...props} />
 }
 
+/**
+ * Handles `SelectTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectTrigger({
   className,
   size = 'default',
@@ -50,6 +74,12 @@ function SelectTrigger({
   )
 }
 
+/**
+ * Handles `SelectContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectContent({
   className,
   children,
@@ -85,6 +115,12 @@ function SelectContent({
   )
 }
 
+/**
+ * Handles `SelectLabel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectLabel({
   className,
   ...props
@@ -98,6 +134,12 @@ function SelectLabel({
   )
 }
 
+/**
+ * Handles `SelectItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectItem({
   className,
   children,
@@ -122,6 +164,12 @@ function SelectItem({
   )
 }
 
+/**
+ * Handles `SelectSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectSeparator({
   className,
   ...props
@@ -135,6 +183,12 @@ function SelectSeparator({
   )
 }
 
+/**
+ * Handles `SelectScrollUpButton` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectScrollUpButton({
   className,
   ...props
@@ -153,6 +207,12 @@ function SelectScrollUpButton({
   )
 }
 
+/**
+ * Handles `SelectScrollDownButton` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SelectScrollDownButton({
   className,
   ...props

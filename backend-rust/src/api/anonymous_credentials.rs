@@ -97,6 +97,7 @@ pub async fn is_nullifier_used(
     })))
 }
 
+// Internal helper that builds inputs for `build_submit_call`.
 fn build_submit_call(contract: &str, req: &SubmitCredentialRequest) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("submit_credential_proof")

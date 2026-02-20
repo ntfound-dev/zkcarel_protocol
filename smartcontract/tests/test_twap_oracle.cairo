@@ -7,7 +7,8 @@ use snforge_std::{
 // Import dispatcher and traits from the module path
 use smartcontract::utils::twap_oracle::{ITWAPOracleDispatcher, ITWAPOracleDispatcherTrait};
 
-/// Helper to deploy the TWAPOracle contract
+// Deploys oracle fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_oracle() -> ITWAPOracleDispatcher {
     let contract = declare("TWAPOracle").unwrap().contract_class();
     let (contract_address, _) = contract.deploy(@array![]).unwrap();
@@ -15,6 +16,8 @@ fn deploy_oracle() -> ITWAPOracleDispatcher {
 }
 
 #[test]
+// Test case: validates constructor initialization behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_constructor_initialization() {
     let dispatcher = deploy_oracle();
     let oracle_address = dispatcher.contract_address;
@@ -29,6 +32,8 @@ fn test_constructor_initialization() {
 }
 
 #[test]
+// Test case: validates update and get spot price behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_update_and_get_spot_price() {
     let dispatcher = deploy_oracle();
     let token: ContractAddress = 0x123.try_into().unwrap();
@@ -41,6 +46,8 @@ fn test_update_and_get_spot_price() {
 }
 
 #[test]
+// Test case: validates twap calculation behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_twap_calculation() {
     let dispatcher = deploy_oracle();
     let token: ContractAddress = 0x123.try_into().unwrap();
@@ -74,6 +81,8 @@ fn test_twap_calculation() {
 
 #[test]
 #[should_panic(expected: "Insufficient observations")]
+// Test case: validates get twap panics if insufficient data behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_get_twap_panics_if_insufficient_data() {
     let dispatcher = deploy_oracle();
     let token: ContractAddress = 0x123.try_into().unwrap();
@@ -90,6 +99,8 @@ fn test_get_twap_panics_if_insufficient_data() {
 }
 
 #[test]
+// Test case: validates price deviation calculation behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_price_deviation_calculation() {
     let dispatcher = deploy_oracle();
     let token: ContractAddress = 0x456.try_into().unwrap();

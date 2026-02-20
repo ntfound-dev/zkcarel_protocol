@@ -134,6 +134,7 @@ pub async fn is_nullifier_used(
     })))
 }
 
+// Internal helper that builds inputs for `build_submit_call`.
 fn build_submit_call(contract: &str, req: &SubmitDarkOrderRequest) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("submit_order")
@@ -167,6 +168,7 @@ fn build_submit_call(contract: &str, req: &SubmitDarkOrderRequest) -> Result<Cal
     })
 }
 
+// Internal helper that builds inputs for `build_match_call`.
 fn build_match_call(contract: &str, req: &MatchDarkOrderRequest) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("match_order")

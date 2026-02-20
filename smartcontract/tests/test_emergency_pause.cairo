@@ -6,6 +6,8 @@ use smartcontract::utils::emergency_pause::{IEmergencyPauseDispatcher, IEmergenc
 use smartcontract::utils::emergency_pause::EmergencyPause;
 use smartcontract::utils::emergency_pause::EmergencyPause::EmergencyPaused;
 
+// Deploys emergency pause fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_emergency_pause(admin: ContractAddress, guardian: ContractAddress) -> IEmergencyPauseDispatcher {
     let contract = declare("EmergencyPause").unwrap().contract_class();
     let mut constructor_calldata = array![admin.into(), guardian.into()];
@@ -14,6 +16,8 @@ fn deploy_emergency_pause(admin: ContractAddress, guardian: ContractAddress) -> 
 }
 
 #[test]
+// Test case: validates initial state behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_initial_state() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let guardian: ContractAddress = 0x2.try_into().unwrap();
@@ -25,6 +29,8 @@ fn test_initial_state() {
 }
 
 #[test]
+// Test case: validates pause by guardian behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_pause_by_guardian() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let guardian: ContractAddress = 0x2.try_into().unwrap();
@@ -46,6 +52,8 @@ fn test_pause_by_guardian() {
 
 #[test]
 #[should_panic(expected: 'Caller is missing role')] // Fixed: Use single quotes for felt252 panic
+// Test case: validates pause unauthorized fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_pause_unauthorized_fails() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let guardian: ContractAddress = 0x2.try_into().unwrap();
@@ -57,6 +65,8 @@ fn test_pause_unauthorized_fails() {
 }
 
 #[test]
+// Test case: validates unpause by admin behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unpause_by_admin() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let guardian: ContractAddress = 0x2.try_into().unwrap();
@@ -74,6 +84,8 @@ fn test_unpause_by_admin() {
 }
 
 #[test]
+// Test case: validates manage pausable contracts behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_manage_pausable_contracts() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let guardian: ContractAddress = 0x2.try_into().unwrap();
@@ -95,6 +107,8 @@ fn test_manage_pausable_contracts() {
 
 #[test]
 #[should_panic(expected: "System already paused")]
+// Test case: validates double pause fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_double_pause_fails() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let guardian: ContractAddress = 0x2.try_into().unwrap();

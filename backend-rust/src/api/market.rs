@@ -27,10 +27,12 @@ pub struct MarketDepthQuery {
     pub limit: Option<i32>,
 }
 
+// Internal helper that parses or transforms values for `clamp_limit`.
 fn clamp_limit(limit: Option<i32>) -> i32 {
     limit.unwrap_or(10).clamp(1, 50)
 }
 
+// Internal helper that builds inputs for `build_levels`.
 fn build_levels(mid_price: f64, levels: i32) -> (Vec<OrderBookLevel>, Vec<OrderBookLevel>) {
     let mut bids = Vec::new();
     let mut asks = Vec::new();
@@ -55,6 +57,7 @@ fn build_levels(mid_price: f64, levels: i32) -> (Vec<OrderBookLevel>, Vec<OrderB
     (bids, asks)
 }
 
+// Internal helper that supports `latest_price` operations.
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     let price: Option<f64> = sqlx::query_scalar(
         "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
@@ -90,6 +93,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that builds inputs for `build_levels_returns_equal_counts`.
     fn build_levels_returns_equal_counts() {
         // Memastikan bids dan asks memiliki jumlah level yang sama
         let (bids, asks) = build_levels(100.0, 5);

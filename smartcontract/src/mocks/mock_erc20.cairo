@@ -1,14 +1,14 @@
 use starknet::ContractAddress;
 
-/// @title Mock ERC20 Interface
-/// @notice Minimal admin mint interface for testnet liquidity tokens.
+// Minimal admin mint interface for testnet liquidity tokens.
 #[starknet::interface]
 pub trait IMockERC20<TContractState> {
+    // Applies mint after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn mint(ref self: TContractState, recipient: ContractAddress, amount: u256);
 }
 
-/// @title Mock ERC20 Token
-/// @notice ERC20 token with configurable decimals for USDC/USDT/WBTC testnet setup.
+// ERC20 token with configurable decimals for USDC/USDT/WBTC testnet setup.
 #[starknet::contract]
 pub mod MockERC20 {
     use openzeppelin::access::ownable::OwnableComponent;
@@ -51,6 +51,8 @@ pub mod MockERC20 {
     }
 
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(
         ref self: ContractState,
         name: ByteArray,
@@ -68,14 +70,20 @@ pub mod MockERC20 {
 
     #[abi(embed_v0)]
     impl ERC20MetadataImpl of interface::IERC20Metadata<ContractState> {
+        // Implements name logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn name(self: @ContractState) -> ByteArray {
             self.erc20.name()
         }
 
+        // Implements symbol logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn symbol(self: @ContractState) -> ByteArray {
             self.erc20.symbol()
         }
 
+        // Implements decimals logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn decimals(self: @ContractState) -> u8 {
             self.decimals.read()
         }
@@ -83,6 +91,8 @@ pub mod MockERC20 {
 
     #[abi(embed_v0)]
     impl MockERC20Impl of super::IMockERC20<ContractState> {
+        // Applies mint after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn mint(ref self: ContractState, recipient: ContractAddress, amount: u256) {
             self.ownable.assert_only_owner();
             self.erc20.mint(recipient, amount);

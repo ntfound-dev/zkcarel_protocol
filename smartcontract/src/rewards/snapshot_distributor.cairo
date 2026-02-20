@@ -8,76 +8,47 @@ pub struct BatchClaim {
     pub proof_len: u32,
 }
 
-/// @title Staking Interface
-/// @author CAREL Team
-/// @notice Minimal interface for staking balance checks.
-/// @dev Used to enforce minimum stake for reward claims.
+// Minimal interface for staking balance checks.
+// Used to enforce minimum stake for reward claims.
 #[starknet::interface]
 pub trait IStaking<TContractState> {
-    /// @notice Returns user stake amount.
-    /// @dev Read-only helper for eligibility checks.
-    /// @param user User address.
-    /// @return stake Staked amount.
+    // Returns current staked balance for a user.
     fn get_user_stake(self: @TContractState, user: ContractAddress) -> u256;
 }
 
-/// @title CAREL Token Interface
-/// @author CAREL Team
-/// @notice Minimal mint interface for reward distribution.
-/// @dev Used to mint rewards on claims.
+// Minimal mint interface for reward distribution.
+// Used to mint rewards on claims.
 #[starknet::interface]
 pub trait ICarelToken<TContractState> {
-    /// @notice Mints tokens to a recipient.
-    /// @dev Used to distribute rewards.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to mint.
+    // Mints CAREL to the provided recipient.
     fn mint(ref self: TContractState, recipient: ContractAddress, amount: u256);
 }
 
-/// @title Snapshot Distributor Interface
-/// @author CAREL Team
-/// @notice Defines Merkle root submission and reward claims.
-/// @dev Uses epoch-based Merkle snapshots.
+// Snapshot-based reward distribution API.
+// Each epoch has one Merkle root with user claim allocations.
 #[starknet::interface]
 pub trait ISnapshotDistributor<TContractState> {
-    /// @notice Submits a Merkle root for an epoch.
-    /// @dev Backend-only to prevent tampering.
-    /// @param epoch Epoch identifier.
-    /// @param root Merkle root.
+    // Stores Merkle root for an epoch.
     fn submit_merkle_root(ref self: TContractState, epoch: u64, root: felt252);
-    /// @notice Claims reward for an epoch.
-    /// @dev Verifies Merkle proof and minimum stake.
-    /// @param epoch Epoch identifier.
-    /// @param amount Claimable amount.
-    /// @param proof Merkle proof.
+    // Claims reward for caller using Merkle proof.
     fn claim_reward(ref self: TContractState, epoch: u64, amount: u256, proof: Span<felt252>);
-    /// @notice Claims rewards for multiple users in one call.
-    /// @dev Uses flattened proofs with offsets to reduce calldata overhead.
-    /// @param epoch Epoch identifier.
-    /// @param claims Array of batch claims.
-    /// @param proofs Flattened Merkle proofs.
+    // Processes multiple claims using a flat proofs array.
     fn batch_claim_rewards(
         ref self: TContractState,
         epoch: u64,
         claims: Array<BatchClaim>,
         proofs: Span<felt252>
     );
-    /// @notice Checks whether a user has claimed for an epoch.
-    /// @dev Read-only helper for UI.
-    /// @param epoch Epoch identifier.
-    /// @param user User address.
-    /// @return claimed True if claimed.
+    // Returns whether `user` has already claimed in `epoch`.
     fn is_claimed(self: @TContractState, epoch: u64, user: ContractAddress) -> bool;
 }
 
-/// @title Snapshot Distributor Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for snapshot rewards.
+// Hide Mode hooks for snapshot actions routed through privacy layer.
 #[starknet::interface]
 pub trait ISnapshotDistributorPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets privacy router for private snapshot actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private snapshot action proof.
+    // Forwards nullifier/commitment-bound snapshot payload to privacy router.
     fn submit_private_snapshot_action(
         ref self: TContractState,
         old_root: felt252,
@@ -89,10 +60,8 @@ pub trait ISnapshotDistributorPrivacy<TContractState> {
     );
 }
 
-/// @title Snapshot Distributor Contract
-/// @author CAREL Team
-/// @notice Distributes rewards based on Merkle snapshots.
-/// @dev Enforces minimum stake and applies claim tax splits.
+// Distributes rewards from backend-submitted Merkle snapshots.
+// Claims require minimum stake and apply protocol tax split.
 #[starknet::contract]
 pub mod SnapshotDistributor {
     use core::poseidon::PoseidonTrait;
@@ -138,15 +107,7 @@ pub mod SnapshotDistributor {
         pub root: felt252
     }
 
-
-    /// @notice Initializes the snapshot distributor.
-    /// @dev Sets token, staking, wallets, and backend signer.
-    /// @param token CAREL token address.
-    /// @param staking Staking contract address.
-    /// @param dev Dev wallet address.
-    /// @param treasury Treasury wallet address.
-    /// @param signer Backend signer address.
-    /// @param protocol_start Protocol start timestamp.
+    // Initializes token dependencies, fee wallets, signer, and protocol start time.
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -167,21 +128,15 @@ pub mod SnapshotDistributor {
 
     #[abi(embed_v0)]
     impl SnapshotDistributorImpl of super::ISnapshotDistributor<ContractState> {
-        /// @notice Submits a Merkle root for an epoch.
-        /// @dev Backend-only to prevent tampering.
-        /// @param epoch Epoch identifier.
-        /// @param root Merkle root.
+        // Backend signer publishes Merkle root for the target epoch.
         fn submit_merkle_root(ref self: ContractState, epoch: u64, root: felt252) {
             assert!(get_caller_address() == self.backend_signer.read(), "Bukan authorized signer");
             self.merkle_roots.entry(epoch).write(root);
             self.emit(Event::RootSubmitted(RootSubmitted { epoch, root }));
         }
 
-        /// @notice Claims reward for an epoch.
-        /// @dev Verifies Merkle proof and minimum stake.
-        /// @param epoch Epoch identifier.
-        /// @param amount Claimable amount.
-        /// @param proof Merkle proof.
+        // Claims reward for caller after stake and proof validation.
+        // Marks claimed before minting and splits 5% tax between treasury and dev wallet.
         fn claim_reward(ref self: ContractState, epoch: u64, amount: u256, proof: Span<felt252>) {
             let user = get_caller_address();
             assert!(!self.claimed.entry((epoch, user)).read(), "Sudah melakukan claim");
@@ -224,6 +179,7 @@ pub mod SnapshotDistributor {
             self.emit(Event::RewardClaimed(RewardClaimed { user, epoch, net_amount: net_reward }));
         }
 
+        // Batch variant of `claim_reward` using packed proof segments per user.
         fn batch_claim_rewards(
             ref self: ContractState,
             epoch: u64,
@@ -279,11 +235,7 @@ pub mod SnapshotDistributor {
             };
         }
 
-        /// @notice Checks whether a user has claimed for an epoch.
-        /// @dev Read-only helper for UI.
-        /// @param epoch Epoch identifier.
-        /// @param user User address.
-        /// @return claimed True if claimed.
+        // Returns whether a claim has already been consumed for `(epoch, user)`.
         fn is_claimed(self: @ContractState, epoch: u64, user: ContractAddress) -> bool {
             self.claimed.entry((epoch, user)).read()
         }
@@ -291,12 +243,15 @@ pub mod SnapshotDistributor {
 
     #[abi(embed_v0)]
     impl SnapshotDistributorPrivacyImpl of super::ISnapshotDistributorPrivacy<ContractState> {
+        // Sets privacy router for Hide Mode snapshot submissions.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.backend_signer.read(), "Unauthorized backend");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Relays private snapshot action to privacy router.
+        // Router enforces proof validity and nullifier replay protection.
         fn submit_private_snapshot_action(
             ref self: ContractState,
             old_root: felt252,
@@ -323,8 +278,7 @@ pub mod SnapshotDistributor {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
-        /// @notice Hashes a pair of Merkle nodes.
-        /// @dev Orders pair to keep hashes deterministic.
+        // Deterministic node hashing with sorted pair ordering.
         fn hash_pair(self: @ContractState, left: felt252, right: felt252) -> felt252 {
             let left_u256: u256 = left.into();
             let right_u256: u256 = right.into();
@@ -336,8 +290,7 @@ pub mod SnapshotDistributor {
             }
         }
 
-        /// @notice Verifies a Merkle proof against a root and leaf.
-        /// @dev Recomputes root iteratively using hash_pair.
+        // Verifies a standard sibling proof against the provided root.
         fn verify_proof(self: @ContractState, proof: Span<felt252>, root: felt252, leaf: felt252) -> bool {
             let mut computed_hash = leaf;
             for i in 0..proof.len() {
@@ -346,6 +299,7 @@ pub mod SnapshotDistributor {
             computed_hash == root
         }
 
+        // Verifies a proof slice stored inside a flattened proofs array.
         fn verify_proof_from_flat(
             self: @ContractState,
             proofs: Span<felt252>,

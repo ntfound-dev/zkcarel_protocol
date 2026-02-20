@@ -44,6 +44,12 @@ type SidebarContextProps = {
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
 
+/**
+ * Exposes `useSidebar` as a reusable hook.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function useSidebar() {
   const context = React.useContext(SidebarContext)
   if (!context) {
@@ -53,6 +59,12 @@ function useSidebar() {
   return context
 }
 
+/**
+ * Handles `SidebarProvider` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
@@ -95,6 +107,14 @@ function SidebarProvider({
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
+    /**
+     * Handles `handleKeyDown` logic.
+     *
+     * @param event - Input used by `handleKeyDown` to compute state, payload, or request behavior.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
@@ -151,6 +171,12 @@ function SidebarProvider({
   )
 }
 
+/**
+ * Handles `Sidebar` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Sidebar({
   side = 'left',
   variant = 'sidebar',
@@ -253,6 +279,12 @@ function Sidebar({
   )
 }
 
+/**
+ * Handles `SidebarTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarTrigger({
   className,
   onClick,
@@ -279,6 +311,15 @@ function SidebarTrigger({
   )
 }
 
+/**
+ * Handles `SidebarRail` logic.
+ *
+ * @param className - Input used by `SidebarRail` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarRail` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarRail({ className, ...props }: React.ComponentProps<'button'>) {
   const { toggleSidebar } = useSidebar()
 
@@ -304,6 +345,15 @@ function SidebarRail({ className, ...props }: React.ComponentProps<'button'>) {
   )
 }
 
+/**
+ * Handles `SidebarInset` logic.
+ *
+ * @param className - Input used by `SidebarInset` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarInset` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarInset({ className, ...props }: React.ComponentProps<'main'>) {
   return (
     <main
@@ -318,6 +368,12 @@ function SidebarInset({ className, ...props }: React.ComponentProps<'main'>) {
   )
 }
 
+/**
+ * Handles `SidebarInput` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarInput({
   className,
   ...props
@@ -332,6 +388,15 @@ function SidebarInput({
   )
 }
 
+/**
+ * Handles `SidebarHeader` logic.
+ *
+ * @param className - Input used by `SidebarHeader` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarHeader` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -343,6 +408,15 @@ function SidebarHeader({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `SidebarFooter` logic.
+ *
+ * @param className - Input used by `SidebarFooter` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarFooter` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarFooter({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -354,6 +428,12 @@ function SidebarFooter({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `SidebarSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarSeparator({
   className,
   ...props
@@ -368,6 +448,15 @@ function SidebarSeparator({
   )
 }
 
+/**
+ * Handles `SidebarContent` logic.
+ *
+ * @param className - Input used by `SidebarContent` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarContent` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarContent({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -382,6 +471,15 @@ function SidebarContent({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `SidebarGroup` logic.
+ *
+ * @param className - Input used by `SidebarGroup` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarGroup` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarGroup({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -393,6 +491,12 @@ function SidebarGroup({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `SidebarGroupLabel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarGroupLabel({
   className,
   asChild = false,
@@ -414,6 +518,12 @@ function SidebarGroupLabel({
   )
 }
 
+/**
+ * Handles `SidebarGroupAction` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarGroupAction({
   className,
   asChild = false,
@@ -437,6 +547,12 @@ function SidebarGroupAction({
   )
 }
 
+/**
+ * Handles `SidebarGroupContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarGroupContent({
   className,
   ...props
@@ -451,6 +567,15 @@ function SidebarGroupContent({
   )
 }
 
+/**
+ * Handles `SidebarMenu` logic.
+ *
+ * @param className - Input used by `SidebarMenu` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarMenu` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenu({ className, ...props }: React.ComponentProps<'ul'>) {
   return (
     <ul
@@ -462,6 +587,15 @@ function SidebarMenu({ className, ...props }: React.ComponentProps<'ul'>) {
   )
 }
 
+/**
+ * Handles `SidebarMenuItem` logic.
+ *
+ * @param className - Input used by `SidebarMenuItem` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarMenuItem` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenuItem({ className, ...props }: React.ComponentProps<'li'>) {
   return (
     <li
@@ -495,6 +629,12 @@ const sidebarMenuButtonVariants = cva(
   },
 )
 
+/**
+ * Handles `SidebarMenuButton` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenuButton({
   asChild = false,
   isActive = false,
@@ -545,6 +685,12 @@ function SidebarMenuButton({
   )
 }
 
+/**
+ * Handles `SidebarMenuAction` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenuAction({
   className,
   asChild = false,
@@ -577,6 +723,12 @@ function SidebarMenuAction({
   )
 }
 
+/**
+ * Handles `SidebarMenuBadge` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenuBadge({
   className,
   ...props
@@ -599,6 +751,12 @@ function SidebarMenuBadge({
   )
 }
 
+/**
+ * Handles `SidebarMenuSkeleton` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenuSkeleton({
   className,
   showIcon = false,
@@ -637,6 +795,15 @@ function SidebarMenuSkeleton({
   )
 }
 
+/**
+ * Handles `SidebarMenuSub` logic.
+ *
+ * @param className - Input used by `SidebarMenuSub` to compute state, payload, or request behavior.
+ * @param props - Input used by `SidebarMenuSub` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenuSub({ className, ...props }: React.ComponentProps<'ul'>) {
   return (
     <ul
@@ -652,6 +819,12 @@ function SidebarMenuSub({ className, ...props }: React.ComponentProps<'ul'>) {
   )
 }
 
+/**
+ * Handles `SidebarMenuSubItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenuSubItem({
   className,
   ...props
@@ -666,6 +839,12 @@ function SidebarMenuSubItem({
   )
 }
 
+/**
+ * Handles `SidebarMenuSubButton` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SidebarMenuSubButton({
   asChild = false,
   size = 'md',

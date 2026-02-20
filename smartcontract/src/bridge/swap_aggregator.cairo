@@ -7,129 +7,82 @@ pub struct Route {
     pub min_amount_out: u256,
 }
 
-/// @title DEX Router Interface
-/// @author CAREL Team
-/// @notice Defines minimal router quote and swap entrypoints.
-/// @dev Used by the swap aggregator to query and execute swaps.
+// Defines minimal router quote and swap entrypoints.
+// Used by the swap aggregator to query and execute swaps.
 #[starknet::interface]
 pub trait IDEXRouter<TContractState> {
-    /// @notice Returns a quote for a swap.
-    /// @dev Read-only helper used for route selection.
-    /// @param from_token Input token address.
-    /// @param to_token Output token address.
-    /// @param amount Input amount.
-    /// @return quote Expected output amount.
+    // Returns get quote from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_quote(self: @TContractState, from_token: ContractAddress, to_token: ContractAddress, amount: u256) -> u256;
-    /// @notice Executes a swap.
-    /// @dev Called by aggregator after fee adjustments.
-    /// @param from_token Input token address.
-    /// @param to_token Output token address.
-    /// @param amount Input amount after fees.
-    /// @param min_amount_out Minimum acceptable output.
+    // Implements swap logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn swap(ref self: TContractState, from_token: ContractAddress, to_token: ContractAddress, amount: u256, min_amount_out: u256);
 }
 
-/// @title Swap Aggregator Interface
-/// @author CAREL Team
-/// @notice Defines best-route selection and swap execution.
-/// @dev Applies protocol fees and optional MEV protection.
+// Defines best-route selection and swap execution.
+// Applies protocol fees and optional MEV protection.
 #[starknet::interface]
 pub trait ISwapAggregator<TContractState> {
-    /// @notice Returns the best swap route across registered DEXes.
-    /// @dev Selects route by best quote and applies slippage tolerance.
-    /// @param from_token Input token address.
-    /// @param to_token Output token address.
-    /// @param amount Input amount.
-    /// @return route Best route metadata.
+    // Returns get best swap route from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_best_swap_route(self: @TContractState, from_token: ContractAddress, to_token: ContractAddress, amount: u256) -> Route;
-    /// @notice Executes a swap using a selected route.
-    /// @dev Charges protocol and optional MEV fees.
-    /// @param route Selected route.
-    /// @param from_token Input token address.
-    /// @param to_token Output token address.
-    /// @param amount Input amount.
-    /// @param mev_protected Whether MEV protection fee is applied.
+    // Applies execute swap after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn execute_swap(ref self: TContractState, route: Route, from_token: ContractAddress, to_token: ContractAddress, amount: u256, mev_protected: bool);
-    /// @notice Returns an oracle-based quote for a swap.
-    /// @dev Uses on-chain price oracle for rate calculation.
-    /// @param from_token Input token address.
-    /// @param to_token Output token address.
-    /// @param amount Input amount.
-    /// @return amount_out Estimated output amount.
+    // Returns get oracle quote from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_oracle_quote(self: @TContractState, from_token: ContractAddress, to_token: ContractAddress, amount: u256) -> u256;
-    /// @notice Registers a DEX router.
-    /// @dev Owner-only to control active DEX list.
-    /// @param dex_id DEX identifier.
-    /// @param router_address Router contract address.
+    // Applies register dex router after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn register_dex_router(ref self: TContractState, dex_id: felt252, router_address: ContractAddress);
-    /// @notice Updates fee configuration for swaps.
-    /// @dev Owner-only to prevent unauthorized fee changes.
-    /// @param lp_fee_bps LP fee in bps.
-    /// @param dev_fee_bps Dev fee in bps.
-    /// @param mev_fee_bps MEV fee in bps.
+    // Updates fee config configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_fee_config(ref self: TContractState, lp_fee_bps: u256, dev_fee_bps: u256, mev_fee_bps: u256);
-    /// @notice Updates fee recipient addresses.
-    /// @dev Owner-only to secure fee routing.
-    /// @param dev_fund Dev fund address.
-    /// @param fee_recipient LP fee recipient address.
+    // Updates fee recipients configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_fee_recipients(ref self: TContractState, dev_fund: ContractAddress, fee_recipient: ContractAddress);
-    /// @notice Sets the price oracle contract address.
-    /// @dev Owner-only to keep oracle trust boundaries.
-    /// @param oracle Price oracle address.
+    // Updates price oracle configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_price_oracle(ref self: TContractState, oracle: ContractAddress);
-    /// @notice Sets oracle metadata for a token.
-    /// @dev Owner-only to map token to oracle asset id and decimals.
-    /// @param token Token address.
-    /// @param asset_id Oracle asset id.
-    /// @param decimals Token decimals.
+    // Updates token oracle config configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_token_oracle_config(ref self: TContractState, token: ContractAddress, asset_id: felt252, decimals: u32);
-    /// @notice Sets the maximum number of registered DEXes.
-    /// @dev Owner-only to cap iteration cost.
-    /// @param max_dexes Maximum DEX count.
+    // Updates max dexes configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_max_dexes(ref self: TContractState, max_dexes: u64);
 }
 
-/// @title ERC20 Minimal Interface
-/// @author CAREL Team
-/// @notice Minimal token interface used for settlement and fees.
-/// @dev Keeps swap aggregator dependency surface small.
+// Minimal token interface used for settlement and fees.
+// Keeps swap aggregator dependency surface small.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
-    /// @notice Returns token balance of an account.
-    /// @param account Account address.
-    /// @return balance Account token balance.
+    // Implements balance of logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
-    /// @notice Transfers tokens from caller to recipient.
-    /// @param recipient Recipient address.
-    /// @param amount Transfer amount.
-    /// @return success True if transfer succeeds.
+    // Applies transfer after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
-    /// @notice Transfers tokens between two addresses using allowance.
-    /// @param sender Token source address.
-    /// @param recipient Token destination address.
-    /// @param amount Transfer amount.
-    /// @return success True if transfer succeeds.
+    // Applies transfer from after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn transfer_from(
         ref self: TContractState,
         sender: ContractAddress,
         recipient: ContractAddress,
         amount: u256
     ) -> bool;
-    /// @notice Approves spender to spend caller tokens.
-    /// @param spender Spender address.
-    /// @param amount Allowance amount.
-    /// @return success True if approve succeeds.
+    // Applies approve after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
 }
 
-/// @title Swap Aggregator Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for swap aggregation.
+// ZK privacy hooks for swap aggregation.
 #[starknet::interface]
 pub trait ISwapAggregatorPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private swap-aggregator action proof.
+    // Applies submit private swap agg action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_swap_agg_action(
         ref self: TContractState,
         old_root: felt252,
@@ -141,15 +94,13 @@ pub trait ISwapAggregatorPrivacy<TContractState> {
     );
 }
 
-/// @title Swap Aggregator Contract
-/// @author CAREL Team
-/// @notice Aggregates swap routes and applies protocol fees.
-/// @dev Maintains DEX registry and slippage configuration.
+// Aggregates swap routes and applies protocol fees.
+// Maintains DEX registry and slippage configuration.
 #[starknet::contract]
 pub mod SwapAggregator {
-    // Menghapus get_contract_address karena tidak digunakan
+    // Imports address helpers used in route execution and permission checks.
     use starknet::{ContractAddress, get_caller_address, get_contract_address};
-    // Wajib untuk akses storage Vec dan Map
+    // Required for Vec and Map storage access traits.
     use starknet::storage::*;
     use core::num::traits::Zero;
     use super::{
@@ -196,10 +147,11 @@ pub mod SwapAggregator {
         pub mev_fee: u256,
     }
 
-    /// @notice Initializes the swap aggregator.
-    /// @dev Sets owner and default fee configuration.
-    /// @param owner Owner/admin address.
+    // Initializes the swap aggregator with owner and default fee settings.
+    // `owner` is used for admin updates and initial fee recipient wiring.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, owner: ContractAddress) {
         self.owner.write(owner);
         self.slippage_tolerance.write(DEFAULT_SLIPPAGE);
@@ -215,12 +167,8 @@ pub mod SwapAggregator {
 
     #[abi(embed_v0)]
     impl SwapAggregatorImpl of ISwapAggregator<ContractState> {
-        /// @notice Returns the best swap route across registered DEXes.
-        /// @dev Selects route by best quote and applies slippage tolerance.
-        /// @param from_token Input token address.
-        /// @param to_token Output token address.
-        /// @param amount Input amount.
-        /// @return route Best route metadata.
+        // Returns get best swap route from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_best_swap_route(self: @ContractState, from_token: ContractAddress, to_token: ContractAddress, amount: u256) -> Route {
             let mut best_dex_id: felt252 = 0;
             let mut highest_out: u256 = 0;
@@ -252,13 +200,8 @@ pub mod SwapAggregator {
             Route { dex_id: best_dex_id, expected_amount_out: highest_out, min_amount_out: min_out }
         }
 
-        /// @notice Executes a swap using a selected route.
-        /// @dev Charges protocol and optional MEV fees.
-        /// @param route Selected route.
-        /// @param from_token Input token address.
-        /// @param to_token Output token address.
-        /// @param amount Input amount.
-        /// @param mev_protected Whether MEV protection fee is applied.
+        // Applies execute swap after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn execute_swap(
             ref self: ContractState, 
             route: Route, 
@@ -342,12 +285,8 @@ pub mod SwapAggregator {
             }));
         }
 
-        /// @notice Returns an oracle-based quote for a swap.
-        /// @dev Uses on-chain price oracle for rate calculation.
-        /// @param from_token Input token address.
-        /// @param to_token Output token address.
-        /// @param amount Input amount.
-        /// @return amount_out Estimated output amount.
+        // Returns get oracle quote from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_oracle_quote(
             self: @ContractState,
             from_token: ContractAddress,
@@ -359,10 +298,8 @@ pub mod SwapAggregator {
             quote
         }
 
-        /// @notice Registers a DEX router.
-        /// @dev Owner-only to control active DEX list.
-        /// @param dex_id DEX identifier.
-        /// @param router_address Router contract address.
+        // Applies register dex router after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn register_dex_router(ref self: ContractState, dex_id: felt252, router_address: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             let current: u64 = self.dex_ids.len().into();
@@ -371,15 +308,12 @@ pub mod SwapAggregator {
             self.dex_routers.entry(dex_id).write(router_address);
             self.active_dexes.entry(router_address).write(true);
             
-            // Menggunakan push() menggantikan append().write() untuk menghindari warning
+            // Uses `push()` to avoid deprecated append/write pattern warnings.
             self.dex_ids.push(dex_id);
         }
 
-        /// @notice Updates fee configuration for swaps.
-        /// @dev Owner-only to prevent unauthorized fee changes.
-        /// @param lp_fee_bps LP fee in bps.
-        /// @param dev_fee_bps Dev fee in bps.
-        /// @param mev_fee_bps MEV fee in bps.
+        // Updates fee config configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_fee_config(ref self: ContractState, lp_fee_bps: u256, dev_fee_bps: u256, mev_fee_bps: u256) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             assert!(lp_fee_bps + dev_fee_bps <= 1000, "Swap fee too high");
@@ -389,10 +323,8 @@ pub mod SwapAggregator {
             self.mev_fee_bps.write(mev_fee_bps);
         }
 
-        /// @notice Updates fee recipient addresses.
-        /// @dev Owner-only to secure fee routing.
-        /// @param dev_fund Dev fund address.
-        /// @param fee_recipient LP fee recipient address.
+        // Updates fee recipients configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_fee_recipients(ref self: ContractState, dev_fund: ContractAddress, fee_recipient: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             assert!(!dev_fund.is_zero(), "Dev fund required");
@@ -401,20 +333,16 @@ pub mod SwapAggregator {
             self.fee_recipient.write(fee_recipient);
         }
 
-        /// @notice Sets the price oracle contract address.
-        /// @dev Owner-only to keep oracle trust boundaries.
-        /// @param oracle Price oracle address.
+        // Updates price oracle configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_price_oracle(ref self: ContractState, oracle: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             assert!(!oracle.is_zero(), "Oracle required");
             self.price_oracle.write(oracle);
         }
 
-        /// @notice Sets oracle metadata for a token.
-        /// @dev Owner-only to map token to oracle asset id and decimals.
-        /// @param token Token address.
-        /// @param asset_id Oracle asset id.
-        /// @param decimals Token decimals.
+        // Updates token oracle config configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_token_oracle_config(ref self: ContractState, token: ContractAddress, asset_id: felt252, decimals: u32) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             assert!(decimals > 0, "Invalid decimals");
@@ -422,6 +350,8 @@ pub mod SwapAggregator {
             self.oracle_decimals.entry(token).write(decimals);
         }
 
+        // Updates max dexes configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_max_dexes(ref self: ContractState, max_dexes: u64) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             assert!(max_dexes > 0, "Max DEXes required");
@@ -431,12 +361,16 @@ pub mod SwapAggregator {
 
     #[abi(embed_v0)]
     impl SwapAggregatorPrivacyImpl of super::ISwapAggregatorPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Applies submit private swap agg action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_swap_agg_action(
             ref self: ContractState,
             old_root: felt252,
@@ -461,6 +395,8 @@ pub mod SwapAggregator {
         }
     }
 
+    // Implements oracle quote logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn _oracle_quote(
         self: @ContractState,
         from_token: ContractAddress,
@@ -496,6 +432,8 @@ pub mod SwapAggregator {
         (value_usd * scale) / to_price
     }
 
+    // Implements pow10 logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn _pow10(decimals: u32) -> u256 {
         let mut value: u256 = 1;
         let mut i: u32 = 0;

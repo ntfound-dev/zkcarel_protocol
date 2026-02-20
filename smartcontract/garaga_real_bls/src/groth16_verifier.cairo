@@ -2,6 +2,7 @@ use super::groth16_verifier_constants::{N_PUBLIC_INPUTS, ic, precomputed_lines, 
 
 #[starknet::interface]
 pub trait IGroth16VerifierBLS12_381<TContractState> {
+    // Handles `verify_groth16_proof_bls12_381` in `garaga_real_bls/src/groth16_verifier.cairo` with deterministic contract-side behavior.
     fn verify_groth16_proof_bls12_381(
         self: @TContractState, full_proof_with_hints: Span<felt252>,
     ) -> Option<Span<u256>>;
@@ -25,6 +26,7 @@ mod Groth16VerifierBLS12_381 {
 
     #[abi(embed_v0)]
     impl IGroth16VerifierBLS12_381 of super::IGroth16VerifierBLS12_381<ContractState> {
+        // Handles `verify_groth16_proof_bls12_381` in `garaga_real_bls/src/groth16_verifier.cairo` with deterministic contract-side behavior.
         fn verify_groth16_proof_bls12_381(
             self: @ContractState, full_proof_with_hints: Span<felt252>,
         ) -> Option<Span<u256>> {

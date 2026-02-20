@@ -24,6 +24,12 @@ const actionTypes = {
 
 let count = 0
 
+/**
+ * Handles `genId` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function genId() {
   count = (count + 1) % Number.MAX_SAFE_INTEGER
   return count.toString()
@@ -55,6 +61,14 @@ interface State {
 
 const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 
+/**
+ * Handles `addToRemoveQueue` logic.
+ *
+ * @param toastId - Input used by `addToRemoveQueue` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const addToRemoveQueue = (toastId: string) => {
   if (toastTimeouts.has(toastId)) {
     return
@@ -130,6 +144,14 @@ const listeners: Array<(state: State) => void> = []
 
 let memoryState: State = { toasts: [] }
 
+/**
+ * Handles `dispatch` logic.
+ *
+ * @param action - Input used by `dispatch` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function dispatch(action: Action) {
   memoryState = reducer(memoryState, action)
   listeners.forEach((listener) => {
@@ -139,14 +161,36 @@ function dispatch(action: Action) {
 
 type Toast = Omit<ToasterToast, 'id'>
 
+/**
+ * Handles `toast` logic.
+ *
+ * @param props - Input used by `toast` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function toast({ ...props }: Toast) {
   const id = genId()
 
+  /**
+   * Updates state for `update`.
+   *
+   * @param props - Input used by `update` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const update = (props: ToasterToast) =>
     dispatch({
       type: 'UPDATE_TOAST',
       toast: { ...props, id },
     })
+  /**
+   * Handles `dismiss` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const dismiss = () => dispatch({ type: 'DISMISS_TOAST', toastId: id })
 
   dispatch({
@@ -168,6 +212,12 @@ function toast({ ...props }: Toast) {
   }
 }
 
+/**
+ * Exposes `useToast` as a reusable hook.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function useToast() {
   const [state, setState] = React.useState<State>(memoryState)
 

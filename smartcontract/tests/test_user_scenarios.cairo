@@ -33,15 +33,25 @@ use snforge_std::start_cheat_block_timestamp;
 
 #[starknet::interface]
 pub trait IMockToken<TContractState> {
+    // Updates balance configuration after access-control and invariant checks.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn set_balance(ref self: TContractState, account: ContractAddress, amount: u256);
+    // Applies transfer after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+    // Applies transfer from after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer_from(
         ref self: TContractState,
         sender: ContractAddress,
         recipient: ContractAddress,
         amount: u256
     ) -> bool;
+    // Implements balance of logic while keeping state transitions deterministic.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
+    // Implements burn logic while keeping state transitions deterministic.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn burn(ref self: TContractState, amount: u256);
 }
 
@@ -57,16 +67,22 @@ pub mod MockERC20 {
 
     #[abi(embed_v0)]
     impl MockTokenImpl of super::IMockToken<ContractState> {
+        // Updates balance configuration after access-control and invariant checks.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn set_balance(ref self: ContractState, account: ContractAddress, amount: u256) {
             self.balances.entry(account).write(amount);
         }
 
+        // Applies transfer after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool {
             let _ = recipient;
             let _ = amount;
             true
         }
 
+        // Applies transfer from after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer_from(
             ref self: ContractState,
             sender: ContractAddress,
@@ -79,10 +95,14 @@ pub mod MockERC20 {
             true
         }
 
+        // Implements balance of logic while keeping state transitions deterministic.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn balance_of(self: @ContractState, account: ContractAddress) -> u256 {
             self.balances.entry(account).read()
         }
 
+        // Implements burn logic while keeping state transitions deterministic.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn burn(ref self: ContractState, amount: u256) {
             let _ = amount;
         }
@@ -91,7 +111,11 @@ pub mod MockERC20 {
 
 #[starknet::interface]
 pub trait IExecTarget<TContractState> {
+    // Implements execute logic while keeping state transitions deterministic.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn execute(ref self: TContractState);
+    // Returns get value from state without mutating storage.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn get_value(self: @TContractState) -> u256;
 }
 
@@ -106,11 +130,15 @@ pub mod MockExecTarget {
 
     #[abi(embed_v0)]
     impl ExecImpl of super::IExecTarget<ContractState> {
+        // Implements execute logic while keeping state transitions deterministic.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn execute(ref self: ContractState) {
             let current = self.value.read();
             self.value.write(current + 1);
         }
 
+        // Returns get value from state without mutating storage.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn get_value(self: @ContractState) -> u256 {
             self.value.read()
         }
@@ -119,6 +147,8 @@ pub mod MockExecTarget {
 
 #[starknet::interface]
 pub trait IMockDEX<TContractState> {
+    // Updates price configuration after access-control and invariant checks.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn set_price(ref self: TContractState, price: u256);
 }
 
@@ -134,6 +164,8 @@ pub mod MockDEX {
 
     #[abi(embed_v0)]
     impl IDEXRouterImpl of smartcontract::bridge::swap_aggregator::IDEXRouter<ContractState> {
+        // Returns get quote from state without mutating storage.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn get_quote(self: @ContractState, from_token: ContractAddress, to_token: ContractAddress, amount: u256) -> u256 {
             let _ = from_token;
             let _ = to_token;
@@ -141,6 +173,8 @@ pub mod MockDEX {
             self.price.read()
         }
 
+        // Implements swap logic while keeping state transitions deterministic.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn swap(ref self: ContractState, from_token: ContractAddress, to_token: ContractAddress, amount: u256, min_amount_out: u256) {
             let _ = from_token;
             let _ = to_token;
@@ -151,12 +185,16 @@ pub mod MockDEX {
 
     #[abi(embed_v0)]
     impl IMockDEXImpl of super::IMockDEX<ContractState> {
+        // Updates price configuration after access-control and invariant checks.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn set_price(ref self: ContractState, price: u256) {
             self.price.write(price);
         }
     }
 }
 
+// Deploys bridge aggregator fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_bridge_aggregator(owner: ContractAddress) -> IBridgeAggregatorDispatcher {
     let contract = declare("BridgeAggregator").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -166,6 +204,8 @@ fn deploy_bridge_aggregator(owner: ContractAddress) -> IBridgeAggregatorDispatch
     IBridgeAggregatorDispatcher { contract_address }
 }
 
+// Deploys swap aggregator fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_swap_aggregator(owner: ContractAddress) -> ISwapAggregatorDispatcher {
     let contract = declare("SwapAggregator").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -174,6 +214,8 @@ fn deploy_swap_aggregator(owner: ContractAddress) -> ISwapAggregatorDispatcher {
     ISwapAggregatorDispatcher { contract_address }
 }
 
+// Deploys keeper network fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_keeper_network(owner: ContractAddress) -> IKeeperNetworkDispatcher {
     let contract = declare("KeeperNetwork").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -182,6 +224,8 @@ fn deploy_keeper_network(owner: ContractAddress) -> IKeeperNetworkDispatcher {
     IKeeperNetworkDispatcher { contract_address }
 }
 
+// Deploys point storage fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_point_storage(signer: ContractAddress) -> IPointStorageDispatcher {
     let contract = declare("PointStorage").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -190,12 +234,16 @@ fn deploy_point_storage(signer: ContractAddress) -> IPointStorageDispatcher {
     IPointStorageDispatcher { contract_address }
 }
 
+// Deploys mock erc20 fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_mock_erc20() -> ContractAddress {
     let contract = declare("MockERC20").unwrap().contract_class();
     let (contract_address, _) = contract.deploy(@array![]).unwrap();
     contract_address
 }
 
+// Deploys discount soulbound fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_discount_soulbound(point_storage: ContractAddress, epoch: u64) -> IDiscountSoulboundDispatcher {
     let contract = declare("DiscountSoulbound").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -205,6 +253,8 @@ fn deploy_discount_soulbound(point_storage: ContractAddress, epoch: u64) -> IDis
     IDiscountSoulboundDispatcher { contract_address }
 }
 
+// Deploys referral system fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_referral_system(admin: ContractAddress, signer: ContractAddress, point_storage: ContractAddress) -> IReferralSystemDispatcher {
     let contract = declare("ReferralSystem").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -215,6 +265,8 @@ fn deploy_referral_system(admin: ContractAddress, signer: ContractAddress, point
     IReferralSystemDispatcher { contract_address }
 }
 
+// Deploys staking carel fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_staking_carel(token: ContractAddress, reward_pool: ContractAddress) -> IStakingCarelDispatcher {
     let contract = declare("StakingCarel").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -224,6 +276,8 @@ fn deploy_staking_carel(token: ContractAddress, reward_pool: ContractAddress) ->
     IStakingCarelDispatcher { contract_address }
 }
 
+// Deploys treasury fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_treasury(owner: ContractAddress, token: ContractAddress) -> ITreasuryDispatcher {
     let contract = declare("Treasury").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -233,6 +287,8 @@ fn deploy_treasury(owner: ContractAddress, token: ContractAddress) -> ITreasuryD
     ITreasuryDispatcher { contract_address }
 }
 
+// Deploys governance fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_governance(voting_delay: u64, voting_period: u64) -> IGovernanceDispatcher {
     let contract = declare("Governance").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -242,6 +298,8 @@ fn deploy_governance(voting_delay: u64, voting_period: u64) -> IGovernanceDispat
     IGovernanceDispatcher { contract_address }
 }
 
+// Deploys timelock fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_timelock(admin: ContractAddress, min_delay: u64) -> ITimelockDispatcher {
     let contract = declare("Timelock").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -251,6 +309,8 @@ fn deploy_timelock(admin: ContractAddress, min_delay: u64) -> ITimelockDispatche
     ITimelockDispatcher { contract_address }
 }
 
+// Deploys private payments fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_private_payments(admin: ContractAddress, verifier: ContractAddress) -> IPrivatePaymentsDispatcher {
     let contract = declare("PrivatePayments").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -260,6 +320,8 @@ fn deploy_private_payments(admin: ContractAddress, verifier: ContractAddress) ->
     IPrivatePaymentsDispatcher { contract_address }
 }
 
+// Deploys dark pool fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_dark_pool(admin: ContractAddress, verifier: ContractAddress) -> IDarkPoolDispatcher {
     let contract = declare("DarkPool").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -269,6 +331,8 @@ fn deploy_dark_pool(admin: ContractAddress, verifier: ContractAddress) -> IDarkP
     IDarkPoolDispatcher { contract_address }
 }
 
+// Deploys ai executor fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_ai_executor(token: ContractAddress, backend_signer: ContractAddress) -> IAIExecutorDispatcher {
     let contract = declare("AIExecutor").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -283,6 +347,8 @@ fn deploy_ai_executor(token: ContractAddress, backend_signer: ContractAddress) -
     IAIExecutorDispatcher { contract_address }
 }
 
+// Deploys mock verifier fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_mock_verifier(admin: ContractAddress) -> ContractAddress {
     let contract = declare("MockGaragaVerifier").unwrap().contract_class();
     let mut constructor_args = array![];
@@ -292,6 +358,8 @@ fn deploy_mock_verifier(admin: ContractAddress) -> ContractAddress {
     contract_address
 }
 
+// Deploys exec target fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_exec_target() -> ContractAddress {
     let contract = declare("MockExecTarget").unwrap().contract_class();
     let (contract_address, _) = contract.deploy(@array![]).unwrap();
@@ -299,6 +367,8 @@ fn deploy_exec_target() -> ContractAddress {
 }
 
 #[test]
+// Test case: validates user bridge flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_bridge_flow() {
     let owner: ContractAddress = 0x111.try_into().unwrap();
     let user: ContractAddress = 0x222.try_into().unwrap();
@@ -335,6 +405,8 @@ fn test_user_bridge_flow() {
 }
 
 #[test]
+// Test case: validates user swap flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_swap_flow() {
     let owner: ContractAddress = 0x333.try_into().unwrap();
     let user: ContractAddress = 0x444.try_into().unwrap();
@@ -364,6 +436,8 @@ fn test_user_swap_flow() {
 }
 
 #[test]
+// Test case: validates user limit order flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_limit_order_flow() {
     let owner: ContractAddress = 0x555.try_into().unwrap();
     let keeper: ContractAddress = 0x666.try_into().unwrap();
@@ -384,6 +458,8 @@ fn test_user_limit_order_flow() {
 }
 
 #[test]
+// Test case: validates user points flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_points_flow() {
     let signer: ContractAddress = 0x777.try_into().unwrap();
     let user: ContractAddress = 0x888.try_into().unwrap();
@@ -408,6 +484,8 @@ fn test_user_points_flow() {
 }
 
 #[test]
+// Test case: validates points convert zero total returns zero behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_points_convert_zero_total_returns_zero() {
     let signer: ContractAddress = 0x777.try_into().unwrap();
     let user: ContractAddress = 0x999.try_into().unwrap();
@@ -424,6 +502,8 @@ fn test_points_convert_zero_total_returns_zero() {
 }
 
 #[test]
+// Test case: validates user nft discount flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_nft_discount_flow() {
     let backend: ContractAddress = 0x999.try_into().unwrap();
     let user: ContractAddress = 0xabc.try_into().unwrap();
@@ -447,6 +527,8 @@ fn test_user_nft_discount_flow() {
 }
 
 #[test]
+// Test case: validates user referral flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_referral_flow() {
     let admin: ContractAddress = 0xaaa.try_into().unwrap();
     let backend: ContractAddress = 0xbbb.try_into().unwrap();
@@ -483,6 +565,8 @@ fn test_user_referral_flow() {
 }
 
 #[test]
+// Test case: validates user staking flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_staking_flow() {
     let user: ContractAddress = 0x1111.try_into().unwrap();
     let token = deploy_mock_erc20();
@@ -497,6 +581,8 @@ fn test_user_staking_flow() {
 }
 
 #[test]
+// Test case: validates user governance flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_governance_flow() {
     let governance = deploy_governance(0, 10);
     let target = deploy_exec_target();
@@ -522,6 +608,8 @@ fn test_user_governance_flow() {
 }
 
 #[test]
+// Test case: validates user timelock flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_timelock_flow() {
     let admin: ContractAddress = 0x4444.try_into().unwrap();
     let timelock = deploy_timelock(admin, 0);
@@ -540,6 +628,8 @@ fn test_user_timelock_flow() {
 }
 
 #[test]
+// Test case: validates user treasury flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_treasury_flow() {
     let owner: ContractAddress = 0x5555.try_into().unwrap();
     let collector: ContractAddress = 0x6666.try_into().unwrap();
@@ -563,6 +653,8 @@ fn test_user_treasury_flow() {
 }
 
 #[test]
+// Test case: validates user private payments flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_private_payments_flow() {
     let admin: ContractAddress = 0x7777.try_into().unwrap();
     let verifier = deploy_mock_verifier(admin);
@@ -581,6 +673,8 @@ fn test_user_private_payments_flow() {
 }
 
 #[test]
+// Test case: validates user dark pool flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_dark_pool_flow() {
     let admin: ContractAddress = 0x8888.try_into().unwrap();
     let verifier = deploy_mock_verifier(admin);
@@ -598,6 +692,8 @@ fn test_user_dark_pool_flow() {
 }
 
 #[test]
+// Test case: validates user ai executor flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_user_ai_executor_flow() {
     let backend: ContractAddress = 0x9999.try_into().unwrap();
     let user: ContractAddress = 0xaaaa.try_into().unwrap();

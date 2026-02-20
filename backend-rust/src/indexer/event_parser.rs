@@ -6,6 +6,17 @@ use starknet_core::utils::get_selector_from_name;
 pub struct EventParser;
 
 impl EventParser {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new() -> Self {
         Self
     }
@@ -39,6 +50,7 @@ impl EventParser {
         None
     }
 
+    // Internal helper that parses or transforms values for `parse_swap_event`.
     fn parse_swap_event(&self, event: &Event) -> Option<ParsedEvent> {
         let user = user_from_keys_or_data(event, 0)?;
 
@@ -80,6 +92,7 @@ impl EventParser {
         })
     }
 
+    // Internal helper that parses or transforms values for `parse_bridge_event`.
     fn parse_bridge_event(&self, event: &Event) -> Option<ParsedEvent> {
         let user = if key_is(event.keys.get(0)?.as_str(), "BridgeInitiated") {
             event.data.get(1)?.clone()
@@ -95,6 +108,7 @@ impl EventParser {
         })
     }
 
+    // Internal helper that parses or transforms values for `parse_stake_event`.
     fn parse_stake_event(&self, event: &Event) -> Option<ParsedEvent> {
         let user = user_from_keys_or_data(event, 0)?;
 
@@ -106,6 +120,7 @@ impl EventParser {
         })
     }
 
+    // Internal helper that parses or transforms values for `parse_unstake_event`.
     fn parse_unstake_event(&self, event: &Event) -> Option<ParsedEvent> {
         let user = user_from_keys_or_data(event, 0)?;
 
@@ -117,6 +132,7 @@ impl EventParser {
         })
     }
 
+    // Internal helper that parses or transforms values for `parse_claim_event`.
     fn parse_claim_event(&self, event: &Event) -> Option<ParsedEvent> {
         let user = user_from_keys_or_data(event, 0)?;
 
@@ -128,6 +144,7 @@ impl EventParser {
         })
     }
 
+    // Internal helper that parses or transforms values for `parse_order_filled_event`.
     fn parse_order_filled_event(&self, event: &Event) -> Option<ParsedEvent> {
         if event.data.len() < 2 {
             return None;
@@ -153,11 +170,13 @@ impl EventParser {
     }
 }
 
+// Internal helper that supports `selector_hex` operations.
 fn selector_hex(name: &str) -> Option<String> {
     let selector = get_selector_from_name(name).ok()?;
     Some(format!("{selector:#x}"))
 }
 
+// Internal helper that parses or transforms values for `normalize_hex`.
 fn normalize_hex(value: &str) -> String {
     let trimmed = value.trim_start_matches("0x");
     let trimmed = trimmed.trim_start_matches('0');
@@ -165,6 +184,7 @@ fn normalize_hex(value: &str) -> String {
     normalized.to_ascii_lowercase()
 }
 
+// Internal helper that supports `key_is` operations.
 fn key_is(key: &str, name: &str) -> bool {
     let Some(selector) = selector_hex(name) else {
         return false;
@@ -172,6 +192,7 @@ fn key_is(key: &str, name: &str) -> bool {
     normalize_hex(key) == normalize_hex(&selector)
 }
 
+// Internal helper that supports `user_from_keys_or_data` operations.
 fn user_from_keys_or_data(event: &Event, data_index: usize) -> Option<String> {
     if event.keys.len() > 1 {
         return event.keys.get(1).cloned();
@@ -186,6 +207,7 @@ pub struct ParsedEvent {
 }
 
 impl Default for EventParser {
+    // Internal helper that supports `default` operations.
     fn default() -> Self {
         Self::new()
     }
@@ -196,6 +218,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `test_parse_swap_event` operations.
     fn test_parse_swap_event() {
         let parser = EventParser::new();
         let selector = selector_hex("SwapExecuted").unwrap();
@@ -221,6 +244,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_event_returns_none_for_empty_keys`.
     fn parse_event_returns_none_for_empty_keys() {
         // Memastikan event tanpa key diabaikan
         let parser = EventParser::new();
@@ -235,6 +259,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `hex_to_decimal_parses_valid_hex` operations.
     fn hex_to_decimal_parses_valid_hex() {
         // Memastikan hex valid diubah menjadi angka desimal
         let parser = EventParser::new();
@@ -242,6 +267,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `hex_to_address_always_prefixes` operations.
     fn hex_to_address_always_prefixes() {
         // Memastikan alamat selalu memiliki prefix 0x
         let parser = EventParser::new();

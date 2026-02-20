@@ -12,6 +12,7 @@ use tokio::sync::RwLock;
 
 use crate::api::AppState;
 
+// Internal helper that supports `connected_payload` operations.
 fn connected_payload() -> String {
     serde_json::json!({
         "type": "connected",
@@ -42,6 +43,7 @@ pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Res
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
+// Internal helper that supports `handle_socket` operations.
 async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
@@ -124,6 +126,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     tracing::info!("Price WebSocket connection closed");
 }
 
+// Internal helper that supports `fallback_price_for` operations.
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_uppercase().as_str() {
         "USDT" | "USDC" | "CAREL" => 1.0,
@@ -131,6 +134,7 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+// Internal helper that supports `latest_price_with_change` operations.
 async fn latest_price_with_change(
     state: &AppState,
     token: &str,
@@ -177,6 +181,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `connected_payload_contains_type` operations.
     fn connected_payload_contains_type() {
         // Memastikan payload koneksi berisi tipe connected
         let payload = connected_payload();
@@ -184,6 +189,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `fallback_price_unknown_returns_zero` operations.
     fn fallback_price_unknown_returns_zero() {
         // Memastikan token tidak dikenal mengembalikan 0.0
         let price = fallback_price_for("UNKNOWN");

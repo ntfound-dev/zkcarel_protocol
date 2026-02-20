@@ -7,10 +7,12 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
+// Internal helper that parses or transforms values for `normalize_swap_delimiters`.
 fn normalize_swap_delimiters(text: &str) -> String {
     text.to_lowercase().replace("->", " to ")
 }
 
+// Internal helper that parses or transforms values for `normalize_token_symbol`.
 fn normalize_token_symbol(word: &str) -> Option<&'static str> {
     match word {
         "btc" | "bitcoin" => Some("BTC"),
@@ -24,6 +26,7 @@ fn normalize_token_symbol(word: &str) -> Option<&'static str> {
     }
 }
 
+// Internal helper that supports `tokenize_words` operations.
 fn tokenize_words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
@@ -31,6 +34,7 @@ fn tokenize_words(text: &str) -> Vec<String> {
         .collect()
 }
 
+// Internal helper that supports `extract_token_from_text` operations.
 fn extract_token_from_text(text: &str) -> String {
     let normalized = normalize_swap_delimiters(text);
     for word in tokenize_words(&normalized) {
@@ -41,6 +45,7 @@ fn extract_token_from_text(text: &str) -> String {
     "".to_string()
 }
 
+// Internal helper that supports `extract_swap_tokens` operations.
 fn extract_swap_tokens(text: &str) -> Vec<String> {
     let normalized = normalize_swap_delimiters(text);
     let mut found = Vec::new();
@@ -58,6 +63,7 @@ fn extract_swap_tokens(text: &str) -> Vec<String> {
     found
 }
 
+// Internal helper that parses or transforms values for `parse_swap_parameters`.
 fn parse_swap_parameters(text: &str) -> (String, String, f64) {
     let normalized = normalize_swap_delimiters(text);
     let words = tokenize_words(&normalized);
@@ -107,10 +113,12 @@ fn parse_swap_parameters(text: &str) -> (String, String, f64) {
     (from, to, extract_amount_from_text(&normalized))
 }
 
+// Internal helper that supports `contains_any_keyword` operations.
 fn contains_any_keyword(text: &str, keywords: &[&str]) -> bool {
     keywords.iter().any(|keyword| text.contains(keyword))
 }
 
+// Internal helper that supports `fallback_price_for` operations.
 fn fallback_price_for(token: &str) -> f64 {
     match token {
         "USDT" | "USDC" | "CAREL" => 1.0,
@@ -118,7 +126,9 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+// Internal helper that supports `extract_amount_from_text` operations.
 fn extract_amount_from_text(text: &str) -> f64 {
+    // Internal helper that parses or transforms values for `parse_numeric_word`.
     fn parse_numeric_word(word: &str) -> Option<f64> {
         let cleaned: String = word
             .chars()
@@ -140,6 +150,7 @@ fn extract_amount_from_text(text: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+// Internal helper that supports `extract_price_from_text` operations.
 fn extract_price_from_text(text: &str) -> f64 {
     let words: Vec<&str> = text.split_whitespace().collect();
     for idx in 0..words.len() {
@@ -156,6 +167,7 @@ fn extract_price_from_text(text: &str) -> f64 {
     0.0
 }
 
+// Internal helper that supports `extract_expiry_from_text` operations.
 fn extract_expiry_from_text(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
     if lower.contains("30d") || lower.contains("30 days") {
@@ -167,6 +179,7 @@ fn extract_expiry_from_text(text: &str) -> String {
     "7d".to_string()
 }
 
+// Internal helper that parses or transforms values for `parse_limit_order_parameters`.
 fn parse_limit_order_parameters(text: &str) -> (String, String, f64, f64, String) {
     let (from, to, amount) = parse_swap_parameters(text);
     let price = extract_price_from_text(text);
@@ -174,6 +187,7 @@ fn parse_limit_order_parameters(text: &str) -> (String, String, f64, f64, String
     (from, to, amount, price, expiry)
 }
 
+// Internal helper that parses or transforms values for `parse_intent_from_command`.
 fn parse_intent_from_command(command: &str) -> Intent {
     let command_lower = command.to_lowercase();
 
@@ -371,6 +385,17 @@ pub enum AIGuardScope {
     Unknown,
 }
 
+/// Handles `classify_command_scope` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn classify_command_scope(command: &str) -> AIGuardScope {
     let intent = parse_intent_from_command(command);
     match intent.action.as_str() {
@@ -394,6 +419,17 @@ pub struct AIService {
 }
 
 impl AIService {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self { db, config }
     }
@@ -451,6 +487,7 @@ impl AIService {
         Ok(parse_intent_from_command(command))
     }
 
+    // Internal helper that builds inputs for `generate_with_gemini`.
     async fn generate_with_gemini(
         &self,
         user_address: &str,
@@ -541,6 +578,7 @@ impl AIService {
             .find(|text| !text.is_empty())
     }
 
+    // Internal helper that runs side-effecting logic for `execute_swap_command`.
     async fn execute_swap_command(&self, intent: &Intent) -> Result<AIResponse> {
         let from = intent
             .parameters
@@ -580,6 +618,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_bridge_command`.
     async fn execute_bridge_command(&self, intent: &Intent) -> Result<AIResponse> {
         let from = intent
             .parameters
@@ -619,6 +658,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_balance_command`.
     async fn execute_balance_command(&self, user_address: &str) -> Result<AIResponse> {
         let assets = self.fetch_portfolio_assets(user_address).await?;
         if assets.is_empty() {
@@ -655,6 +695,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_points_command`.
     async fn execute_points_command(&self, user_address: &str) -> Result<AIResponse> {
         let epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
@@ -690,6 +731,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_stake_command`.
     async fn execute_stake_command(&self, intent: &Intent) -> Result<AIResponse> {
         // Use intent parameters (if provided) to craft a more useful reply
         let token = intent
@@ -719,6 +761,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_unstake_command`.
     async fn execute_unstake_command(&self, intent: &Intent) -> Result<AIResponse> {
         let token = intent
             .parameters
@@ -753,6 +796,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_stake_claim_command`.
     async fn execute_stake_claim_command(&self, intent: &Intent) -> Result<AIResponse> {
         let token = intent
             .parameters
@@ -773,6 +817,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_limit_order_create_command`.
     async fn execute_limit_order_create_command(&self, intent: &Intent) -> Result<AIResponse> {
         let from = intent
             .parameters
@@ -833,6 +878,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_limit_order_cancel_command`.
     async fn execute_limit_order_cancel_command(&self) -> Result<AIResponse> {
         Ok(AIResponse {
             message:
@@ -843,6 +889,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_market_analysis`.
     async fn execute_market_analysis(&self, intent: &Intent) -> Result<AIResponse> {
         // Optionally use token parameter if provided
         let token_opt = intent.parameters.get("token").and_then(|v| v.as_str());
@@ -860,6 +907,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_portfolio_management_command`.
     async fn execute_portfolio_management_command(&self, user_address: &str) -> Result<AIResponse> {
         let assets = self.fetch_portfolio_assets(user_address).await?;
         let total_usd: f64 = assets.iter().map(|asset| asset.value_usd).sum();
@@ -876,6 +924,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_alerts_command`.
     async fn execute_alerts_command(&self) -> Result<AIResponse> {
         Ok(AIResponse {
             message: "Alerts are ready. Choose token, trigger condition, and notification channel."
@@ -887,6 +936,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_tutorial_command`.
     async fn execute_tutorial_command(&self, level: u8) -> Result<AIResponse> {
         let level_hint = match level {
             1 => "You are on Level 1 (read-only).",
@@ -911,6 +961,7 @@ impl AIService {
         })
     }
 
+    // Internal helper that fetches data for `fetch_portfolio_assets`.
     async fn fetch_portfolio_assets(&self, user_address: &str) -> Result<Vec<PortfolioAsset>> {
         let rows = sqlx::query_as::<_, PortfolioAssetRow>(
             r#"
@@ -947,6 +998,7 @@ impl AIService {
         Ok(assets)
     }
 
+    // Internal helper that supports `latest_price_for` operations.
     async fn latest_price_for(&self, token: &str) -> Result<f64> {
         let latest: Option<f64> = sqlx::query_scalar(
             "SELECT close::FLOAT8 FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
@@ -987,6 +1039,7 @@ struct PortfolioAssetRow {
     amount: f64,
 }
 
+// Internal helper that supports `estimate_carel_from_points` operations.
 fn estimate_carel_from_points(
     points: Decimal,
     total_points: Decimal,
@@ -1003,6 +1056,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `extract_token_from_text_detects_eth` operations.
     fn extract_token_from_text_detects_eth() {
         // Memastikan token ETH terdeteksi dari teks
         let token = extract_token_from_text("swap eth to usdt");
@@ -1010,6 +1064,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `extract_amount_from_text_reads_number` operations.
     fn extract_amount_from_text_reads_number() {
         // Memastikan angka pertama diambil dari teks
         let amount = extract_amount_from_text("swap 12.5 eth");
@@ -1017,6 +1072,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_intent_from_command_sets_action`.
     fn parse_intent_from_command_sets_action() {
         // Memastikan intent swap dikenali
         let intent = parse_intent_from_command("please swap 1 btc to eth");
@@ -1024,6 +1080,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_swap_parameters_reads_from_and_to`.
     fn parse_swap_parameters_reads_from_and_to() {
         // Memastikan token asal dan tujuan swap terdeteksi benar
         let (from, to, amount) = parse_swap_parameters("swap 25 strk to carel");
@@ -1033,6 +1090,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_swap_parameters_supports_indonesian_keyword`.
     fn parse_swap_parameters_supports_indonesian_keyword() {
         // Memastikan format "ke" juga terbaca untuk token tujuan
         let (from, to, amount) = parse_swap_parameters("tukar 10 usdt ke strk");
@@ -1042,6 +1100,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `extract_amount_from_text_supports_decimal_comma` operations.
     fn extract_amount_from_text_supports_decimal_comma() {
         // Memastikan angka dengan koma tetap bisa diparse
         let amount = extract_amount_from_text("swap 1,5 strk to carel");
@@ -1049,24 +1108,28 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `classify_command_scope_enforces_read_only` operations.
     fn classify_command_scope_enforces_read_only() {
         let scope = classify_command_scope("cek saldo portfolio saya");
         assert_eq!(scope, AIGuardScope::ReadOnly);
     }
 
     #[test]
+    // Internal helper that supports `classify_command_scope_enforces_swap_bridge` operations.
     fn classify_command_scope_enforces_swap_bridge() {
         let scope = classify_command_scope("bridge 100 usdt to strk");
         assert_eq!(scope, AIGuardScope::SwapBridge);
     }
 
     #[test]
+    // Internal helper that supports `classify_command_scope_limit_order_is_onchain_scope` operations.
     fn classify_command_scope_limit_order_is_onchain_scope() {
         let scope = classify_command_scope("create limit order 10 strk to usdc at 1.2");
         assert_eq!(scope, AIGuardScope::SwapBridge);
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_limit_order_parameters_reads_price_and_expiry`.
     fn parse_limit_order_parameters_reads_price_and_expiry() {
         let (from, to, amount, price, expiry) =
             parse_limit_order_parameters("create limit order 10 strk to usdc at 1.2 for 30d");
@@ -1078,6 +1141,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_intent_handles_unstake_and_claim`.
     fn parse_intent_handles_unstake_and_claim() {
         let unstake_intent = parse_intent_from_command("unstake 50 usdt");
         assert_eq!(unstake_intent.action, "unstake");
@@ -1086,6 +1150,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `classify_command_scope_enforces_portfolio_alert` operations.
     fn classify_command_scope_enforces_portfolio_alert() {
         let scope = classify_command_scope("buat alert harga btc");
         assert_eq!(scope, AIGuardScope::PortfolioAlert);

@@ -1,6 +1,7 @@
 use crate::{config::Config, db::Database, error::Result};
 use sqlx::Row;
 
+// Internal helper that parses or transforms values for `format_webhook_secret`.
 fn format_webhook_secret(bytes: [u8; 32]) -> String {
     format!("whsec_{}", hex::encode(bytes))
 }
@@ -12,6 +13,17 @@ pub struct WebhookService {
 }
 
 impl WebhookService {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self { db, config }
     }
@@ -70,6 +82,7 @@ impl WebhookService {
         Ok(())
     }
 
+    // Internal helper that supports `deliver_webhook` operations.
     async fn deliver_webhook(
         &self,
         id: i64,
@@ -116,6 +129,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that parses or transforms values for `format_webhook_secret_has_prefix`.
     fn format_webhook_secret_has_prefix() {
         // Memastikan secret webhook memakai prefix whsec_
         let secret = format_webhook_secret([0u8; 32]);

@@ -1,19 +1,11 @@
 use starknet::ContractAddress;
 
-/// @title BTC Light Client Interface
-/// @author CAREL Team
-/// @notice Minimal interface to verify BTC deposits.
-/// @dev Used to validate BTC proofs before minting.
+// Minimal interface to verify BTC deposits.
+// Used to validate BTC proofs before minting.
 #[starknet::interface]
 pub trait IBtcLightClient<TContractState> {
-    /// @notice Verifies a BTC transaction proof.
-    /// @dev Returns true if the proof is valid.
-    /// @param txid BTC transaction id.
-    /// @param amount_sats Amount in satoshis.
-    /// @param recipient Recipient address on Starknet.
-    /// @param merkle_proof Merkle proof data.
-    /// @param block_hash BTC block hash.
-    /// @return valid True if the proof is valid.
+    // Applies verify tx after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_tx(
         self: @TContractState,
         txid: felt252,
@@ -24,32 +16,21 @@ pub trait IBtcLightClient<TContractState> {
     ) -> bool;
 }
 
-/// @title Mintable ERC20 Interface
-/// @author CAREL Team
-/// @notice Minimal mint interface for wrapped BTC tokens.
-/// @dev Used to mint on successful BTC proof verification.
+// Minimal mint interface for wrapped BTC tokens.
+// Used to mint on successful BTC proof verification.
 #[starknet::interface]
 pub trait IMintableERC20<TContractState> {
-    /// @notice Mints tokens to a recipient.
-    /// @dev Called by the bridge on successful deposit.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to mint.
+    // Applies mint after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn mint(ref self: TContractState, recipient: ContractAddress, amount: u256);
 }
 
-/// @title BTC Native Bridge Interface
-/// @author CAREL Team
-/// @notice Defines BTC deposit submission and config entrypoints.
-/// @dev Mints wrapped tokens after BTC proof verification.
+// Defines BTC deposit submission and config entrypoints.
+// Mints wrapped tokens after BTC proof verification.
 #[starknet::interface]
 pub trait IBtcNativeBridge<TContractState> {
-    /// @notice Submits a BTC deposit proof for minting.
-    /// @dev Verifies via light client before minting.
-    /// @param txid BTC transaction id.
-    /// @param amount_sats Amount in satoshis.
-    /// @param recipient Recipient address on Starknet.
-    /// @param merkle_proof Merkle proof data.
-    /// @param block_hash BTC block hash.
+    // Applies submit btc deposit after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_btc_deposit(
         ref self: TContractState,
         txid: felt252,
@@ -58,33 +39,28 @@ pub trait IBtcNativeBridge<TContractState> {
         merkle_proof: Span<felt252>,
         block_hash: felt252
     );
-    /// @notice Checks whether a BTC deposit was processed.
-    /// @dev Read-only helper for idempotency checks.
-    /// @param txid BTC transaction id.
-    /// @return processed True if already processed.
+    // Returns is processed from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn is_processed(self: @TContractState, txid: felt252) -> bool;
-    /// @notice Updates the light client contract address.
-    /// @dev Owner-only to keep verification trusted.
-    /// @param light_client New light client address.
+    // Updates light client configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_light_client(ref self: TContractState, light_client: ContractAddress);
-    /// @notice Updates the mint token contract address.
-    /// @dev Owner-only to control minting target.
-    /// @param token Mint token address.
+    // Updates mint token configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_mint_token(ref self: TContractState, token: ContractAddress);
-    /// @notice Updates the satoshi-to-token multiplier.
-    /// @dev Owner-only to control mint unit scaling.
-    /// @param multiplier Unit multiplier.
+    // Updates unit multiplier configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_unit_multiplier(ref self: TContractState, multiplier: u256);
 }
 
-/// @title BTC Native Bridge Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for BTC bridge actions.
+// ZK privacy hooks for BTC bridge actions.
 #[starknet::interface]
 pub trait IBtcNativeBridgePrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private BTC bridge action proof.
+    // Applies submit private btc bridge action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_btc_bridge_action(
         ref self: TContractState,
         old_root: felt252,
@@ -96,10 +72,8 @@ pub trait IBtcNativeBridgePrivacy<TContractState> {
     );
 }
 
-/// @title BTC Native Bridge Contract
-/// @author CAREL Team
-/// @notice Verifies BTC deposits and mints wrapped tokens.
-/// @dev Uses light client verification and idempotent processing.
+// Verifies BTC deposits and mints wrapped tokens.
+// Uses light client verification and idempotent processing.
 #[starknet::contract]
 pub mod BtcNativeBridge {
     use starknet::ContractAddress;
@@ -161,12 +135,12 @@ pub mod BtcNativeBridge {
         pub multiplier: u256,
     }
 
-    /// @notice Initializes the BTC native bridge.
-    /// @dev Sets owner, light client, mint token, and unit multiplier.
-    /// @param admin Owner/admin address.
-    /// @param light_client Light client contract address.
-    /// @param token Mintable token contract address.
+    // Initializes the BTC native bridge.
+    // Sets owner, light client, mint token, and unit multiplier.
+    // `admin` owns config updates, `light_client` verifies proofs, and `token` receives minted supply.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, admin: ContractAddress, light_client: ContractAddress, token: ContractAddress) {
         self.ownable.initializer(admin);
         self.light_client.write(light_client);
@@ -176,13 +150,8 @@ pub mod BtcNativeBridge {
 
     #[abi(embed_v0)]
     impl BtcNativeBridgeImpl of super::IBtcNativeBridge<ContractState> {
-        /// @notice Submits a BTC deposit proof for minting.
-        /// @dev Verifies via light client before minting.
-        /// @param txid BTC transaction id.
-        /// @param amount_sats Amount in satoshis.
-        /// @param recipient Recipient address on Starknet.
-        /// @param merkle_proof Merkle proof data.
-        /// @param block_hash BTC block hash.
+        // Applies submit btc deposit after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_btc_deposit(
             ref self: ContractState,
             txid: felt252,
@@ -217,35 +186,30 @@ pub mod BtcNativeBridge {
             }));
         }
 
-        /// @notice Checks whether a BTC deposit was processed.
-        /// @dev Read-only helper for idempotency checks.
-        /// @param txid BTC transaction id.
-        /// @return processed True if already processed.
+        // Returns is processed from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn is_processed(self: @ContractState, txid: felt252) -> bool {
             self.processed.entry(txid).read()
         }
 
-        /// @notice Updates the light client contract address.
-        /// @dev Owner-only to keep verification trusted.
-        /// @param light_client New light client address.
+        // Updates light client configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_light_client(ref self: ContractState, light_client: ContractAddress) {
             self.ownable.assert_only_owner();
             self.light_client.write(light_client);
             self.emit(Event::LightClientUpdated(LightClientUpdated { light_client }));
         }
 
-        /// @notice Updates the mint token contract address.
-        /// @dev Owner-only to control minting target.
-        /// @param token Mint token address.
+        // Updates mint token configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_mint_token(ref self: ContractState, token: ContractAddress) {
             self.ownable.assert_only_owner();
             self.mint_token.write(token);
             self.emit(Event::MintTokenUpdated(MintTokenUpdated { token }));
         }
 
-        /// @notice Updates the satoshi-to-token multiplier.
-        /// @dev Owner-only to control mint unit scaling.
-        /// @param multiplier Unit multiplier.
+        // Updates unit multiplier configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_unit_multiplier(ref self: ContractState, multiplier: u256) {
             self.ownable.assert_only_owner();
             assert!(multiplier > 0, "Multiplier required");
@@ -256,12 +220,16 @@ pub mod BtcNativeBridge {
 
     #[abi(embed_v0)]
     impl BtcNativeBridgePrivacyImpl of super::IBtcNativeBridgePrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Applies submit private btc bridge action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_btc_bridge_action(
             ref self: ContractState,
             old_root: felt252,

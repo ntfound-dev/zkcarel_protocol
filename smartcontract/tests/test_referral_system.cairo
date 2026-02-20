@@ -5,16 +5,18 @@ mod tests {
     use snforge_std::{start_cheat_caller_address, stop_cheat_caller_address, spy_events, EventSpyAssertionsTrait};
     use snforge_std::interact_with_state;
     
-    // Pastikan namespace sesuai dengan nama package di Scarb.toml (smartcontract)
+    // Ensure namespace matches package name in `Scarb.toml` (`smartcontract`).
     use smartcontract::rewards::referral_system::{IReferralSystemDispatcher, IReferralSystemDispatcherTrait};
     use smartcontract::rewards::referral_system::ReferralSystem;
     use smartcontract::rewards::referral_system::ReferralSystem::{ReferralRegistered, BonusClaimed};
     use smartcontract::rewards::point_storage::{IPointStorageAdminDispatcher, IPointStorageAdminDispatcherTrait, IPointStorageDispatcher, IPointStorageDispatcherTrait};
     
-    // PENTING: Import semua trait storage agar .entry(), .read(), dan .write() dapat dikenali
+    // Important: import storage traits so `.entry()`, `.read()`, and `.write()` resolve.
     use starknet::storage::*;
     use core::array::ArrayTrait;
 
+    // Deploys point storage fixture and returns handles used by dependent test flows.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn deploy_point_storage(signer: ContractAddress) -> IPointStorageDispatcher {
         let contract = declare("PointStorage").unwrap().contract_class();
         let mut args = array![];
@@ -23,6 +25,8 @@ mod tests {
         IPointStorageDispatcher { contract_address }
     }
 
+    // Deploys referral fixture and returns handles used by dependent test flows.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn deploy_referral(admin: ContractAddress, signer: ContractAddress, point_storage: ContractAddress) -> IReferralSystemDispatcher {
         let contract = declare("ReferralSystem").unwrap().contract_class();
         let mut args = array![];
@@ -34,6 +38,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates registration success behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_registration_success() {
         let admin: ContractAddress = 0x1.try_into().unwrap();
         let signer: ContractAddress = 0x2.try_into().unwrap();
@@ -51,7 +57,7 @@ mod tests {
         assert!(dispatcher.get_referrer(referee) == referrer, "Referrer mismatch");
         let referrals = dispatcher.get_referrals(referrer);
         
-        // Gunakan ArrayTrait secara eksplisit untuk menghindari ambiguitas dengan Span
+        // Use ArrayTrait explicitly to avoid Span-related ambiguity.
         assert!(ArrayTrait::len(@referrals) == 1, "Count mismatch");
         assert!(*ArrayTrait::at(@referrals, 0) == referee, "Referee address mismatch");
 
@@ -67,6 +73,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected: "Cannot refer yourself")]
+    // Test case: validates cannot refer self behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_cannot_refer_self() {
         let admin: ContractAddress = 0x1.try_into().unwrap();
         let signer: ContractAddress = 0x2.try_into().unwrap();
@@ -79,6 +87,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates valid referral threshold behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_valid_referral_threshold() {
         let admin: ContractAddress = 0x1.try_into().unwrap();
         let signer: ContractAddress = 0x2.try_into().unwrap();
@@ -87,10 +97,10 @@ mod tests {
         let referee: ContractAddress = 0x222.try_into().unwrap();
         let epoch: u64 = 1;
 
-        // Menggunakan interact_with_state untuk memanipulasi storage internal
+        // Use `interact_with_state` to manipulate internal storage.
         interact_with_state(dispatcher.contract_address, || {
             let mut state = ReferralSystem::contract_state_for_testing();
-            // Sekarang .entry() dan .write() valid karena trait sudah diimport
+            // `.entry()` and `.write()` resolve because storage traits are imported.
             state.referee_points.entry((referee, epoch)).write(50_u256);
         });
 
@@ -105,6 +115,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates claim bonus logic behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_claim_bonus_logic() {
         let admin: ContractAddress = 0x1.try_into().unwrap();
         let signer: ContractAddress = 0x2.try_into().unwrap();

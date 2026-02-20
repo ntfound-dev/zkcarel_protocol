@@ -37,11 +37,13 @@ impl SignatureVerifier {
 mod tests {
     use super::*;
 
+    // Internal helper that supports `valid_signature` operations.
     fn valid_signature() -> String {
         format!("0x{}", "a".repeat(64))
     }
 
     #[test]
+    // Internal helper that supports `empty_inputs_return_bad_request` operations.
     fn empty_inputs_return_bad_request() {
         let result = SignatureVerifier::verify_signature("", "hello", &valid_signature());
         match result {
@@ -61,6 +63,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `invalid_signature_format_returns_error` operations.
     fn invalid_signature_format_returns_error() {
         let result = SignatureVerifier::verify_signature("0xabc", "hello", "deadbeef");
         match result {
@@ -70,6 +73,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `valid_signature_returns_true` operations.
     fn valid_signature_returns_true() {
         let result = SignatureVerifier::verify_signature("0xabc", "hello", &valid_signature());
         assert!(matches!(result, Ok(true)));

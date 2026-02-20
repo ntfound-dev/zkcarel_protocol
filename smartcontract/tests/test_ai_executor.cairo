@@ -15,6 +15,8 @@ use smartcontract::ai::ai_executor::{
     IAIExecutorAdminDispatcher, IAIExecutorAdminDispatcherTrait
 };
 
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (IAIExecutorDispatcher, ContractAddress, ContractAddress, ContractAddress) {
     let carel_token: ContractAddress = 0x111.try_into().unwrap();
     let backend_signer: ContractAddress = 0x222.try_into().unwrap();
@@ -39,6 +41,8 @@ fn setup() -> (IAIExecutorDispatcher, ContractAddress, ContractAddress, Contract
 }
 
 #[test]
+// Test case: validates submit action increments count behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_submit_action_increments_count() {
     let (dispatcher, _, user, _) = setup();
     
@@ -57,6 +61,8 @@ fn test_submit_action_increments_count() {
 
 #[test]
 #[should_panic(expected: "Rate limit exceeded")]
+// Test case: validates rate limit enforcement behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_rate_limit_enforcement() {
     let (dispatcher, _, user, _) = setup();
     
@@ -73,6 +79,8 @@ fn test_rate_limit_enforcement() {
 }
 
 #[test]
+// Test case: validates rate limit resets next day behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_rate_limit_resets_next_day() {
     let (dispatcher, _, user, _) = setup();
     let initial_time: u64 = 86400; 
@@ -94,6 +102,8 @@ fn test_rate_limit_resets_next_day() {
 }
 
 #[test]
+// Test case: validates execute action by authorized backend behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_execute_action_by_authorized_backend() {
     let (dispatcher, backend, user, _) = setup();
     
@@ -110,6 +120,8 @@ fn test_execute_action_by_authorized_backend() {
 
 #[test]
 #[should_panic(expected: "Unauthorized backend signer")]
+// Test case: validates execute action unauthorized fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_execute_action_unauthorized_fails() {
     let (dispatcher, _, user, _) = setup();
     
@@ -120,6 +132,8 @@ fn test_execute_action_unauthorized_fails() {
 }
 
 #[test]
+// Test case: validates batch submit and execute behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_batch_submit_and_execute() {
     let (dispatcher, backend, user, _) = setup();
 
@@ -140,6 +154,8 @@ fn test_batch_submit_and_execute() {
 }
 
 #[test]
+// Test case: validates get pending actions page behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_get_pending_actions_page() {
     let (dispatcher, _, user, _) = setup();
 
@@ -158,6 +174,8 @@ fn test_get_pending_actions_page() {
 
 #[test]
 #[should_panic(expected: "Batch too large")]
+// Test case: validates batch execute too large panics behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_batch_execute_too_large_panics() {
     let (dispatcher, backend, user, _) = setup();
 
@@ -176,6 +194,8 @@ fn test_batch_execute_too_large_panics() {
 
 #[test]
 #[should_panic(expected: "Too many pending actions")]
+// Test case: validates max actions per user enforced behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_max_actions_per_user_enforced() {
     let (dispatcher, backend, user, _) = setup();
 
@@ -191,6 +211,8 @@ fn test_max_actions_per_user_enforced() {
 }
 
 #[test]
+// Test case: validates get pending actions page limit zero returns empty behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_get_pending_actions_page_limit_zero_returns_empty() {
     let (dispatcher, _, user, _) = setup();
 
@@ -203,6 +225,8 @@ fn test_get_pending_actions_page_limit_zero_returns_empty() {
 }
 
 #[test]
+// Test case: validates get pending actions respects max scan behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_get_pending_actions_respects_max_scan() {
     let (dispatcher, backend, user, _) = setup();
 

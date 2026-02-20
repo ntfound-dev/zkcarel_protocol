@@ -1,38 +1,31 @@
 use starknet::ContractAddress;
 
-/// @title CAREL Token Interface
-/// @author CAREL Team
-/// @notice Defines mint/burn and role management for CAREL token.
-/// @dev Protocol-controlled minting with a hard supply cap.
+// Defines mint/burn and role management for CAREL token.
+// Protocol-controlled minting with a hard supply cap.
 #[starknet::interface]
 pub trait ICarelToken<TContractState> {
-    /// @notice Mints CAREL to a recipient.
-    /// @dev Restricted to MINTER_ROLE to enforce supply cap.
-    /// @param recipient Address receiving minted tokens.
-    /// @param amount Amount to mint (18 decimals).
+    // Applies mint after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn mint(ref self: TContractState, recipient: ContractAddress, amount: u256);
-    /// @notice Burns CAREL from the caller.
-    /// @dev Restricted to BURNER_ROLE to prevent unauthorized burns.
-    /// @param amount Amount to burn (18 decimals).
+    // Implements burn logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn burn(ref self: TContractState, amount: u256);
-    /// @notice Grants MINTER_ROLE to an address.
-    /// @dev Admin-only to keep minting authority controlled.
-    /// @param address Address to grant minter role.
+    // Updates minter configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_minter(ref self: TContractState, address: ContractAddress);
-    /// @notice Grants BURNER_ROLE to an address.
-    /// @dev Admin-only to keep burning authority controlled.
-    /// @param address Address to grant burner role.
+    // Updates burner configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_burner(ref self: TContractState, address: ContractAddress);
 }
 
-/// @title CAREL Token Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for token actions.
+// ZK privacy entrypoints for token actions.
 #[starknet::interface]
 pub trait ICarelTokenPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private token action proof.
+    // Applies submit private token action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_token_action(
         ref self: TContractState,
         old_root: felt252,
@@ -44,10 +37,8 @@ pub trait ICarelTokenPrivacy<TContractState> {
     );
 }
 
-/// @title CAREL Token Contract
-/// @author CAREL Team
-/// @notice ERC20 token with capped supply and role-based mint/burn.
-/// @dev Uses OpenZeppelin ERC20 and AccessControl components.
+// ERC20 token with capped supply and role-based mint/burn.
+// Uses OpenZeppelin ERC20 and AccessControl components.
 #[starknet::contract]
 pub mod CarelToken {
     use openzeppelin::token::erc20::{ERC20Component, ERC20HooksEmptyImpl};
@@ -107,10 +98,12 @@ pub mod CarelToken {
         SRC5Event: SRC5Component::Event,
     }
 
-    /// @notice Initializes the CAREL token contract.
-    /// @dev Sets name/symbol, admin role, and total supply cap.
-    /// @param multisig_admin Address receiving DEFAULT_ADMIN_ROLE.
+    // Initializes the CAREL token contract.
+    // Sets name/symbol, admin role, and total supply cap.
+    // `multisig_admin` receives DEFAULT_ADMIN_ROLE at deployment.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, multisig_admin: ContractAddress) {
         let name: ByteArray = "Carel Protocol";
         let symbol: ByteArray = "CAREL";
@@ -124,10 +117,8 @@ pub mod CarelToken {
 
     #[abi(embed_v0)]
     impl CarelTokenImpl of super::ICarelToken<ContractState> {
-        /// @notice Mints CAREL to a recipient.
-        /// @dev Restricted to MINTER_ROLE to enforce supply cap.
-        /// @param recipient Address receiving minted tokens.
-        /// @param amount Amount to mint (18 decimals).
+        // Applies mint after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn mint(ref self: ContractState, recipient: ContractAddress, amount: u256) {
             self.accesscontrol.assert_only_role(MINTER_ROLE);
             let new_total = self.total_minted.read() + amount;
@@ -136,9 +127,8 @@ pub mod CarelToken {
             self.erc20.mint(recipient, amount);
         }
 
-        /// @notice Burns CAREL from the caller.
-        /// @dev Restricted to BURNER_ROLE to prevent unauthorized burns.
-        /// @param amount Amount to burn (18 decimals).
+        // Implements burn logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn burn(ref self: ContractState, amount: u256) {
             self.accesscontrol.assert_only_role(BURNER_ROLE);
             let caller = get_caller_address();
@@ -148,17 +138,15 @@ pub mod CarelToken {
             self.erc20.burn(caller, amount);
         }
 
-        /// @notice Grants MINTER_ROLE to an address.
-        /// @dev Admin-only to keep minting authority controlled.
-        /// @param address Address to grant minter role.
+        // Updates minter configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_minter(ref self: ContractState, address: ContractAddress) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
             self.accesscontrol._grant_role(MINTER_ROLE, address);
         }
 
-        /// @notice Grants BURNER_ROLE to an address.
-        /// @dev Admin-only to keep burning authority controlled.
-        /// @param address Address to grant burner role.
+        // Updates burner configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_burner(ref self: ContractState, address: ContractAddress) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
             self.accesscontrol._grant_role(BURNER_ROLE, address);
@@ -167,12 +155,16 @@ pub mod CarelToken {
 
     #[abi(embed_v0)]
     impl CarelTokenPrivacyImpl of super::ICarelTokenPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Applies submit private token action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_token_action(
             ref self: ContractState,
             old_root: felt252,

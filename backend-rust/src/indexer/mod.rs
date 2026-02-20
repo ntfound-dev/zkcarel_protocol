@@ -11,6 +11,7 @@ mod tests {
     use super::event_parser::EventParser;
 
     #[test]
+    // Internal helper that supports `event_parser_default_formats_address` operations.
     fn event_parser_default_formats_address() {
         let parser = EventParser::default();
         assert_eq!(parser.hex_to_address("abc"), "0xabc");

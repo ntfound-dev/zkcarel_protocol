@@ -47,14 +47,17 @@ struct CountResult {
     total: i64,
 }
 
+// Internal helper that builds inputs for `build_referral_code`.
 fn build_referral_code(user_address: &str) -> String {
     format!("CAREL_{}", &user_address[2..10].to_uppercase())
 }
 
+// Internal helper that builds inputs for `build_referral_url`.
 fn build_referral_url(code: &str) -> String {
     format!("https://zkcarel.io?ref={}", code)
 }
 
+// Internal helper that supports `onchain_referral_count` operations.
 async fn onchain_referral_count(state: &AppState, referrer: &str) -> Result<Option<i64>> {
     let Some(contract) = state.config.referral_system_address.as_deref() else {
         return Ok(None);
@@ -258,6 +261,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that builds inputs for `build_referral_code_uses_address_slice`.
     fn build_referral_code_uses_address_slice() {
         // Memastikan kode referral mengambil substring alamat
         let code = build_referral_code("0x1234567890abcdef");
@@ -265,6 +269,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that builds inputs for `build_referral_url_appends_code`.
     fn build_referral_url_appends_code() {
         // Memastikan URL referral memakai kode yang diberikan
         let url = build_referral_url("CAREL_TEST");

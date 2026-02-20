@@ -38,6 +38,7 @@ struct StatsResult {
     total: i64,
 }
 
+// Internal helper that checks conditions for `should_mark_all`.
 fn should_mark_all(notification_ids: &[i64]) -> bool {
     notification_ids.is_empty()
 }
@@ -156,12 +157,14 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that checks conditions for `should_mark_all_true_when_empty`.
     fn should_mark_all_true_when_empty() {
         // Memastikan daftar kosong menandai semua notifikasi
         assert!(should_mark_all(&[]));
     }
 
     #[test]
+    // Internal helper that checks conditions for `should_mark_all_false_when_ids_present`.
     fn should_mark_all_false_when_ids_present() {
         // Memastikan daftar berisi ID tidak menandai semua
         assert!(!should_mark_all(&[1, 2, 3]));

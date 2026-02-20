@@ -1,17 +1,23 @@
 use starknet::ContractAddress;
 
+// Verifier interface for Garaga Groth16 BLS12-381 proofs.
 #[starknet::interface]
 pub trait IGroth16VerifierBlsOutput<TContractState> {
+    // Verifies Groth16 BLS12-381 proof and returns optional public outputs.
     fn verify_groth16_proof_bls12_381(
         self: @TContractState, full_proof_with_hints: Span<felt252>,
     ) -> Option<Span<u256>>;
 }
 
+// Battleship game API with proof-gated actions.
 #[starknet::interface]
 pub trait IBattleshipGaraga<TContractState> {
+    // Updates verifier contract used by proof checks (admin only).
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
+    // Updates timeout window in blocks (admin only).
     fn set_timeout_blocks(ref self: TContractState, timeout_blocks: u64);
 
+    // Creates a new battleship game and commits player A board hash.
     fn create_game(
         ref self: TContractState,
         opponent: ContractAddress,
@@ -19,6 +25,7 @@ pub trait IBattleshipGaraga<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>,
     ) -> u64;
+    // Joins invited game and commits player B board hash.
     fn join_game(
         ref self: TContractState,
         game_id: u64,
@@ -26,7 +33,9 @@ pub trait IBattleshipGaraga<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>,
     );
+    // Fires a shot for current turn and stores pending shot coordinates.
     fn fire_shot(ref self: TContractState, game_id: u64, x: u64, y: u64);
+    // Resolves pending shot with proof-backed hit or miss response.
     fn respond_shot(
         ref self: TContractState,
         game_id: u64,
@@ -34,6 +43,7 @@ pub trait IBattleshipGaraga<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>,
     );
+    // Declares sunk ship with proof-backed binding for current game state.
     fn declare_ship_sunk(
         ref self: TContractState,
         game_id: u64,
@@ -41,14 +51,19 @@ pub trait IBattleshipGaraga<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>,
     );
+    // Claims victory when opponent turn exceeds configured timeout.
     fn claim_timeout(ref self: TContractState, game_id: u64);
 
+    // Returns compact game state snapshot for UI and indexers.
     fn get_game_state(
         self: @TContractState, game_id: u64,
     ) -> (u64, ContractAddress, ContractAddress, ContractAddress, ContractAddress, u64, u64, bool);
+    // Returns current pending shot tuple (shooter, x, y).
     fn get_pending_shot(self: @TContractState, game_id: u64) -> (ContractAddress, u64, u64);
 }
 
+// Two-player battleship game with ZK-gated state transitions.
+// Uses nullifiers and proof bindings to prevent replay and action forgery.
 #[starknet::contract]
 pub mod BattleshipGaraga {
     use core::num::traits::Zero;
@@ -178,6 +193,7 @@ pub mod BattleshipGaraga {
         pub timeout_blocks: u64,
     }
 
+    // Initializes admin, verifier dependency, and timeout window.
     #[constructor]
     fn constructor(
         ref self: ContractState, admin: ContractAddress, verifier: ContractAddress, timeout_blocks: u64,
@@ -191,6 +207,7 @@ pub mod BattleshipGaraga {
 
     #[abi(embed_v0)]
     impl BattleshipGaragaImpl of IBattleshipGaraga<ContractState> {
+        // Updates verifier contract used by proof checks (admin only).
         fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self._assert_admin();
             assert!(!verifier.is_zero(), "Verifier required");
@@ -198,6 +215,7 @@ pub mod BattleshipGaraga {
             self.emit(Event::VerifierUpdated(VerifierUpdated { verifier }));
         }
 
+        // Updates timeout window in blocks (admin only).
         fn set_timeout_blocks(ref self: ContractState, timeout_blocks: u64) {
             self._assert_admin();
             assert!(timeout_blocks > 0, "timeout_blocks > 0");
@@ -205,6 +223,7 @@ pub mod BattleshipGaraga {
             self.emit(Event::TimeoutBlocksUpdated(TimeoutBlocksUpdated { timeout_blocks }));
         }
 
+        // Creates a new battleship game and commits player A board hash.
         fn create_game(
             ref self: ContractState,
             opponent: ContractAddress,
@@ -244,6 +263,7 @@ pub mod BattleshipGaraga {
             game_id
         }
 
+        // Joins invited game and commits player B board hash.
         fn join_game(
             ref self: ContractState,
             game_id: u64,
@@ -271,6 +291,7 @@ pub mod BattleshipGaraga {
             );
         }
 
+        // Fires a shot for current turn and stores pending shot coordinates.
         fn fire_shot(ref self: ContractState, game_id: u64, x: u64, y: u64) {
             let caller = get_caller_address();
             self._assert_game_playing(game_id);
@@ -293,6 +314,7 @@ pub mod BattleshipGaraga {
             self.emit(Event::ShotFired(ShotFired { game_id, shooter: caller, x, y }));
         }
 
+        // Resolves pending shot with proof-backed hit or miss response.
         fn respond_shot(
             ref self: ContractState,
             game_id: u64,
@@ -350,6 +372,7 @@ pub mod BattleshipGaraga {
             self.last_action_block.write(game_id, get_block_number());
         }
 
+        // Declares sunk ship with proof-backed binding for current game state.
         fn declare_ship_sunk(
             ref self: ContractState,
             game_id: u64,
@@ -368,6 +391,7 @@ pub mod BattleshipGaraga {
             self.last_action_block.write(game_id, get_block_number());
         }
 
+        // Claims victory when opponent turn exceeds configured timeout.
         fn claim_timeout(ref self: ContractState, game_id: u64) {
             let caller = get_caller_address();
             self._assert_game_playing(game_id);
@@ -394,6 +418,7 @@ pub mod BattleshipGaraga {
             self.emit(Event::GameOver(GameOver { game_id, winner: caller }));
         }
 
+        // Returns compact game state snapshot for UI and indexers.
         fn get_game_state(
             self: @ContractState, game_id: u64,
         ) -> (u64, ContractAddress, ContractAddress, ContractAddress, ContractAddress, u64, u64, bool) {
@@ -410,6 +435,7 @@ pub mod BattleshipGaraga {
             )
         }
 
+        // Returns current pending shot tuple (shooter, x, y).
         fn get_pending_shot(self: @ContractState, game_id: u64) -> (ContractAddress, u64, u64) {
             (
                 self.pending_shooter.read(game_id),
@@ -421,25 +447,31 @@ pub mod BattleshipGaraga {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        // Asserts caller is contract admin.
         fn _assert_admin(self: @ContractState) {
             assert!(get_caller_address() == self.admin.read(), "Only admin");
         }
 
+        // Asserts game id exists in storage.
         fn _assert_game_exists(self: @ContractState, game_id: u64) {
             assert!(!self.player_a.read(game_id).is_zero(), "Game not found");
         }
 
+        // Asserts game is in playing status.
         fn _assert_game_playing(self: @ContractState, game_id: u64) {
             self._assert_game_exists(game_id);
             assert!(self.status.read(game_id) == STATUS_PLAYING, "Game not playing");
         }
 
+        // Asserts caller belongs to game participants.
         fn _assert_participant(self: @ContractState, game_id: u64, caller: ContractAddress) {
             let a = self.player_a.read(game_id);
             let b = self.player_b.read(game_id);
             assert!(caller == a || caller == b, "Not game participant");
         }
 
+        // Verifies action proof and enforces nullifier/binding consistency.
+        // Expects `public_inputs[0] = nullifier` and `public_inputs[1] = binding`.
         fn _verify_action_proof(
             ref self: ContractState,
             expected_binding: felt252,
@@ -474,6 +506,7 @@ pub mod BattleshipGaraga {
             self.nullifier_used.write(nullifier, true);
         }
 
+        // Builds deterministic key for shot uniqueness tracking.
         fn _shot_key(
             self: @ContractState, game_id: u64, shooter: ContractAddress, x: u64, y: u64,
         ) -> felt252 {
@@ -489,6 +522,7 @@ pub mod BattleshipGaraga {
             poseidon_hash_span(data.span())
         }
 
+        // Builds response binding hash for hit/miss proof checks.
         fn _response_binding(
             self: @ContractState,
             game_id: u64,
@@ -514,6 +548,7 @@ pub mod BattleshipGaraga {
             poseidon_hash_span(data.span())
         }
 
+        // Builds sunk-ship binding hash for proof checks.
         fn _sunk_binding(
             self: @ContractState, game_id: u64, player: ContractAddress, ship_size: felt252,
         ) -> felt252 {
@@ -528,6 +563,7 @@ pub mod BattleshipGaraga {
         }
     }
 
+    // Converts u256 into felt252 with high/low composition.
     fn _u256_to_felt(value: u256) -> felt252 {
         const TWO_POW_128: felt252 = 0x100000000000000000000000000000000;
         let low_felt: felt252 = value.low.into();

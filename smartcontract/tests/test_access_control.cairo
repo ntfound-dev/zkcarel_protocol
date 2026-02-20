@@ -2,17 +2,19 @@ use starknet::ContractAddress;
 use snforge_std::{declare, ContractClassTrait, DeclareResultTrait};
 use snforge_std::{start_cheat_caller_address, stop_cheat_caller_address, spy_events, EventSpyAssertionsTrait};
 
-// Import dispatcher menggunakan full path dari parent module
+// Imports dispatcher using full path from the parent module.
 use smartcontract::utils::access_control::{IAccessControlDispatcher, IAccessControlDispatcherTrait};
-// Import konstanta dan kontrak
+// Imports constants and contract event namespace.
 use smartcontract::utils::access_control::{
     MINTER_ROLE, BURNER_ROLE, AccessControlContract
 };
 
-// Import dari OpenZeppelin
+// Imports OpenZeppelin access-control primitives.
 use openzeppelin::access::accesscontrol::DEFAULT_ADMIN_ROLE;
 use openzeppelin::access::accesscontrol::AccessControlComponent::{RoleGranted, Event as ACEvent};
 
+// Deploys access control fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_access_control(admin: ContractAddress) -> IAccessControlDispatcher {
     let contract = declare("AccessControlContract").unwrap().contract_class();
     let mut constructor_calldata = array![admin.into()];
@@ -21,6 +23,8 @@ fn deploy_access_control(admin: ContractAddress) -> IAccessControlDispatcher {
 }
 
 #[test]
+// Test case: validates constructor initializes admin behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_constructor_initializes_admin() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let dispatcher = deploy_access_control(admin);
@@ -29,6 +33,8 @@ fn test_constructor_initializes_admin() {
 }
 
 #[test]
+// Test case: validates grant role as admin behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_grant_role_as_admin() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let minter: ContractAddress = 0x456.try_into().unwrap();
@@ -50,9 +56,11 @@ fn test_grant_role_as_admin() {
     ]);
 }
 
-// PERBAIKAN: Gunakan format tuple ('...', ) untuk mencocokkan panic bertipe felt252 array
+
 #[test]
 #[should_panic(expected: ('Caller is missing role', ))]
+// Test case: validates grant role unauthorized fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_grant_role_unauthorized_fails() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let non_admin: ContractAddress = 0x789.try_into().unwrap();
@@ -64,6 +72,8 @@ fn test_grant_role_unauthorized_fails() {
 }
 
 #[test]
+// Test case: validates revoke role behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_revoke_role() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let minter: ContractAddress = 0x456.try_into().unwrap();
@@ -79,6 +89,8 @@ fn test_revoke_role() {
 }
 
 #[test]
+// Test case: validates renounce role behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_renounce_role() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let minter: ContractAddress = 0x456.try_into().unwrap();
@@ -96,6 +108,8 @@ fn test_renounce_role() {
 }
 
 #[test]
+// Test case: validates set role admin hierarchy behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_set_role_admin_hierarchy() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let custom_admin: ContractAddress = 0x999.try_into().unwrap();

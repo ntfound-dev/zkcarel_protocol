@@ -10,6 +10,12 @@ import {
   ToastViewport,
 } from '@/components/ui/toast'
 
+/**
+ * Handles `Toaster` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function Toaster() {
   const { toasts } = useToast()
 

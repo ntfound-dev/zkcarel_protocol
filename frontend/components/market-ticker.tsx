@@ -14,6 +14,12 @@ const tokens = [
   { symbol: "CAREL", name: "Carel Protocol", icon: "◇" },
 ]
 
+/**
+ * Parses or transforms values for `formatPrice`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatPrice = (value?: number) => {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—"
   if (value >= 1000) return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -21,6 +27,12 @@ const formatPrice = (value?: number) => {
   return `$${value.toFixed(6)}`
 }
 
+/**
+ * Handles `sourceBadge` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const sourceBadge = (source?: PriceSource) => {
   switch (source) {
     case "ws":
@@ -32,6 +44,12 @@ const sourceBadge = (source?: PriceSource) => {
   }
 }
 
+/**
+ * Handles `MarketTicker` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function MarketTicker() {
   const trackedTokens = React.useMemo(() => tokens.map((token) => token.symbol), [])
   const fallback = React.useMemo(() => ({ CAREL: 1, USDC: 1, USDT: 1 }), [])

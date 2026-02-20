@@ -34,6 +34,7 @@ struct RpcCircuitBreaker {
 static STARKNET_RPC_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 static STARKNET_RPC_BREAKER: OnceLock<tokio::sync::RwLock<RpcCircuitBreaker>> = OnceLock::new();
 
+// Internal helper that supports `env_non_empty` operations.
 fn env_non_empty(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -41,10 +42,12 @@ fn env_non_empty(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+// Internal helper that fetches data for `resolve_api_rpc_url`.
 fn resolve_api_rpc_url(config: &Config) -> String {
     env_non_empty("STARKNET_API_RPC_URL").unwrap_or_else(|| config.starknet_rpc_url.clone())
 }
 
+// Internal helper that supports `configured_max_inflight` operations.
 fn configured_max_inflight() -> usize {
     std::env::var("STARKNET_RPC_MAX_INFLIGHT")
         .ok()
@@ -53,14 +56,17 @@ fn configured_max_inflight() -> usize {
         .unwrap_or(STARKNET_RPC_MAX_INFLIGHT_DEFAULT)
 }
 
+// Internal helper that supports `rpc_semaphore` operations.
 fn rpc_semaphore() -> &'static Arc<Semaphore> {
     STARKNET_RPC_SEMAPHORE.get_or_init(|| Arc::new(Semaphore::new(configured_max_inflight())))
 }
 
+// Internal helper that supports `rpc_breaker` operations.
 fn rpc_breaker() -> &'static tokio::sync::RwLock<RpcCircuitBreaker> {
     STARKNET_RPC_BREAKER.get_or_init(|| tokio::sync::RwLock::new(RpcCircuitBreaker::default()))
 }
 
+// Internal helper that supports `looks_like_transient_rpc_error` operations.
 fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("too many requests")
@@ -78,6 +84,7 @@ fn looks_like_transient_rpc_error(message: &str) -> bool {
         || lower.contains("unknown field `code`")
 }
 
+// Internal helper that supports `breaker_backoff_duration` operations.
 fn breaker_backoff_duration(failures: u32) -> Duration {
     if failures <= STARKNET_RPC_BREAKER_THRESHOLD {
         return Duration::from_secs(STARKNET_RPC_BREAKER_BASE_SECS);
@@ -88,6 +95,7 @@ fn breaker_backoff_duration(failures: u32) -> Duration {
     Duration::from_secs(secs.min(STARKNET_RPC_BREAKER_MAX_SECS))
 }
 
+// Internal helper that supports `rpc_preflight` operations.
 async fn rpc_preflight(method: &str) -> Result<OwnedSemaphorePermit> {
     let now = Instant::now();
     {
@@ -110,6 +118,7 @@ async fn rpc_preflight(method: &str) -> Result<OwnedSemaphorePermit> {
         .map_err(|e| crate::error::AppError::Internal(format!("RPC semaphore closed: {}", e)))
 }
 
+// Internal helper that supports `rpc_record_success` operations.
 async fn rpc_record_success() {
     let mut guard = rpc_breaker().write().await;
     if guard.consecutive_failures != 0 || guard.open_until.is_some() {
@@ -118,6 +127,7 @@ async fn rpc_record_success() {
     }
 }
 
+// Internal helper that supports `rpc_record_failure` operations.
 async fn rpc_record_failure(method: &str, error_text: &str) {
     if !looks_like_transient_rpc_error(error_text) {
         return;
@@ -142,6 +152,17 @@ async fn rpc_record_failure(method: &str, error_text: &str) {
 }
 
 impl OnchainInvoker {
+    /// Handles `from_config` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn from_config(config: &Config) -> Result<Option<Self>> {
         let account_address = resolve_backend_account(config);
         let Some(account_address) = account_address else {
@@ -172,6 +193,17 @@ impl OnchainInvoker {
         Ok(Some(Self { account }))
     }
 
+    /// Runs `invoke` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn invoke(&self, call: Call) -> Result<Felt> {
         let _permit = rpc_preflight("starknet_invoke").await?;
         let response = self
@@ -191,6 +223,17 @@ impl OnchainInvoker {
         Ok(result.transaction_hash)
     }
 
+    /// Runs `invoke_many` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn invoke_many(&self, calls: Vec<Call>) -> Result<Felt> {
         if calls.is_empty() {
             return Err(crate::error::AppError::BadRequest(
@@ -217,6 +260,17 @@ impl OnchainInvoker {
 }
 
 impl OnchainReader {
+    /// Handles `from_config` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn from_config(config: &Config) -> Result<Self> {
         let rpc_url = Url::parse(&resolve_api_rpc_url(config))
             .map_err(|e| crate::error::AppError::Internal(format!("Invalid RPC URL: {}", e)))?;
@@ -224,6 +278,17 @@ impl OnchainReader {
         Ok(Self { provider })
     }
 
+    /// Handles `call` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn call(&self, call: FunctionCall) -> Result<Vec<Felt>> {
         let _permit = rpc_preflight("starknet_call").await?;
         let response = self
@@ -241,6 +306,17 @@ impl OnchainReader {
         response
     }
 
+    /// Fetches data for `get_transaction_receipt`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_transaction_receipt(
         &self,
         tx_hash: &Felt,
@@ -261,6 +337,17 @@ impl OnchainReader {
         response
     }
 
+    /// Fetches data for `get_transaction`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_transaction(&self, tx_hash: &Felt) -> Result<Transaction> {
         let _permit = rpc_preflight("starknet_getTransactionByHash").await?;
         let response = self
@@ -278,6 +365,17 @@ impl OnchainReader {
         response
     }
 
+    /// Fetches data for `get_storage_at`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_storage_at(&self, contract_address: Felt, key: Felt) -> Result<Felt> {
         let _permit = rpc_preflight("starknet_getStorageAt").await?;
         let response = self
@@ -296,6 +394,17 @@ impl OnchainReader {
     }
 }
 
+/// Fetches data for `resolve_backend_account`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn resolve_backend_account(config: &Config) -> Option<&str> {
     if let Some(addr) = &config.backend_account_address {
         return Some(addr.as_str());
@@ -306,6 +415,17 @@ pub fn resolve_backend_account(config: &Config) -> Option<&str> {
     None
 }
 
+/// Parses or transforms values for `parse_chain_id`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn parse_chain_id(chain_id: &str) -> Result<Felt> {
     if chain_id.starts_with("0x") {
         return parse_felt(chain_id);
@@ -314,6 +434,17 @@ pub fn parse_chain_id(chain_id: &str) -> Result<Felt> {
     parse_felt(&format!("0x{hex}"))
 }
 
+/// Parses or transforms values for `parse_felt`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn parse_felt(value: &str) -> Result<Felt> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -329,6 +460,17 @@ pub fn parse_felt(value: &str) -> Result<Felt> {
         .map_err(|e| crate::error::AppError::Internal(format!("Invalid felt dec: {}", e)))
 }
 
+/// Handles `felt_to_u128` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn felt_to_u128(value: &Felt) -> Result<u128> {
     let text = value.to_string();
     if let Some(stripped) = text.strip_prefix("0x") {
@@ -340,6 +482,17 @@ pub fn felt_to_u128(value: &Felt) -> Result<u128> {
     }
 }
 
+/// Handles `u256_from_felts` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn u256_from_felts(low: &Felt, high: &Felt) -> Result<u128> {
     let low = felt_to_u128(low)?;
     let high = felt_to_u128(high)?;
@@ -351,6 +504,17 @@ pub fn u256_from_felts(low: &Felt, high: &Felt) -> Result<u128> {
     Ok(low)
 }
 
+/// Handles `u256_to_felts` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn u256_to_felts(value: u128) -> (Felt, Felt) {
     (Felt::from(value), Felt::from(0_u128))
 }

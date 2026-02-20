@@ -19,6 +19,8 @@ use smartcontract::bridge::atomiq_adapter::AtomiqAdapter;
 use smartcontract::bridge::garden_adapter::GardenAdapter;
 use smartcontract::bridge::layerswap_adapter::LayerSwapAdapter;
 
+// Deploys aggregator fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_aggregator(owner: ContractAddress) -> IBridgeAggregatorDispatcher {
     let min_liquidity: u256 = 1000;
     let contract = declare("BridgeAggregator").unwrap().contract_class();
@@ -29,6 +31,8 @@ fn deploy_aggregator(owner: ContractAddress) -> IBridgeAggregatorDispatcher {
     IBridgeAggregatorDispatcher { contract_address }
 }
 
+// Applies register provider after input validation and commits the resulting state.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn register_provider(
     dispatcher: IBridgeAggregatorDispatcher,
     owner: ContractAddress,
@@ -50,6 +54,8 @@ fn register_provider(
 }
 
 #[test]
+// Test case: validates atomiq adapter emits event behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_atomiq_adapter_emits_event() {
     let admin: ContractAddress = 0x111.try_into().unwrap();
     let contract = declare("AtomiqAdapter").unwrap().contract_class();
@@ -85,6 +91,8 @@ fn test_atomiq_adapter_emits_event() {
 }
 
 #[test]
+// Test case: validates garden adapter emits event behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_garden_adapter_emits_event() {
     let admin: ContractAddress = 0x111.try_into().unwrap();
     let contract = declare("GardenAdapter").unwrap().contract_class();
@@ -115,6 +123,8 @@ fn test_garden_adapter_emits_event() {
 }
 
 #[test]
+// Test case: validates layerswap adapter emits event behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_layerswap_adapter_emits_event() {
     let admin: ContractAddress = 0x111.try_into().unwrap();
     let contract = declare("LayerSwapAdapter").unwrap().contract_class();
@@ -145,6 +155,8 @@ fn test_layerswap_adapter_emits_event() {
 }
 
 #[test]
+// Test case: validates bridge aggregator calls adapter behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_bridge_aggregator_calls_adapter() {
     let owner: ContractAddress = 0x999.try_into().unwrap();
     let dispatcher = deploy_aggregator(owner);

@@ -110,6 +110,8 @@ const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 600;
 const NFT_DISCOUNT_CACHE_MAX_ENTRIES: usize = 100_000;
 const BRIDGE_MEV_FEE_RATE: f64 = 0.01;
 
+// Internal helper that supports `canonical_bridge_chain` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn canonical_bridge_chain(chain: &str) -> String {
     let lower = chain.trim().to_ascii_lowercase();
     if lower == "btc" || lower.contains("bitcoin") {
@@ -133,10 +135,14 @@ struct CachedNftDiscount {
 static NFT_DISCOUNT_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedNftDiscount>>> =
     OnceLock::new();
 
+// Internal helper that supports `nft_discount_cache` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn nft_discount_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedNftDiscount>> {
     NFT_DISCOUNT_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `nft_discount_cache_key` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn nft_discount_cache_key(contract: &str, user: &str) -> String {
     format!(
         "{}|{}",
@@ -145,6 +151,8 @@ fn nft_discount_cache_key(contract: &str, user: &str) -> String {
     )
 }
 
+// Internal helper that fetches data for `get_cached_nft_discount` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn get_cached_nft_discount(key: &str, max_age: Duration) -> Option<f64> {
     let cache = nft_discount_cache();
     let guard = cache.read().await;
@@ -155,6 +163,8 @@ async fn get_cached_nft_discount(key: &str, max_age: Duration) -> Option<f64> {
     None
 }
 
+// Internal helper that supports `cache_nft_discount` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn cache_nft_discount(key: &str, discount: f64) {
     let cache = nft_discount_cache();
     let mut guard = cache.write().await;
@@ -171,6 +181,8 @@ async fn cache_nft_discount(key: &str, discount: f64) {
     }
 }
 
+// Internal helper that supports `invalidate_cached_nft_discount` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn invalidate_cached_nft_discount(contract: &str, user: &str) {
     let key = nft_discount_cache_key(contract, user);
     let cache = nft_discount_cache();
@@ -178,6 +190,8 @@ async fn invalidate_cached_nft_discount(contract: &str, user: &str) {
     guard.remove(&key);
 }
 
+// Internal helper that checks conditions for `has_remaining_nft_usage` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn has_remaining_nft_usage(
     reader: &OnchainReader,
     contract_address: Felt,
@@ -208,6 +222,8 @@ async fn has_remaining_nft_usage(
     Ok(max_usage > 0 && used_in_period < max_usage)
 }
 
+// Internal helper that supports `estimate_time` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn estimate_time(provider: &str) -> &'static str {
     match provider {
         BRIDGE_LAYERSWAP => "~15-20 min",
@@ -218,6 +234,8 @@ fn estimate_time(provider: &str) -> &'static str {
     }
 }
 
+// Internal helper that supports `discount_contract_address` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn discount_contract_address(state: &AppState) -> Option<&str> {
     state
         .config
@@ -226,6 +244,8 @@ fn discount_contract_address(state: &AppState) -> Option<&str> {
         .filter(|addr| !addr.trim().is_empty() && !addr.starts_with("0x0000"))
 }
 
+// Internal helper that supports `active_nft_discount_percent` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f64 {
     let Some(contract) = discount_contract_address(state) else {
         return 0.0;
@@ -366,6 +386,8 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
     normalized
 }
 
+// Internal helper that supports `fallback_price_for` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_ascii_uppercase().as_str() {
         "BTC" | "WBTC" => 65_000.0,
@@ -377,6 +399,8 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+// Internal helper that supports `latest_price_usd` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
     let symbol = token.to_ascii_uppercase();
     let price: Option<f64> = sqlx::query_scalar(
@@ -390,6 +414,8 @@ async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
         .unwrap_or_else(|| fallback_price_for(&symbol)))
 }
 
+// Internal helper that builds inputs for `build_bridge_id` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_bridge_id(tx_hash: &str) -> String {
     let short = tx_hash.strip_prefix("0x").unwrap_or(tx_hash);
     let suffix = if short.len() >= 12 {
@@ -400,6 +426,8 @@ fn build_bridge_id(tx_hash: &str) -> String {
     format!("BR_{}", suffix)
 }
 
+// Internal helper that parses or transforms values for `normalize_bridge_onchain_tx_hash` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_bridge_onchain_tx_hash(
     tx_hash: Option<&str>,
     from_chain: &str,
@@ -431,6 +459,8 @@ fn normalize_bridge_onchain_tx_hash(
     Ok(format!("0x{}", body.to_ascii_lowercase()))
 }
 
+// Internal helper that parses or transforms values for `parse_hex_u64` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn parse_hex_u64(value: &str) -> Option<u64> {
     let body = value.trim().strip_prefix("0x").unwrap_or(value.trim());
     if body.is_empty() {
@@ -439,6 +469,8 @@ fn parse_hex_u64(value: &str) -> Option<u64> {
     u64::from_str_radix(body, 16).ok()
 }
 
+// Internal helper that supports `verify_starknet_bridge_tx_hash` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn verify_starknet_bridge_tx_hash(state: &AppState, tx_hash: &str) -> Result<i64> {
     let reader = OnchainReader::from_config(&state.config)?;
     let tx_hash_felt = parse_felt(tx_hash)?;
@@ -488,6 +520,8 @@ async fn verify_starknet_bridge_tx_hash(state: &AppState, tx_hash: &str) -> Resu
     )))
 }
 
+// Internal helper that supports `verify_ethereum_bridge_tx_hash` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn verify_ethereum_bridge_tx_hash(state: &AppState, tx_hash: &str) -> Result<i64> {
     let rpc_url = state.config.ethereum_rpc_url.trim();
     if rpc_url.is_empty() {
@@ -610,6 +644,8 @@ async fn verify_ethereum_bridge_tx_hash(state: &AppState, tx_hash: &str) -> Resu
     )))
 }
 
+// Internal helper that supports `verify_bridge_onchain_tx_hash` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn verify_bridge_onchain_tx_hash(
     state: &AppState,
     tx_hash: &str,
@@ -624,6 +660,8 @@ async fn verify_bridge_onchain_tx_hash(
     }
 }
 
+// Internal helper that checks conditions for `is_valid_evm_address` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn is_valid_evm_address(value: &str) -> bool {
     let normalized = value.trim();
     normalized.starts_with("0x")
@@ -631,6 +669,8 @@ fn is_valid_evm_address(value: &str) -> bool {
         && normalized[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
+// Internal helper that parses or transforms values for `normalize_evm_address` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_evm_address(value: &str) -> Option<String> {
     let normalized = value.trim();
     if !is_valid_evm_address(normalized) {
@@ -639,6 +679,8 @@ fn normalize_evm_address(value: &str) -> Option<String> {
     Some(format!("0x{}", normalized[2..].to_ascii_lowercase()))
 }
 
+// Internal helper that parses or transforms values for `normalize_source_owner_for_chain` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_source_owner_for_chain(chain: &str, candidate: &str) -> Option<String> {
     let normalized_chain = chain.trim().to_ascii_lowercase();
     let normalized_candidate = candidate.trim();
@@ -660,6 +702,8 @@ fn normalize_source_owner_for_chain(chain: &str, candidate: &str) -> Option<Stri
     }
 }
 
+// Internal helper that supports `missing_garden_source_wallet_error` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn missing_garden_source_wallet_error(from_chain: &str) -> crate::error::AppError {
     match from_chain.trim().to_ascii_lowercase().as_str() {
         "ethereum" | "eth" | "evm" => crate::error::AppError::BadRequest(
@@ -680,15 +724,23 @@ fn missing_garden_source_wallet_error(from_chain: &str) -> crate::error::AppErro
     }
 }
 
+// Internal helper that fetches data for `find_linked_wallet_for_chain` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn find_linked_wallet_for_chain(wallets: &[LinkedWalletAddress], chain: &str) -> Option<String> {
+    // Internal helper that checks conditions for `is_btc_chain` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn is_btc_chain(value: &str) -> bool {
         value.eq_ignore_ascii_case("bitcoin") || value.eq_ignore_ascii_case("btc")
     }
 
+    // Internal helper that checks conditions for `is_starknet_chain` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn is_starknet_chain(value: &str) -> bool {
         value.eq_ignore_ascii_case("starknet") || value.eq_ignore_ascii_case("strk")
     }
 
+    // Internal helper that checks conditions for `is_evm_chain` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn is_evm_chain(value: &str) -> bool {
         value.eq_ignore_ascii_case("evm")
             || value.eq_ignore_ascii_case("ethereum")
@@ -726,6 +778,8 @@ fn find_linked_wallet_for_chain(wallets: &[LinkedWalletAddress], chain: &str) ->
         .map(|wallet| wallet.wallet_address.clone())
 }
 
+// Internal helper that fetches data for `lookup_xverse_btc_address` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn lookup_xverse_btc_address(state: &AppState, user_id: &str) -> Result<Option<String>> {
     let normalized = user_id.trim();
     if normalized.is_empty() {
@@ -742,6 +796,8 @@ async fn lookup_xverse_btc_address(state: &AppState, user_id: &str) -> Result<Op
         .map_err(|e| crate::error::AppError::BadRequest(format!("Xverse lookup failed: {}", e)))
 }
 
+// Internal helper that supports `privacy_seed_from_tx_hash` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn privacy_seed_from_tx_hash(tx_hash: &str) -> String {
     let raw = tx_hash.trim();
     if raw.starts_with("0x")
@@ -758,10 +814,14 @@ fn privacy_seed_from_tx_hash(tx_hash: &str) -> String {
     hash::hash_string(raw)
 }
 
+// Internal helper that checks conditions for `should_run_privacy_verification` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn should_run_privacy_verification(hide_balance: bool) -> bool {
     hide_balance
 }
 
+// Internal helper that supports `mev_fee_for_mode` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn mev_fee_for_mode(mode: Option<&str>, amount: f64) -> f64 {
     if mode.unwrap_or_default().eq_ignore_ascii_case("private") {
         amount * BRIDGE_MEV_FEE_RATE
@@ -770,6 +830,8 @@ fn mev_fee_for_mode(mode: Option<&str>, amount: f64) -> f64 {
     }
 }
 
+// Internal helper that fetches data for `resolve_privacy_inputs` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn resolve_privacy_inputs(
     seed: &str,
     payload: Option<&PrivacyVerificationPayload>,
@@ -822,6 +884,8 @@ fn resolve_privacy_inputs(
     Ok((nullifier, commitment, proof, public_inputs))
 }
 
+// Internal helper that checks conditions for `is_dummy_garaga_payload` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
     if proof.len() != 1 || public_inputs.len() != 1 {
         return false;
@@ -830,6 +894,8 @@ fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
         && public_inputs[0].trim().eq_ignore_ascii_case("0x1")
 }
 
+// Internal helper that supports `verify_private_trade_with_verifier` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn verify_private_trade_with_verifier(
     state: &AppState,
     seed: &str,
@@ -1404,6 +1470,8 @@ pub async fn get_bridge_status(
     })))
 }
 
+// Internal helper that runs side-effecting logic for `invoke_bridge_aggregator` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn invoke_bridge_aggregator(
     state: &AppState,
     provider: &str,
@@ -1455,6 +1523,8 @@ async fn invoke_bridge_aggregator(
     Ok(())
 }
 
+// Internal helper that supports `default_bridge_provider_id` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn default_bridge_provider_id(provider: &str) -> Option<&'static str> {
     if provider.eq_ignore_ascii_case(BRIDGE_LAYERSWAP) {
         return Some("0x4c535750"); // LSWP
@@ -1471,6 +1541,8 @@ fn default_bridge_provider_id(provider: &str) -> Option<&'static str> {
     None
 }
 
+// Internal helper that supports `to_u256_felt` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn to_u256_felt(value: f64) -> Result<(starknet_core::types::Felt, starknet_core::types::Felt)> {
     let scaled = (value * 1e18_f64).round();
     let as_u128 = scaled as u128;
@@ -1486,6 +1558,8 @@ mod tests {
     use chrono::Utc;
 
     #[test]
+    // Internal helper that supports `estimate_time_maps_providers` operations in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn estimate_time_maps_providers() {
         // Memastikan estimasi waktu sesuai provider
         assert_eq!(estimate_time(BRIDGE_LAYERSWAP), "~15-20 min");
@@ -1495,12 +1569,16 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that builds inputs for `build_bridge_id_uses_short_hash_prefix` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn build_bridge_id_uses_short_hash_prefix() {
         let id = build_bridge_id("0x1234567890abcdef");
         assert_eq!(id, "BR_1234567890ab");
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_bridge_hash_accepts_btc_txid_without_prefix` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn normalize_bridge_hash_accepts_btc_txid_without_prefix() {
         let txid = "fa28fab8ae02404513796fbb4674347bff278e8806c8f5d29fecff534e94a07d";
         let normalized = normalize_bridge_onchain_tx_hash(Some(txid), "bitcoin")
@@ -1509,6 +1587,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_bridge_hash_prefixes_non_btc` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn normalize_bridge_hash_prefixes_non_btc() {
         let txid = "185243a4591a33171141926dd90aa9c8a8100807dc6f0b7f42b19f261a0cd383";
         let normalized = normalize_bridge_onchain_tx_hash(Some(txid), "ethereum")
@@ -1517,6 +1597,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_bridge_hash_allows_missing_btc_hash` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn normalize_bridge_hash_allows_missing_btc_hash() {
         let normalized = normalize_bridge_onchain_tx_hash(None, "bitcoin")
             .expect("missing btc hash should generate internal correlation id");
@@ -1525,6 +1607,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_bridge_hash_requires_non_btc_hash` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn normalize_bridge_hash_requires_non_btc_hash() {
         let err = normalize_bridge_onchain_tx_hash(None, "starknet")
             .expect_err("non-btc bridge must require user tx hash");
@@ -1537,6 +1621,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_hex_u64_supports_prefixed_and_plain_values` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn parse_hex_u64_supports_prefixed_and_plain_values() {
         assert_eq!(parse_hex_u64("0x10"), Some(16));
         assert_eq!(parse_hex_u64("ff"), Some(255));
@@ -1545,6 +1631,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_source_owner_for_ethereum_rejects_starknet_format` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn normalize_source_owner_for_ethereum_rejects_starknet_format() {
         let invalid = "0x0469de079832d5da0591fc5f8fd2957f70b908d62c5d0dcb057d030cfc827705";
         assert!(normalize_source_owner_for_chain("ethereum", invalid).is_none());
@@ -1557,6 +1645,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `mev_fee_for_private_mode_is_one_percent` operations in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn mev_fee_for_private_mode_is_one_percent() {
         assert!((mev_fee_for_mode(Some("private"), 100.0) - 1.0).abs() < 1e-9);
         assert!((mev_fee_for_mode(Some("PRIVATE"), 100.0) - 1.0).abs() < 1e-9);
@@ -1565,6 +1655,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `privacy_verification_depends_on_hide_balance_only` operations in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn privacy_verification_depends_on_hide_balance_only() {
         assert!(should_run_privacy_verification(true));
         assert!(!should_run_privacy_verification(false));
@@ -1572,6 +1664,8 @@ mod tests {
 
     #[test]
 
+    // Internal helper that fetches data for `find_linked_wallet_for_chain_skips_invalid_evm_wallet` in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn find_linked_wallet_for_chain_skips_invalid_evm_wallet() {
         let now = Utc::now();
         let invalid_evm = LinkedWalletAddress {

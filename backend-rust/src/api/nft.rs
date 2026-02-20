@@ -50,15 +50,18 @@ static OWNED_NFT_FETCH_LOCKS: OnceLock<
     tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 > = OnceLock::new();
 
+// Internal helper that supports `owned_nft_cache` operations.
 fn owned_nft_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOwnedNfts>> {
     OWNED_NFT_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `owned_nft_fetch_locks` operations.
 fn owned_nft_fetch_locks(
 ) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
     OWNED_NFT_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `owned_nft_fetch_lock_for` operations.
 async fn owned_nft_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = owned_nft_fetch_locks();
     {
@@ -83,6 +86,7 @@ async fn owned_nft_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     lock
 }
 
+// Internal helper that supports `owned_nft_cache_key` operations.
 fn owned_nft_cache_key(contract: &str, user: &str) -> String {
     format!(
         "{}|{}",
@@ -91,6 +95,7 @@ fn owned_nft_cache_key(contract: &str, user: &str) -> String {
     )
 }
 
+// Internal helper that fetches data for `get_cached_owned_nfts`.
 async fn get_cached_owned_nfts(key: &str, max_age: Duration) -> Option<Vec<NFT>> {
     let cache = owned_nft_cache();
     let guard = cache.read().await;
@@ -101,6 +106,7 @@ async fn get_cached_owned_nfts(key: &str, max_age: Duration) -> Option<Vec<NFT>>
     None
 }
 
+// Internal helper that supports `cache_owned_nfts` operations.
 async fn cache_owned_nfts(key: String, value: Vec<NFT>) {
     let cache = owned_nft_cache();
     let mut guard = cache.write().await;
@@ -123,6 +129,7 @@ pub struct MintRequest {
     pub onchain_tx_hash: Option<String>,
 }
 
+// Internal helper that supports `points_cost_for_tier` operations.
 fn points_cost_for_tier(tier: i32) -> i64 {
     match tier {
         1 => 5_000,
@@ -134,6 +141,7 @@ fn points_cost_for_tier(tier: i32) -> i64 {
     }
 }
 
+// Internal helper that supports `discount_for_tier` operations.
 fn discount_for_tier(tier: i32) -> f64 {
     match tier {
         0 => 0.0,
@@ -147,6 +155,7 @@ fn discount_for_tier(tier: i32) -> f64 {
     }
 }
 
+// Internal helper that supports `tier_for_discount` operations.
 fn tier_for_discount(discount: f64) -> i32 {
     let rounded = discount.round() as i64;
     match rounded {
@@ -159,6 +168,7 @@ fn tier_for_discount(discount: f64) -> i32 {
     }
 }
 
+// Internal helper that supports `discount_contract_or_error` operations.
 fn discount_contract_or_error(state: &AppState) -> Result<&str> {
     let Some(contract) = state.config.discount_soulbound_address.as_deref() else {
         return Err(crate::error::AppError::BadRequest(
@@ -173,6 +183,7 @@ fn discount_contract_or_error(state: &AppState) -> Result<&str> {
     Ok(contract)
 }
 
+// Internal helper that supports `discount_contract` operations.
 fn discount_contract(state: &AppState) -> Option<&str> {
     state
         .config
@@ -181,6 +192,7 @@ fn discount_contract(state: &AppState) -> Option<&str> {
         .filter(|addr| !addr.trim().is_empty() && !addr.starts_with("0x0000"))
 }
 
+// Internal helper that parses or transforms values for `normalize_onchain_tx_hash`.
 fn normalize_onchain_tx_hash(
     tx_hash: Option<&str>,
 ) -> std::result::Result<Option<String>, crate::error::AppError> {
@@ -205,6 +217,7 @@ fn normalize_onchain_tx_hash(
     Ok(Some(raw.to_ascii_lowercase()))
 }
 
+// Internal helper that supports `looks_like_transient_rpc_error` operations.
 fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("jsonrpcresponse")
@@ -224,6 +237,7 @@ struct OnchainNftState {
     used_in_period: u128,
 }
 
+// Internal helper that fetches data for `read_discount_state_onchain`.
 async fn read_discount_state_onchain(
     state: &AppState,
     contract: &str,
@@ -245,6 +259,7 @@ async fn read_discount_state_onchain(
     Ok((active, discount_u128 as f64))
 }
 
+// Internal helper that fetches data for `read_user_nft_token_id_onchain`.
 async fn read_user_nft_token_id_onchain(
     state: &AppState,
     contract: &str,
@@ -260,10 +275,12 @@ async fn read_user_nft_token_id_onchain(
     Ok(felt_to_u128(&raw_value).unwrap_or(0))
 }
 
+// Internal helper that supports `u256_calldata` operations.
 fn u256_calldata(value: u128) -> [Felt; 2] {
     [Felt::from(value), Felt::from(0_u8)]
 }
 
+// Internal helper that fetches data for `read_nft_info_onchain`.
 async fn read_nft_info_onchain(
     state: &AppState,
     contract: &str,
@@ -299,6 +316,7 @@ async fn read_nft_info_onchain(
     })
 }
 
+// Internal helper that supports `fallback_owned_nft_from_discount_state` operations.
 async fn fallback_owned_nft_from_discount_state(
     state: &AppState,
     contract: &str,
@@ -479,6 +497,7 @@ pub async fn get_owned_nfts(
     }
 }
 
+// Internal helper that fetches data for `get_owned_nfts_uncached`.
 async fn get_owned_nfts_uncached(
     state: &AppState,
     contract: &str,
@@ -672,12 +691,14 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `discount_for_tier_defaults_to_zero` operations.
     fn discount_for_tier_defaults_to_zero() {
         // Memastikan tier di luar range memakai diskon 0
         assert_eq!(discount_for_tier(99), 0.0);
     }
 
     #[test]
+    // Internal helper that supports `discount_for_tier_returns_exact_value` operations.
     fn discount_for_tier_returns_exact_value() {
         // Memastikan tier 3 memakai konstanta yang benar
         assert_eq!(discount_for_tier(3), NFT_TIER_3_DISCOUNT);

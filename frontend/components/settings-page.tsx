@@ -10,6 +10,12 @@ import { useWallet } from "@/hooks/use-wallet"
 import { useNotifications } from "@/hooks/use-notifications"
 import { Moon, Sun, Globe, Eye, EyeOff, Bell, Shield, Wallet, Trash2 } from "lucide-react"
 
+/**
+ * Handles `SettingsPage` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function SettingsPage() {
   const { mode, toggleMode } = useTheme()
   const wallet = useWallet()
@@ -30,11 +36,28 @@ export function SettingsPage() {
   const [sumoToken, setSumoToken] = React.useState("")
   const [sumoAddress, setSumoAddress] = React.useState("")
 
+  /**
+   * Handles `handleThemeChange` logic.
+   *
+   * @param newTheme - Input used by `handleThemeChange` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleThemeChange = (newTheme: "dark" | "light") => {
     setTheme(newTheme)
     // Implement theme change logic
   }
 
+  /**
+   * Handles `handlePrivacyChange` logic.
+   *
+   * @param key - Input used by `handlePrivacyChange` to compute state, payload, or request behavior.
+   * @param value - Input used by `handlePrivacyChange` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handlePrivacyChange = (key: string, value: boolean) => {
     setPrivacy(prev => ({ ...prev, [key]: value }))
     if (key === "privateMode" && value !== (mode === "private")) {

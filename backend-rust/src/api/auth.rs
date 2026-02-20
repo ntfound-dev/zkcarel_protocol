@@ -256,6 +256,7 @@ fn verify_signature(address: &str, message: &str, signature: &str, chain_id: u64
     Ok(())
 }
 
+// Internal helper that builds inputs for `generate_jwt_token`.
 fn generate_jwt_token(address: &str, secret: &str, expiry_hours: u64) -> Result<String> {
     let expiration = Utc::now()
         .checked_add_signed(Duration::hours(expiry_hours as i64))
@@ -278,6 +279,7 @@ fn generate_jwt_token(address: &str, secret: &str, expiry_hours: u64) -> Result<
     Ok(token)
 }
 
+// Internal helper that parses or transforms values for `decode_claims`.
 fn decode_claims(token: &str, secret: &str, validate_exp: bool) -> Result<Claims> {
     let mut validation = Validation::default();
     validation.validate_exp = validate_exp;
@@ -292,12 +294,24 @@ fn decode_claims(token: &str, secret: &str, validate_exp: bool) -> Result<Claims
     Ok(token_data.claims)
 }
 
+/// Handles `extract_user_from_token` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub async fn extract_user_from_token(token: &str, secret: &str) -> Result<String> {
     let claims = decode_claims(token, secret, true)?;
 
     Ok(claims.sub)
 }
 
+// Internal helper that supports `extract_user_from_refresh_token` operations.
 fn extract_user_from_refresh_token(
     token: &str,
     secret: &str,
@@ -316,6 +330,7 @@ fn extract_user_from_refresh_token(
     Ok(claims.sub)
 }
 
+// Internal helper that supports `detect_wallet_chain` operations.
 fn detect_wallet_chain(chain_id: u64, wallet_type: Option<&str>) -> Option<&'static str> {
     if let Some(kind) = wallet_type.map(|v| v.trim().to_ascii_lowercase()) {
         match kind.as_str() {
@@ -333,6 +348,7 @@ fn detect_wallet_chain(chain_id: u64, wallet_type: Option<&str>) -> Option<&'sta
     }
 }
 
+// Internal helper that checks conditions for `is_zero_placeholder_address`.
 fn is_zero_placeholder_address(address: &str) -> bool {
     let normalized = address.trim().to_ascii_lowercase();
     normalized == "0x0"
@@ -340,6 +356,7 @@ fn is_zero_placeholder_address(address: &str) -> bool {
         || normalized == "0x0000000000000000000000000000000000000000000000000000000000000000"
 }
 
+// Internal helper that supports `derive_sumo_subject_key` operations.
 fn derive_sumo_subject_key(token: &str) -> Result<String> {
     let claims = token
         .split('.')
@@ -368,6 +385,7 @@ fn derive_sumo_subject_key(token: &str) -> Result<String> {
     Ok(format!("sumo:{}", hash::hash_string(&key)))
 }
 
+// Internal helper that supports `canonical_address_for_sumo_subject` operations.
 fn canonical_address_for_sumo_subject(subject: &str) -> String {
     let digest = hash::hash_string(subject);
     let hex = digest.strip_prefix("0x").unwrap_or(digest.as_str());
@@ -375,6 +393,7 @@ fn canonical_address_for_sumo_subject(subject: &str) -> String {
     format!("0x{}", cut)
 }
 
+// Internal helper that parses or transforms values for `parse_referral_code`.
 fn parse_referral_code(raw: Option<&str>) -> Result<Option<String>> {
     let Some(input) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
@@ -400,6 +419,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `verify_signature_rejects_invalid_format` operations.
     fn verify_signature_rejects_invalid_format() {
         // Memastikan format signature yang salah ditolak
         let result = verify_signature("0xabc", "hello", "deadbeef", 1);
@@ -407,6 +427,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Internal helper that supports `extract_user_from_token_rejects_invalid` operations.
     async fn extract_user_from_token_rejects_invalid() {
         // Memastikan token invalid mengembalikan error autentikasi
         let result = extract_user_from_token("invalid.token", "secret").await;
@@ -414,6 +435,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_referral_code_accepts_prefixed_and_plain`.
     fn parse_referral_code_accepts_prefixed_and_plain() {
         let with_prefix = parse_referral_code(Some("carel_1234abcd")).unwrap();
         let plain = parse_referral_code(Some("1234ABCD")).unwrap();
@@ -422,12 +444,14 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_referral_code_rejects_invalid`.
     fn parse_referral_code_rejects_invalid() {
         let result = parse_referral_code(Some("CAREL_12ZZ"));
         assert!(matches!(result, Err(AppError::BadRequest(_))));
     }
 
     #[test]
+    // Internal helper that supports `derive_sumo_subject_key_prefers_iss_and_sub` operations.
     fn derive_sumo_subject_key_prefers_iss_and_sub() {
         let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
         let payload = URL_SAFE_NO_PAD.encode(r#"{"iss":"https://sumo","sub":"user-123"}"#);
@@ -439,6 +463,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `derive_sumo_subject_key_rejects_invalid_token` operations.
     fn derive_sumo_subject_key_rejects_invalid_token() {
         let key = derive_sumo_subject_key("not-a-jwt");
         assert!(matches!(key, Err(AppError::AuthError(_))));

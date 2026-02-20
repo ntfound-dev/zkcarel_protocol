@@ -1,5 +1,14 @@
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Kbd` logic.
+ *
+ * @param className - Input used by `Kbd` to compute state, payload, or request behavior.
+ * @param props - Input used by `Kbd` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Kbd({ className, ...props }: React.ComponentProps<'kbd'>) {
   return (
     <kbd
@@ -15,6 +24,15 @@ function Kbd({ className, ...props }: React.ComponentProps<'kbd'>) {
   )
 }
 
+/**
+ * Handles `KbdGroup` logic.
+ *
+ * @param className - Input used by `KbdGroup` to compute state, payload, or request behavior.
+ * @param props - Input used by `KbdGroup` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function KbdGroup({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <kbd

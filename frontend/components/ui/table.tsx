@@ -4,6 +4,15 @@ import * as React from 'react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Table` logic.
+ *
+ * @param className - Input used by `Table` to compute state, payload, or request behavior.
+ * @param props - Input used by `Table` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Table({ className, ...props }: React.ComponentProps<'table'>) {
   return (
     <div
@@ -19,6 +28,15 @@ function Table({ className, ...props }: React.ComponentProps<'table'>) {
   )
 }
 
+/**
+ * Handles `TableHeader` logic.
+ *
+ * @param className - Input used by `TableHeader` to compute state, payload, or request behavior.
+ * @param props - Input used by `TableHeader` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TableHeader({ className, ...props }: React.ComponentProps<'thead'>) {
   return (
     <thead
@@ -29,6 +47,15 @@ function TableHeader({ className, ...props }: React.ComponentProps<'thead'>) {
   )
 }
 
+/**
+ * Handles `TableBody` logic.
+ *
+ * @param className - Input used by `TableBody` to compute state, payload, or request behavior.
+ * @param props - Input used by `TableBody` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TableBody({ className, ...props }: React.ComponentProps<'tbody'>) {
   return (
     <tbody
@@ -39,6 +66,15 @@ function TableBody({ className, ...props }: React.ComponentProps<'tbody'>) {
   )
 }
 
+/**
+ * Handles `TableFooter` logic.
+ *
+ * @param className - Input used by `TableFooter` to compute state, payload, or request behavior.
+ * @param props - Input used by `TableFooter` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TableFooter({ className, ...props }: React.ComponentProps<'tfoot'>) {
   return (
     <tfoot
@@ -52,6 +88,15 @@ function TableFooter({ className, ...props }: React.ComponentProps<'tfoot'>) {
   )
 }
 
+/**
+ * Handles `TableRow` logic.
+ *
+ * @param className - Input used by `TableRow` to compute state, payload, or request behavior.
+ * @param props - Input used by `TableRow` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TableRow({ className, ...props }: React.ComponentProps<'tr'>) {
   return (
     <tr
@@ -65,6 +110,15 @@ function TableRow({ className, ...props }: React.ComponentProps<'tr'>) {
   )
 }
 
+/**
+ * Handles `TableHead` logic.
+ *
+ * @param className - Input used by `TableHead` to compute state, payload, or request behavior.
+ * @param props - Input used by `TableHead` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TableHead({ className, ...props }: React.ComponentProps<'th'>) {
   return (
     <th
@@ -78,6 +132,15 @@ function TableHead({ className, ...props }: React.ComponentProps<'th'>) {
   )
 }
 
+/**
+ * Handles `TableCell` logic.
+ *
+ * @param className - Input used by `TableCell` to compute state, payload, or request behavior.
+ * @param props - Input used by `TableCell` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TableCell({ className, ...props }: React.ComponentProps<'td'>) {
   return (
     <td
@@ -91,6 +154,12 @@ function TableCell({ className, ...props }: React.ComponentProps<'td'>) {
   )
 }
 
+/**
+ * Handles `TableCaption` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TableCaption({
   className,
   ...props

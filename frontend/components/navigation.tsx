@@ -34,6 +34,12 @@ const faucetTokens = [
   { symbol: "CAREL", name: "Carel Protocol", amount: "100" },
 ]
 
+/**
+ * Handles `Navigation` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function Navigation() {
   const { mode, toggleMode } = useTheme()
   const [isConnected, setIsConnected] = React.useState(false)
@@ -44,10 +50,25 @@ export function Navigation() {
   const [carelBalance, setCarelBalance] = React.useState(245)
   const [claimedFaucet, setClaimedFaucet] = React.useState<string[]>([])
 
+  /**
+   * Handles `handleConnect` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleConnect = () => {
     setIsConnected(true)
   }
 
+  /**
+   * Handles `handleClaimFaucet` logic.
+   *
+   * @param symbol - Input used by `handleClaimFaucet` to compute state, payload, or request behavior.
+   * @param amount - Input used by `handleClaimFaucet` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleClaimFaucet = (symbol: string, amount: string) => {
     if (claimedFaucet.includes(symbol)) return
     setClaimedFaucet([...claimedFaucet, symbol])

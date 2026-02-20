@@ -56,19 +56,23 @@ struct CachedPointsResponse {
     value: PointsResponse,
 }
 
+// Internal helper that supports `onchain_points_cache` operations.
 fn onchain_points_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOnchainPoints>> {
     ONCHAIN_POINTS_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `points_response_cache` operations.
 fn points_response_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedPointsResponse>> {
     POINTS_RESPONSE_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `points_response_fetch_locks` operations.
 fn points_response_fetch_locks(
 ) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
     POINTS_RESPONSE_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `points_response_fetch_lock_for` operations.
 async fn points_response_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = points_response_fetch_locks();
     {
@@ -93,6 +97,7 @@ async fn points_response_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>
     lock
 }
 
+// Internal helper that supports `onchain_points_cache_key` operations.
 fn onchain_points_cache_key(contract: &str, epoch: i64, user: &str) -> String {
     format!(
         "{}|{}|{}",
@@ -102,6 +107,7 @@ fn onchain_points_cache_key(contract: &str, epoch: i64, user: &str) -> String {
     )
 }
 
+// Internal helper that fetches data for `get_cached_onchain_points`.
 async fn get_cached_onchain_points(key: &str, max_age: Duration) -> Option<CachedOnchainPoints> {
     let cache = onchain_points_cache();
     let guard = cache.read().await;
@@ -112,6 +118,7 @@ async fn get_cached_onchain_points(key: &str, max_age: Duration) -> Option<Cache
     None
 }
 
+// Internal helper that supports `cache_onchain_points` operations.
 async fn cache_onchain_points(key: &str, points: Option<f64>) {
     let cache = onchain_points_cache();
     let mut guard = cache.write().await;
@@ -128,6 +135,7 @@ async fn cache_onchain_points(key: &str, points: Option<f64>) {
     }
 }
 
+// Internal helper that supports `points_response_cache_key` operations.
 fn points_response_cache_key(user_addresses: &[String], epoch: i64) -> String {
     let scope = normalize_scope_addresses(user_addresses);
     format!(
@@ -141,6 +149,7 @@ fn points_response_cache_key(user_addresses: &[String], epoch: i64) -> String {
     )
 }
 
+// Internal helper that fetches data for `get_cached_points_response`.
 async fn get_cached_points_response(key: &str, max_age: Duration) -> Option<PointsResponse> {
     let cache = points_response_cache();
     let guard = cache.read().await;
@@ -151,6 +160,7 @@ async fn get_cached_points_response(key: &str, max_age: Duration) -> Option<Poin
     None
 }
 
+// Internal helper that supports `cache_points_response` operations.
 async fn cache_points_response(key: &str, value: PointsResponse) {
     let cache = points_response_cache();
     let mut guard = cache.write().await;
@@ -222,6 +232,7 @@ pub struct SyncOnchainPointsResponse {
     pub sync_tx_hash: Option<String>,
 }
 
+// Internal helper that supports `calculate_epoch_reward` operations.
 fn calculate_epoch_reward(
     points: Decimal,
     total_points: Decimal,
@@ -235,17 +246,20 @@ fn calculate_epoch_reward(
 
 const ONE_CAREL_WEI: u128 = 1_000_000_000_000_000_000;
 
+// Internal helper that supports `wei_to_carel_amount` operations.
 fn wei_to_carel_amount(wei: u128) -> Decimal {
     let wei_dec = Decimal::from_u128(wei).unwrap_or(Decimal::ZERO);
     let denom = Decimal::from_u128(ONE_CAREL_WEI).unwrap_or(Decimal::ONE);
     wei_dec / denom
 }
 
+// Internal helper that supports `crypto_felt_to_core` operations.
 fn crypto_felt_to_core(value: &CryptoFelt) -> Result<Felt> {
     let hex = value.to_fixed_hex_string();
     Ok(Felt::from_hex(&hex).map_err(|e| AppError::Internal(format!("Invalid felt hex: {}", e)))?)
 }
 
+// Internal helper that parses or transforms values for `normalize_scope_addresses`.
 fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for address in user_addresses {
@@ -274,6 +288,7 @@ struct AggregatedPointsRow {
     nft_boost: bool,
 }
 
+// Internal helper that supports `aggregate_points_for_scope` operations.
 async fn aggregate_points_for_scope(
     state: &AppState,
     user_addresses: &[String],
@@ -316,6 +331,7 @@ async fn aggregate_points_for_scope(
     Ok(row)
 }
 
+// Internal helper that fetches data for `resolve_total_distribution`.
 async fn resolve_total_distribution(state: &AppState, requested: Option<f64>) -> Result<Decimal> {
     if let Some(val) = requested {
         return Ok(Decimal::from_f64_retain(val).unwrap_or(Decimal::ZERO));
@@ -325,6 +341,7 @@ async fn resolve_total_distribution(state: &AppState, requested: Option<f64>) ->
     ))
 }
 
+// Internal helper that supports `configured_point_storage_contract` operations.
 fn configured_point_storage_contract(state: &AppState) -> Option<&str> {
     let contract = state.config.point_storage_address.trim();
     if contract.is_empty() || contract.starts_with("0x0000") {
@@ -333,6 +350,7 @@ fn configured_point_storage_contract(state: &AppState) -> Option<&str> {
     Some(contract)
 }
 
+// Internal helper that builds inputs for `build_submit_points_call`.
 fn build_submit_points_call(contract: &str, epoch: i64, user: &str, points: u128) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("submit_points")
@@ -352,6 +370,7 @@ fn build_submit_points_call(contract: &str, epoch: i64, user: &str, points: u128
     })
 }
 
+// Internal helper that fetches data for `read_onchain_user_points`.
 async fn read_onchain_user_points(
     state: &AppState,
     contract: &str,
@@ -430,6 +449,7 @@ pub async fn get_points(
     }
 }
 
+// Internal helper that builds inputs for `build_points_response`.
 async fn build_points_response(
     state: &AppState,
     headers: &HeaderMap,
@@ -823,6 +843,7 @@ pub async fn convert_to_carel(
     Ok(Json(ApiResponse::success(response)))
 }
 
+// Internal helper that runs side-effecting logic for `claim_rewards_onchain`.
 async fn claim_rewards_onchain(
     state: &AppState,
     epoch: i64,
@@ -879,6 +900,7 @@ async fn claim_rewards_onchain(
     Ok(Some((tx_hash.to_string(), net_amount)))
 }
 
+// Internal helper that parses or transforms values for `convert_points_onchain`.
 async fn convert_points_onchain(
     state: &AppState,
     epoch: i64,
@@ -914,10 +936,12 @@ async fn convert_points_onchain(
     ))
 }
 
+// Internal helper that supports `to_u256_strings` operations.
 fn to_u256_strings(value: u128) -> (String, String) {
     (value.to_string(), "0".to_string())
 }
 
+// Internal helper that builds inputs for `build_batch_claim_call`.
 fn build_batch_claim_call(
     contract: &str,
     epoch: u64,
@@ -949,6 +973,7 @@ fn build_batch_claim_call(
     })
 }
 
+// Internal helper that builds inputs for `build_submit_root_call`.
 fn build_submit_root_call(contract: &str, epoch: u64, root: Felt) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("submit_merkle_root")
@@ -962,6 +987,7 @@ fn build_submit_root_call(contract: &str, epoch: u64, root: Felt) -> Result<Call
     })
 }
 
+// Internal helper that parses or transforms values for `parse_u256_low`.
 fn parse_u256_low(values: &[String]) -> Result<u128> {
     if values.len() < 2 {
         return Err(AppError::Internal("Invalid u256 response".into()));
@@ -974,6 +1000,7 @@ fn parse_u256_low(values: &[String]) -> Result<u128> {
     Ok(low)
 }
 
+// Internal helper that parses or transforms values for `parse_felt_u128`.
 fn parse_felt_u128(value: &str) -> Result<u128> {
     if let Some(stripped) = value.strip_prefix("0x") {
         u128::from_str_radix(stripped, 16)
@@ -990,6 +1017,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `calculate_epoch_reward_handles_zero` operations.
     fn calculate_epoch_reward_handles_zero() {
         let reward = calculate_epoch_reward(Decimal::from(100), Decimal::ZERO, Decimal::from(1000));
         assert_eq!(reward, Decimal::ZERO);

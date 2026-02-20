@@ -1,18 +1,11 @@
 use starknet::ContractAddress;
 
-/// @title Shielded Vault Interface
-/// @author CAREL Team
-/// @notice Maintains Merkle root, nullifiers, and commitments for privacy notes.
+// Maintains Merkle root, nullifiers, and commitments for privacy notes.
 #[starknet::interface]
 pub trait IShieldedVault<TContractState> {
-    /// @notice Returns the current Merkle root.
+    // Returns the active shielded Merkle root used to validate privacy proofs.
     fn get_root(self: @TContractState) -> felt252;
-    /// @notice Applies a shielded state transition.
-    /// @dev Router-only to ensure proofs are validated upstream.
-    /// @param old_root Current root asserted by the proof.
-    /// @param new_root New root produced by the proof.
-    /// @param nullifiers Nullifiers to consume.
-    /// @param commitments New commitments to register.
+    // Applies a shielded transition by validating root linkage, nullifiers, and new commitments.
     fn submit_transition(
         ref self: TContractState,
         old_root: felt252,
@@ -20,26 +13,22 @@ pub trait IShieldedVault<TContractState> {
         nullifiers: Span<felt252>,
         commitments: Span<felt252>
     );
-    /// @notice Checks whether a nullifier was already used.
+    // Read-only check for whether a nullifier has been consumed (double-spend protection).
     fn is_nullifier_used(self: @TContractState, nullifier: felt252) -> bool;
-    /// @notice Checks whether a commitment has been seen.
+    // Read-only check for whether a commitment/note is already present in vault state.
     fn is_commitment_seen(self: @TContractState, commitment: felt252) -> bool;
 }
 
-/// @title Shielded Vault Admin Interface
-/// @author CAREL Team
-/// @notice Administrative hooks for router + root bootstrap.
+// Administrative hooks for router + root bootstrap.
 #[starknet::interface]
 pub trait IShieldedVaultAdmin<TContractState> {
-    /// @notice Sets the authorized privacy router.
+    // Owner-only setter for updating the trusted router allowed to submit vault transitions.
     fn set_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Bootstraps or overrides the root (owner-only).
+    // Owner-only root override used for controlled bootstrap or emergency recovery.
     fn set_root(ref self: TContractState, new_root: felt252);
 }
 
-/// @title Shielded Vault Contract
-/// @author CAREL Team
-/// @notice Stores privacy roots, nullifiers, and commitments.
+// Stores privacy roots, nullifiers, and commitments.
 #[starknet::contract]
 pub mod ShieldedVault {
     use starknet::{ContractAddress, get_caller_address};
@@ -94,6 +83,7 @@ pub mod ShieldedVault {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, owner: ContractAddress, initial_root: felt252) {
         self.ownable.initializer(owner);
         self.current_root.write(initial_root);
@@ -105,11 +95,13 @@ pub mod ShieldedVault {
 
     #[abi(embed_v0)]
     impl ShieldedVaultImpl of super::IShieldedVault<ContractState> {
-        fn get_root(self: @ContractState) -> felt252 {
+        // Returns the active shielded Merkle root used to validate privacy proofs.
+            fn get_root(self: @ContractState) -> felt252 {
             self.current_root.read()
         }
 
-        fn submit_transition(
+        // Applies a shielded transition by validating root linkage, nullifiers, and new commitments.
+            fn submit_transition(
             ref self: ContractState,
             old_root: felt252,
             new_root: felt252,
@@ -159,25 +151,29 @@ pub mod ShieldedVault {
             }));
         }
 
-        fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
+        // Read-only check for whether a nullifier has been consumed (double-spend protection).
+            fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
             self.nullifiers.entry(nullifier).read()
         }
 
-        fn is_commitment_seen(self: @ContractState, commitment: felt252) -> bool {
+        // Read-only check for whether a commitment/note is already present in vault state.
+            fn is_commitment_seen(self: @ContractState, commitment: felt252) -> bool {
             self.commitments.entry(commitment).read()
         }
     }
 
     #[abi(embed_v0)]
     impl ShieldedVaultAdminImpl of super::IShieldedVaultAdmin<ContractState> {
-        fn set_router(ref self: ContractState, router: ContractAddress) {
+        // Owner-only setter for updating the trusted router allowed to submit vault transitions.
+            fn set_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Router required");
             self.router.write(router);
             self.emit(Event::RouterUpdated(RouterUpdated { router }));
         }
 
-        fn set_root(ref self: ContractState, new_root: felt252) {
+        // Owner-only root override used for controlled bootstrap or emergency recovery.
+            fn set_root(ref self: ContractState, new_root: felt252) {
             self.ownable.assert_only_owner();
             self.current_root.write(new_root);
             let next = self.root_count.read() + 1;

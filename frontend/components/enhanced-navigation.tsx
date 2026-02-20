@@ -115,6 +115,12 @@ type UiTx = {
   txNetwork?: "starknet" | "evm" | "btc"
 }
 
+/**
+ * Handles `EnhancedNavigation` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function EnhancedNavigation() {
   const wallet = useWallet()
   const notifications = useNotifications()
@@ -146,12 +152,28 @@ export function EnhancedNavigation() {
     return n.toLocaleString()
   }
 
+  /**
+   * Parses or transforms values for `formatAsset`.
+   *
+   * @param value - Input used by `formatAsset` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const formatAsset = (value: number | null | undefined) => {
     if (value === null || value === undefined) return "—"
     if (!Number.isFinite(value)) return "—"
     return value.toLocaleString(undefined, { maximumFractionDigits: 6 })
   }
 
+  /**
+   * Parses or transforms values for `formatTime`.
+   *
+   * @param ts - Input used by `formatTime` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const formatTime = (ts: unknown) => {
     if (!ts) return ""
     try {
@@ -163,6 +185,14 @@ export function EnhancedNavigation() {
     }
   }
 
+  /**
+   * Parses or transforms values for `formatRelativeTime`.
+   *
+   * @param iso - Input used by `formatRelativeTime` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const formatRelativeTime = (iso: string) => {
     const date = new Date(iso)
     if (Number.isNaN(date.getTime())) return ""
@@ -175,23 +205,47 @@ export function EnhancedNavigation() {
     return `${days} days ago`
   }
 
+  /**
+   * Parses or transforms values for `parseNumber`.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const parseNumber = (value?: string | number | null) => {
     if (value === null || value === undefined) return 0
     const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : 0
   }
 
+  /**
+   * Handles `shortenAddress` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const shortenAddress = (addr?: string | null) => {
     if (!addr) return ""
     if (addr.length <= 12) return addr
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`
   }
 
+  /**
+   * Handles `renderLinkStatus` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const renderLinkStatus = (addr?: string | null) => {
     if (!addr) return "Not linked"
     return shortenAddress(addr)
   }
 
+  /**
+   * Handles `txExplorerLinks` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const txExplorerLinks = (txHash?: string, txNetwork?: "starknet" | "evm" | "btc") => {
     if (!txHash) return []
     if (txNetwork === "evm") {
@@ -426,6 +480,14 @@ export function EnhancedNavigation() {
     }
   }
 
+  /**
+   * Handles `handleBtcConnect` logic.
+   *
+   * @param provider - Input used by `handleBtcConnect` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleBtcConnect = async (provider: BtcWalletProviderType) => {
     if (btcConnectPending) return
     setBtcConnectPending(true)
@@ -460,6 +522,12 @@ export function EnhancedNavigation() {
     }
   }
 
+  /**
+   * Handles `handleSetDisplayName` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleSetDisplayName = async () => {
     if (!wallet.isConnected) {
       notifications.addNotification({
@@ -559,6 +627,12 @@ export function EnhancedNavigation() {
     }
   }
 
+  /**
+   * Handles `handleManualBtcLink` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleManualBtcLink = async () => {
     if (btcManualLinkPending) return
     setBtcManualLinkPending(true)
@@ -581,6 +655,14 @@ export function EnhancedNavigation() {
     }
   }
 
+  /**
+   * Handles `handleClaimFaucet` logic.
+   *
+   * @param symbol - Input used by `handleClaimFaucet` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleClaimFaucet = async (symbol: string) => {
     if (!wallet.isConnected) {
       notifications.addNotification({
@@ -657,6 +739,12 @@ export function EnhancedNavigation() {
     }
   }
 
+  /**
+   * Handles `copyAddress` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const copyAddress = () => {
     if (wallet?.address) {
       navigator.clipboard.writeText(wallet.address)

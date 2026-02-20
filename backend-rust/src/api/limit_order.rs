@@ -59,6 +59,8 @@ pub struct CancelOrderRequest {
     pub privacy: Option<ModelPrivacyVerificationPayload>,
 }
 
+// Internal helper that supports `expiry_duration_for` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn expiry_duration_for(expiry: &str) -> chrono::Duration {
     match expiry {
         "1d" => chrono::Duration::days(1),
@@ -68,6 +70,8 @@ fn expiry_duration_for(expiry: &str) -> chrono::Duration {
     }
 }
 
+// Internal helper that builds inputs for `build_order_id` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_order_id(
     user_address: &str,
     from_token: &str,
@@ -83,6 +87,8 @@ fn build_order_id(
     hash::hash_string(&order_data)
 }
 
+// Internal helper that supports `map_privacy_payload` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn map_privacy_payload(
     payload: Option<&ModelPrivacyVerificationPayload>,
 ) -> Option<OnchainPrivacyPayload> {
@@ -95,6 +101,8 @@ fn map_privacy_payload(
     })
 }
 
+// Internal helper that parses or transforms values for `normalize_order_id` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_order_id(
     raw: Option<&str>,
 ) -> std::result::Result<Option<String>, crate::error::AppError> {
@@ -119,6 +127,8 @@ fn normalize_order_id(
     Ok(Some(value.to_ascii_lowercase()))
 }
 
+// Internal helper that supports `env_flag` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn env_flag(name: &str, default: bool) -> bool {
     std::env::var(name)
         .ok()
@@ -131,6 +141,8 @@ fn env_flag(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+// Internal helper that supports `hide_balance_relayer_pool_enabled` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_balance_relayer_pool_enabled() -> bool {
     env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", true)
 }
@@ -141,6 +153,8 @@ enum HideExecutorKind {
     ShieldedPoolV2,
 }
 
+// Internal helper that supports `hide_executor_kind` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_executor_kind() -> HideExecutorKind {
     let raw = std::env::var("HIDE_BALANCE_EXECUTOR_KIND")
         .unwrap_or_default()
@@ -153,6 +167,8 @@ fn hide_executor_kind() -> HideExecutorKind {
     }
 }
 
+// Internal helper that fetches data for `resolve_private_action_executor_felt` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Result<Felt> {
     for raw in [
         std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
@@ -173,6 +189,8 @@ fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Resul
     ))
 }
 
+// Internal helper that fetches data for `resolve_limit_order_target_felt` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn resolve_limit_order_target_felt(state: &AppState) -> Result<Felt> {
     parse_felt(state.config.limit_order_book_address.trim()).map_err(|e| {
         crate::error::AppError::BadRequest(format!(
@@ -182,6 +200,8 @@ fn resolve_limit_order_target_felt(state: &AppState) -> Result<Felt> {
     })
 }
 
+// Internal helper that parses or transforms values for `normalize_hex_items` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_hex_items(items: &[String]) -> Vec<String> {
     items
         .iter()
@@ -191,6 +211,8 @@ fn normalize_hex_items(items: &[String]) -> Vec<String> {
         .collect()
 }
 
+// Internal helper that supports `payload_from_request` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn payload_from_request(
     payload: Option<&ModelPrivacyVerificationPayload>,
     verifier: &str,
@@ -228,6 +250,8 @@ fn payload_from_request(
     })
 }
 
+// Internal helper that supports `compute_limit_intent_hash_on_executor` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn compute_limit_intent_hash_on_executor(
     state: &AppState,
     executor: Felt,
@@ -269,6 +293,8 @@ async fn compute_limit_intent_hash_on_executor(
     Ok(intent_hash.to_string())
 }
 
+// Internal helper that builds inputs for `build_submit_private_intent_call` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_submit_private_intent_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
@@ -305,6 +331,8 @@ fn build_submit_private_intent_call(
     })
 }
 
+// Internal helper that builds inputs for `build_execute_private_limit_call` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_execute_private_limit_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
@@ -334,6 +362,8 @@ fn build_execute_private_limit_call(
     })
 }
 
+// Internal helper that builds inputs for `build_shielded_set_asset_rule_call` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_shielded_set_asset_rule_call(
     executor: Felt,
     token: Felt,
@@ -349,6 +379,8 @@ fn build_shielded_set_asset_rule_call(
     })
 }
 
+// Internal helper that builds inputs for `build_shielded_deposit_fixed_call` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_shielded_deposit_fixed_call(
     executor: Felt,
     token: Felt,
@@ -363,6 +395,8 @@ fn build_shielded_deposit_fixed_call(
     })
 }
 
+// Internal helper that builds inputs for `build_erc20_approve_call` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_erc20_approve_call(
     token: Felt,
     spender: Felt,
@@ -378,6 +412,8 @@ fn build_erc20_approve_call(
     })
 }
 
+// Internal helper that supports `shielded_note_registered` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn shielded_note_registered(
     state: &AppState,
     executor: Felt,
@@ -397,6 +433,8 @@ async fn shielded_note_registered(
     Ok(flag != Felt::ZERO)
 }
 
+// Internal helper that supports `shielded_fixed_amount` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn shielded_fixed_amount(
     state: &AppState,
     executor: Felt,
@@ -914,6 +952,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `expiry_duration_for_defaults_to_7d` operations in the limit-order flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn expiry_duration_for_defaults_to_7d() {
         // Memastikan input tidak dikenal memakai 7 hari
         let duration = expiry_duration_for("unknown");
@@ -921,6 +961,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that builds inputs for `build_order_id_is_stable` in the limit-order flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn build_order_id_is_stable() {
         // Memastikan order_id konsisten untuk input yang sama
         let id = build_order_id("0xabc", "ETH", "USDT", 10.0, 1_700_000_000);

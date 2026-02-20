@@ -17,6 +17,8 @@ use smartcontract::ai::ai_signature_verifier::{
     IAISignatureVerifierAdminDispatcher, IAISignatureVerifierAdminDispatcherTrait
 };
 
+// Implements action type to felt logic while keeping state transitions deterministic.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn action_type_to_felt(action_type: ActionType) -> felt252 {
     match action_type {
         ActionType::Swap => 0,
@@ -29,6 +31,8 @@ fn action_type_to_felt(action_type: ActionType) -> felt252 {
     }
 }
 
+// Implements compute action hash logic while keeping state transitions deterministic.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn compute_action_hash(
     user: ContractAddress,
     action_type: ActionType,
@@ -44,6 +48,8 @@ fn compute_action_hash(
 }
 
 #[test]
+// Test case: validates ai executor signature verification with allowlist behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_ai_executor_signature_verification_with_allowlist() {
     let carel_token: ContractAddress = 0x111.try_into().unwrap();
     let backend_signer: ContractAddress = 0x222.try_into().unwrap();
@@ -85,6 +91,8 @@ fn test_ai_executor_signature_verification_with_allowlist() {
 
 #[test]
 #[should_panic(expected: "Invalid user signature")]
+// Test case: validates ai executor rejects replay hash behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_ai_executor_rejects_replay_hash() {
     let carel_token: ContractAddress = 0x111.try_into().unwrap();
     let backend_signer: ContractAddress = 0x222.try_into().unwrap();
@@ -128,6 +136,8 @@ fn test_ai_executor_rejects_replay_hash() {
 
 #[test]
 #[should_panic(expected: "Invalid user signature")]
+// Test case: validates ai executor signature verification rejects unknown hash behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_ai_executor_signature_verification_rejects_unknown_hash() {
     let carel_token: ContractAddress = 0x111.try_into().unwrap();
     let backend_signer: ContractAddress = 0x222.try_into().unwrap();

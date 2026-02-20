@@ -2,6 +2,16 @@ import * as React from 'react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Input` logic.
+ *
+ * @param className - Input used by `Input` to compute state, payload, or request behavior.
+ * @param type - Input used by `Input` to compute state, payload, or request behavior.
+ * @param props - Input used by `Input` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Input({ className, type, ...props }: React.ComponentProps<'input'>) {
   return (
     <input

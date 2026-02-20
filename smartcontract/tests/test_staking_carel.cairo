@@ -2,22 +2,28 @@ use core::array::ArrayTrait;
 use core::traits::TryInto;
 use starknet::ContractAddress;
 
-// Import interface dan dispatcher
+// Imports staking interface and dispatcher.
 use smartcontract::staking::staking_carel::{
     IStakingCarelDispatcher, IStakingCarelDispatcherTrait, StakingCarel
 };
 
-// Import interface token CAREL
+// Imports CAREL token interface.
 use smartcontract::core::token::{ICarelTokenDispatcher, ICarelTokenDispatcherTrait};
 
-// Import event structs untuk spying dari modul kontrak
+// Imports event structs for event spying from the contract module.
 use smartcontract::staking::staking_carel::StakingCarel::{Staked, Unstaked, RewardsClaimed};
 
-// Interface standar ERC20 untuk pengecekan saldo dan approval
+// Standard ERC20 interface for balance checks and approvals.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
+    // Applies approve after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
+    // Implements balance of logic while keeping state transitions deterministic.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
+    // Applies transfer after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
 }
 
@@ -27,6 +33,8 @@ use snforge_std::{
     start_cheat_block_timestamp, spy_events, EventSpyAssertionsTrait
 };
 
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup_staking() -> (IStakingCarelDispatcher, ContractAddress, ContractAddress, ContractAddress) {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let user: ContractAddress = 0x456.try_into().unwrap();
@@ -46,16 +54,16 @@ fn setup_staking() -> (IStakingCarelDispatcher, ContractAddress, ContractAddress
     let (staking_addr, _) = staking_class.deploy(@array![token_addr.into(), reward_pool.into()]).unwrap();
     let staking = IStakingCarelDispatcher { contract_address: staking_addr };
 
-    // 3. Grant MINTER_ROLE kepada admin untuk setup test
+    // 3. Grant MINTER_ROLE to admin for test setup.
     start_cheat_caller_address(token_addr, admin);
     carel_token.set_minter(admin);
     
-    // 4. Mint token untuk user dan reward pool
+    // 4. Mint tokens for user and reward pool.
     carel_token.mint(user, 50000 * 1000000000000000000_u256);
     carel_token.mint(reward_pool, 1000000 * 1000000000000000000_u256);
     stop_cheat_caller_address(token_addr);
 
-    // 5. Approve kontrak staking untuk menggunakan token user
+    // 5. Approve staking contract to spend user tokens.
     start_cheat_caller_address(token_addr, user);
     erc20_token.approve(staking_addr, 50000 * 1000000000000000000_u256);
     stop_cheat_caller_address(token_addr);
@@ -64,6 +72,8 @@ fn setup_staking() -> (IStakingCarelDispatcher, ContractAddress, ContractAddress
 }
 
 #[test]
+// Test case: validates successful stake and tier behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_successful_stake_and_tier() {
     let (staking, _, user, _) = setup_staking();
     let amount = 1500 * 1000000000000000000_u256; 
@@ -88,6 +98,8 @@ fn test_successful_stake_and_tier() {
 
 #[test]
 #[should_panic(expected: "Minimal stake adalah 100 CAREL")]
+// Test case: validates stake below minimum fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_stake_below_minimum_fails() {
     let (staking, _, user, _) = setup_staking();
     let low_amount = 50 * 1000000000000000000_u256;
@@ -97,6 +109,8 @@ fn test_stake_below_minimum_fails() {
 }
 
 #[test]
+// Test case: validates rewards accrual after one year behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_rewards_accrual_after_one_year() {
     let (staking, _, user, _) = setup_staking();
     let one_carel: u256 = 1000000000000000000;
@@ -118,25 +132,27 @@ fn test_rewards_accrual_after_one_year() {
 }
 
 #[test]
+// Test case: validates unstake early penalty behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unstake_early_penalty() {
     let (staking, _, user, _) = setup_staking();
     let amount = 1000 * 1000000000000000000_u256;
 
-    // Set waktu awal sebelum staking
+    // Set initial timestamp before staking.
     let start_time = 1000000;
     start_cheat_block_timestamp(staking.contract_address, start_time);
 
     start_cheat_caller_address(staking.contract_address, user);
     staking.stake(amount);
 
-    // Unstake setelah 1 hari (86.400 detik) - Masih dalam periode penalti (< 7 hari)
+    // Unstake after 1 day (86,400 seconds), still inside penalty window (< 7 days).
     let unstake_time = start_time + 86400;
     start_cheat_block_timestamp(staking.contract_address, unstake_time);
     
     let mut spy = spy_events();
     staking.unstake(amount);
 
-    // Ekspektasi penalti 10% (100 CAREL)
+    // Expected 10% penalty (100 CAREL).
     let expected_penalty = 100 * 1000000000000000000_u256;
     
     spy.assert_emitted(@array![
@@ -148,6 +164,8 @@ fn test_unstake_early_penalty() {
 }
 
 #[test]
+// Test case: validates claim rewards flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_claim_rewards_flow() {
     let (staking, token_addr, user, reward_pool) = setup_staking();
     let amount = 1000 * 1000000000000000000_u256;
@@ -157,7 +175,7 @@ fn test_claim_rewards_flow() {
 
     start_cheat_block_timestamp(staking.contract_address, 15768000);
 
-    // Approval dari reward pool untuk mendistribusikan reward
+    // Reward pool approval for reward distribution.
     start_cheat_caller_address(token_addr, reward_pool);
     IERC20Dispatcher { contract_address: token_addr }.approve(staking.contract_address, 1000000 * 1000000000000000000_u256);
     stop_cheat_caller_address(token_addr);

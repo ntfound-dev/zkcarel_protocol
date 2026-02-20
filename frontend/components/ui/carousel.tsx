@@ -32,6 +32,12 @@ type CarouselContextProps = {
 
 const CarouselContext = React.createContext<CarouselContextProps | null>(null)
 
+/**
+ * Exposes `useCarousel` as a reusable hook.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function useCarousel() {
   const context = React.useContext(CarouselContext)
 
@@ -42,6 +48,12 @@ function useCarousel() {
   return context
 }
 
+/**
+ * Handles `Carousel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Carousel({
   orientation = 'horizontal',
   opts,
@@ -132,6 +144,15 @@ function Carousel({
   )
 }
 
+/**
+ * Handles `CarouselContent` logic.
+ *
+ * @param className - Input used by `CarouselContent` to compute state, payload, or request behavior.
+ * @param props - Input used by `CarouselContent` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CarouselContent({ className, ...props }: React.ComponentProps<'div'>) {
   const { carouselRef, orientation } = useCarousel()
 
@@ -153,6 +174,15 @@ function CarouselContent({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `CarouselItem` logic.
+ *
+ * @param className - Input used by `CarouselItem` to compute state, payload, or request behavior.
+ * @param props - Input used by `CarouselItem` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CarouselItem({ className, ...props }: React.ComponentProps<'div'>) {
   const { orientation } = useCarousel()
 
@@ -171,6 +201,12 @@ function CarouselItem({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `CarouselPrevious` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CarouselPrevious({
   className,
   variant = 'outline',
@@ -201,6 +237,12 @@ function CarouselPrevious({
   )
 }
 
+/**
+ * Handles `CarouselNext` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CarouselNext({
   className,
   variant = 'outline',

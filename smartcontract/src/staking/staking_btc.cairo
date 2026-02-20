@@ -9,74 +9,42 @@ pub struct Stake {
     pub accumulated_rewards: u256,
 }
 
-/// @title ERC20 Interface
-/// @author CAREL Team
-/// @notice Minimal ERC20 interface for staking transfers.
-/// @dev Used for BTC wrapper tokens and reward payouts.
+// Minimal ERC20 interface for staking transfers.
+// Used for BTC wrapper tokens and reward payouts.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
-    /// @notice Transfers tokens to a recipient.
-    /// @dev Used for withdrawals.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Transfers tokens from this contract to `recipient`.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
-    /// @notice Transfers tokens from a sender.
-    /// @dev Used for staking deposits.
-    /// @param sender Token holder address.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Transfers tokens from `sender` to `recipient` using allowance.
     fn transfer_from(
         ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256
     ) -> bool;
 }
 
-/// @title BTC Staking Interface
-/// @author CAREL Team
-/// @notice Defines staking entrypoints for BTC wrapper tokens.
-/// @dev Supports multiple BTC-wrapped tokens.
+// Public staking API for BTC-wrapper assets.
+// Allows multiple BTC tokens through owner-managed allowlist.
 #[starknet::interface]
 pub trait IBTCStaking<TContractState> {
-    /// @notice Stakes a supported BTC token.
-    /// @dev Records stake and tier.
-    /// @param btc_token BTC token address.
-    /// @param amount Amount to stake.
+    // Stakes assets and updates caller position.
     fn stake(ref self: TContractState, btc_token: ContractAddress, amount: u256);
-    /// @notice Unstakes a supported BTC token.
-    /// @dev Enforces lock period.
-    /// @param btc_token BTC token address.
-    /// @param amount Amount to unstake.
+    // Unstakes assets and updates caller position.
     fn unstake(ref self: TContractState, btc_token: ContractAddress, amount: u256);
-    /// @notice Claims rewards for a BTC stake.
-    /// @dev Transfers rewards in reward token.
-    /// @param btc_token BTC token address.
+    // Claims accrued staking rewards.
     fn claim_rewards(ref self: TContractState, btc_token: ContractAddress);
-    /// @notice Calculates rewards for a BTC stake.
-    /// @dev Includes accumulated and pending rewards.
-    /// @param user User address.
-    /// @param btc_token BTC token address.
-    /// @return rewards Total rewards.
+    // Returns total rewards (stored + pending) for a position.
     fn calculate_rewards(self: @TContractState, user: ContractAddress, btc_token: ContractAddress) -> u256;
-    /// @notice Checks if a BTC token is accepted.
-    /// @dev Read-only helper for UI.
-    /// @param btc_token BTC token address.
-    /// @return accepted True if supported.
+    // Returns whether a BTC token is allowlisted.
     fn is_token_accepted(self: @TContractState, btc_token: ContractAddress) -> bool;
-    /// @notice Adds a BTC token to the accepted list.
-    /// @dev Owner-only to control supported tokens.
-    /// @param btc_token BTC token address.
+    // Adds a BTC token to the staking allowlist.
     fn add_btc_token(ref self: TContractState, btc_token: ContractAddress);
 }
 
-/// @title BTC Staking Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for BTC staking actions.
+// Hide Mode hooks for BTC staking actions.
 #[starknet::interface]
 pub trait IBTCStakingPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets the privacy router used for Hide Mode staking actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private staking action proof.
+    // Forwards nullifier/commitment-bound staking payload to the privacy router.
     fn submit_private_staking_action(
         ref self: TContractState,
         old_root: felt252,
@@ -88,10 +56,8 @@ pub trait IBTCStakingPrivacy<TContractState> {
     );
 }
 
-/// @title BTC Staking Contract
-/// @author CAREL Team
-/// @notice Tiered staking for BTC wrapper tokens.
-/// @dev Enforces lock period and tiered APY.
+// BTC-wrapper staking contract with tier thresholds and lock period.
+// Rewards are paid in `reward_token_address`.
 #[starknet::contract]
 pub mod BTCStaking {
     use starknet::storage::*;
@@ -142,11 +108,9 @@ pub mod BTCStaking {
         pub amount: u256
     }
 
-    /// @notice Initializes BTC staking.
-    /// @dev Sets reward token and owner.
-    /// @param reward_token Reward token address.
-    /// @param owner Owner/admin address.
+    // Initializes reward token dependency and owner authority.
     #[constructor]
+    // Initializes contract storage during deployment.
     fn constructor(ref self: ContractState, reward_token: ContractAddress, owner: ContractAddress) {
         self.reward_token_address.write(reward_token);
         self.owner.write(owner);
@@ -154,10 +118,7 @@ pub mod BTCStaking {
 
     #[abi(embed_v0)]
     impl BTCStakingImpl of IBTCStaking<ContractState> {
-        /// @notice Stakes a supported BTC token.
-        /// @dev Records stake and tier.
-        /// @param btc_token BTC token address.
-        /// @param amount Amount to stake.
+        // Stakes allowlisted BTC token, compounds pending rewards, and refreshes tier.
         fn stake(ref self: ContractState, btc_token: ContractAddress, amount: u256) {
             assert!(self.accepted_btc_tokens.entry(btc_token).read(), "Token BTC tidak didukung");
             
@@ -181,10 +142,7 @@ pub mod BTCStaking {
             self.emit(Event::Staked(Staked { user, btc_token, amount }));
         }
 
-        /// @notice Unstakes a supported BTC token.
-        /// @dev Enforces lock period.
-        /// @param btc_token BTC token address.
-        /// @param amount Amount to unstake.
+        // Unstakes BTC token after lock period and updates stake metadata.
         fn unstake(ref self: ContractState, btc_token: ContractAddress, amount: u256) {
             let user = get_caller_address();
             let now = get_block_timestamp();
@@ -210,9 +168,7 @@ pub mod BTCStaking {
             self.emit(Event::Unstaked(Unstaked { user, btc_token, amount }));
         }
 
-        /// @notice Claims rewards for a BTC stake.
-        /// @dev Transfers rewards in reward token.
-        /// @param btc_token BTC token address.
+        // Claims caller rewards for selected BTC token position.
         fn claim_rewards(ref self: ContractState, btc_token: ContractAddress) {
             let user = get_caller_address();
             let now = get_block_timestamp();
@@ -230,27 +186,18 @@ pub mod BTCStaking {
             self.emit(Event::RewardsClaimed(RewardsClaimed { user, amount: total_reward }));
         }
 
-        /// @notice Calculates rewards for a BTC stake.
-        /// @dev Includes accumulated and pending rewards.
-        /// @param user User address.
-        /// @param btc_token BTC token address.
-        /// @return rewards Total rewards.
+        // Returns total claimable rewards (stored + pending) for a token position.
         fn calculate_rewards(self: @ContractState, user: ContractAddress, btc_token: ContractAddress) -> u256 {
             let stake = self.stakes.entry((user, btc_token)).read();
             stake.accumulated_rewards + self._calculate_pending(@stake)
         }
 
-        /// @notice Checks if a BTC token is accepted.
-        /// @dev Read-only helper for UI.
-        /// @param btc_token BTC token address.
-        /// @return accepted True if supported.
+        // Returns whether a BTC token is allowlisted.
         fn is_token_accepted(self: @ContractState, btc_token: ContractAddress) -> bool {
             self.accepted_btc_tokens.entry(btc_token).read()
         }
 
-        /// @notice Adds a BTC token to the accepted list.
-        /// @dev Owner-only to control supported tokens.
-        /// @param btc_token BTC token address.
+        // Adds a BTC token to the staking allowlist.
         fn add_btc_token(ref self: ContractState, btc_token: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Unauthorized");
             self.accepted_btc_tokens.entry(btc_token).write(true);
@@ -259,8 +206,7 @@ pub mod BTCStaking {
 
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
-        /// @notice Calculates staking tier based on amount.
-        /// @dev Used to apply tiered APY.
+        // Maps staked amount to reward tier thresholds.
         fn _calculate_tier(self: @ContractState, amount: u256) -> u8 {
             let one_token: u256 = 1000000000000000000;
             if amount >= 10000 * one_token { return 3; }
@@ -269,8 +215,7 @@ pub mod BTCStaking {
             0
         }
 
-        /// @notice Calculates pending rewards since last claim.
-        /// @dev Uses tier-specific APY and elapsed time.
+        // Computes linear rewards since the last claim checkpoint.
         fn _calculate_pending(self: @ContractState, stake: @Stake) -> u256 {
             if *stake.amount == 0 { return 0; }
             let time_diff = get_block_timestamp() - *stake.last_claim_time;
@@ -286,12 +231,15 @@ pub mod BTCStaking {
 
     #[abi(embed_v0)]
     impl BTCStakingPrivacyImpl of super::IBTCStakingPrivacy<ContractState> {
+        // Sets router used by Hide Mode staking flow.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Unauthorized owner");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Forwards private staking payload to privacy router for proof checks.
+        // `nullifiers` prevent replay and `commitments` bind action intent.
         fn submit_private_staking_action(
             ref self: ContractState,
             old_root: felt252,

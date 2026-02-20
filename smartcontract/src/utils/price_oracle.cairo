@@ -1,6 +1,6 @@
 use starknet::ContractAddress;
 
-// Add #[default] to resolve the starknet::Store diagnostic
+// Price source marker stored with cached values.
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub enum PriceSource {
     #[default]
@@ -18,26 +18,21 @@ pub struct CachedPrice {
     pub is_stale: bool,
 }
 
-/// @title Pragma Oracle Interface
-/// @author CAREL Team
-/// @notice Minimal interface for reading Pragma median prices.
-/// @dev Keeps dependency surface small for oracle integrations.
+// Minimal interface for reading Pragma median prices.
+// Keeps dependency surface small for oracle integrations.
 #[starknet::interface]
 pub trait IPragmaOracle<TContractState> {
-    /// @notice Returns median price data for a given data type.
-    /// @dev Read-only oracle query used for price resolution.
-    /// @param data_type Pragma data type selector.
-    /// @return response Aggregated price data.
+    // Returns median price data from Pragma oracle.
     fn get_data_median(self: @TContractState, data_type: DataType) -> PragmaPricesResponse;
 }
 
 #[derive(Copy, Drop, Serde)]
 pub enum DataType {
-    /// Spot price data (e.g., BTC/USD).
+    // Spot price data (e.g., BTC/USD).
     SpotEntry: felt252,
-    /// Futures data (e.g., BTC/USD expiry).
+    // Futures data (e.g., BTC/USD expiry).
     FutureEntry: (felt252, u64),
-    /// Generic data feeds.
+    // Generic data feeds.
     GenericEntry: felt252,
 }
 
@@ -50,50 +45,28 @@ pub struct PragmaPricesResponse {
     pub expiration_timestamp: Option<u64>,
 }
 
-/// @title Price Oracle Interface
-/// @author CAREL Team
-/// @notice Standard price oracle entrypoints for CAREL protocol.
-/// @dev Supports cached reads, manual updates, and fallback prices.
+// Price-oracle API used by trading and bridge quote paths.
+// Supports cached reads plus manual and fallback updates.
 #[starknet::interface]
 pub trait IPriceOracle<TContractState> {
-    /// @notice Returns the latest price for a token.
-    /// @dev Falls back to cached or fallback price when needed.
-    /// @param token Token address.
-    /// @param asset_id Oracle asset identifier.
-    /// @return price Latest resolved price.
+    // Returns latest cached or resolved price for an asset.
     fn get_price(self: @TContractState, token: ContractAddress, asset_id: felt252) -> u256;
-    /// @notice Returns a USD value for a token amount.
-    /// @dev Uses get_price and scales by token decimals.
-    /// @param token Token address.
-    /// @param asset_id Oracle asset identifier.
-    /// @param amount Token amount.
-    /// @param decimals Token decimals.
-    /// @return value_usd USD value of the amount.
+    // Converts token amount into USD value using oracle pricing.
     fn get_price_usd(self: @TContractState, token: ContractAddress, asset_id: felt252, amount: u256, decimals: u32) -> u256;
-    /// @notice Updates the manual price cache for a token.
-    /// @dev Restricted to authorized updaters for integrity.
-    /// @param token Token address.
-    /// @param price Manual price value.
+    // Writes manual price into cache (authorized updater only).
     fn update_price_manual(ref self: TContractState, token: ContractAddress, price: u256);
-    /// @notice Sets a fallback price for a token.
-    /// @dev Owner-only to avoid malicious price injection.
-    /// @param token Token address.
-    /// @param price Fallback price value.
+    // Updates fallback price used when live sources are unavailable (owner only).
     fn set_fallback_price(ref self: TContractState, token: ContractAddress, price: u256);
-    /// @notice Pauses or unpauses oracle reads.
-    /// @dev Owner-only for emergency control.
-    /// @param paused Pause flag.
+    // Toggles oracle pause state (owner only).
     fn set_paused(ref self: TContractState, paused: bool);
 }
 
-/// @title Price Oracle Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for oracle updates.
+// Hide Mode hooks for private oracle updates.
 #[starknet::interface]
 pub trait IPriceOraclePrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets privacy router used for Hide Mode actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private oracle update proof.
+    // Forwards private oracle update payload to privacy router.
     fn submit_private_oracle_action(
         ref self: TContractState,
         old_root: felt252,
@@ -105,16 +78,12 @@ pub trait IPriceOraclePrivacy<TContractState> {
     );
 }
 
-/// @title Price Oracle Contract
-/// @author CAREL Team
-/// @notice Resolves token prices from oracles with caching and fallback.
-/// @dev Combines Pragma data with cached and fallback pricing.
+// Resolves token prices from oracles with caching and fallback.
+// Combines Pragma data with cached and fallback pricing.
 #[starknet::contract]
 pub mod PriceOracle {
-    // Rule: Always use full paths for core library imports
     use starknet::ContractAddress;
     use starknet::{get_caller_address, get_block_timestamp};
-    // Rule: Always add all storage imports using wildcard
     use starknet::storage::*;
     use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy::action_types::ACTION_ORACLE;
@@ -146,6 +115,7 @@ pub mod PriceOracle {
 
     const STANDARD_PRICE_DECIMALS: u32 = 8;
 
+    // Normalizes oracle price values to target decimals.
     fn normalize_price(price: u128, decimals: u32) -> u256 {
         let mut result: u256 = price.into();
         if decimals == STANDARD_PRICE_DECIMALS {
@@ -171,11 +141,8 @@ pub mod PriceOracle {
         result / div
     }
 
-    /// @notice Initializes the price oracle.
-    /// @dev Sets oracle addresses and safe cache defaults.
-    /// @param pragma Pragma oracle address.
-    /// @param chainlink Chainlink oracle address.
-    /// @param owner_address Owner address for admin controls.
+    // Initializes oracle dependencies and cache defaults.
+    // pragma/chainlink/owner_address: external sources and admin account.
     #[constructor]
     fn constructor(
         ref self: ContractState, 
@@ -193,13 +160,8 @@ pub mod PriceOracle {
 
     #[abi(embed_v0)]
     impl PriceOracleImpl of IPriceOracle<ContractState> {
-        /// @notice Returns the latest price for a token.
-        /// @dev Falls back to cached or fallback price when needed.
-        /// @param token Token address.
-        /// @param asset_id Oracle asset identifier.
-        /// @return price Latest resolved price.
+        // Returns latest cached or resolved price for an asset.
         fn get_price(self: @ContractState, token: ContractAddress, asset_id: felt252) -> u256 {
-            // Rule: Ensure double quotes in assert strings
             assert!(!self.paused.read(), "Contract is paused");
             let now = get_block_timestamp();
             let cached = self.price_cache.entry(token).read();
@@ -230,13 +192,7 @@ pub mod PriceOracle {
             fallback
         }
 
-        /// @notice Returns a USD value for a token amount.
-        /// @dev Uses get_price and scales by token decimals.
-        /// @param token Token address.
-        /// @param asset_id Oracle asset identifier.
-        /// @param amount Token amount.
-        /// @param decimals Token decimals.
-        /// @return value_usd USD value of the amount.
+        // Converts token amount into USD value using oracle pricing.
         fn get_price_usd(
             self: @ContractState, 
             token: ContractAddress, 
@@ -256,10 +212,7 @@ pub mod PriceOracle {
             (amount * price) / divisor
         }
 
-        /// @notice Updates the manual price cache for a token.
-        /// @dev Restricted to authorized updaters for integrity.
-        /// @param token Token address.
-        /// @param price Manual price value.
+        // Writes manual price into cache (authorized updater only).
         fn update_price_manual(ref self: ContractState, token: ContractAddress, price: u256) {
             assert!(self.authorized_updaters.entry(get_caller_address()).read(), "Not authorized");
             let new_cache = CachedPrice {
@@ -271,18 +224,13 @@ pub mod PriceOracle {
             self.price_cache.entry(token).write(new_cache);
         }
 
-        /// @notice Sets a fallback price for a token.
-        /// @dev Owner-only to avoid malicious price injection.
-        /// @param token Token address.
-        /// @param price Fallback price value.
+        // Updates fallback price used when live sources are unavailable (owner only).
         fn set_fallback_price(ref self: ContractState, token: ContractAddress, price: u256) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             self.fallback_prices.entry(token).write(price);
         }
 
-        /// @notice Pauses or unpauses oracle reads.
-        /// @dev Owner-only for emergency control.
-        /// @param paused Pause flag.
+        // Toggles oracle pause state (owner only).
         fn set_paused(ref self: ContractState, paused: bool) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             self.paused.write(paused);
@@ -291,12 +239,15 @@ pub mod PriceOracle {
 
     #[abi(embed_v0)]
     impl PriceOraclePrivacyImpl of super::IPriceOraclePrivacy<ContractState> {
+        // Sets privacy router used for Hide Mode oracle actions (owner only).
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Relays private oracle payload for proof verification and execution.
+        // `nullifiers` prevent replay and `commitments` bind intended update state.
         fn submit_private_oracle_action(
             ref self: ContractState,
             old_root: felt252,

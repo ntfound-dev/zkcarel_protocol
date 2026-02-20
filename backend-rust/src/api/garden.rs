@@ -48,6 +48,7 @@ pub struct GardenSchemaPath {
     pub name: String,
 }
 
+// Internal helper that supports `garden_client` operations.
 fn garden_client(state: &AppState) -> GardenClient {
     GardenClient::new(
         state.config.garden_api_key.clone().unwrap_or_default(),

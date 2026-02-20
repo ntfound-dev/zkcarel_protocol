@@ -9,64 +9,39 @@ pub struct Transaction {
     pub executed: bool,
 }
 
-/// @title Multisig Interface
-/// @author CAREL Team
-/// @notice Defines multisig transaction lifecycle entrypoints.
-/// @dev Used to coordinate sensitive protocol actions with multiple owners.
+// Multisig API for transaction proposal, confirmation, and execution.
+// Coordinates sensitive protocol actions through owner quorum.
 #[starknet::interface]
 pub trait IMultisig<TContractState> {
-    /// @notice Submits a new transaction for multisig approval.
-    /// @dev Hashes calldata for later verification during execution.
-    /// @param target Target contract address.
-    /// @param selector Function selector to call.
-    /// @param calldata Calldata for the target call.
-    /// @return tx_id Newly created transaction id.
+    // Submits multisig transaction proposal and returns tx id.
     fn submit_transaction(
         ref self: TContractState, 
         target: ContractAddress, 
         selector: felt252, 
         calldata: Span<felt252>
     ) -> u256;
-    /// @notice Confirms a pending transaction.
-    /// @dev Only owners can confirm; increases confirmation count.
-    /// @param tx_id Transaction id to confirm.
+    // Confirms pending multisig transaction for caller owner key.
     fn confirm_transaction(ref self: TContractState, tx_id: u256);
-    /// @notice Revokes a previous confirmation.
-    /// @dev Only owners can revoke; decreases confirmation count.
-    /// @param tx_id Transaction id to revoke.
+    // Revokes caller confirmation on a pending transaction.
     fn revoke_confirmation(ref self: TContractState, tx_id: u256);
-    /// @notice Executes a confirmed transaction.
-    /// @dev Requires threshold confirmations and matching calldata hash.
-    /// @param tx_id Transaction id to execute.
-    /// @param calldata Calldata for the target call.
+    // Executes multisig transaction when required confirmations reached.
     fn execute_transaction(ref self: TContractState, tx_id: u256, calldata: Span<felt252>);
-    /// @notice Adds a new multisig owner.
-    /// @dev Callable only by the contract itself (via executed tx).
-    /// @param new_owner Address to add as owner.
+    // Adds a new multisig owner through self-call governance.
     fn add_owner(ref self: TContractState, new_owner: ContractAddress);
-    /// @notice Removes an existing multisig owner.
-    /// @dev Callable only by the contract itself (via executed tx).
-    /// @param owner_to_remove Address to remove.
+    // Removes an existing multisig owner through self-call governance.
     fn remove_owner(ref self: TContractState, owner_to_remove: ContractAddress);
-    /// @notice Returns the current owners list.
-    /// @dev Filters out removed owners.
-    /// @return owners Array of owner addresses.
+    // Returns current multisig owner set.
     fn get_owners(self: @TContractState) -> Array<ContractAddress>;
-    /// @notice Returns a transaction record.
-    /// @dev Read-only helper for UIs and audits.
-    /// @param tx_id Transaction id to fetch.
-    /// @return tx Stored transaction data.
+    // Returns transaction metadata and execution status by id.
     fn get_transaction(self: @TContractState, tx_id: u256) -> Transaction;
 }
 
-/// @title Multisig Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for multisig actions.
+// Hide Mode hooks for multisig actions.
 #[starknet::interface]
 pub trait IMultisigPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets privacy router used for Hide Mode actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private multisig action proof.
+    // Forwards private multisig payload to privacy router.
     fn submit_private_multisig_action(
         ref self: TContractState,
         old_root: felt252,
@@ -78,10 +53,8 @@ pub trait IMultisigPrivacy<TContractState> {
     );
 }
 
-/// @title Multisig Contract
-/// @author CAREL Team
-/// @notice Multi-owner execution gate for sensitive protocol actions.
-/// @dev Uses calldata hashing to ensure approvals match execution data.
+// Multi-owner execution gate for sensitive protocol actions.
+// Uses calldata hashing to ensure approvals match executed payload.
 #[starknet::contract]
 pub mod Multisig {
     use starknet::ContractAddress;
@@ -106,10 +79,8 @@ pub mod Multisig {
         pub privacy_router: ContractAddress,
     }
 
-    /// @notice Initializes the multisig with owners and threshold.
-    /// @dev Validates that the required threshold is within owner count.
-    /// @param initial_owners Initial owner list.
-    /// @param required Required confirmations threshold.
+    // Initializes owner set and required confirmation threshold.
+    // initial_owners/required: initial quorum configuration.
     #[constructor]
     fn constructor(ref self: ContractState, initial_owners: Span<ContractAddress>, required: u256) {
         assert!(required > 0, "Required confirmations must be > 0");
@@ -129,12 +100,7 @@ pub mod Multisig {
 
     #[abi(embed_v0)]
     pub impl MultisigImpl of super::IMultisig<ContractState> {
-        /// @notice Submits a new transaction for multisig approval.
-        /// @dev Hashes calldata for later verification during execution.
-        /// @param target Target contract address.
-        /// @param selector Function selector to call.
-        /// @param calldata Calldata for the target call.
-        /// @return tx_id Newly created transaction id.
+        // Submits multisig transaction proposal and returns tx id.
         fn submit_transaction(
             ref self: ContractState, 
             target: ContractAddress, 
@@ -157,9 +123,7 @@ pub mod Multisig {
             id
         }
 
-        /// @notice Confirms a pending transaction.
-        /// @dev Only owners can confirm; increases confirmation count.
-        /// @param tx_id Transaction id to confirm.
+        // Confirms pending multisig transaction for caller owner key.
         fn confirm_transaction(ref self: ContractState, tx_id: u256) {
             self.assert_only_owner();
             let caller = get_caller_address();
@@ -174,9 +138,7 @@ pub mod Multisig {
             self.transactions.entry(tx_id).write(tx);
         }
 
-        /// @notice Revokes a previous confirmation.
-        /// @dev Only owners can revoke; decreases confirmation count.
-        /// @param tx_id Transaction id to revoke.
+        // Revokes caller confirmation on a pending transaction.
         fn revoke_confirmation(ref self: ContractState, tx_id: u256) {
             self.assert_only_owner();
             let caller = get_caller_address();
@@ -190,10 +152,7 @@ pub mod Multisig {
             self.transactions.entry(tx_id).write(tx);
         }
 
-        /// @notice Executes a confirmed transaction.
-        /// @dev Requires threshold confirmations and matching calldata hash.
-        /// @param tx_id Transaction id to execute.
-        /// @param calldata Calldata for the target call.
+        // Executes multisig transaction when required confirmations reached.
         fn execute_transaction(ref self: ContractState, tx_id: u256, calldata: Span<felt252>) {
             self.assert_only_owner();
             let mut tx = self.transactions.entry(tx_id).read();
@@ -205,15 +164,13 @@ pub mod Multisig {
             tx.executed = true;
             self.transactions.entry(tx_id).write(tx);
 
-            // Menggunakan unwrap_syscall untuk menangkap error dari sub-call
+            // Mark execution context before the downstream contract call.
             self.executing.write(true);
             call_contract_syscall(tx.target, tx.selector, calldata).unwrap_syscall();
             self.executing.write(false);
         }
 
-        /// @notice Adds a new multisig owner.
-        /// @dev Callable only by the contract itself (via executed tx).
-        /// @param new_owner Address to add as owner.
+        // Adds a new owner; callable only through successful multisig self-call.
         fn add_owner(ref self: ContractState, new_owner: ContractAddress) {
             self.assert_only_self();
             assert!(!self.is_owner.entry(new_owner).read(), "Already an owner");
@@ -221,9 +178,7 @@ pub mod Multisig {
             self.is_owner.entry(new_owner).write(true);
         }
 
-        /// @notice Removes an existing multisig owner.
-        /// @dev Callable only by the contract itself (via executed tx).
-        /// @param owner_to_remove Address to remove.
+        // Removes an owner and adjusts threshold if it exceeds active owner count.
         fn remove_owner(ref self: ContractState, owner_to_remove: ContractAddress) {
             self.assert_only_self();
             assert!(self.is_owner.entry(owner_to_remove).read(), "Not an owner");
@@ -243,9 +198,7 @@ pub mod Multisig {
             }
         }
 
-        /// @notice Returns the current owners list.
-        /// @dev Filters out removed owners.
-        /// @return owners Array of owner addresses.
+        // Returns current multisig owner set.
         fn get_owners(self: @ContractState) -> Array<ContractAddress> {
             let mut result = array![];
             for i in 0..self.owners.len() {
@@ -257,10 +210,7 @@ pub mod Multisig {
             result
         }
 
-        /// @notice Returns a transaction record.
-        /// @dev Read-only helper for UIs and audits.
-        /// @param tx_id Transaction id to fetch.
-        /// @return tx Stored transaction data.
+        // Returns transaction metadata and execution status by id.
         fn get_transaction(self: @ContractState, tx_id: u256) -> Transaction {
             self.transactions.entry(tx_id).read()
         }
@@ -268,12 +218,15 @@ pub mod Multisig {
 
     #[abi(embed_v0)]
     impl MultisigPrivacyImpl of super::IMultisigPrivacy<ContractState> {
+        // Sets privacy router used for Hide Mode multisig actions.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Relays private multisig payload for proof verification and execution.
+        // `nullifiers` prevent replay and `commitments` bind intended operation.
         fn submit_private_multisig_action(
             ref self: ContractState,
             old_root: felt252,
@@ -300,15 +253,13 @@ pub mod Multisig {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
-        /// @notice Ensures the caller is a multisig owner.
-        /// @dev Centralizes owner checks to keep access control consistent.
+        // Asserts caller is one of multisig owners.
         fn assert_only_owner(self: @ContractState) {
             let caller = get_caller_address();
             assert!(self.is_owner.entry(caller).read(), "Caller is not an owner");
         }
 
-        /// @notice Ensures only the contract can call sensitive internals.
-        /// @dev Allows internal execution flow during multisig calls.
+        // Asserts call originates from the multisig contract itself.
         fn assert_only_self(self: @ContractState) {
             if self.executing.read() {
                 return;

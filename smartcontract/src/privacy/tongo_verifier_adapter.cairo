@@ -1,7 +1,5 @@
-/// @title Tongo Verifier Adapter
-/// @author CAREL Team
-/// @notice Adapter for Tongo proof verification.
-/// @dev Forwards proof verification to Tongo verifier contract.
+// Adapter for Tongo proof verification.
+// Forwards proof verification to Tongo verifier contract.
 #[starknet::contract]
 pub mod TongoVerifierAdapter {
     use starknet::ContractAddress;
@@ -10,7 +8,8 @@ pub mod TongoVerifierAdapter {
 
     #[starknet::interface]
     pub trait ITongoVerifier<TContractState> {
-        fn verify_proof(self: @TContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool;
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @TContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool;
     }
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
@@ -40,6 +39,7 @@ pub mod TongoVerifierAdapter {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, verifier: ContractAddress) {
         self.ownable.initializer(admin);
         self.verifier.write(verifier);
@@ -47,7 +47,8 @@ pub mod TongoVerifierAdapter {
 
     #[abi(embed_v0)]
     impl VerifierImpl of super::super::zk_privacy_router::IProofVerifier<ContractState> {
-        fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
             let verifier = ITongoVerifierDispatcher { contract_address: self.verifier.read() };
             verifier.verify_proof(proof, public_inputs)
         }
@@ -55,7 +56,8 @@ pub mod TongoVerifierAdapter {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::super::privacy_adapter::IPrivacyVerifierAdmin<ContractState> {
-        fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
+        // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
+            fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             self.verifier.write(verifier);
             self.emit(Event::VerifierUpdated(VerifierUpdated { verifier }));

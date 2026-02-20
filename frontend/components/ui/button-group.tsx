@@ -21,6 +21,12 @@ const buttonGroupVariants = cva(
   },
 )
 
+/**
+ * Handles `ButtonGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ButtonGroup({
   className,
   orientation,
@@ -37,6 +43,12 @@ function ButtonGroup({
   )
 }
 
+/**
+ * Handles `ButtonGroupText` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ButtonGroupText({
   className,
   asChild = false,
@@ -57,6 +69,12 @@ function ButtonGroupText({
   )
 }
 
+/**
+ * Handles `ButtonGroupSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ButtonGroupSeparator({
   className,
   orientation = 'vertical',

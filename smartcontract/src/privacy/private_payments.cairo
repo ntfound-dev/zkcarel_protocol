@@ -8,31 +8,18 @@ pub struct PaymentCommitment {
     pub finalized: bool,
 }
 
-/// @title Private Payments Interface
-/// @author CAREL Team
-/// @notice Confidential payment flow with ZK proofs.
-/// @dev Integrates external proof verifier.
+// Confidential payment flow with ZK proofs.
+// Integrates external proof verifier.
 #[starknet::interface]
 pub trait IPrivatePayments<TContractState> {
-    /// @notice Submits a private payment commitment.
-    /// @dev Verifies proof before accepting.
-    /// @param payment Encrypted payment commitment.
-    /// @param proof ZK proof.
-    /// @param public_inputs Public inputs.
-    /// @return payment_id Newly created payment id.
+    // Registers a private payment commitment for deferred settlement and proof-based finalization.
     fn submit_private_payment(
         ref self: TContractState,
         payment: PaymentCommitment,
         proof: Span<felt252>,
         public_inputs: Span<felt252>
     ) -> u64;
-    /// @notice Finalizes a private payment.
-    /// @dev Uses nullifier to prevent reuse.
-    /// @param payment_id Payment id.
-    /// @param recipient Recipient address.
-    /// @param nullifier Nullifier value.
-    /// @param proof ZK proof.
-    /// @param public_inputs Public inputs.
+    // Finalizes a private payment by verifying proof inputs and consuming the settlement nullifier.
     fn finalize_private_payment(
         ref self: TContractState,
         payment_id: u64,
@@ -41,27 +28,19 @@ pub trait IPrivatePayments<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>
     );
-    /// @notice Checks if a nullifier has been used.
-    /// @param nullifier Nullifier to check.
-    /// @return used True if used.
+    // Read-only check for whether a nullifier has been consumed (double-spend protection).
     fn is_nullifier_used(self: @TContractState, nullifier: felt252) -> bool;
 }
 
-/// @title Private Payments Admin Interface
-/// @author CAREL Team
-/// @notice Admin controls for verifier configuration.
+// Admin controls for verifier configuration.
 #[starknet::interface]
 pub trait IPrivatePaymentsAdmin<TContractState> {
-    /// @notice Updates verifier address.
-    /// @dev Owner-only.
-    /// @param verifier New verifier address.
+    // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
 }
 
-/// @title Private Payments Contract
-/// @author CAREL Team
-/// @notice Confidential payments via encrypted commitments.
-/// @dev Uses verifier and nullifiers for safety.
+// Confidential payments via encrypted commitments.
+// Uses verifier and nullifiers for safety.
 #[starknet::contract]
 pub mod PrivatePayments {
     use starknet::ContractAddress;
@@ -115,6 +94,7 @@ pub mod PrivatePayments {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, verifier: ContractAddress) {
         self.ownable.initializer(admin);
         self.verifier.write(verifier);
@@ -122,7 +102,8 @@ pub mod PrivatePayments {
 
     #[abi(embed_v0)]
     impl PrivatePaymentsImpl of super::IPrivatePayments<ContractState> {
-        fn submit_private_payment(
+        // Registers a private payment commitment for deferred settlement and proof-based finalization.
+            fn submit_private_payment(
             ref self: ContractState,
             payment: PaymentCommitment,
             proof: Span<felt252>,
@@ -139,7 +120,8 @@ pub mod PrivatePayments {
             id
         }
 
-        fn finalize_private_payment(
+        // Finalizes a private payment by verifying proof inputs and consuming the settlement nullifier.
+            fn finalize_private_payment(
             ref self: ContractState,
             payment_id: u64,
             recipient: ContractAddress,
@@ -159,14 +141,16 @@ pub mod PrivatePayments {
             self.emit(Event::PaymentFinalized(PaymentFinalized { payment_id, recipient }));
         }
 
-        fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
+        // Read-only check for whether a nullifier has been consumed (double-spend protection).
+            fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
             self.nullifiers.entry(nullifier).read()
         }
     }
 
     #[abi(embed_v0)]
     impl AdminImpl of super::IPrivatePaymentsAdmin<ContractState> {
-        fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
+        // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
+            fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!verifier.is_zero(), "Verifier required");
             self.verifier.write(verifier);

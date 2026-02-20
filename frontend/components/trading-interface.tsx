@@ -203,6 +203,14 @@ const TOKEN_DECIMALS: Record<string, number> = {
   CAREL: 18,
 }
 
+/**
+ * Handles `chainFromNetwork` logic.
+ *
+ * @param network - Input used by `chainFromNetwork` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const chainFromNetwork = (network: string) => {
   const key = network.trim().toLowerCase()
   if (key.includes("bitcoin")) return "bitcoin"
@@ -211,6 +219,16 @@ const chainFromNetwork = (network: string) => {
   return key
 }
 
+/**
+ * Checks conditions for `isBridgeToStrkDisabledRoute`.
+ *
+ * @param fromChain - Input used by `isBridgeToStrkDisabledRoute` to compute state, payload, or request behavior.
+ * @param toChain - Input used by `isBridgeToStrkDisabledRoute` to compute state, payload, or request behavior.
+ * @param toSymbol - Input used by `isBridgeToStrkDisabledRoute` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const isBridgeToStrkDisabledRoute = (fromChain: string, toChain: string, toSymbol: string) =>
   fromChain !== "starknet" && toChain === "starknet" && toSymbol.trim().toUpperCase() === "STRK"
 
@@ -243,6 +261,14 @@ const convertAmountByUsdPrice = (
   return (amount * fromPrice) / toPrice
 }
 
+/**
+ * Parses or transforms values for `normalizeFeltAddress`.
+ *
+ * @param value - Input used by `normalizeFeltAddress` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const normalizeFeltAddress = (value: string) => {
   const trimmed = value.trim()
   if (!trimmed) return ""
@@ -305,18 +331,38 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
   }
 }
 
+/**
+ * Handles `persistTradePrivacyPayload` logic.
+ *
+ * @param payload - Input used by `persistTradePrivacyPayload` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
   if (typeof window === "undefined") return
   window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(payload))
   window.dispatchEvent(new Event("trade-privacy-payload-updated"))
 }
 
+/**
+ * Updates state for `clearTradePrivacyPayload`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const clearTradePrivacyPayload = () => {
   if (typeof window === "undefined") return
   window.localStorage.removeItem(TRADE_PRIVACY_PAYLOAD_KEY)
   window.dispatchEvent(new Event("trade-privacy-payload-updated"))
 }
 
+/**
+ * Handles `randomHexFelt` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const randomHexFelt = () => {
   const bytes = new Uint8Array(16)
   const cryptoApi =
@@ -342,6 +388,14 @@ const createDevTradePrivacyPayload = (): PrivacyVerificationPayload => ({
   public_inputs: ["0x1"],
 })
 
+/**
+ * Builds inputs required by `buildHideBalancePrivacyCall`.
+ *
+ * @param payload - Input used by `buildHideBalancePrivacyCall` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const buildHideBalancePrivacyCall = (payload: PrivacyVerificationPayload) => {
   const router = STARKNET_ZK_PRIVACY_ROUTER_ADDRESS.trim()
   if (!router) {
@@ -372,6 +426,15 @@ const buildHideBalancePrivacyCall = (payload: PrivacyVerificationPayload) => {
   }
 }
 
+/**
+ * Checks conditions for `isSameFeltAddress`.
+ *
+ * @param left - Input used by `isSameFeltAddress` to compute state, payload, or request behavior.
+ * @param right - Input used by `isSameFeltAddress` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const isSameFeltAddress = (left: string, right: string) => {
   const a = normalizeFeltAddress(left)
   const b = normalizeFeltAddress(right)
@@ -389,6 +452,14 @@ const resolveTokenDecimals = (symbol: string): number => {
   return TOKEN_DECIMALS[key] ?? 18
 }
 
+/**
+ * Parses or transforms values for `formatTokenAmount`.
+ *
+ * @param value - Input used by `formatTokenAmount` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
   if (!Number.isFinite(value)) return "—"
   return value.toLocaleString(undefined, {
@@ -397,6 +468,12 @@ const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
   })
 }
 
+/**
+ * Handles `estimatedBridgeTimeByProvider` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const estimatedBridgeTimeByProvider = (provider?: string) => {
   const key = (provider || "").trim().toLowerCase()
   if (!key) return "~15-20 min"
@@ -454,6 +531,14 @@ const normalizeEstimatedTimeLabel = ({
   return base
 }
 
+/**
+ * Parses or transforms values for `formatBtcFromSats`.
+ *
+ * @param value - Input used by `formatBtcFromSats` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatBtcFromSats = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return "0.00000000 BTC"
   return `${(value / 100_000_000).toFixed(8)} BTC`
@@ -496,6 +581,12 @@ const parseGardenOrderProgress = (orderPayload: unknown): GardenOrderProgress =>
     !isRefunded &&
     (isExpired || statusRaw === "failed" || statusRaw === "cancelled" || !!instantRefundTx)
 
+  /**
+   * Handles `status` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const status = (() => {
     if (isCompleted) return "completed"
     if (isRefunded) return "refunded"
@@ -540,6 +631,14 @@ const broadcastBtcRawTransaction = async (rawTxHex: string): Promise<string> => 
   return payload
 }
 
+/**
+ * Parses or transforms values for `formatMultiplier`.
+ *
+ * @param value - Input used by `formatMultiplier` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatMultiplier = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return "1x"
   const rounded = Math.round(value)
@@ -547,11 +646,27 @@ const formatMultiplier = (value: number) => {
   return `${value.toFixed(2)}x`
 }
 
+/**
+ * Handles `stableKeyNumber` logic.
+ *
+ * @param value - Input used by `stableKeyNumber` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const stableKeyNumber = (value: number, fractionDigits = 8) => {
   if (!Number.isFinite(value)) return "0"
   return value.toFixed(fractionDigits)
 }
 
+/**
+ * Parses or transforms values for `sanitizeDecimalInput`.
+ *
+ * @param raw - Input used by `sanitizeDecimalInput` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const sanitizeDecimalInput = (raw: string, maxDecimals = 18) => {
   const cleaned = raw.replace(/,/g, "").replace(/[^\d.]/g, "")
   if (!cleaned) return ""
@@ -567,12 +682,29 @@ const sanitizeDecimalInput = (raw: string, maxDecimals = 18) => {
   return `${intPart}.${fracPart}`
 }
 
+/**
+ * Handles `trimDecimalZeros` logic.
+ *
+ * @param raw - Input used by `trimDecimalZeros` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const trimDecimalZeros = (raw: string) =>
   raw
     .replace(/(\.\d*?[1-9])0+$/, "$1")
     .replace(/\.0+$/, "")
     .replace(/\.$/, "")
 
+/**
+ * Parses or transforms values for `normalizeTokenAmountDisplay`.
+ *
+ * @param raw - Input used by `normalizeTokenAmountDisplay` to compute state, payload, or request behavior.
+ * @param symbol - Input used by `normalizeTokenAmountDisplay` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const normalizeTokenAmountDisplay = (raw: string | number, symbol: string) => {
   const parsed =
     typeof raw === "number" ? raw : Number.parseFloat(String(raw).replace(/,/g, ""))
@@ -634,6 +766,12 @@ interface TokenSelectorProps {
 
 type TokenWithBalance = (typeof tokenCatalog)[number] & { balance: number }
 
+/**
+ * Handles `TokenSelector` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TokenSelector({
   selectedToken,
   onSelect,
@@ -745,6 +883,18 @@ function TokenSelector({
   )
 }
 
+/**
+ * Handles `SimpleRouteVisualization` logic.
+ *
+ * @param fromToken - Input used by `SimpleRouteVisualization` to compute state, payload, or request behavior.
+ * @param toToken - Input used by `SimpleRouteVisualization` to compute state, payload, or request behavior.
+ * @param isCrossChain - Input used by `SimpleRouteVisualization` to compute state, payload, or request behavior.
+ * @param toToken - Input used by `SimpleRouteVisualization` to compute state, payload, or request behavior.
+ * @param isCrossChain - Input used by `SimpleRouteVisualization` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function SimpleRouteVisualization({ fromToken, toToken, isCrossChain }: { fromToken: TokenWithBalance, toToken: TokenWithBalance, isCrossChain: boolean }) {
   return (
     <div className="flex items-center justify-center gap-2 py-3 text-sm">
@@ -766,6 +916,12 @@ function SimpleRouteVisualization({ fromToken, toToken, isCrossChain }: { fromTo
   )
 }
 
+/**
+ * Handles `defaultReceiveAddressForNetwork` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function defaultReceiveAddressForNetwork(
   networkLabel: string,
   addresses: {
@@ -781,6 +937,12 @@ function defaultReceiveAddressForNetwork(
   return addresses.starknet || addresses.fallback || ""
 }
 
+/**
+ * Handles `TradingInterface` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function TradingInterface() {
   const { mode } = useTheme()
   const wallet = useWallet()
@@ -978,6 +1140,12 @@ export function TradingInterface() {
       return autoPrivacyPayloadPromiseRef.current
     }
 
+    /**
+     * Handles `task` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const task = (async () => {
       if (DEV_AUTO_GARAGA_PAYLOAD_ENABLED) {
         const generated = createDevTradePrivacyPayload()
@@ -1088,6 +1256,12 @@ export function TradingInterface() {
     wallet.isConnected,
   ])
 
+  /**
+   * Parses or transforms values for `formatSource`.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const formatSource = (source?: string) => {
     switch (source) {
       case "ws":
@@ -1177,6 +1351,12 @@ export function TradingInterface() {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
+    /**
+     * Handles `syncPayload` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const syncPayload = () => refreshTradePrivacyPayload()
     syncPayload()
     window.addEventListener("focus", syncPayload)
@@ -1254,6 +1434,12 @@ export function TradingInterface() {
       return
     }
 
+    /**
+     * Handles `loadMultiplier` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadMultiplier = async (force = false) => {
       try {
         const rewards = await getRewardsPoints({ force })
@@ -1322,6 +1508,12 @@ export function TradingInterface() {
 
     let cancelled = false
     const requestSeq = ++quoteRequestSeqRef.current
+    /**
+     * Checks conditions for `isStale`.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const isStale = () => cancelled || requestSeq !== quoteRequestSeqRef.current
     const timer = setTimeout(async () => {
       setIsQuoteLoading(true)
@@ -1344,6 +1536,16 @@ export function TradingInterface() {
         quoteCacheRef.current.delete(quoteCacheKey)
       }
 
+      /**
+       * Updates state for `saveQuoteToCache`.
+       *
+       * @param nextQuote - Input used by `saveQuoteToCache` to compute state, payload, or request behavior.
+       * @param nextToAmount - Input used by `saveQuoteToCache` to compute state, payload, or request behavior.
+       * @param nextQuoteError - Input used by `saveQuoteToCache` to compute state, payload, or request behavior.
+       *
+       * @returns Result consumed by caller flow, UI state updates, or async chaining.
+       * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+       */
       const saveQuoteToCache = (nextQuote: QuoteState, nextToAmount: string, nextQuoteError: string | null) => {
         quoteCacheRef.current.set(quoteCacheKey, {
           expiresAt: Date.now() + QUOTE_CACHE_TTL_MS,
@@ -1562,6 +1764,12 @@ export function TradingInterface() {
     customSlippage,
   ])
 
+  /**
+   * Handles `handleSwapTokens` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleSwapTokens = () => {
     const tempTokenSymbol = fromSymbol
     const tempAmount = fromAmount
@@ -1576,6 +1784,14 @@ export function TradingInterface() {
   const hasQuote = Boolean(quote)
   const bridgeTokenMismatch = isCrossChain && fromToken.symbol !== toToken.symbol
   const tokenFeeDigits = ["BTC", "WBTC"].includes(fromToken.symbol.toUpperCase()) ? 8 : 6
+  /**
+   * Parses or transforms values for `formatTokenFeeValue`.
+   *
+   * @param amount - Input used by `formatTokenFeeValue` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const formatTokenFeeValue = (amount: number) => {
     const safeAmount = Math.max(0, amount)
     const minDisplayAmount = 10 ** -tokenFeeDigits
@@ -1701,6 +1917,12 @@ export function TradingInterface() {
           pendingBtcDeposit.instantRefundTx ||
           pendingBtcDeposit.instantRefundHash)
     )
+  /**
+   * Handles `pendingStatusLabel` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const pendingStatusLabel = (() => {
     if (pendingOrderStatus === "pending_deposit") return "Pending deposit"
     if (pendingOrderStatus === "initiated" || pendingOrderStatus === "processing") {
@@ -1731,6 +1953,12 @@ export function TradingInterface() {
   const shouldRequireLiveStarknetBalance =
     sourceChain === "starknet" &&
     ["STRK", "CAREL", "USDC", "USDT", "WBTC"].includes(fromToken.symbol.toUpperCase())
+  /**
+   * Handles `fromTokenLiveBalance` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const fromTokenLiveBalance = (() => {
     const symbol = fromToken.symbol.toUpperCase()
     if (!shouldRequireLiveStarknetBalance) return null
@@ -1812,6 +2040,12 @@ export function TradingInterface() {
       : isCrossChain && !resolvedReceiveAddress
       ? "Receive address is required."
       : null
+  /**
+   * Runs `executeButtonLabel` and handles related side effects.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const executeButtonLabel = (() => {
     if (swapState === "confirming") {
       return (
@@ -2189,6 +2423,12 @@ export function TradingInterface() {
     toToken.symbol,
   ])
 
+  /**
+   * Handles `handleExecuteTrade` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleExecuteTrade = () => {
     if (executeDisabledReason) return
     setPreviewOpen(true)
@@ -2456,6 +2696,12 @@ export function TradingInterface() {
     }
   }, [notifications, pendingBtcDeposit, pollGardenBridgeOrder, wallet])
 
+  /**
+   * Handles `confirmTrade` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const confirmTrade = async () => {
     setPreviewOpen(false)
     setSwapState("confirming")

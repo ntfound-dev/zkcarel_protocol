@@ -10,10 +10,32 @@ pub struct GardenClient {
 }
 
 impl GardenClient {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(api_key: String, api_url: String) -> Self {
         Self { api_key, api_url }
     }
 
+    /// Fetches data for `get_quote`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_quote(
         &self,
         from_chain: &str,
@@ -104,6 +126,17 @@ impl GardenClient {
         })
     }
 
+    /// Runs `execute_bridge` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn execute_bridge(
         &self,
         quote: &GardenQuote,
@@ -207,6 +240,17 @@ impl GardenClient {
         ))
     }
 
+    /// Fetches data for `get_order_status`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_order_status(&self, order_id: &str) -> Result<GardenOrderStatus> {
         if self.api_url.trim().is_empty() {
             return Err(crate::error::AppError::ExternalAPI(
@@ -310,6 +354,17 @@ impl GardenClient {
         })
     }
 
+    /// Fetches data for `get_total_volume`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_total_volume(
         &self,
         source_chain: Option<&str>,
@@ -343,6 +398,17 @@ impl GardenClient {
         self.get_json("/v2/volume", &params).await
     }
 
+    /// Fetches data for `get_total_fees`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_total_fees(
         &self,
         source_chain: Option<&str>,
@@ -376,6 +442,17 @@ impl GardenClient {
         self.get_json("/v2/fees", &params).await
     }
 
+    /// Fetches data for `get_supported_chains`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_supported_chains(&self, from_asset: Option<&str>) -> Result<Value> {
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(value) = from_asset.map(str::trim).filter(|value| !value.is_empty()) {
@@ -384,6 +461,17 @@ impl GardenClient {
         self.get_json("/v2/chains", &params).await
     }
 
+    /// Fetches data for `get_supported_assets`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_supported_assets(&self, from_asset: Option<&str>) -> Result<Value> {
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(value) = from_asset.map(str::trim).filter(|value| !value.is_empty()) {
@@ -392,11 +480,33 @@ impl GardenClient {
         self.get_json("/v2/assets", &params).await
     }
 
+    /// Fetches data for `get_available_liquidity`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_available_liquidity(&self) -> Result<Value> {
         self.get_json("/v2/liquidity", &[]).await
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Fetches data for `get_orders`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_orders(
         &self,
         address: Option<&str>,
@@ -448,12 +558,34 @@ impl GardenClient {
         self.get_json("/v2/orders", &params).await
     }
 
+    /// Fetches data for `get_order_by_id`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_order_by_id(&self, order_id: &str) -> Result<Value> {
         let normalized = validate_path_segment("order", order_id)?;
         self.get_json(&format!("/v2/orders/{}", normalized), &[])
             .await
     }
 
+    /// Fetches data for `get_order_instant_refund_hash`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_order_instant_refund_hash(&self, order_id: &str) -> Result<Value> {
         let normalized = validate_path_segment("order", order_id)?;
         self.get_json(
@@ -463,16 +595,39 @@ impl GardenClient {
         .await
     }
 
+    /// Fetches data for `get_schema`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_schema(&self, name: &str) -> Result<Value> {
         let normalized = validate_path_segment("schema", name)?;
         self.get_json(&format!("/v2/schemas/{}", normalized), &[])
             .await
     }
 
+    /// Fetches data for `get_app_earnings`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_app_earnings(&self) -> Result<Value> {
         self.get_json("/v2/apps/earnings", &[]).await
     }
 
+    // Internal helper that fetches data for `get_json`.
     async fn get_json(&self, path: &str, params: &[(&str, String)]) -> Result<Value> {
         if self.api_url.trim().is_empty() {
             return Err(crate::error::AppError::ExternalAPI(
@@ -574,6 +729,7 @@ pub struct GardenStarknetTransaction {
 
 #[cfg(test)]
 impl GardenQuote {
+    // Internal helper that supports `simulated` operations.
     fn simulated(
         from_chain: &str,
         to_chain: &str,
@@ -593,6 +749,7 @@ impl GardenQuote {
         }
     }
 
+    // Internal helper that supports `simulated_id` operations.
     fn simulated_id(recipient: &str) -> String {
         let id_bytes: [u8; 16] = rand::random();
         let id_hex = hex::encode(id_bytes);
@@ -621,6 +778,7 @@ struct GardenOrderLeg {
     amount: String,
 }
 
+// Internal helper that supports `map_garden_chain` operations.
 fn map_garden_chain(chain: &str) -> &'static str {
     match chain.trim().to_ascii_lowercase().as_str() {
         "bitcoin" | "btc" => "bitcoin_testnet",
@@ -630,6 +788,7 @@ fn map_garden_chain(chain: &str) -> &'static str {
     }
 }
 
+// Internal helper that supports `validate_path_segment` operations.
 fn validate_path_segment(label: &str, value: &str) -> Result<String> {
     let normalized = value.trim();
     if normalized.is_empty() {
@@ -647,6 +806,7 @@ fn validate_path_segment(label: &str, value: &str) -> Result<String> {
     Ok(normalized.to_string())
 }
 
+// Internal helper that supports `map_garden_token` operations.
 fn map_garden_token(chain: &str, token: &str) -> &'static str {
     match (
         chain.trim().to_ascii_lowercase().as_str(),
@@ -663,6 +823,7 @@ fn map_garden_token(chain: &str, token: &str) -> &'static str {
     }
 }
 
+// Internal helper that supports `map_garden_asset` operations.
 fn map_garden_asset(chain: &str, token: &str) -> String {
     format!(
         "{}:{}",
@@ -671,6 +832,7 @@ fn map_garden_asset(chain: &str, token: &str) -> String {
     )
 }
 
+// Internal helper that supports `garden_decimals` operations.
 fn garden_decimals(token: &str) -> u32 {
     match token.trim().to_ascii_uppercase().as_str() {
         "BTC" | "WBTC" => 8,
@@ -679,6 +841,7 @@ fn garden_decimals(token: &str) -> u32 {
     }
 }
 
+// Internal helper that supports `to_base_units` operations.
 fn to_base_units(amount: f64, decimals: u32) -> u128 {
     if !amount.is_finite() || amount <= 0.0 {
         return 0;
@@ -687,6 +850,7 @@ fn to_base_units(amount: f64, decimals: u32) -> u128 {
     (amount * scale).round() as u128
 }
 
+// Internal helper that supports `from_base_units` operations.
 fn from_base_units(amount: u128, decimals: u32) -> f64 {
     if amount == 0 {
         return 0.0;
@@ -695,6 +859,7 @@ fn from_base_units(amount: u128, decimals: u32) -> f64 {
     (amount as f64) / scale
 }
 
+// Internal helper that supports `pick_value_by_path` operations.
 fn pick_value_by_path<'a>(body: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = body;
     for segment in path {
@@ -708,6 +873,7 @@ fn pick_value_by_path<'a>(body: &'a Value, path: &[&str]) -> Option<&'a Value> {
     Some(current)
 }
 
+// Internal helper that supports `pick_u128` operations.
 fn pick_u128(body: &Value, paths: &[&[&str]]) -> Option<u128> {
     for path in paths {
         if let Some(value) = pick_value_by_path(body, path).and_then(value_to_u128) {
@@ -717,6 +883,7 @@ fn pick_u128(body: &Value, paths: &[&[&str]]) -> Option<u128> {
     None
 }
 
+// Internal helper that supports `pick_string` operations.
 fn pick_string(body: &Value, paths: &[&[&str]]) -> Option<String> {
     for path in paths {
         if let Some(value) = pick_value_by_path(body, path).and_then(value_to_string) {
@@ -726,6 +893,7 @@ fn pick_string(body: &Value, paths: &[&[&str]]) -> Option<String> {
     None
 }
 
+// Internal helper that supports `pick_string_non_empty` operations.
 fn pick_string_non_empty(body: &Value, paths: &[&[&str]]) -> Option<String> {
     pick_string(body, paths).and_then(|value| {
         let trimmed = value.trim();
@@ -737,6 +905,7 @@ fn pick_string_non_empty(body: &Value, paths: &[&[&str]]) -> Option<String> {
     })
 }
 
+// Internal helper that supports `pick_string_list` operations.
 fn pick_string_list(body: &Value, paths: &[&[&str]]) -> Option<Vec<String>> {
     for path in paths {
         if let Some(value) = pick_value_by_path(body, path) {
@@ -757,6 +926,7 @@ fn pick_string_list(body: &Value, paths: &[&[&str]]) -> Option<Vec<String>> {
     None
 }
 
+// Internal helper that parses or transforms values for `parse_evm_transaction`.
 fn parse_evm_transaction(value: &Value) -> Option<GardenEvmTransaction> {
     let to = pick_string_non_empty(value, &[&["to"]])?;
     let value_hex =
@@ -775,6 +945,7 @@ fn parse_evm_transaction(value: &Value) -> Option<GardenEvmTransaction> {
     })
 }
 
+// Internal helper that parses or transforms values for `parse_starknet_transaction`.
 fn parse_starknet_transaction(value: &Value) -> Option<GardenStarknetTransaction> {
     let to = pick_string_non_empty(value, &[&["to"]])?;
     let selector = pick_string_non_empty(value, &[&["selector"]])?;
@@ -786,6 +957,7 @@ fn parse_starknet_transaction(value: &Value) -> Option<GardenStarknetTransaction
     })
 }
 
+// Internal helper that supports `value_to_u128` operations.
 fn value_to_u128(value: &Value) -> Option<u128> {
     if let Some(raw) = value.as_u64() {
         return Some(raw as u128);
@@ -813,6 +985,7 @@ fn value_to_u128(value: &Value) -> Option<u128> {
     None
 }
 
+// Internal helper that supports `value_to_string` operations.
 fn value_to_string(value: &Value) -> Option<String> {
     if let Some(raw) = value.as_str() {
         if !raw.trim().is_empty() {
@@ -834,6 +1007,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    // Internal helper that supports `map_bitcoin_chain_always_uses_btc_asset` operations.
     fn map_bitcoin_chain_always_uses_btc_asset() {
         assert_eq!(
             map_garden_asset("bitcoin", "STRK"),
@@ -842,6 +1016,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `pick_string_reads_order_id_from_result` operations.
     fn pick_string_reads_order_id_from_result() {
         let body = json!({
             "result": {
@@ -853,6 +1028,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `simulated_quote_tracks_source_and_destination_tokens` operations.
     fn simulated_quote_tracks_source_and_destination_tokens() {
         let quote = GardenQuote::simulated("bitcoin", "starknet", "BTC", "STRK", 0.1);
         assert_eq!(quote.from_token, "BTC");

@@ -11,6 +11,7 @@ use crate::{
 
 use super::{require_user, AppState};
 
+// Internal helper that supports `compute_next_claim_in` operations.
 fn compute_next_claim_in(
     next_claim: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
@@ -28,6 +29,7 @@ fn compute_next_claim_in(
     }
 }
 
+// Internal helper that supports `faucet_amount_from_options` operations.
 fn faucet_amount_from_options(
     token: &str,
     btc_amount: Option<f64>,
@@ -43,6 +45,7 @@ fn faucet_amount_from_options(
     }
 }
 
+// Internal helper that supports `faucet_cooldown_hours` operations.
 fn faucet_cooldown_hours(state: &AppState) -> i64 {
     state
         .config
@@ -50,6 +53,7 @@ fn faucet_cooldown_hours(state: &AppState) -> i64 {
         .unwrap_or(crate::constants::FAUCET_COOLDOWN_HOURS as u64) as i64
 }
 
+// Internal helper that supports `faucet_carel_unlimited` operations.
 fn faucet_carel_unlimited() -> bool {
     std::env::var("FAUCET_CAREL_UNLIMITED")
         .ok()
@@ -62,6 +66,7 @@ fn faucet_carel_unlimited() -> bool {
         .unwrap_or(false)
 }
 
+// Internal helper that supports `token_faucet_configured` operations.
 fn token_faucet_configured(state: &AppState, token: &str) -> bool {
     match token {
         "BTC" => state
@@ -231,6 +236,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     #[test]
+    // Internal helper that supports `compute_next_claim_in_returns_zero_when_none` operations.
     fn compute_next_claim_in_returns_zero_when_none() {
         // Memastikan None menghasilkan 0 detik
         let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
@@ -238,6 +244,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `compute_next_claim_in_clamps_past_to_zero` operations.
     fn compute_next_claim_in_clamps_past_to_zero() {
         // Memastikan waktu klaim yang sudah lewat dikembalikan 0
         let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
@@ -246,6 +253,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `faucet_amount_from_options_uses_overrides` operations.
     fn faucet_amount_from_options_uses_overrides() {
         // Memastikan override config dipakai jika tersedia
         let amount = faucet_amount_from_options("BTC", Some(0.02), None, None);

@@ -3,6 +3,7 @@ use chrono::{Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::Row;
 
+// Internal helper that supports `period_to_duration` operations.
 fn period_to_duration(period: &str) -> Option<Duration> {
     match period {
         "24h" | "1d" => Some(Duration::hours(24)),
@@ -13,6 +14,7 @@ fn period_to_duration(period: &str) -> Option<Duration> {
     }
 }
 
+// Internal helper that supports `pnl_multiplier` operations.
 fn pnl_multiplier(is_testnet: bool) -> f64 {
     if is_testnet {
         0.5
@@ -21,6 +23,7 @@ fn pnl_multiplier(is_testnet: bool) -> f64 {
     }
 }
 
+// Internal helper that supports `fallback_price_for` operations.
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_uppercase().as_str() {
         "USDT" | "USDC" | "CAREL" => 1.0,
@@ -28,6 +31,7 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+// Internal helper that supports `latest_price_for_token` operations.
 async fn latest_price_for_token(db: &Database, token: &str) -> Result<Option<f64>> {
     let token_upper = token.to_ascii_uppercase();
     let mut price: Option<f64> = sqlx::query_scalar(
@@ -47,6 +51,7 @@ async fn latest_price_for_token(db: &Database, token: &str) -> Result<Option<f64
     Ok(price)
 }
 
+// Internal helper that parses or transforms values for `normalize_scope_addresses`.
 fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for address in user_addresses {
@@ -70,6 +75,17 @@ pub struct AnalyticsService {
 }
 
 impl AnalyticsService {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self { db, config }
     }
@@ -276,6 +292,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `period_to_duration_handles_7d` operations.
     fn period_to_duration_handles_7d() {
         // Memastikan periode 7d menghasilkan durasi 7 hari
         let duration = period_to_duration("7d").expect("harus ada durasi");
@@ -283,6 +300,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `pnl_multiplier_testnet_is_half` operations.
     fn pnl_multiplier_testnet_is_half() {
         // Memastikan testnet memakai multiplier 0.5
         assert!((pnl_multiplier(true) - 0.5).abs() < f64::EPSILON);

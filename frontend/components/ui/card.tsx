@@ -2,6 +2,15 @@ import * as React from 'react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Card` logic.
+ *
+ * @param className - Input used by `Card` to compute state, payload, or request behavior.
+ * @param props - Input used by `Card` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Card({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -15,6 +24,15 @@ function Card({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `CardHeader` logic.
+ *
+ * @param className - Input used by `CardHeader` to compute state, payload, or request behavior.
+ * @param props - Input used by `CardHeader` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CardHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -28,6 +46,15 @@ function CardHeader({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `CardTitle` logic.
+ *
+ * @param className - Input used by `CardTitle` to compute state, payload, or request behavior.
+ * @param props - Input used by `CardTitle` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CardTitle({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -38,6 +65,15 @@ function CardTitle({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `CardDescription` logic.
+ *
+ * @param className - Input used by `CardDescription` to compute state, payload, or request behavior.
+ * @param props - Input used by `CardDescription` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CardDescription({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -48,6 +84,15 @@ function CardDescription({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `CardAction` logic.
+ *
+ * @param className - Input used by `CardAction` to compute state, payload, or request behavior.
+ * @param props - Input used by `CardAction` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CardAction({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -61,6 +106,15 @@ function CardAction({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `CardContent` logic.
+ *
+ * @param className - Input used by `CardContent` to compute state, payload, or request behavior.
+ * @param props - Input used by `CardContent` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CardContent({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -71,6 +125,15 @@ function CardContent({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `CardFooter` logic.
+ *
+ * @param className - Input used by `CardFooter` to compute state, payload, or request behavior.
+ * @param props - Input used by `CardFooter` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CardFooter({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div

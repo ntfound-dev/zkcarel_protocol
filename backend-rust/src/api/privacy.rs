@@ -98,6 +98,8 @@ enum PrivateExecutionFlow {
 }
 
 impl PrivateExecutionFlow {
+    // Parses user-provided flow labels into the internal flow enum used by the executor path.
+    // This keeps API input validation centralized for Hide Mode request handling.
     fn parse(raw: &str) -> Result<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "swap" => Ok(Self::Swap),
@@ -109,6 +111,7 @@ impl PrivateExecutionFlow {
         }
     }
 
+    // Resolves the preview entrypoint name used to compute intent_hash off-chain before submission.
     fn preview_entrypoint(self) -> &'static str {
         match self {
             Self::Swap => "preview_swap_intent_hash",
@@ -117,6 +120,7 @@ impl PrivateExecutionFlow {
         }
     }
 
+    // Resolves the executor entrypoint used for the final private execution call.
     fn execute_entrypoint(self) -> &'static str {
         match self {
             Self::Swap => "execute_private_swap",
@@ -126,7 +130,21 @@ impl PrivateExecutionFlow {
     }
 }
 
-/// POST /api/v1/privacy/submit
+/// Submits a Hide Mode privacy action through the configured router.
+///
+/// # Arguments
+/// * `state` - Shared application state containing config, DB, and relayer dependencies.
+/// * `headers` - Request headers used to authenticate and resolve the caller address.
+/// * `req` - Privacy payload that includes verifier choice and Garaga proof fields.
+///
+/// # Returns
+/// * `Ok(Json<ApiResponse<PrivacyActionResponse>>)` - API success payload containing on-chain tx hash.
+/// * `Err(AppError)` - Validation/auth/on-chain failures during private action submission.
+///
+/// # Notes
+/// - Hide Mode routes through relayer execution instead of direct wallet execution.
+/// - For V1 flow, `public_inputs[0]` must bind to nullifier and `public_inputs[1]` to commitment.
+/// - Dummy payloads (`0x1`) are explicitly rejected to avoid mock proof usage.
 pub async fn submit_private_action(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -140,7 +158,20 @@ pub async fn submit_private_action(
     })))
 }
 
-/// POST /api/v1/privacy/auto-submit
+/// Generates Garaga payload automatically and optionally submits it on-chain.
+///
+/// # Arguments
+/// * `state` - Shared application state with privacy wiring and prover configuration.
+/// * `headers` - Auth headers used to identify the requesting user.
+/// * `req` - Auto-submit options (`verifier`, `submit_onchain`, and optional tx context).
+///
+/// # Returns
+/// * `Ok(Json<ApiResponse<AutoPrivacyActionResponse>>)` - Generated payload and optional tx hash.
+/// * `Err(AppError)` - Returned when auth fails, prover command fails, or submission fails.
+///
+/// # Notes
+/// - This endpoint is the primary relayer entrypoint used by one-click Hide Mode in the frontend.
+/// - If `submit_onchain=false`, only payload generation is performed and no chain write occurs.
 pub async fn auto_submit_private_action(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -180,7 +211,21 @@ pub async fn auto_submit_private_action(
     })))
 }
 
-/// POST /api/v1/privacy/prepare-private-execution
+/// Prepares executor calldata for private execution with intent-hash binding.
+///
+/// # Arguments
+/// * `state` - Shared app state used to resolve executor and on-chain reader.
+/// * `headers` - Auth headers used to resolve the submitting wallet identity.
+/// * `req` - Flow, target entrypoint, calldata, verifier choice, and optional tx context.
+///
+/// # Returns
+/// * `Ok(Json<ApiResponse<PreparePrivateExecutionResponse>>)` - Bound payload, intent_hash, and wallet calls.
+/// * `Err(AppError)` - Validation, resolver, or on-chain preview failures.
+///
+/// # Notes
+/// - Binds `intent_hash` into `public_inputs` before creating executor calls.
+/// - Ensures nullifier/commitment binding remains valid after payload mutation.
+/// - Used by Hide Mode flows (`swap`, `limit`, `stake`) that execute via private executor.
 pub async fn prepare_private_execution(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -239,6 +284,8 @@ pub async fn prepare_private_execution(
     )))
 }
 
+// Routes privacy submissions to V1 (`submit_private_action`) or V2 (`submit_action`) based on payload shape.
+// Enforces payload integrity (including nullifier/commitment binding) before relayer execution.
 async fn submit_private_action_internal(
     state: &AppState,
     user_address: &str,
@@ -345,6 +392,7 @@ async fn submit_private_action_internal(
     Ok(tx_hash.to_string())
 }
 
+// Detects mock placeholder payloads (`proof=[0x1]`, `public_inputs=[0x1]`) and rejects them in real Hide Mode.
 fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
     if proof.len() != 1 || public_inputs.len() != 1 {
         return false;
@@ -353,6 +401,7 @@ fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
         && public_inputs[0].trim().eq_ignore_ascii_case("0x1")
 }
 
+// Encodes V2 router calldata including root transition metadata plus nullifier/commitment arrays and proof data.
 fn build_submit_call_v2(router: &str, req: &PrivacyActionRequest) -> Result<Call> {
     let to = parse_felt(router)?;
     let selector = get_selector_from_name("submit_action")
@@ -409,6 +458,8 @@ fn build_submit_call_v2(router: &str, req: &PrivacyActionRequest) -> Result<Call
     })
 }
 
+// Encodes legacy V1 calldata for `submit_private_action` with a single nullifier/commitment pair.
+// Preserves V1 compatibility while still relying on upstream binding checks in `public_inputs`.
 fn build_submit_call_v1(router: &str, req: &PrivacyActionRequest) -> Result<Call> {
     let to = parse_felt(router)?;
     let selector = get_selector_from_name("submit_private_action")
@@ -444,6 +495,8 @@ fn build_submit_call_v1(router: &str, req: &PrivacyActionRequest) -> Result<Call
     })
 }
 
+// Normalizes action type input into felt values expected by the V2 privacy router.
+// Accepts literal felts (`0x...` or decimal) and plain ASCII labels.
 fn parse_action_type(value: &str) -> Result<starknet_core::types::Felt> {
     if value.starts_with("0x") || value.chars().all(|c| c.is_ascii_digit()) {
         return parse_felt(value);
@@ -452,6 +505,21 @@ fn parse_action_type(value: &str) -> Result<starknet_core::types::Felt> {
     parse_felt(&format!("0x{hex}"))
 }
 
+/// Generates a Garaga payload for Hide Mode using the configured prover command.
+///
+/// # Arguments
+/// * `config` - Runtime configuration used to resolve prover command and timeout.
+/// * `user_address` - Wallet address used as contextual input for payload generation.
+/// * `verifier` - Selected verifier label (`garaga`, `tongo`, `semaphore`, etc.).
+/// * `tx_context` - Optional action metadata to bind intent-specific payload generation.
+///
+/// # Returns
+/// * `Ok(AutoPrivacyPayloadResponse)` - Parsed and validated payload ready for submission.
+/// * `Err(AppError)` - Missing prover config, invalid response, or binding mismatch.
+///
+/// # Notes
+/// - Requires `PRIVACY_AUTO_GARAGA_PROVER_CMD` to be configured.
+/// - Returned payload is validated against nullifier/commitment public input binding.
 pub(crate) async fn generate_auto_garaga_payload(
     config: &crate::config::Config,
     user_address: &str,
@@ -480,6 +548,8 @@ pub(crate) async fn generate_auto_garaga_payload(
     .await
 }
 
+// Executes the external prover command and parses the returned proof/public_inputs payload.
+// Applies strict timeout/error handling and validates nullifier/commitment field presence.
 async fn load_auto_garaga_payload_from_prover_cmd(
     cmd: &str,
     timeout_ms: u64,
@@ -619,6 +689,7 @@ async fn load_auto_garaga_payload_from_prover_cmd(
     })
 }
 
+// Reads felt arrays from prover JSON output using fallback keys and normalizes supported representations.
 fn extract_hex_array(value: &Value, keys: &[&str], field_label: &str) -> Result<Vec<String>> {
     if let Some(array) = value.as_array() {
         return parse_hex_array(array, field_label);
@@ -650,6 +721,21 @@ fn extract_hex_array(value: &Value, keys: &[&str], field_label: &str) -> Result<
     )))
 }
 
+/// Verifies that `public_inputs` bind the submitted `nullifier` and `commitment`.
+///
+/// # Arguments
+/// * `nullifier` - Expected single-use hash for replay protection.
+/// * `commitment` - Expected commitment hash associated with the private intent.
+/// * `public_inputs` - Public inputs array returned by prover payload.
+/// * `source_label` - Human-readable source label used in validation errors.
+///
+/// # Returns
+/// * `Ok(())` - Binding is valid for configured indices.
+/// * `Err(AppError)` - Binding is missing, index out-of-range, or values mismatch.
+///
+/// # Notes
+/// - Index positions come from `GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX` and `GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX`.
+/// - This check is mandatory before relayer submits Hide Mode actions on-chain.
 pub(crate) fn ensure_public_inputs_bind_nullifier_commitment(
     nullifier: &str,
     commitment: &str,
@@ -686,6 +772,7 @@ pub(crate) fn ensure_public_inputs_bind_nullifier_commitment(
     Ok(())
 }
 
+// Reads and validates the configured public input index reserved for intent-hash binding.
 fn intent_hash_public_input_index() -> Result<usize> {
     let raw =
         std::env::var("GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX").unwrap_or_else(|_| "2".to_string());
@@ -698,6 +785,19 @@ fn intent_hash_public_input_index() -> Result<usize> {
     Ok(parsed)
 }
 
+/// Binds executor `intent_hash` into the configured public input slot.
+///
+/// # Arguments
+/// * `payload` - Mutable Garaga payload that will be executed by the private executor.
+/// * `intent_hash` - Felt-encoded hash previewed from the executor contract.
+///
+/// # Returns
+/// * `Ok(())` - Payload updated successfully.
+/// * `Err(AppError)` - Invalid felt value or index configuration.
+///
+/// # Notes
+/// - Pads `public_inputs` with `0x0` when the configured index exceeds current length.
+/// - Used to couple off-chain generated proof payload with on-chain private execution intent.
 pub(crate) fn bind_intent_hash_into_payload(
     payload: &mut AutoPrivacyPayloadResponse,
     intent_hash: &str,
@@ -711,6 +811,7 @@ pub(crate) fn bind_intent_hash_into_payload(
     Ok(())
 }
 
+// Parses executor entrypoint input as either a felt selector or a selector name string.
 fn parse_selector_or_felt(value: &str) -> Result<Felt> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -725,6 +826,8 @@ fn parse_selector_or_felt(value: &str) -> Result<Felt> {
         .map_err(|e| AppError::Internal(format!("Selector error for '{}': {}", trimmed, e)))
 }
 
+// Resolves the active private executor address (PrivateActionExecutor / ShieldedPoolV2) from env/config fallbacks.
+// Verifies that the resolved value is a valid felt address before building on-chain calls.
 fn resolve_private_action_executor_address(config: &crate::config::Config) -> Result<String> {
     for raw in [
         std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
@@ -747,6 +850,7 @@ fn resolve_private_action_executor_address(config: &crate::config::Config) -> Re
     ))
 }
 
+// Calls the executor preview entrypoint to compute the intent hash bound into Garaga public inputs.
 async fn compute_intent_hash_on_executor(
     state: &AppState,
     executor_address: &str,
@@ -779,6 +883,8 @@ async fn compute_intent_hash_on_executor(
     Ok(intent_hash.to_string())
 }
 
+// Builds a two-call wallet batch: first `submit_private_intent`, then the flow-specific `execute_private_*`.
+// Carries forward commitment-bound calldata so execution matches the proven intent.
 fn build_private_executor_wallet_calls(
     executor_address: &str,
     flow: PrivateExecutionFlow,
@@ -815,6 +921,7 @@ fn build_private_executor_wallet_calls(
     ])
 }
 
+// Reads numeric binding indexes from env and validates they are usable for payload integrity checks.
 fn privacy_binding_index(env_key: &str, default_value: usize) -> Result<usize> {
     let raw = std::env::var(env_key).unwrap_or_else(|_| default_value.to_string());
     let parsed = raw.trim().parse::<usize>().map_err(|_| {
@@ -826,6 +933,7 @@ fn privacy_binding_index(env_key: &str, default_value: usize) -> Result<usize> {
     Ok(parsed)
 }
 
+// Parses textual felt lists (comma/newline-delimited) from prover outputs.
 fn parse_hex_string(raw: &str, field_label: &str) -> Result<Vec<String>> {
     let values: Vec<String> = raw
         .split(|c| c == ',' || c == '\n')
@@ -842,6 +950,7 @@ fn parse_hex_string(raw: &str, field_label: &str) -> Result<Vec<String>> {
     Ok(values)
 }
 
+// Parses JSON felt arrays from prover outputs and normalizes each entry into string form.
 fn parse_hex_array(array: &[Value], field_label: &str) -> Result<Vec<String>> {
     let mut values = Vec::with_capacity(array.len());
     for item in array {

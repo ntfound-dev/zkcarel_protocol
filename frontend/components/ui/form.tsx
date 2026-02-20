@@ -42,6 +42,12 @@ const FormField = <
   )
 }
 
+/**
+ * Exposes `useFormField` as a reusable hook.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const useFormField = () => {
   const fieldContext = React.useContext(FormFieldContext)
   const itemContext = React.useContext(FormItemContext)
@@ -73,6 +79,15 @@ const FormItemContext = React.createContext<FormItemContextValue>(
   {} as FormItemContextValue,
 )
 
+/**
+ * Handles `FormItem` logic.
+ *
+ * @param className - Input used by `FormItem` to compute state, payload, or request behavior.
+ * @param props - Input used by `FormItem` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FormItem({ className, ...props }: React.ComponentProps<'div'>) {
   const id = React.useId()
 
@@ -87,6 +102,12 @@ function FormItem({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `FormLabel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FormLabel({
   className,
   ...props
@@ -104,6 +125,14 @@ function FormLabel({
   )
 }
 
+/**
+ * Handles `FormControl` logic.
+ *
+ * @param props - Input used by `FormControl` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FormControl({ ...props }: React.ComponentProps<typeof Slot>) {
   const { error, formItemId, formDescriptionId, formMessageId } = useFormField()
 
@@ -122,6 +151,15 @@ function FormControl({ ...props }: React.ComponentProps<typeof Slot>) {
   )
 }
 
+/**
+ * Handles `FormDescription` logic.
+ *
+ * @param className - Input used by `FormDescription` to compute state, payload, or request behavior.
+ * @param props - Input used by `FormDescription` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FormDescription({ className, ...props }: React.ComponentProps<'p'>) {
   const { formDescriptionId } = useFormField()
 
@@ -135,6 +173,15 @@ function FormDescription({ className, ...props }: React.ComponentProps<'p'>) {
   )
 }
 
+/**
+ * Handles `FormMessage` logic.
+ *
+ * @param className - Input used by `FormMessage` to compute state, payload, or request behavior.
+ * @param props - Input used by `FormMessage` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FormMessage({ className, ...props }: React.ComponentProps<'p'>) {
   const { error, formMessageId } = useFormField()
   const body = error ? String(error?.message ?? '') : props.children

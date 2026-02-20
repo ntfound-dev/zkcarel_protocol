@@ -192,12 +192,26 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
   }
 }
 
+/**
+ * Handles `persistTradePrivacyPayload` logic.
+ *
+ * @param payload - Input used by `persistTradePrivacyPayload` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
   if (typeof window === "undefined") return
   window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(payload))
   window.dispatchEvent(new Event("trade-privacy-payload-updated"))
 }
 
+/**
+ * Handles `randomHexFelt` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const randomHexFelt = () => {
   const bytes = new Uint8Array(16)
   crypto.getRandomValues(bytes)
@@ -213,6 +227,14 @@ const createDevTradePrivacyPayload = (): PrivacyVerificationPayload => ({
   public_inputs: ["0x1"],
 })
 
+/**
+ * Builds inputs required by `buildHideBalancePrivacyCall`.
+ *
+ * @param payload - Input used by `buildHideBalancePrivacyCall` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const buildHideBalancePrivacyCall = (payload: PrivacyVerificationPayload) => {
   const router = STARKNET_ZK_PRIVACY_ROUTER_ADDRESS.trim()
   if (!router) {
@@ -236,12 +258,28 @@ const buildHideBalancePrivacyCall = (payload: PrivacyVerificationPayload) => {
   }
 }
 
+/**
+ * Parses or transforms values for `formatDateTime`.
+ *
+ * @param value - Input used by `formatDateTime` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatDateTime = (value: string) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })
 }
 
+/**
+ * Handles `expiryToSeconds` logic.
+ *
+ * @param expiry - Input used by `expiryToSeconds` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const expiryToSeconds = (expiry: string) => {
   switch (expiry) {
     case "1d":
@@ -255,6 +293,12 @@ const expiryToSeconds = (expiry: string) => {
   }
 }
 
+/**
+ * Builds inputs required by `generateClientOrderId`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const generateClientOrderId = () => {
   // Starknet felt must be < 251 bits, so use 31 random bytes.
   const bytes = new Uint8Array(31)
@@ -266,6 +310,12 @@ const generateClientOrderId = () => {
 const CANDLE_BULL = "#00d48a"
 const CANDLE_BEAR = "#ff5a6f"
 
+/**
+ * Handles `LimitOrder` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function LimitOrder() {
   const notifications = useNotifications()
   const wallet = useWallet()
@@ -316,6 +366,12 @@ export function LimitOrder() {
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
     if (autoPrivacyPayloadPromiseRef.current) return autoPrivacyPayloadPromiseRef.current
 
+    /**
+     * Handles `task` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const task = (async () => {
       if (DEV_AUTO_GARAGA_PAYLOAD_ENABLED) {
         const generated = createDevTradePrivacyPayload()
@@ -457,6 +513,12 @@ export function LimitOrder() {
       return
     }
 
+    /**
+     * Handles `loadRewardsContext` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadRewardsContext = async (force = false) => {
       try {
         const [nfts, rewards] = await Promise.all([
@@ -499,6 +561,14 @@ export function LimitOrder() {
     }
   }, [refreshTradePrivacyPayload])
 
+  /**
+   * Handles `intervalForPeriod` logic.
+   *
+   * @param period - Input used by `intervalForPeriod` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const intervalForPeriod = (period: string) => {
     switch (period) {
       case "5M":
@@ -655,6 +725,14 @@ export function LimitOrder() {
     }
   }, [])
 
+  /**
+   * Handles `handlePricePreset` logic.
+   *
+   * @param percentage - Input used by `handlePricePreset` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handlePricePreset = (percentage: number) => {
     const marketPrice = selectedToken.price
     const newPrice = marketPrice * (1 + percentage / 100)
@@ -701,6 +779,14 @@ export function LimitOrder() {
     ]
   )
 
+  /**
+   * Handles `handleAmountPreset` logic.
+   *
+   * @param percent - Input used by `handleAmountPreset` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleAmountPreset = (percent: number) => {
     const balance = orderType === "buy" ? resolveAvailableBalance(payToken.symbol) : resolveAvailableBalance(selectedToken.symbol)
     setAmount((balance * percent / 100).toString())
@@ -726,10 +812,22 @@ export function LimitOrder() {
     basePoints > 0 ? Math.floor(basePoints * effectivePointsMultiplier) : 0
   const isBtcBuyComingSoon = orderType === "buy" && selectedToken.symbol === "BTC"
 
+  /**
+   * Handles `handleSubmitOrder` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleSubmitOrder = () => {
     setShowConfirmDialog(true)
   }
 
+  /**
+   * Handles `confirmOrder` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const confirmOrder = async () => {
     if (isBtcBuyComingSoon) {
       notifications.addNotification({
@@ -916,6 +1014,14 @@ export function LimitOrder() {
     }
   }
 
+  /**
+   * Runs `cancelOrder` and handles related side effects.
+   *
+   * @param orderId - Input used by `cancelOrder` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const cancelOrder = async (orderId: string) => {
     try {
       const effectiveHideBalance = balanceHidden
@@ -1139,6 +1245,14 @@ export function LimitOrder() {
                         const paddingTop = 8
                         const paddingBottom = 8
                         const drawableHeight = chartHeight - paddingTop - paddingBottom
+                        /**
+                         * Handles `yFor` logic.
+                         *
+                         * @param price - Input used by `yFor` to compute state, payload, or request behavior.
+                         *
+                         * @returns Result consumed by caller flow, UI state updates, or async chaining.
+                         * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+                         */
                         const yFor = (price: number) =>
                           chartHeight -
                           paddingBottom -
@@ -1840,6 +1954,14 @@ export function LimitOrder() {
                     const paddingTop = 10
                     const paddingBottom = 10
                     const drawableHeight = chartHeight - paddingTop - paddingBottom
+                    /**
+                     * Handles `yFor` logic.
+                     *
+                     * @param price - Input used by `yFor` to compute state, payload, or request behavior.
+                     *
+                     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+                     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+                     */
                     const yFor = (price: number) =>
                       chartHeight -
                       paddingBottom -

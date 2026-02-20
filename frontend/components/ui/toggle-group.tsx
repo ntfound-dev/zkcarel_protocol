@@ -14,6 +14,12 @@ const ToggleGroupContext = React.createContext<
   variant: 'default',
 })
 
+/**
+ * Handles `ToggleGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ToggleGroup({
   className,
   variant,
@@ -40,6 +46,12 @@ function ToggleGroup({
   )
 }
 
+/**
+ * Handles `ToggleGroupItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ToggleGroupItem({
   className,
   children,

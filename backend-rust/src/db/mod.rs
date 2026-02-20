@@ -14,6 +14,7 @@ pub struct Database {
 mod tests {
     use super::*;
 
+    // Internal helper that supports `test_config` operations.
     fn test_config(database_url: &str) -> Config {
         Config {
             host: "0.0.0.0".to_string(),
@@ -104,6 +105,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Internal helper that supports `database_new_returns_error_on_invalid_url` operations.
     async fn database_new_returns_error_on_invalid_url() {
         let config = test_config("not-a-url");
         let result = Database::new(&config).await;
@@ -111,6 +113,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_wallet_address_is_case_insensitive_per_chain`.
     fn normalize_wallet_address_is_case_insensitive_per_chain() {
         let btc =
             normalize_wallet_address_value("bitcoin", "TB1QDK7PD4347C9KR9Z60GCAXPPGF7ZWXNC2KUKSAV");
@@ -124,6 +127,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_starknet_wallet_address_removes_leading_zeroes`.
     fn normalize_starknet_wallet_address_removes_leading_zeroes() {
         assert_eq!(
             normalize_wallet_address_value(
@@ -136,6 +140,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_wallet_chain_lowercases_value`.
     fn normalize_wallet_chain_lowercases_value() {
         assert_eq!(normalize_wallet_chain_value("BitCoin "), "bitcoin");
         assert_eq!(normalize_wallet_chain_value(" EVM"), "evm");
@@ -143,6 +148,17 @@ mod tests {
 }
 
 impl Database {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn new(config: &Config) -> anyhow::Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(config.database_max_connections)
@@ -152,12 +168,34 @@ impl Database {
         Ok(Self { pool })
     }
 
+    /// Handles `run_migrations` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn run_migrations(&self) -> anyhow::Result<()> {
         // migrations harus berada di crate root: ./migrations
         sqlx::migrate!("./migrations").run(&self.pool).await?;
         Ok(())
     }
 
+    /// Handles `pool` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
@@ -165,6 +203,17 @@ impl Database {
 
 // ==================== USER QUERIES ====================
 impl Database {
+    /// Builds inputs required by `create_user`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn create_user(&self, address: &str) -> Result<()> {
         ensure_varchar_max("users.address", address, 66)?;
 
@@ -178,6 +227,17 @@ impl Database {
         Ok(())
     }
 
+    /// Updates state for `touch_user`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn touch_user(&self, address: &str) -> Result<()> {
         ensure_varchar_max("users.address", address, 66)?;
 
@@ -193,6 +253,17 @@ impl Database {
         Ok(())
     }
 
+    /// Fetches data for `get_user`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_user(&self, address: &str) -> Result<Option<User>> {
         let row = sqlx::query_as::<_, User>("SELECT * FROM users WHERE address = $1")
             .bind(address)
@@ -201,6 +272,17 @@ impl Database {
         Ok(row)
     }
 
+    /// Fetches data for `find_user_by_sumo_subject`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn find_user_by_sumo_subject(&self, sumo_subject: &str) -> Result<Option<String>> {
         ensure_varchar_max("users.sumo_subject", sumo_subject, 255)?;
         let row: Option<String> =
@@ -211,6 +293,17 @@ impl Database {
         Ok(row)
     }
 
+    /// Updates state for `bind_sumo_subject_once`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn bind_sumo_subject_once(&self, address: &str, sumo_subject: &str) -> Result<()> {
         ensure_varchar_max("users.address", address, 66)?;
         ensure_varchar_max("users.sumo_subject", sumo_subject, 255)?;
@@ -245,6 +338,17 @@ impl Database {
         ))
     }
 
+    /// Updates state for `update_last_active`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn update_last_active(&self, address: &str) -> Result<()> {
         sqlx::query("UPDATE users SET last_active = NOW() WHERE address = $1")
             .bind(address)
@@ -253,6 +357,17 @@ impl Database {
         Ok(())
     }
 
+    /// Updates state for `set_display_name`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn set_display_name(&self, address: &str, display_name: &str) -> Result<User> {
         ensure_varchar_max("users.address", address, 66)?;
         ensure_varchar_max("users.display_name", display_name, 50)?;
@@ -272,6 +387,17 @@ impl Database {
         Ok(user)
     }
 
+    /// Fetches data for `find_user_by_referral_code`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn find_user_by_referral_code(
         &self,
         referral_suffix: &str,
@@ -291,6 +417,17 @@ impl Database {
         Ok(address)
     }
 
+    /// Updates state for `bind_referrer_once`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn bind_referrer_once(
         &self,
         user_address: &str,
@@ -315,6 +452,17 @@ impl Database {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Handles `upsert_wallet_address` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn upsert_wallet_address(
         &self,
         user_address: &str,
@@ -406,6 +554,17 @@ impl Database {
         Ok(())
     }
 
+    /// Fetches data for `find_user_by_wallet_address`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn find_user_by_wallet_address(
         &self,
         wallet_address: &str,
@@ -475,6 +634,17 @@ impl Database {
         Ok(row)
     }
 
+    /// Fetches data for `list_wallet_addresses`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn list_wallet_addresses(
         &self,
         user_address: &str,
@@ -495,6 +665,17 @@ impl Database {
 
 // ==================== POINTS QUERIES ====================
 impl Database {
+    /// Fetches data for `get_user_points`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_user_points(&self, address: &str, epoch: i64) -> Result<Option<UserPoints>> {
         let points = sqlx::query_as::<_, UserPoints>(
             "SELECT * FROM points WHERE user_address = $1 AND epoch = $2",
@@ -506,6 +687,17 @@ impl Database {
         Ok(points)
     }
 
+    /// Builds inputs required by `create_or_update_points`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn create_or_update_points(
         &self,
         address: &str,
@@ -541,6 +733,17 @@ impl Database {
         Ok(())
     }
 
+    /// Handles `consume_points` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn consume_points(
         &self,
         address: &str,
@@ -576,6 +779,17 @@ impl Database {
         Ok(())
     }
 
+    /// Handles `add_referral_points` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn add_referral_points(
         &self,
         address: &str,
@@ -602,6 +816,17 @@ impl Database {
         Ok(())
     }
 
+    /// Handles `add_social_points` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn add_social_points(
         &self,
         address: &str,
@@ -631,6 +856,17 @@ impl Database {
 
 // ==================== TRANSACTION QUERIES ====================
 impl Database {
+    /// Updates state for `save_transaction`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn save_transaction(&self, tx: &Transaction) -> Result<()> {
         ensure_varchar_max("transactions.tx_hash", &tx.tx_hash, 66)?;
         ensure_varchar_max("transactions.user_address", &tx.user_address, 66)?;
@@ -699,6 +935,17 @@ impl Database {
         Ok(())
     }
 
+    /// Fetches data for `get_transaction`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_transaction(&self, tx_hash: &str) -> Result<Option<Transaction>> {
         let tx = sqlx::query_as::<_, Transaction>("SELECT * FROM transactions WHERE tx_hash = $1")
             .bind(tx_hash)
@@ -707,6 +954,17 @@ impl Database {
         Ok(tx)
     }
 
+    /// Updates state for `mark_transaction_private`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn mark_transaction_private(&self, tx_hash: &str) -> Result<()> {
         ensure_varchar_max("transactions.tx_hash", tx_hash, 66)?;
         sqlx::query(
@@ -721,6 +979,7 @@ impl Database {
     }
 }
 
+// Internal helper that runs side-effecting logic for `ensure_varchar_max`.
 fn ensure_varchar_max(field: &str, value: &str, max_len: usize) -> Result<()> {
     if value.chars().count() > max_len {
         return Err(AppError::BadRequest(format!(
@@ -733,10 +992,12 @@ fn ensure_varchar_max(field: &str, value: &str, max_len: usize) -> Result<()> {
     Ok(())
 }
 
+// Internal helper that parses or transforms values for `normalize_wallet_chain_value`.
 fn normalize_wallet_chain_value(chain: &str) -> String {
     chain.trim().to_ascii_lowercase()
 }
 
+// Internal helper that parses or transforms values for `normalize_wallet_address_value`.
 fn normalize_wallet_address_value(chain: &str, wallet_address: &str) -> String {
     let trimmed = wallet_address.trim();
     if trimmed.is_empty() {
@@ -756,6 +1017,7 @@ fn normalize_wallet_address_value(chain: &str, wallet_address: &str) -> String {
     trimmed.to_ascii_lowercase()
 }
 
+// Internal helper that parses or transforms values for `normalize_starknet_wallet_address`.
 fn normalize_starknet_wallet_address(wallet_address: &str) -> String {
     let trimmed = wallet_address.trim();
     if trimmed.is_empty() {
@@ -776,6 +1038,17 @@ fn normalize_starknet_wallet_address(wallet_address: &str) -> String {
 
 // ==================== FAUCET QUERIES ====================
 impl Database {
+    /// Checks conditions for `can_claim_faucet`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn can_claim_faucet(
         &self,
         address: &str,
@@ -802,6 +1075,17 @@ impl Database {
         Ok(!recent_claim)
     }
 
+    /// Handles `record_faucet_claim` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn record_faucet_claim(
         &self,
         address: &str,
@@ -828,6 +1112,17 @@ impl Database {
 
 // ==================== NOTIFICATION QUERIES ====================
 impl Database {
+    /// Builds inputs required by `create_notification`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn create_notification(
         &self,
         user: &str,
@@ -855,6 +1150,17 @@ impl Database {
         Ok(id)
     }
 
+    /// Fetches data for `get_user_notifications`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_user_notifications(
         &self,
         address: &str,
@@ -876,6 +1182,17 @@ impl Database {
         Ok(notifications)
     }
 
+    /// Updates state for `mark_notification_read`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn mark_notification_read(&self, id: i64, user: &str) -> Result<()> {
         sqlx::query("UPDATE notifications SET read = true WHERE id = $1 AND user_address = $2")
             .bind(id)
@@ -888,6 +1205,17 @@ impl Database {
 
 // ==================== PRICE HISTORY QUERIES ====================
 impl Database {
+    /// Updates state for `save_price_tick`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn save_price_tick(
         &self,
         token: &str,
@@ -924,6 +1252,17 @@ impl Database {
         Ok(())
     }
 
+    /// Fetches data for `get_price_history`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_price_history(
         &self,
         token: &str,
@@ -961,6 +1300,17 @@ impl Database {
 
 // ==================== LIMIT ORDER QUERIES ====================
 impl Database {
+    /// Builds inputs required by `create_limit_order`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn create_limit_order(&self, order: &LimitOrder) -> Result<()> {
         sqlx::query(
             r#"
@@ -983,6 +1333,17 @@ impl Database {
         Ok(())
     }
 
+    /// Fetches data for `get_limit_order`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_limit_order(&self, order_id: &str) -> Result<Option<LimitOrder>> {
         let order =
             sqlx::query_as::<_, LimitOrder>("SELECT * FROM limit_orders WHERE order_id = $1")
@@ -992,6 +1353,17 @@ impl Database {
         Ok(order)
     }
 
+    /// Fetches data for `get_active_orders_for_owner`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_active_orders_for_owner(&self, owner: &str) -> Result<Vec<LimitOrder>> {
         let orders = sqlx::query_as::<_, LimitOrder>(
             "SELECT * FROM limit_orders WHERE owner = $1 AND status = 0 AND expiry > NOW() ORDER BY created_at ASC",
@@ -1002,6 +1374,17 @@ impl Database {
         Ok(orders)
     }
 
+    /// Updates state for `update_order_status`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn update_order_status(&self, order_id: &str, status: i16) -> Result<()> {
         sqlx::query("UPDATE limit_orders SET status = $1 WHERE order_id = $2")
             .bind(status)
@@ -1011,6 +1394,17 @@ impl Database {
         Ok(())
     }
 
+    /// Handles `fill_order` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn fill_order(&self, order_id: &str, amount: rust_decimal::Decimal) -> Result<()> {
         sqlx::query(
             r#"

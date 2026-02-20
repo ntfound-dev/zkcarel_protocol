@@ -7,28 +7,18 @@ pub struct DarkOrder {
     pub filled: bool,
 }
 
-/// @title Dark Pool Interface
-/// @author CAREL Team
-/// @notice Private orderbook for hidden trade intent.
-/// @dev Uses ZK proofs and nullifiers.
+// Dark-pool API for hidden order commitments.
+// Uses ZK proofs and nullifiers to prevent replay/double-match.
 #[starknet::interface]
 pub trait IDarkPool<TContractState> {
-    /// @notice Submits a hidden order commitment.
-    /// @param order Encrypted order commitment.
-    /// @param proof ZK proof.
-    /// @param public_inputs Public inputs.
-    /// @return order_id New order id.
+    // Submits encrypted order intent and stores commitment under new order id.
     fn submit_order(
         ref self: TContractState,
         order: DarkOrder,
         proof: Span<felt252>,
         public_inputs: Span<felt252>
     ) -> u64;
-    /// @notice Matches an order using proof.
-    /// @param order_id Order id.
-    /// @param nullifier Nullifier to prevent replay.
-    /// @param proof ZK proof.
-    /// @param public_inputs Public inputs.
+    // Matches an order after proof verification and consumes provided nullifier.
     fn match_order(
         ref self: TContractState,
         order_id: u64,
@@ -36,27 +26,19 @@ pub trait IDarkPool<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>
     );
-    /// @notice Checks if a nullifier has been used.
-    /// @param nullifier Nullifier to check.
-    /// @return used True if used.
+    // Returns whether a dark-pool nullifier has already been consumed.
     fn is_nullifier_used(self: @TContractState, nullifier: felt252) -> bool;
 }
 
-/// @title Dark Pool Admin Interface
-/// @author CAREL Team
-/// @notice Admin controls for verifier configuration.
+// Admin controls for verifier dependency updates.
 #[starknet::interface]
 pub trait IDarkPoolAdmin<TContractState> {
-    /// @notice Updates verifier address.
-    /// @dev Owner-only.
-    /// @param verifier New verifier address.
+    // Updates verifier contract used by proof checks (admin only).
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
 }
 
-/// @title Dark Pool Contract
-/// @author CAREL Team
-/// @notice Private orderbook with ZK verification.
-/// @dev Uses external verifier.
+// Private orderbook implementation with external proof verifier.
+// Stores commitments on-chain while order ciphertext remains opaque.
 #[starknet::contract]
 pub mod DarkPool {
     use starknet::ContractAddress;
@@ -108,6 +90,7 @@ pub mod DarkPool {
         pub verifier: ContractAddress,
     }
 
+    // Initializes owner authority and verifier dependency.
     #[constructor]
     fn constructor(ref self: ContractState, admin: ContractAddress, verifier: ContractAddress) {
         self.ownable.initializer(admin);
@@ -116,6 +99,7 @@ pub mod DarkPool {
 
     #[abi(embed_v0)]
     impl DarkPoolImpl of super::IDarkPool<ContractState> {
+        // Submits a dark order after proof verification.
         fn submit_order(
             ref self: ContractState,
             order: DarkOrder,
@@ -133,6 +117,7 @@ pub mod DarkPool {
             id
         }
 
+        // Matches a dark order and consumes provided nullifier.
         fn match_order(
             ref self: ContractState,
             order_id: u64,
@@ -152,6 +137,7 @@ pub mod DarkPool {
             self.emit(Event::OrderMatched(OrderMatched { order_id }));
         }
 
+        // Returns whether a dark-pool nullifier has already been consumed.
         fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
             self.nullifiers.entry(nullifier).read()
         }
@@ -159,6 +145,7 @@ pub mod DarkPool {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::IDarkPoolAdmin<ContractState> {
+        // Updates verifier contract used by proof checks (admin only).
         fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!verifier.is_zero(), "Verifier required");

@@ -32,6 +32,14 @@ function useAnimatedCounter(end: number, duration: number = 2000) {
     let startTime: number | null = null
     let animationFrame: number
     
+    /**
+     * Handles `animate` logic.
+     *
+     * @param timestamp - Input used by `animate` to compute state, payload, or request behavior.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const animate = (timestamp: number) => {
       if (!startTime) startTime = timestamp
       const progress = Math.min((timestamp - startTime) / duration, 1)
@@ -78,6 +86,12 @@ function AnimatedStat({
   )
 }
 
+/**
+ * Handles `HeroSection` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function HeroSection() {
   const [volumeValue, setVolumeValue] = React.useState<number | null>(null)
   const [txCountValue, setTxCountValue] = React.useState<number | null>(null)
@@ -244,6 +258,12 @@ export function HeroSection() {
   )
 }
 
+/**
+ * Handles `FeatureHighlight` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FeatureHighlight({ 
   icon: Icon, 
   title, 

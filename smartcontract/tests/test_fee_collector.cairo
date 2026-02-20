@@ -10,7 +10,8 @@ use snforge_std::{
 };
 use starknet::ContractAddress;
 
-// Helper function remains the same but now uses the correct ITreasuryDispatcher type
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup_protocol() -> (IFeeCollectorDispatcher, ITreasuryDispatcher, ContractAddress) {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     
@@ -33,6 +34,8 @@ fn setup_protocol() -> (IFeeCollectorDispatcher, ITreasuryDispatcher, ContractAd
 }
 
 #[test]
+// Test case: validates collect swap fee distribution behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_collect_swap_fee_distribution() {
     let (collector, treasury, _) = setup_protocol();
     let lp_provider: ContractAddress = 0x123.try_into().unwrap();
@@ -45,6 +48,8 @@ fn test_collect_swap_fee_distribution() {
 }
 
 #[test]
+// Test case: validates update rates only owner behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_update_rates_only_owner() {
     let (collector, _, admin) = setup_protocol();
 
@@ -56,6 +61,8 @@ fn test_update_rates_only_owner() {
 #[test]
 // Use single quotes to match the felt252 (short string) panic data
 #[should_panic(expected: 'Caller is not the owner')]
+// Test case: validates update rates attacker fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_update_rates_attacker_fails() {
     let (collector, _, _) = setup_protocol();
     let attacker: ContractAddress = 0x666.try_into().unwrap();
@@ -65,6 +72,8 @@ fn test_update_rates_attacker_fails() {
 }
 
 #[test]
+// Test case: validates bridge fee forwarding behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_bridge_fee_forwarding() {
     let (collector, _treasury, _) = setup_protocol();
     let provider: ContractAddress = 0x444.try_into().unwrap();

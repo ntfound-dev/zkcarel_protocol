@@ -11,12 +11,29 @@ import {
 } from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
 
+/**
+ * Parses or transforms values for `parseList`.
+ *
+ * @param value - Input used by `parseList` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const parseList = (value: string) =>
   value
     .split(/[\n,]+/)
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
 
+/**
+ * Checks conditions for `isDummyGaragaPayload`.
+ *
+ * @param proof - Input used by `isDummyGaragaPayload` to compute state, payload, or request behavior.
+ * @param publicInputs - Input used by `isDummyGaragaPayload` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const isDummyGaragaPayload = (proof: string[], publicInputs: string[]) => {
   if (proof.length !== 1 || publicInputs.length !== 1) return false
   return proof[0].toLowerCase() === "0x1" && publicInputs[0].toLowerCase() === "0x1"
@@ -36,6 +53,14 @@ type PrivacyHistoryItem = {
 const HISTORY_KEY = "privacy_history_v2"
 const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v1"
 
+/**
+ * Handles `shortHash` logic.
+ *
+ * @param hash - Input used by `shortHash` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const shortHash = (hash: string) => {
   if (!hash) return ""
   if (hash.length <= 12) return hash
@@ -48,6 +73,12 @@ const statusStyle: Record<PrivacyHistoryStatus, string> = {
   failed: "bg-destructive/20 text-destructive",
 }
 
+/**
+ * Handles `PrivacyRouterPanel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
   const notifications = useNotifications()
   const [mode, setMode] = React.useState<"v2" | "v1">("v2")
@@ -80,11 +111,27 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
     }
   }, [])
 
+  /**
+   * Handles `persistHistory` logic.
+   *
+   * @param items - Input used by `persistHistory` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const persistHistory = (items: PrivacyHistoryItem[]) => {
     if (typeof window === "undefined") return
     window.localStorage.setItem(HISTORY_KEY, JSON.stringify(items))
   }
 
+  /**
+   * Handles `pushHistory` logic.
+   *
+   * @param entry - Input used by `pushHistory` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const pushHistory = (entry: PrivacyHistoryItem) => {
     setHistory((prev) => {
       const next = [entry, ...prev].slice(0, 15)
@@ -93,6 +140,15 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
     })
   }
 
+  /**
+   * Updates state for `updateHistoryStatus`.
+   *
+   * @param id - Input used by `updateHistoryStatus` to compute state, payload, or request behavior.
+   * @param status - Input used by `updateHistoryStatus` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const updateHistoryStatus = (id: string, status: PrivacyHistoryStatus) => {
     setHistory((prev) => {
       const next = prev.map((item) => (item.id === id ? { ...item, status } : item))
@@ -101,6 +157,14 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
     })
   }
 
+  /**
+   * Handles `removeHistory` logic.
+   *
+   * @param id - Input used by `removeHistory` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const removeHistory = (id: string) => {
     setHistory((prev) => {
       const next = prev.filter((item) => item.id !== id)
@@ -140,6 +204,12 @@ export function PrivacyRouterPanel({ compact = false }: { compact?: boolean }) {
     }
   }
 
+  /**
+   * Handles `handleSubmit` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleSubmit = async () => {
     const parsedProof = parseList(proof)
     const parsedPublicInputs = parseList(publicInputs)

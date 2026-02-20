@@ -13,6 +13,12 @@ interface Particle {
   opacity: number
 }
 
+/**
+ * Handles `ParticleBackground` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function ParticleBackground() {
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
   const { mode } = useTheme()
@@ -27,6 +33,12 @@ export function ParticleBackground() {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
+    /**
+     * Handles `resizeCanvas` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const resizeCanvas = () => {
       canvas.width = window.innerWidth
       canvas.height = window.innerHeight
@@ -46,11 +58,25 @@ export function ParticleBackground() {
       opacity: Math.random() * 0.5 + 0.2,
     }))
 
+    /**
+     * Handles `handleMouseMove` logic.
+     *
+     * @param e - Input used by `handleMouseMove` to compute state, payload, or request behavior.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const handleMouseMove = (e: MouseEvent) => {
       mouseRef.current = { x: e.clientX, y: e.clientY }
     }
     window.addEventListener("mousemove", handleMouseMove)
 
+    /**
+     * Handles `animate` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const animate = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 

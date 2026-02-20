@@ -1,42 +1,32 @@
-/// @title Registry Interface
-/// @author CAREL Team
-/// @notice Defines simple registry entrypoints for protocol metadata.
-/// @dev Example registry for storing user-linked data.
+// Defines simple registry entrypoints for protocol metadata.
+// Example registry for storing user-linked data.
 #[starknet::interface]
 pub trait IRegistry<TContractState> {
-    /// @notice Registers data for the caller.
-    /// @dev Stores data in both vector and user map.
-    /// @param data Data value to register.
+    // Applies register data after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn register_data(ref self: TContractState, data: felt252);
-    /// @notice Updates data at a specific index.
-    /// @dev Keeps user mapping aligned with updated data.
-    /// @param index Index to update.
-    /// @param new_data New data value.
+    // Updates data configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn update_data(ref self: TContractState, index: u64, new_data: felt252);
-    /// @notice Returns data at a specific index.
-    /// @dev Read-only helper for consumers.
-    /// @param index Index to fetch.
-    /// @return data Stored data value.
+    // Returns get data from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_data(self: @TContractState, index: u64) -> felt252;
-    /// @notice Returns all stored data.
-    /// @dev Read-only helper for analytics.
-    /// @return data Array of stored values.
+    // Returns get all data from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_all_data(self: @TContractState) -> Array<felt252>;
-    /// @notice Returns data associated with a user.
-    /// @dev Read-only helper for per-user queries.
-    /// @param user User address.
-    /// @return data Stored data value.
+    // Returns get user data from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_user_data(self: @TContractState, user: starknet::ContractAddress) -> felt252;
 }
 
-/// @title Registry Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for registry actions.
+// ZK privacy entrypoints for registry actions.
 #[starknet::interface]
 pub trait IRegistryPrivacy<TContractState> {
-    /// @notice Sets privacy router address (one-time init).
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: starknet::ContractAddress);
-    /// @notice Submits a private registry action proof.
+    // Applies submit private registry action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_registry_action(
         ref self: TContractState,
         old_root: felt252,
@@ -48,10 +38,8 @@ pub trait IRegistryPrivacy<TContractState> {
     );
 }
 
-/// @title Registry Contract
-/// @author CAREL Team
-/// @notice Simple data registry for protocol metadata.
-/// @dev Stores data in vector and per-user map for convenience.
+// Simple data registry for protocol metadata.
+// Stores data in vector and per-user map for convenience.
 #[starknet::contract]
 pub mod Registry {
     use starknet::ContractAddress;
@@ -63,7 +51,7 @@ pub mod Registry {
 
     #[storage]
     pub struct Storage {
-        // Menggunakan Vec untuk koleksi data di storage
+        // Uses Vec to store registered data entries.
         data_vector: Vec<felt252>,
         user_data_map: Map<ContractAddress, felt252>,
         foo: usize,
@@ -90,55 +78,51 @@ pub mod Registry {
         pub new_data: felt252,
     }
 
-    /// @notice Initializes the registry.
-    /// @dev Sets an initial value for internal storage.
-    /// @param initial_data Initial value for the `foo` field.
+    // Initializes the registry.
+    // Sets an initial value for internal storage.
+    // `initial_data` seeds the `foo` storage field.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, initial_data: usize) {
         self.foo.write(initial_data);
     }
 
     #[abi(embed_v0)]
     pub impl RegistryImpl of super::IRegistry<ContractState> {
-        /// @notice Registers data for the caller.
-        /// @dev Stores data in both vector and user map.
-        /// @param data Data value to register.
+        // Applies register data after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn register_data(ref self: ContractState, data: felt252) {
             let caller = get_caller_address();
             
-            // Menggunakan .push() sesuai rekomendasi compiler terbaru
+            // Uses `.push()` for vector append semantics.
             self.data_vector.push(data);
             
             self.user_data_map.entry(caller).write(data);
             self.emit(Event::DataRegistered(DataRegistered { user: caller, data }));
         }
 
-        /// @notice Updates data at a specific index.
-        /// @dev Keeps user mapping aligned with updated data.
-        /// @param index Index to update.
-        /// @param new_data New data value.
+        // Updates data configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn update_data(ref self: ContractState, index: u64, new_data: felt252) {
             let caller = get_caller_address();
             
-            // Menggunakan indexing langsung untuk menulis ulang data
+            // Uses direct indexing to overwrite the selected entry.
             self.data_vector[index].write(new_data);
             
             self.user_data_map.entry(caller).write(new_data);
             self.emit(Event::DataUpdated(DataUpdated { user: caller, index, new_data }));
         }
 
-        /// @notice Returns data at a specific index.
-        /// @dev Read-only helper for consumers.
-        /// @param index Index to fetch.
-        /// @return data Stored data value.
+        // Returns get data from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_data(self: @ContractState, index: u64) -> felt252 {
-            // Menggunakan .at() untuk membaca data di index tertentu
+            // Uses `.at()` to read value at the selected index.
             self.data_vector.at(index).read()
         }
 
-        /// @notice Returns all stored data.
-        /// @dev Read-only helper for analytics.
-        /// @return data Array of stored values.
+        // Returns get all data from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_all_data(self: @ContractState) -> Array<felt252> {
             let mut all_data = array![];
             for i in 0..self.data_vector.len() {
@@ -147,10 +131,8 @@ pub mod Registry {
             all_data
         }
 
-        /// @notice Returns data associated with a user.
-        /// @dev Read-only helper for per-user queries.
-        /// @param user User address.
-        /// @return data Stored data value.
+        // Returns get user data from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_user_data(self: @ContractState, user: ContractAddress) -> felt252 {
             self.user_data_map.entry(user).read()
         }
@@ -158,6 +140,8 @@ pub mod Registry {
 
     #[abi(embed_v0)]
     impl RegistryPrivacyImpl of super::IRegistryPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(!router.is_zero(), "Privacy router required");
             let current = self.privacy_router.read();
@@ -165,6 +149,8 @@ pub mod Registry {
             self.privacy_router.write(router);
         }
 
+        // Applies submit private registry action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_registry_action(
             ref self: ContractState,
             old_root: felt252,

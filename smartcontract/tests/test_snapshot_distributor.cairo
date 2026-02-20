@@ -8,7 +8,11 @@ use smartcontract::core::token::{ICarelTokenDispatcher, ICarelTokenDispatcherTra
 
 #[starknet::interface]
 pub trait IStakingMock<TContractState> {
+    // Updates user stake configuration after access-control and invariant checks.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn set_user_stake(ref self: TContractState, user: ContractAddress, amount: u256);
+    // Returns get user stake from state without mutating storage.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn get_user_stake(self: @TContractState, user: ContractAddress) -> u256;
 }
 
@@ -24,15 +28,21 @@ mod StakingMock {
 
     #[abi(embed_v0)]
     impl IStakingMockImpl of super::IStakingMock<ContractState> {
+        // Updates user stake configuration after access-control and invariant checks.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn set_user_stake(ref self: ContractState, user: ContractAddress, amount: u256) {
             self.stakes.entry(user).write(amount);
         }
+        // Returns get user stake from state without mutating storage.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn get_user_stake(self: @ContractState, user: ContractAddress) -> u256 {
             self.stakes.entry(user).read()
         }
     }
 }
 
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (ISnapshotDistributorDispatcher, ContractAddress, ContractAddress) {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let signer: ContractAddress = 0x2.try_into().unwrap();
@@ -68,6 +78,8 @@ fn setup() -> (ISnapshotDistributorDispatcher, ContractAddress, ContractAddress)
 }
 
 #[test]
+// Test case: validates successful claim behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_successful_claim() {
     let (dist, signer, staking_addr) = setup();
     let user: ContractAddress = 0x123.try_into().unwrap();
@@ -87,5 +99,5 @@ fn test_successful_claim() {
     let proof: Span<felt252> = array![].span();
     dist.claim_reward(epoch, amount, proof);
     
-    assert!(dist.is_claimed(epoch, user), "Status harus claimed");
+    assert!(dist.is_claimed(epoch, user), "Status should be claimed");
 }

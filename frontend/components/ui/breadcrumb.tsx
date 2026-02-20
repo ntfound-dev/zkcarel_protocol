@@ -4,10 +4,27 @@ import { ChevronRight, MoreHorizontal } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Breadcrumb` logic.
+ *
+ * @param props - Input used by `Breadcrumb` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Breadcrumb({ ...props }: React.ComponentProps<'nav'>) {
   return <nav aria-label="breadcrumb" data-slot="breadcrumb" {...props} />
 }
 
+/**
+ * Handles `BreadcrumbList` logic.
+ *
+ * @param className - Input used by `BreadcrumbList` to compute state, payload, or request behavior.
+ * @param props - Input used by `BreadcrumbList` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function BreadcrumbList({ className, ...props }: React.ComponentProps<'ol'>) {
   return (
     <ol
@@ -21,6 +38,15 @@ function BreadcrumbList({ className, ...props }: React.ComponentProps<'ol'>) {
   )
 }
 
+/**
+ * Handles `BreadcrumbItem` logic.
+ *
+ * @param className - Input used by `BreadcrumbItem` to compute state, payload, or request behavior.
+ * @param props - Input used by `BreadcrumbItem` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function BreadcrumbItem({ className, ...props }: React.ComponentProps<'li'>) {
   return (
     <li
@@ -31,6 +57,12 @@ function BreadcrumbItem({ className, ...props }: React.ComponentProps<'li'>) {
   )
 }
 
+/**
+ * Handles `BreadcrumbLink` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function BreadcrumbLink({
   asChild,
   className,
@@ -49,6 +81,15 @@ function BreadcrumbLink({
   )
 }
 
+/**
+ * Handles `BreadcrumbPage` logic.
+ *
+ * @param className - Input used by `BreadcrumbPage` to compute state, payload, or request behavior.
+ * @param props - Input used by `BreadcrumbPage` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function BreadcrumbPage({ className, ...props }: React.ComponentProps<'span'>) {
   return (
     <span
@@ -62,6 +103,12 @@ function BreadcrumbPage({ className, ...props }: React.ComponentProps<'span'>) {
   )
 }
 
+/**
+ * Handles `BreadcrumbSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function BreadcrumbSeparator({
   children,
   className,
@@ -80,6 +127,12 @@ function BreadcrumbSeparator({
   )
 }
 
+/**
+ * Handles `BreadcrumbEllipsis` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function BreadcrumbEllipsis({
   className,
   ...props

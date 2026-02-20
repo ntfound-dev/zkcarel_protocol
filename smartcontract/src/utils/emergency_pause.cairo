@@ -1,44 +1,29 @@
 use starknet::ContractAddress;
 
-/// @title Emergency Pause Interface
-/// @author CAREL Team
-/// @notice Defines protocol-wide pause controls for incident response.
-/// @dev Exposes minimal pause controls to reduce operational risk.
+// Defines protocol-wide pause controls for incident response.
+// Exposes minimal pause controls to reduce operational risk.
 #[starknet::interface]
 pub trait IEmergencyPause<TContractState> {
-    /// @notice Pauses the protocol and records a reason.
-    /// @dev Restricted to guardians for rapid response.
-    /// @param reason Human-readable reason for the pause.
+    // Pauses all registered pausable contracts.
     fn pause_all(ref self: TContractState, reason: ByteArray);
-    /// @notice Unpauses the protocol after an incident.
-    /// @dev Restricted to admins to ensure controlled recovery.
+    // Unpauses all registered pausable contracts.
     fn unpause_all(ref self: TContractState);
-    /// @notice Returns whether the protocol is paused.
-    /// @dev Read-only helper for UI and monitoring.
-    /// @return paused True if the protocol is paused.
+    // Returns whether the contract is currently paused.
     fn is_paused(self: @TContractState) -> bool;
-    /// @notice Adds a contract address to the pausable set.
-    /// @dev Allows admins to expand the pause scope safely.
-    /// @param address Contract address to add.
+    // Registers a contract address to be managed by emergency pause flow (admin only).
     fn add_pausable_contract(ref self: TContractState, address: ContractAddress);
-    /// @notice Removes a contract address from the pausable set.
-    /// @dev Allows admins to shrink the pause scope safely.
-    /// @param address Contract address to remove.
+    // Removes a contract address from emergency pause target list (admin only).
     fn remove_pausable_contract(ref self: TContractState, address: ContractAddress);
-    /// @notice Returns the current list of pausable contracts.
-    /// @dev Read-only helper for tooling and audits.
-    /// @return contracts Array of pausable contract addresses.
+    // Returns full list of registered pausable contracts.
     fn get_pausable_contracts(self: @TContractState) -> Array<ContractAddress>;
 }
 
-/// @title Emergency Pause Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for emergency controls.
+// Hide Mode hooks for emergency-control actions.
 #[starknet::interface]
 pub trait IEmergencyPausePrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets privacy router used for Hide Mode actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private emergency action proof.
+    // Forwards private emergency payload to privacy router.
     fn submit_private_emergency_action(
         ref self: TContractState,
         old_root: felt252,
@@ -50,10 +35,8 @@ pub trait IEmergencyPausePrivacy<TContractState> {
     );
 }
 
-/// @title Emergency Pause Contract
-/// @author CAREL Team
-/// @notice Central pause switch for CAREL protocol contracts.
-/// @dev Uses role-based access control for guardian/admin separation.
+// Centralized pause coordinator for protocol incident response.
+// Uses guardian/admin role split for staged emergency handling.
 #[starknet::contract]
 pub mod EmergencyPause {
     use starknet::ContractAddress;
@@ -128,10 +111,8 @@ pub mod EmergencyPause {
         pub address: ContractAddress,
     }
 
-    /// @notice Initializes the emergency pause contract.
-    /// @dev Sets admin and guardian roles for staged incident response.
-    /// @param admin Address with admin privileges.
-    /// @param guardian Address with guardian privileges.
+    // Initializes access roles and default unpaused state.
+    // admin/guardian: operational roles for unpause and pause workflows.
     #[constructor]
     fn constructor(
         ref self: ContractState, 
@@ -146,9 +127,7 @@ pub mod EmergencyPause {
 
     #[abi(embed_v0)]
     pub impl EmergencyPauseImpl of super::IEmergencyPause<ContractState> {
-        /// @notice Pauses the protocol and records a reason.
-        /// @dev Guardian-only to minimize delay during incidents.
-        /// @param reason Human-readable reason for the pause.
+        // Pauses all registered pausable contracts.
         fn pause_all(ref self: ContractState, reason: ByteArray) {
             self.access_control.assert_only_role(GUARDIAN_ROLE);
             assert!(!self.paused.read(), "System already paused");
@@ -161,8 +140,7 @@ pub mod EmergencyPause {
             self.emit(Event::EmergencyPaused(EmergencyPaused { reason, paused_at: now }));
         }
 
-        /// @notice Unpauses the protocol after an incident.
-        /// @dev Admin-only to ensure controlled recovery.
+        // Unpauses all registered pausable contracts.
         fn unpause_all(ref self: ContractState) {
             self.access_control.assert_only_role(DEFAULT_ADMIN_ROLE);
             assert!(self.paused.read(), "System not paused");
@@ -177,25 +155,19 @@ pub mod EmergencyPause {
             self.emit(Event::EmergencyUnpaused(EmergencyUnpaused { unpaused_at: now, duration }));
         }
 
-        /// @notice Returns whether the protocol is paused.
-        /// @dev Read-only helper for UI and monitoring.
-        /// @return paused True if the protocol is paused.
+        // Returns whether the contract is currently paused.
         fn is_paused(self: @ContractState) -> bool {
             self.paused.read()
         }
 
-        /// @notice Adds a contract address to the pausable set.
-        /// @dev Admin-only to prevent unauthorized scope changes.
-        /// @param address Contract address to add.
+        // Registers a pausable contract target managed by emergency controls.
         fn add_pausable_contract(ref self: ContractState, address: ContractAddress) {
             self.access_control.assert_only_role(DEFAULT_ADMIN_ROLE);
             self.contracts_to_pause.push(address);
             self.emit(Event::ContractAdded(ContractAdded { address }));
         }
 
-        /// @notice Removes a contract address from the pausable set.
-        /// @dev Admin-only to prevent unauthorized scope changes.
-        /// @param address Contract address to remove.
+        // Removes a pausable contract target from emergency controls if present.
         fn remove_pausable_contract(ref self: ContractState, address: ContractAddress) {
             self.access_control.assert_only_role(DEFAULT_ADMIN_ROLE);
             
@@ -218,15 +190,13 @@ pub mod EmergencyPause {
                 let last_index = self.contracts_to_pause.len() - 1;
                 let last_element = self.contracts_to_pause.at(last_index).read();
                 self.contracts_to_pause.at(index).write(last_element);
-                // FIXED: Changed double quotes to single quotes to pass a felt252 to .expect()
+                // Keep felt252 literal in `expect` message for Cairo type compatibility.
                 self.contracts_to_pause.pop().expect('Vec should not be empty');
                 self.emit(Event::ContractRemoved(ContractRemoved { address }));
             }
         }
 
-        /// @notice Returns the current list of pausable contracts.
-        /// @dev Read-only helper for tooling and audits.
-        /// @return contracts Array of pausable contract addresses.
+        // Returns full list of registered pausable contracts.
         fn get_pausable_contracts(self: @ContractState) -> Array<ContractAddress> {
             let mut contracts = array![];
             for i in 0..self.contracts_to_pause.len() {
@@ -238,12 +208,15 @@ pub mod EmergencyPause {
 
     #[abi(embed_v0)]
     impl EmergencyPausePrivacyImpl of super::IEmergencyPausePrivacy<ContractState> {
+        // Sets privacy router used for Hide Mode emergency actions.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.access_control.assert_only_role(DEFAULT_ADMIN_ROLE);
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Relays private emergency payload for proof verification and execution.
+        // `nullifiers` prevent replay and `commitments` bind intended emergency action.
         fn submit_private_emergency_action(
             ref self: ContractState,
             old_root: felt252,

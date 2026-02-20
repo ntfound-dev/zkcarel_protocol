@@ -51,10 +51,12 @@ const USER_TOUCH_CACHE_RETENTION_SECS: u64 = 600;
 
 static USER_TOUCH_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, Instant>>> = OnceLock::new();
 
+// Internal helper that supports `user_touch_cache` operations.
 fn user_touch_cache() -> &'static tokio::sync::RwLock<HashMap<String, Instant>> {
     USER_TOUCH_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that checks conditions for `should_touch_user`.
 async fn should_touch_user(address: &str) -> bool {
     let cache = user_touch_cache();
     let now = Instant::now();
@@ -93,6 +95,17 @@ pub struct AppState {
     pub config: Config,
 }
 
+/// Handles `require_user` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<String> {
     let auth_header = headers
         .get(AUTHORIZATION)
@@ -124,6 +137,7 @@ pub async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<Strin
     Ok(user_address)
 }
 
+// Internal helper that parses or transforms values for `normalize_scope_address`.
 fn normalize_scope_address(address: &str) -> Option<String> {
     let trimmed = address.trim();
     if trimmed.is_empty() {
@@ -132,6 +146,7 @@ fn normalize_scope_address(address: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+// Internal helper that supports `push_scope_address` operations.
 fn push_scope_address(scopes: &mut Vec<String>, address: &str) {
     let Some(normalized) = normalize_scope_address(address) else {
         return;
@@ -145,6 +160,17 @@ fn push_scope_address(scopes: &mut Vec<String>, address: &str) {
     scopes.push(normalized);
 }
 
+/// Fetches data for `resolve_user_scope_addresses`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub async fn resolve_user_scope_addresses(
     headers: &HeaderMap,
     state: &AppState,
@@ -171,6 +197,7 @@ pub async fn resolve_user_scope_addresses(
     Ok(scopes)
 }
 
+// Internal helper that checks conditions for `is_starknet_like_address`.
 fn is_starknet_like_address(address: &str) -> bool {
     let trimmed = address.trim();
     if !trimmed.starts_with("0x") {
@@ -187,6 +214,17 @@ fn is_starknet_like_address(address: &str) -> bool {
     hex.len() > 40
 }
 
+/// Handles `require_starknet_user` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub async fn require_starknet_user(headers: &HeaderMap, state: &AppState) -> Result<String> {
     let user_address = require_user(headers, state).await?;
     let linked = state.db.list_wallet_addresses(&user_address).await?;
@@ -221,6 +259,17 @@ pub async fn require_starknet_user(headers: &HeaderMap, state: &AppState) -> Res
     ))
 }
 
+/// Runs `ensure_user_exists` and handles related side effects.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub async fn ensure_user_exists(state: &AppState, address: &str) -> Result<()> {
     state.db.create_user(address).await?;
     Ok(())

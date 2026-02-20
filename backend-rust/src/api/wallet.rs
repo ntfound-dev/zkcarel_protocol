@@ -93,15 +93,18 @@ struct EvmRpcCircuitBreaker {
     open_until: Option<Instant>,
 }
 
+// Internal helper that supports `onchain_balance_cache` operations.
 fn onchain_balance_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOnchainBalance>> {
     ONCHAIN_BALANCE_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `onchain_balance_fetch_locks` operations.
 fn onchain_balance_fetch_locks(
 ) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
     ONCHAIN_BALANCE_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `configured_evm_max_inflight` operations.
 fn configured_evm_max_inflight() -> usize {
     std::env::var("EVM_RPC_MAX_INFLIGHT")
         .ok()
@@ -110,14 +113,17 @@ fn configured_evm_max_inflight() -> usize {
         .unwrap_or(EVM_RPC_MAX_INFLIGHT_DEFAULT)
 }
 
+// Internal helper that supports `evm_rpc_semaphore` operations.
 fn evm_rpc_semaphore() -> &'static Arc<Semaphore> {
     EVM_RPC_SEMAPHORE.get_or_init(|| Arc::new(Semaphore::new(configured_evm_max_inflight())))
 }
 
+// Internal helper that supports `evm_rpc_breaker` operations.
 fn evm_rpc_breaker() -> &'static tokio::sync::RwLock<EvmRpcCircuitBreaker> {
     EVM_RPC_BREAKER.get_or_init(|| tokio::sync::RwLock::new(EvmRpcCircuitBreaker::default()))
 }
 
+// Internal helper that supports `evm_breaker_backoff_duration` operations.
 fn evm_breaker_backoff_duration(failures: u32) -> Duration {
     if failures <= EVM_RPC_BREAKER_THRESHOLD {
         return Duration::from_secs(EVM_RPC_BREAKER_BASE_SECS);
@@ -128,6 +134,7 @@ fn evm_breaker_backoff_duration(failures: u32) -> Duration {
     Duration::from_secs(secs.min(EVM_RPC_BREAKER_MAX_SECS))
 }
 
+// Internal helper that supports `looks_like_transient_evm_error` operations.
 fn looks_like_transient_evm_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("too many requests")
@@ -141,6 +148,7 @@ fn looks_like_transient_evm_error(message: &str) -> bool {
         || lower.contains("unknown field `code`")
 }
 
+// Internal helper that supports `evm_rpc_preflight` operations.
 async fn evm_rpc_preflight(method: &str) -> Result<OwnedSemaphorePermit> {
     let now = Instant::now();
     {
@@ -163,6 +171,7 @@ async fn evm_rpc_preflight(method: &str) -> Result<OwnedSemaphorePermit> {
         .map_err(|e| AppError::Internal(format!("EVM RPC semaphore closed: {}", e)))
 }
 
+// Internal helper that supports `evm_rpc_record_success` operations.
 async fn evm_rpc_record_success() {
     let mut guard = evm_rpc_breaker().write().await;
     if guard.consecutive_failures != 0 || guard.open_until.is_some() {
@@ -171,6 +180,7 @@ async fn evm_rpc_record_success() {
     }
 }
 
+// Internal helper that supports `evm_rpc_record_failure` operations.
 async fn evm_rpc_record_failure(method: &str, error_text: &str) {
     if !looks_like_transient_evm_error(error_text) {
         return;
@@ -192,6 +202,7 @@ async fn evm_rpc_record_failure(method: &str, error_text: &str) {
     );
 }
 
+// Internal helper that supports `onchain_balance_fetch_lock_for` operations.
 async fn onchain_balance_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = onchain_balance_fetch_locks();
     {
@@ -216,6 +227,7 @@ async fn onchain_balance_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>
     lock
 }
 
+// Internal helper that parses or transforms values for `normalize_cache_part`.
 fn normalize_cache_part(value: Option<&str>) -> String {
     value
         .map(|v| v.trim().to_ascii_lowercase())
@@ -223,6 +235,7 @@ fn normalize_cache_part(value: Option<&str>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+// Internal helper that supports `onchain_balance_cache_key` operations.
 fn onchain_balance_cache_key(
     auth_subject: &str,
     starknet: Option<&str>,
@@ -238,6 +251,7 @@ fn onchain_balance_cache_key(
     )
 }
 
+// Internal helper that supports `onchain_response_has_data` operations.
 fn onchain_response_has_data(value: &OnchainBalanceResponse) -> bool {
     value.strk_l2.is_some()
         || value.strk_l1.is_some()
@@ -249,6 +263,7 @@ fn onchain_response_has_data(value: &OnchainBalanceResponse) -> bool {
         || value.wbtc.is_some()
 }
 
+// Internal helper that supports `looks_like_transient_rpc_error` operations.
 fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("jsonrpcresponse")
@@ -259,6 +274,7 @@ fn looks_like_transient_rpc_error(message: &str) -> bool {
         || lower.contains("timed out")
 }
 
+// Internal helper that fetches data for `get_cached_onchain_balance`.
 async fn get_cached_onchain_balance(
     key: &str,
     max_age: Duration,
@@ -272,6 +288,7 @@ async fn get_cached_onchain_balance(
     None
 }
 
+// Internal helper that supports `cache_onchain_balance` operations.
 async fn cache_onchain_balance(key: String, value: OnchainBalanceResponse) {
     let cache = onchain_balance_cache();
     let mut guard = cache.write().await;
@@ -493,6 +510,7 @@ pub async fn get_onchain_balances(
     Ok(Json(ApiResponse::success(response)))
 }
 
+// Internal helper that fetches data for `fetch_optional_balance_with_timeout`.
 async fn fetch_optional_balance_with_timeout<F>(label: &str, fut: F) -> Option<f64>
 where
     F: std::future::Future<Output = Result<Option<f64>>>,
@@ -574,6 +592,7 @@ pub async fn get_linked_wallets(
     Ok(Json(ApiResponse::success(response)))
 }
 
+// Internal helper that parses or transforms values for `normalize_wallet_chain`.
 fn normalize_wallet_chain(chain: &str) -> Option<&'static str> {
     match chain.trim().to_ascii_lowercase().as_str() {
         "starknet" | "strk" => Some("starknet"),
@@ -583,6 +602,7 @@ fn normalize_wallet_chain(chain: &str) -> Option<&'static str> {
     }
 }
 
+// Internal helper that checks conditions for `is_valid_evm_address`.
 fn is_valid_evm_address(value: &str) -> bool {
     let normalized = value.trim();
     normalized.starts_with("0x")
@@ -590,6 +610,7 @@ fn is_valid_evm_address(value: &str) -> bool {
         && normalized[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
+// Internal helper that supports `looks_like_btc_address` operations.
 fn looks_like_btc_address(value: &str) -> bool {
     let normalized = value.trim();
     if normalized.len() < 14 || normalized.len() > 90 {
@@ -605,6 +626,7 @@ fn looks_like_btc_address(value: &str) -> bool {
         || lower.starts_with('2')
 }
 
+// Internal helper that supports `validate_link_wallet_address` operations.
 fn validate_link_wallet_address(chain: &str, wallet_address: &str) -> Result<()> {
     let is_valid = match chain {
         "starknet" => parse_felt(wallet_address).is_ok(),
@@ -626,16 +648,19 @@ fn validate_link_wallet_address(chain: &str, wallet_address: &str) -> Result<()>
     Err(AppError::BadRequest(message.to_string()))
 }
 
+// Internal helper that supports `clean_address` operations.
 fn clean_address(value: Option<String>) -> Option<String> {
     value
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty() && v != "0x..." && v != "0x0")
 }
 
+// Internal helper that supports `env_address` operations.
 fn env_address(key: &str) -> Option<String> {
     clean_address(std::env::var(key).ok())
 }
 
+// Internal helper that parses or transforms values for `normalize_felt_hex`.
 fn normalize_felt_hex(value: &str) -> String {
     let trimmed = value.trim().to_ascii_lowercase();
     let without_prefix = trimmed.strip_prefix("0x").unwrap_or(trimmed.as_str());
@@ -647,10 +672,12 @@ fn normalize_felt_hex(value: &str) -> String {
     }
 }
 
+// Internal helper that supports `addresses_equal` operations.
 fn addresses_equal(a: &str, b: &str) -> bool {
     normalize_felt_hex(a) == normalize_felt_hex(b)
 }
 
+// Internal helper that supports `known_starknet_token_decimals` operations.
 fn known_starknet_token_decimals(config: &Config, token: &str) -> Option<u8> {
     let token_value = token.trim();
     if token_value.is_empty() {
@@ -674,6 +701,17 @@ fn known_starknet_token_decimals(config: &Config, token: &str) -> Option<u8> {
     None
 }
 
+/// Fetches data for `resolve_starknet_token_address`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub(crate) fn resolve_starknet_token_address(config: &Config, symbol: &str) -> Option<String> {
     match symbol.to_ascii_uppercase().as_str() {
         "STRK" => clean_address(config.token_strk_address.clone())
@@ -698,6 +736,17 @@ pub(crate) fn resolve_starknet_token_address(config: &Config, symbol: &str) -> O
     }
 }
 
+/// Fetches data for `fetch_starknet_erc20_balance`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub(crate) async fn fetch_starknet_erc20_balance(
     config: &Config,
     owner: &str,
@@ -747,6 +796,17 @@ pub(crate) async fn fetch_starknet_erc20_balance(
     Ok(Some(scale_u128(raw, decimals)))
 }
 
+/// Fetches data for `fetch_starknet_decimals`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub(crate) async fn fetch_starknet_decimals(config: &Config, token: &str) -> Result<u8> {
     let reader = OnchainReader::from_config(config)?;
     let token_felt = parse_felt(token)?;
@@ -770,6 +830,17 @@ pub(crate) async fn fetch_starknet_decimals(config: &Config, token: &str) -> Res
     Ok(parsed)
 }
 
+/// Fetches data for `fetch_evm_native_balance`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub(crate) async fn fetch_evm_native_balance(
     config: &Config,
     address: &str,
@@ -798,6 +869,17 @@ pub(crate) async fn fetch_evm_native_balance(
     Ok(Some(scale_u256(balance, 18)))
 }
 
+/// Fetches data for `fetch_evm_erc20_balance`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub(crate) async fn fetch_evm_erc20_balance(
     config: &Config,
     address: &str,
@@ -832,6 +914,17 @@ pub(crate) async fn fetch_evm_erc20_balance(
     Ok(Some(scale_u256(balance, decimals)))
 }
 
+/// Fetches data for `fetch_btc_balance`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub(crate) async fn fetch_btc_balance(config: &Config, address: &str) -> Result<Option<f64>> {
     if address.trim().is_empty() {
         return Ok(None);
@@ -914,6 +1007,7 @@ pub(crate) async fn fetch_btc_balance(config: &Config, address: &str) -> Result<
     Ok(None)
 }
 
+// Internal helper that fetches data for `fetch_btc_balance_from_unisat`.
 async fn fetch_btc_balance_from_unisat(
     client: &reqwest::Client,
     base_url: &str,
@@ -954,6 +1048,7 @@ async fn fetch_btc_balance_from_unisat(
     Some(total_sats / 100_000_000.0)
 }
 
+// Internal helper that fetches data for `fetch_btc_balance_from_xverse`.
 async fn fetch_btc_balance_from_xverse(
     client: &reqwest::Client,
     base_url: &str,
@@ -986,6 +1081,7 @@ async fn fetch_btc_balance_from_xverse(
         .map(|sats| sats / 100_000_000.0)
 }
 
+// Internal helper that fetches data for `fetch_btc_balance_from_mempool`.
 async fn fetch_btc_balance_from_mempool(
     client: &reqwest::Client,
     base_url: &str,
@@ -1034,6 +1130,7 @@ async fn fetch_btc_balance_from_mempool(
         .map(|sats| sats / 100_000_000.0)
 }
 
+// Internal helper that supports `json_as_f64` operations.
 fn json_as_f64(value: &serde_json::Value) -> Option<f64> {
     value
         .as_f64()
@@ -1041,11 +1138,13 @@ fn json_as_f64(value: &serde_json::Value) -> Option<f64> {
         .or_else(|| value.as_u64().map(|v| v as f64))
 }
 
+// Internal helper that parses or transforms values for `scale_u128`.
 fn scale_u128(value: u128, decimals: u8) -> f64 {
     let base = 10_f64.powi(decimals as i32);
     (value as f64) / base
 }
 
+// Internal helper that parses or transforms values for `scale_u256`.
 fn scale_u256(value: U256, decimals: u8) -> f64 {
     let base = 10_f64.powi(decimals as i32);
     let raw = value.as_u128() as f64;

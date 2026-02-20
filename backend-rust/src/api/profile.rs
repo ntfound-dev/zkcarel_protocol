@@ -130,6 +130,7 @@ pub async fn set_display_name(
     })))
 }
 
+// Internal helper that parses or transforms values for `normalize_display_name`.
 fn normalize_display_name(raw: &str) -> Result<String> {
     let value = raw.trim();
     if value.len() < 3 || value.len() > 24 {
@@ -148,6 +149,7 @@ fn normalize_display_name(raw: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
+// Internal helper that supports `map_display_name_error` operations.
 fn map_display_name_error(err: AppError) -> AppError {
     match err {
         AppError::Database(sqlx::Error::Database(db_err))
@@ -168,6 +170,7 @@ struct ParsedExecuteCall {
     calldata: Vec<Felt>,
 }
 
+// Internal helper that parses or transforms values for `normalize_onchain_tx_hash`.
 fn normalize_onchain_tx_hash(
     tx_hash: Option<&str>,
 ) -> std::result::Result<Option<String>, AppError> {
@@ -192,6 +195,7 @@ fn normalize_onchain_tx_hash(
     Ok(Some(raw.to_ascii_lowercase()))
 }
 
+// Internal helper that supports `felt_to_usize` operations.
 fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     let raw = felt_to_u128(value).map_err(|_| {
         AppError::BadRequest(format!(
@@ -205,6 +209,7 @@ fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     })
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls_offset`.
 fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if calldata.is_empty() {
         return Err(AppError::BadRequest(
@@ -265,6 +270,7 @@ fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     Ok(calls)
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls_inline`.
 fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if calldata.is_empty() {
         return Err(AppError::BadRequest(
@@ -308,6 +314,7 @@ fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     Ok(calls)
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls`.
 fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if let Ok(calls) = parse_execute_calls_offset(calldata) {
         return Ok(calls);
@@ -315,6 +322,7 @@ fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     parse_execute_calls_inline(calldata)
 }
 
+// Internal helper that fetches data for `resolve_allowed_starknet_senders_async`.
 async fn resolve_allowed_starknet_senders_async(
     state: &AppState,
     auth_subject: &str,
@@ -345,6 +353,7 @@ async fn resolve_allowed_starknet_senders_async(
     Ok(out)
 }
 
+// Internal helper that supports `verify_rename_fee_invoke_payload` operations.
 fn verify_rename_fee_invoke_payload(
     tx: &StarknetTransaction,
     allowed_senders: &[Felt],
@@ -407,6 +416,7 @@ fn verify_rename_fee_invoke_payload(
     ))
 }
 
+// Internal helper that supports `verify_rename_payment_tx_hash` operations.
 async fn verify_rename_payment_tx_hash(
     state: &AppState,
     auth_subject: &str,

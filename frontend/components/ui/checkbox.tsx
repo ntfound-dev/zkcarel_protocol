@@ -6,6 +6,12 @@ import { CheckIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Checkbox` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Checkbox({
   className,
   ...props

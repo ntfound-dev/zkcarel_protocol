@@ -6,6 +6,12 @@ import { MinusIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `InputOTP` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputOTP({
   className,
   containerClassName,
@@ -26,6 +32,15 @@ function InputOTP({
   )
 }
 
+/**
+ * Handles `InputOTPGroup` logic.
+ *
+ * @param className - Input used by `InputOTPGroup` to compute state, payload, or request behavior.
+ * @param props - Input used by `InputOTPGroup` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputOTPGroup({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -36,6 +51,12 @@ function InputOTPGroup({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `InputOTPSlot` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputOTPSlot({
   index,
   className,
@@ -66,6 +87,14 @@ function InputOTPSlot({
   )
 }
 
+/**
+ * Handles `InputOTPSeparator` logic.
+ *
+ * @param props - Input used by `InputOTPSeparator` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputOTPSeparator({ ...props }: React.ComponentProps<'div'>) {
   return (
     <div data-slot="input-otp-separator" role="separator" {...props}>

@@ -1,7 +1,5 @@
-/// @title Trading Module
-/// @author CAREL Team
-/// @notice Trading automation such as DCA orders.
-/// @dev Isolates trading logic from core protocol contracts.
+// Trading layer modules for keeper automation, dark pool, and Battleship ZK game.
+// Keeps trading-related contracts isolated from core protocol modules.
 pub mod dca_orders;
 pub mod dark_pool;
 pub mod battleship_garaga;

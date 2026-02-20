@@ -20,6 +20,7 @@ pub(crate) struct WsAuthQuery {
     token: Option<String>,
 }
 
+// Internal helper that supports `token_from_headers` operations.
 fn token_from_headers(headers: &HeaderMap) -> Option<String> {
     let header_value = headers.get(AUTHORIZATION)?.to_str().ok()?;
     header_value
@@ -37,6 +38,7 @@ struct OrderUpdate {
     timestamp: i64,
 }
 
+// Internal helper that supports `connected_payload` operations.
 fn connected_payload() -> String {
     serde_json::json!({
         "type": "connected",
@@ -45,6 +47,7 @@ fn connected_payload() -> String {
     .to_string()
 }
 
+// Internal helper that supports `status_label` operations.
 fn status_label(status: i16) -> &'static str {
     match status {
         0 => "active",
@@ -97,6 +100,7 @@ pub async fn handler(
     ws.on_upgrade(|socket| handle_socket(socket, state, user_address))
 }
 
+// Internal helper that supports `handle_socket` operations.
 async fn handle_socket(socket: WebSocket, state: AppState, user_address: String) {
     let (mut sender, mut receiver) = socket.split();
 
@@ -174,6 +178,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `status_label_maps_known_values` operations.
     fn status_label_maps_known_values() {
         // Memastikan status order terjemah sesuai kode
         assert_eq!(status_label(2), "filled");

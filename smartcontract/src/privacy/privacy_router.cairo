@@ -1,19 +1,9 @@
 use starknet::ContractAddress;
 
-/// @title Privacy Router Interface
-/// @author CAREL Team
-/// @notice Routes ZK proofs to verifiers and applies shielded transitions.
+// Routes ZK proofs to verifiers and applies shielded transitions.
 #[starknet::interface]
 pub trait IPrivacyRouter<TContractState> {
-    /// @notice Submits a privacy action with proof.
-    /// @dev Verifies proof then updates ShieldedVault.
-    /// @param action_type Action identifier.
-    /// @param old_root Root before transition.
-    /// @param new_root Root after transition.
-    /// @param nullifiers Nullifiers to consume.
-    /// @param commitments New commitments to add.
-    /// @param public_inputs Public inputs for verifier.
-    /// @param proof ZK proof.
+    // Submits a router action and applies root/nullifier transitions after verifier checks.
     fn submit_action(
         ref self: TContractState,
         action_type: felt252,
@@ -26,24 +16,20 @@ pub trait IPrivacyRouter<TContractState> {
     );
 }
 
-/// @title Privacy Router Admin Interface
-/// @author CAREL Team
-/// @notice Owner-only configuration for router dependencies.
+// Owner-only configuration for router dependencies.
 #[starknet::interface]
 pub trait IPrivacyRouterAdmin<TContractState> {
-    /// @notice Sets the shielded vault address.
+    // Owner-only setter for wiring the ShieldedVault dependency used by router execution.
     fn set_vault(ref self: TContractState, vault: ContractAddress);
-    /// @notice Sets the verifier registry address.
+    // Owner-only setter for wiring the verifier registry used for action-type dispatch.
     fn set_registry(ref self: TContractState, registry: ContractAddress);
-    /// @notice Pauses router submissions.
+    // Pauses new privacy submissions while preserving existing roots, notes, and nullifier history.
     fn pause(ref self: TContractState);
-    /// @notice Unpauses router submissions.
+    // Re-enables privacy submissions after a pause without mutating historical privacy state.
     fn unpause(ref self: TContractState);
 }
 
-/// @title Privacy Router Contract
-/// @author CAREL Team
-/// @notice Central entrypoint for ZK privacy actions.
+// Central entrypoint for ZK privacy actions.
 #[starknet::contract]
 pub mod PrivacyRouter {
     use starknet::ContractAddress;
@@ -105,6 +91,7 @@ pub mod PrivacyRouter {
     pub struct Unpaused {}
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, owner: ContractAddress, vault: ContractAddress, registry: ContractAddress) {
         self.ownable.initializer(owner);
         self.vault.write(vault);
@@ -114,7 +101,8 @@ pub mod PrivacyRouter {
 
     #[abi(embed_v0)]
     impl PrivacyRouterImpl of super::IPrivacyRouter<ContractState> {
-        fn submit_action(
+        // Submits a router action and applies root/nullifier transitions after verifier checks.
+            fn submit_action(
             ref self: ContractState,
             action_type: felt252,
             old_root: felt252,
@@ -147,27 +135,31 @@ pub mod PrivacyRouter {
 
     #[abi(embed_v0)]
     impl PrivacyRouterAdminImpl of super::IPrivacyRouterAdmin<ContractState> {
-        fn set_vault(ref self: ContractState, vault: ContractAddress) {
+        // Owner-only setter for wiring the ShieldedVault dependency used by router execution.
+            fn set_vault(ref self: ContractState, vault: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!vault.is_zero(), "Vault required");
             self.vault.write(vault);
             self.emit(Event::VaultUpdated(VaultUpdated { vault }));
         }
 
-        fn set_registry(ref self: ContractState, registry: ContractAddress) {
+        // Owner-only setter for wiring the verifier registry used for action-type dispatch.
+            fn set_registry(ref self: ContractState, registry: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!registry.is_zero(), "Registry required");
             self.registry.write(registry);
             self.emit(Event::RegistryUpdated(RegistryUpdated { registry }));
         }
 
-        fn pause(ref self: ContractState) {
+        // Pauses new privacy submissions while preserving existing roots, notes, and nullifier history.
+            fn pause(ref self: ContractState) {
             self.ownable.assert_only_owner();
             self.paused.write(true);
             self.emit(Event::Paused(Paused {}));
         }
 
-        fn unpause(ref self: ContractState) {
+        // Re-enables privacy submissions after a pause without mutating historical privacy state.
+            fn unpause(ref self: ContractState) {
             self.ownable.assert_only_owner();
             self.paused.write(false);
             self.emit(Event::Unpaused(Unpaused {}));

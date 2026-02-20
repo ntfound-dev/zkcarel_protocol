@@ -9,6 +9,7 @@ pub enum LeaderboardType {
 }
 
 impl LeaderboardTypeIntoFelt252 of Into<LeaderboardType, felt252> {
+    // Converts leaderboard score value into felt252 representation.
     fn into(self: LeaderboardType) -> felt252 {
         match self {
             LeaderboardType::Points => 0,
@@ -26,31 +27,18 @@ pub struct LeaderboardEntry {
     pub username: ByteArray,
 }
 
-/// @title Leaderboard View Interface
-/// @author CAREL Team
-/// @notice Defines read and update entrypoints for leaderboard data.
-/// @dev Designed for backend-updated snapshots with on-chain read access.
+// Leaderboard API for reading ranked entries and posting backend snapshots.
+// Provides read-optimized views for UI and reward distribution flows.
 #[starknet::interface]
 pub trait ILeaderboardView<TContractState> {
-    /// @notice Returns the top entries for a leaderboard epoch.
-    /// @dev Read-only helper for UI and analytics.
-    /// @param epoch Snapshot epoch identifier.
-    /// @param leaderboard_type Which leaderboard to query.
-    /// @param top_n Maximum number of entries to return.
-    /// @return entries Array of leaderboard entries.
+    // Returns full leaderboard entries up to configured max size.
     fn get_leaderboard(
         self: @TContractState, 
         epoch: u64, 
         leaderboard_type: LeaderboardType, 
         top_n: u64
     ) -> Array<LeaderboardEntry>;
-    /// @notice Returns a page of leaderboard entries for an epoch.
-    /// @dev Bounded by stored size and max entries per update.
-    /// @param epoch Snapshot epoch identifier.
-    /// @param leaderboard_type Which leaderboard to query.
-    /// @param start Starting index (0-based).
-    /// @param limit Maximum number of entries to return.
-    /// @return entries Array of leaderboard entries.
+    // Returns paginated leaderboard slice for UI consumption.
     fn get_leaderboard_page(
         self: @TContractState,
         epoch: u64,
@@ -59,12 +47,7 @@ pub trait ILeaderboardView<TContractState> {
         limit: u64
     ) -> Array<LeaderboardEntry>;
     
-    /// @notice Returns a user's rank for a leaderboard epoch.
-    /// @dev Read-only helper optimized for O(1) lookup.
-    /// @param epoch Snapshot epoch identifier.
-    /// @param leaderboard_type Which leaderboard to query.
-    /// @param user User address to lookup.
-    /// @return rank User rank value.
+    // Returns cached user rank and score entry, if present.
     fn get_user_rank(
         self: @TContractState, 
         epoch: u64, 
@@ -72,11 +55,7 @@ pub trait ILeaderboardView<TContractState> {
         user: ContractAddress
     ) -> u256;
     
-    /// @notice Updates leaderboard entries for an epoch.
-    /// @dev Restricted to backend signer to preserve data integrity.
-    /// @param epoch Snapshot epoch identifier.
-    /// @param leaderboard_type Which leaderboard to update.
-    /// @param data Array of leaderboard entries.
+    // Replaces leaderboard snapshot for the provided epoch and type.
     fn update_leaderboard(
         ref self: TContractState, 
         epoch: u64, 
@@ -84,63 +63,40 @@ pub trait ILeaderboardView<TContractState> {
         data: Array<LeaderboardEntry>
     );
     
-    /// @notice Returns the stored size of a leaderboard.
-    /// @dev Read-only helper for pagination.
-    /// @param epoch Snapshot epoch identifier.
-    /// @param leaderboard_type Which leaderboard to query.
-    /// @return size Stored leaderboard size.
+    // Returns current leaderboard entry count.
     fn get_leaderboard_size(
         self: @TContractState,
         epoch: u64,
         leaderboard_type: LeaderboardType
     ) -> u64;
     
-    /// @notice Returns the backend signer address.
-    /// @dev Used by off-chain services to verify update authority.
-    /// @return backend Backend signer address.
+    // Returns backend signer address used for updates.
     fn get_backend_address(self: @TContractState) -> ContractAddress;
-    /// @notice Returns the contract owner address.
-    /// @dev Used for admin tooling and governance checks.
-    /// @return owner Owner address.
+    // Returns contract owner address.
     fn get_owner(self: @TContractState) -> ContractAddress;
-    /// @notice Updates the backend signer address.
-    /// @dev Owner-only to prevent unauthorized updates.
-    /// @param new_backend New backend signer address.
+    // Updates backend signer address used for leaderboard writes (owner only).
     fn set_backend_address(ref self: TContractState, new_backend: ContractAddress);
     
-    // New admin functions
-    /// @notice Pauses leaderboard updates.
-    /// @dev Owner-only to stop updates during incidents.
+    // Pauses leaderboard mutating operations.
     fn pause(ref self: TContractState);
-    /// @notice Unpauses leaderboard updates.
-    /// @dev Owner-only to resume updates after incident resolution.
+    // Resumes leaderboard mutating operations.
     fn unpause(ref self: TContractState);
-    /// @notice Returns whether the contract is paused.
-    /// @dev Read-only helper for monitoring.
-    /// @return paused True if paused.
+    // Returns whether the contract is currently paused.
     fn is_paused(self: @TContractState) -> bool;
-    /// @notice Sets the maximum entries allowed per update.
-    /// @dev Caps update size to mitigate gas and spam risk.
-    /// @param max Maximum entries per update.
+    // Updates maximum entries allowed per leaderboard update (owner only).
     fn set_max_entries(ref self: TContractState, max: u64);
-    /// @notice Returns the maximum entries allowed per update.
-    /// @dev Read-only helper for backend logic.
-    /// @return max Maximum entries per update.
+    // Returns configured maximum leaderboard size.
     fn get_max_entries(self: @TContractState) -> u64;
-    /// @notice Sets the cooldown between leaderboard updates.
-    /// @dev Rate limiting to prevent rapid updates.
-    /// @param seconds Cooldown in seconds.
+    // Updates minimum seconds between leaderboard updates (owner only).
     fn set_update_cooldown(ref self: TContractState, seconds: u64);
 }
 
-/// @title Leaderboard Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for leaderboard updates.
+// Hide Mode hooks for private leaderboard updates.
 #[starknet::interface]
 pub trait ILeaderboardViewPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets privacy router used for Hide Mode actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private leaderboard update proof.
+    // Forwards private leaderboard payload to privacy router.
     fn submit_private_leaderboard_action(
         ref self: TContractState,
         old_root: felt252,
@@ -152,10 +108,8 @@ pub trait ILeaderboardViewPrivacy<TContractState> {
     );
 }
 
-/// @title Leaderboard View Contract
-/// @author CAREL Team
-/// @notice Stores and exposes leaderboard snapshots for protocol rewards.
-/// @dev Uses cached ranks to provide O(1) user lookups.
+// Stores epoch leaderboard snapshots used by rewards and analytics.
+// Uses user-rank cache for O(1) rank lookups.
 #[starknet::contract]
 pub mod LeaderboardView {
     use starknet::ContractAddress;
@@ -172,19 +126,19 @@ pub mod LeaderboardView {
 
     #[storage]
     struct Storage {
-        // Existing storage
+        // Poseidon-keyed leaderboard entries by epoch/type/index.
         leaderboard_entries: Map<felt252, LeaderboardEntry>,
         leaderboard_size: Map<felt252, u64>,
         
-        // NEW: O(1) user rank lookup - MAJOR GAS OPTIMIZATION
+        // O(1) user rank cache for fast lookup.
         user_rank_cache: Map<felt252, u256>,
         
-        // Access control
+        // Authorized actors and privacy router wiring.
         backend_address: ContractAddress,
         owner: ContractAddress,
         privacy_router: ContractAddress,
         
-        // NEW: Security features
+        // Operational safety configuration.
         paused: bool,
         max_entries_per_update: u64,
         update_cooldown: u64,
@@ -237,20 +191,21 @@ pub mod LeaderboardView {
         pub new_cooldown: u64,
     }
 
-    // Helper functions
+    // Computes storage key for leaderboard entry by rank.
     fn compute_entry_key(epoch: u64, leaderboard_type: LeaderboardType, index: u64) -> felt252 {
         let type_felt: felt252 = leaderboard_type.into();
         let mut data = array![epoch.into(), type_felt, index.into()];
         poseidon_hash_span(data.span())
     }
 
+    // Computes storage key for leaderboard size value.
     fn compute_size_key(epoch: u64, leaderboard_type: LeaderboardType) -> felt252 {
         let type_felt: felt252 = leaderboard_type.into();
         let mut data = array![epoch.into(), type_felt];
         poseidon_hash_span(data.span())
     }
 
-    // NEW: User rank cache key
+    // Computes storage key for user-to-rank mapping.
     fn compute_user_rank_key(
         epoch: u64, 
         leaderboard_type: LeaderboardType, 
@@ -262,14 +217,14 @@ pub mod LeaderboardView {
         poseidon_hash_span(data.span())
     }
 
+    // Computes storage key for last leaderboard update timestamp.
     fn compute_update_timestamp_key(epoch: u64, leaderboard_type: LeaderboardType) -> felt252 {
         compute_size_key(epoch, leaderboard_type)
     }
 
-    /// @notice Initializes the leaderboard view contract.
-    /// @dev Sets owner and backend signer plus safe operational defaults.
-    /// @param owner_address Contract owner with admin privileges.
-    /// @param backend_signer Authorized backend updater address.
+    // Initializes the leaderboard view contract.
+    // Sets owner and backend signer plus safe operational defaults.
+    // `owner_address` controls config updates and `backend_signer` is allowed to post snapshots.
     #[constructor]
     fn constructor(
         ref self: ContractState, 
@@ -282,20 +237,15 @@ pub mod LeaderboardView {
         self.owner.write(owner_address);
         self.backend_address.write(backend_signer);
         
-        // Security defaults
+        // Conservative defaults for update safety and throughput.
         self.paused.write(false);
-        self.max_entries_per_update.write(1000); // Max 1000 entries
-        self.update_cooldown.write(300); // 5 minutes cooldown
+        self.max_entries_per_update.write(1000);
+        self.update_cooldown.write(300);
     }
 
     #[abi(embed_v0)]
     impl LeaderboardViewImpl of ILeaderboardView<ContractState> {
-        /// @notice Returns the top entries for a leaderboard epoch.
-        /// @dev Read-only helper for UI and analytics.
-        /// @param epoch Snapshot epoch identifier.
-        /// @param leaderboard_type Which leaderboard to query.
-        /// @param top_n Maximum number of entries to return.
-        /// @return entries Array of leaderboard entries.
+        // Returns full leaderboard entries up to configured max size.
         fn get_leaderboard(
             self: @ContractState, 
             epoch: u64, 
@@ -323,6 +273,7 @@ pub mod LeaderboardView {
             result
         }
 
+        // Returns paginated leaderboard slice for UI consumption.
         fn get_leaderboard_page(
             self: @ContractState,
             epoch: u64,
@@ -355,42 +306,33 @@ pub mod LeaderboardView {
             result
         }
 
-        /// @notice Returns a user's rank for a leaderboard epoch.
-        /// @dev Uses cached rank for O(1) lookup.
-        /// @param epoch Snapshot epoch identifier.
-        /// @param leaderboard_type Which leaderboard to query.
-        /// @param user User address to lookup.
-        /// @return rank User rank value.
+        // Returns cached user rank and score entry, if present.
         fn get_user_rank(
             self: @ContractState, 
             epoch: u64, 
             leaderboard_type: LeaderboardType, 
             user: ContractAddress
         ) -> u256 {
-            // OPTIMIZED: O(1) lookup instead of O(n)
+            // O(1) lookup via user rank cache.
             let user_rank_key = compute_user_rank_key(epoch, leaderboard_type, user);
             self.user_rank_cache.read(user_rank_key)
         }
 
-        /// @notice Updates leaderboard entries for an epoch.
-        /// @dev Backend-only to preserve data integrity.
-        /// @param epoch Snapshot epoch identifier.
-        /// @param leaderboard_type Which leaderboard to update.
-        /// @param data Array of leaderboard entries.
+        // Replaces leaderboard snapshot for the provided epoch and type.
         fn update_leaderboard(
             ref self: ContractState, 
             epoch: u64, 
             leaderboard_type: LeaderboardType, 
             data: Array<LeaderboardEntry>
         ) {
-            // Security checks
+            // Enforce pause state and backend authorization.
             assert!(!self.paused.read(), "Contract is paused");
             
             let caller = get_caller_address();
             let backend = self.backend_address.read();
             assert!(caller == backend, "Caller is not authorized backend");
 
-            // Rate limiting
+            // Enforce per-epoch/type write cooldown.
             let current_time = get_block_timestamp();
             let timestamp_key = compute_update_timestamp_key(epoch, leaderboard_type);
             let last_update = self.last_update_timestamp.read(timestamp_key);
@@ -401,7 +343,7 @@ pub mod LeaderboardView {
                 "Update too frequent - cooldown active"
             );
 
-            // Input validation
+            // Reject empty updates and oversized batches.
             let data_len = data.len();
             let max_entries = self.max_entries_per_update.read();
             assert!(data_len > 0, "Cannot update with empty data");
@@ -416,19 +358,19 @@ pub mod LeaderboardView {
                 let entry_to_write = data.at(i).clone();
                 let idx_u64: u64 = i.into();
                 
-                // Data integrity validation
+                // Entry integrity checks.
                 assert!(entry_to_write.rank > 0, "Rank must be positive");
                 assert!(!entry_to_write.user.is_zero(), "Invalid user address");
                 
-                // Optional: Check rank ordering (commented out for flexibility)
+                // Rank ordering checks can be enabled if backend guarantees strict ordering.
                 // assert!(entry_to_write.rank > prev_rank, "Ranks must be sequential");
                 // prev_rank = entry_to_write.rank;
                 
-                // Write entry
+                // Persist entry keyed by epoch/type/index.
                 let entry_key = compute_entry_key(epoch, leaderboard_type, idx_u64);
                 self.leaderboard_entries.write(entry_key, entry_to_write.clone());
                 
-                // OPTIMIZATION: Cache user rank for O(1) lookup
+                // Cache user rank for constant-time rank reads.
                 let user_rank_key = compute_user_rank_key(
                     epoch, 
                     leaderboard_type, 
@@ -439,12 +381,12 @@ pub mod LeaderboardView {
                 i += 1;
             };
             
-            // Update size
+            // Persist snapshot size.
             let size_key = compute_size_key(epoch, leaderboard_type);
             let size_value: u64 = data_len.into();
             self.leaderboard_size.write(size_key, size_value);
             
-            // Update timestamp
+            // Record last successful update timestamp.
             self.last_update_timestamp.write(timestamp_key, current_time);
             
             self.emit(
@@ -456,11 +398,7 @@ pub mod LeaderboardView {
             );
         }
 
-        /// @notice Returns the stored size of a leaderboard.
-        /// @dev Read-only helper for pagination.
-        /// @param epoch Snapshot epoch identifier.
-        /// @param leaderboard_type Which leaderboard to query.
-        /// @return size Stored leaderboard size.
+        // Returns current leaderboard entry count.
         fn get_leaderboard_size(
             self: @ContractState,
             epoch: u64,
@@ -470,23 +408,17 @@ pub mod LeaderboardView {
             self.leaderboard_size.read(size_key)
         }
 
-        /// @notice Returns the backend signer address.
-        /// @dev Used by off-chain services to verify update authority.
-        /// @return backend Backend signer address.
+        // Returns backend signer address used for updates.
         fn get_backend_address(self: @ContractState) -> ContractAddress {
             self.backend_address.read()
         }
 
-        /// @notice Returns the contract owner address.
-        /// @dev Used for admin tooling and governance checks.
-        /// @return owner Owner address.
+        // Returns contract owner address.
         fn get_owner(self: @ContractState) -> ContractAddress {
             self.owner.read()
         }
 
-        /// @notice Updates the backend signer address.
-        /// @dev Owner-only to prevent unauthorized updates.
-        /// @param new_backend New backend signer address.
+        // Updates backend signer address used for leaderboard writes (owner only).
         fn set_backend_address(ref self: ContractState, new_backend: ContractAddress) {
             let caller = get_caller_address();
             let owner = self.owner.read();
@@ -504,9 +436,7 @@ pub mod LeaderboardView {
             );
         }
 
-        // NEW: Emergency pause
-        /// @notice Pauses leaderboard updates.
-        /// @dev Owner-only to stop updates during incidents.
+        // Pauses leaderboard mutating operations.
         fn pause(ref self: ContractState) {
             let caller = get_caller_address();
             assert!(caller == self.owner.read(), "Only owner can pause");
@@ -516,8 +446,7 @@ pub mod LeaderboardView {
             self.emit(ContractPaused { timestamp: get_block_timestamp() });
         }
 
-        /// @notice Unpauses leaderboard updates.
-        /// @dev Owner-only to resume updates after incident resolution.
+        // Resumes leaderboard mutating operations.
         fn unpause(ref self: ContractState) {
             let caller = get_caller_address();
             assert!(caller == self.owner.read(), "Only owner can unpause");
@@ -527,22 +456,17 @@ pub mod LeaderboardView {
             self.emit(ContractUnpaused { timestamp: get_block_timestamp() });
         }
 
-        /// @notice Returns whether the contract is paused.
-        /// @dev Read-only helper for monitoring.
-        /// @return paused True if paused.
+        // Returns whether the contract is currently paused.
         fn is_paused(self: @ContractState) -> bool {
             self.paused.read()
         }
 
-        // NEW: Configure max entries
-        /// @notice Sets the maximum entries allowed per update.
-        /// @dev Caps update size to mitigate gas and spam risk.
-        /// @param max Maximum entries per update.
+        // Updates maximum entries allowed per leaderboard update (owner only).
         fn set_max_entries(ref self: ContractState, max: u64) {
             let caller = get_caller_address();
             assert!(caller == self.owner.read(), "Only owner");
             assert!(max > 0, "Max must be positive");
-            assert!(max <= 10000, "Max too high"); // Reasonable upper limit
+            assert!(max <= 10000, "Max too high"); // Hard cap to bound update costs.
             
             let old_max = self.max_entries_per_update.read();
             self.max_entries_per_update.write(max);
@@ -550,17 +474,12 @@ pub mod LeaderboardView {
             self.emit(MaxEntriesUpdated { old_max, new_max: max });
         }
 
-        /// @notice Returns the maximum entries allowed per update.
-        /// @dev Read-only helper for backend logic.
-        /// @return max Maximum entries per update.
+        // Returns configured maximum leaderboard size.
         fn get_max_entries(self: @ContractState) -> u64 {
             self.max_entries_per_update.read()
         }
 
-        // NEW: Configure cooldown
-        /// @notice Sets the cooldown between leaderboard updates.
-        /// @dev Rate limiting to prevent rapid updates.
-        /// @param seconds Cooldown in seconds.
+        // Updates minimum seconds between leaderboard updates (owner only).
         fn set_update_cooldown(ref self: ContractState, seconds: u64) {
             let caller = get_caller_address();
             assert!(caller == self.owner.read(), "Only owner");
@@ -575,6 +494,7 @@ pub mod LeaderboardView {
 
     #[abi(embed_v0)]
     impl LeaderboardViewPrivacyImpl of super::ILeaderboardViewPrivacy<ContractState> {
+        // Sets privacy router used for Hide Mode leaderboard actions (owner only).
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             let caller = get_caller_address();
             assert!(caller == self.owner.read(), "Only owner");
@@ -582,6 +502,8 @@ pub mod LeaderboardView {
             self.privacy_router.write(router);
         }
 
+        // Relays private leaderboard payload for proof verification and execution.
+        // `nullifiers` prevent replay and `commitments` bind intended update state.
         fn submit_private_leaderboard_action(
             ref self: ContractState,
             old_root: felt252,

@@ -5,6 +5,7 @@ use crate::{
     integrations::bridge::{AtomiqClient, GardenClient, LayerSwapClient},
 };
 
+// Internal helper that parses or transforms values for `normalize_chain`.
 fn normalize_chain(value: &str) -> String {
     let lower = value.trim().to_ascii_lowercase();
     if lower.contains("starknet") || lower == "strk" {
@@ -19,6 +20,7 @@ fn normalize_chain(value: &str) -> String {
     lower
 }
 
+// Internal helper that supports `bridge_providers_for` operations.
 fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     match (from, to) {
         ("bitcoin", "starknet") => vec![BRIDGE_GARDEN.to_string()],
@@ -31,10 +33,12 @@ fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     }
 }
 
+// Internal helper that parses or transforms values for `normalize_token_symbol`.
 fn normalize_token_symbol(token: &str) -> String {
     token.trim().to_ascii_uppercase()
 }
 
+// Internal helper that supports `garden_destination_token` operations.
 fn garden_destination_token(
     to_chain: &str,
     source_token: &str,
@@ -66,6 +70,7 @@ fn garden_destination_token(
     }
 }
 
+// Internal helper that supports `garden_token_supported_on_chain` operations.
 fn garden_token_supported_on_chain(chain: &str, token: &str) -> bool {
     let chain = chain.trim().to_ascii_lowercase();
     let token = normalize_token_symbol(token);
@@ -93,6 +98,7 @@ fn garden_token_supported_on_chain(chain: &str, token: &str) -> bool {
     }
 }
 
+// Internal helper that supports `garden_supports_route` operations.
 fn garden_supports_route(from: &str, to: &str) -> bool {
     match (from, to) {
         ("bitcoin", "starknet")
@@ -105,6 +111,7 @@ fn garden_supports_route(from: &str, to: &str) -> bool {
     }
 }
 
+// Internal helper that checks conditions for `is_active_config_value`.
 fn is_active_config_value(raw: &str) -> bool {
     let value = raw.trim();
     if value.is_empty() {
@@ -114,12 +121,14 @@ fn is_active_config_value(raw: &str) -> bool {
     !(upper == "DISABLED" || upper == "CHANGE_ME" || upper == "REPLACE_ME")
 }
 
+// Internal helper that checks conditions for `has_non_empty`.
 fn has_non_empty(value: Option<&String>) -> bool {
     value
         .map(|item| is_active_config_value(item))
         .unwrap_or(false)
 }
 
+// Internal helper that supports `bridge_score` operations.
 fn bridge_score(route: &BridgeRoute, is_testnet: bool) -> f64 {
     let output_score = route.amount_out / route.amount_in;
     let time_score = 1.0 / (route.estimated_time_minutes as f64 / 10.0);
@@ -134,10 +143,12 @@ fn bridge_score(route: &BridgeRoute, is_testnet: bool) -> f64 {
     score * env_factor
 }
 
+// Internal helper that supports `compact_error_message` operations.
 fn compact_error_message(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+// Internal helper that supports `humanize_bridge_provider_error` operations.
 fn humanize_bridge_provider_error(
     provider: &str,
     err: &AppError,
@@ -182,6 +193,7 @@ fn humanize_bridge_provider_error(
     format!("{}: {}", provider, raw)
 }
 
+// Internal helper that supports `bridge_to_strk_is_disabled` operations.
 fn bridge_to_strk_is_disabled(
     from_chain: &str,
     to_chain: &str,
@@ -192,6 +204,7 @@ fn bridge_to_strk_is_disabled(
         && requested_to_token.map(normalize_token_symbol).as_deref() == Some("STRK")
 }
 
+// Internal helper that parses or transforms values for `normalize_bridge_token_for_chain`.
 fn normalize_bridge_token_for_chain(chain: &str, token: &str) -> String {
     let normalized = normalize_token_symbol(token);
     if chain == "bitcoin" && normalized == "WBTC" {
@@ -200,6 +213,7 @@ fn normalize_bridge_token_for_chain(chain: &str, token: &str) -> String {
     normalized
 }
 
+// Internal helper that supports `bridge_pair_supported_for_current_routes` operations.
 fn bridge_pair_supported_for_current_routes(
     from_chain: &str,
     to_chain: &str,
@@ -230,6 +244,17 @@ pub struct RouteOptimizer {
 }
 
 impl RouteOptimizer {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(config: Config) -> Self {
         Self { config }
     }
@@ -357,6 +382,7 @@ impl RouteOptimizer {
         )))
     }
 
+    // Internal helper that fetches data for `get_bridge_providers`.
     fn get_bridge_providers(&self, from: &str, to: &str) -> Vec<String> {
         bridge_providers_for(from, to)
             .into_iter()
@@ -364,6 +390,7 @@ impl RouteOptimizer {
             .collect()
     }
 
+    // Internal helper that supports `provider_is_configured` operations.
     fn provider_is_configured(&self, provider: &str) -> bool {
         match provider {
             BRIDGE_LAYERSWAP => {
@@ -383,6 +410,7 @@ impl RouteOptimizer {
         }
     }
 
+    // Internal helper that fetches data for `get_bridge_quote`.
     async fn get_bridge_quote(
         &self,
         provider: &str,
@@ -513,6 +541,7 @@ impl RouteOptimizer {
         Ok(route)
     }
 
+    // Internal helper that supports `calculate_bridge_score` operations.
     fn calculate_bridge_score(&self, route: &BridgeRoute) -> f64 {
         let score = bridge_score(route, self.config.is_testnet());
         tracing::debug!(
@@ -540,6 +569,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `bridge_providers_for_bitcoin_to_starknet` operations.
     fn bridge_providers_for_bitcoin_to_starknet() {
         // BTC native -> Starknet dikunci ke Garden agar sesuai order lifecycle API Garden.
         let providers = bridge_providers_for("bitcoin", "starknet");
@@ -548,6 +578,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `bridge_providers_for_ethereum_to_bitcoin_prefers_garden` operations.
     fn bridge_providers_for_ethereum_to_bitcoin_prefers_garden() {
         let providers = bridge_providers_for("ethereum", "bitcoin");
         assert_eq!(providers.first().map(String::as_str), Some(BRIDGE_GARDEN));
@@ -555,12 +586,14 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `garden_destination_token_for_bitcoin_is_btc` operations.
     fn garden_destination_token_for_bitcoin_is_btc() {
         assert_eq!(garden_destination_token("bitcoin", "ETH", None), "BTC");
         assert_eq!(garden_destination_token("bitcoin", "WBTC", None), "BTC");
     }
 
     #[test]
+    // Internal helper that supports `garden_destination_token_prefers_explicit_to_token` operations.
     fn garden_destination_token_prefers_explicit_to_token() {
         assert_eq!(
             garden_destination_token("starknet", "ETH", Some("WBTC")),
@@ -569,6 +602,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `garden_supports_common_routes` operations.
     fn garden_supports_common_routes() {
         assert!(garden_supports_route("ethereum", "bitcoin"));
         assert!(garden_supports_route("ethereum", "starknet"));
@@ -576,12 +610,14 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `garden_token_support_rejects_eth_on_starknet` operations.
     fn garden_token_support_rejects_eth_on_starknet() {
         assert!(garden_token_supported_on_chain("starknet", "STRK"));
         assert!(!garden_token_supported_on_chain("starknet", "ETH"));
     }
 
     #[test]
+    // Internal helper that supports `bridge_score_applies_env_factor` operations.
     fn bridge_score_applies_env_factor() {
         // Memastikan skor berkurang di testnet
         let route = BridgeRoute {
@@ -598,6 +634,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `humanize_garden_invalid_to_asset_error` operations.
     fn humanize_garden_invalid_to_asset_error() {
         let err = AppError::ExternalAPI(
             "Garden quote returned 400 Bad Request: {\"status\":\"Error\",\"error\":\"invalid to_asset\"}"
@@ -618,6 +655,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `bridge_to_strk_policy_blocks_cross_chain_destination` operations.
     fn bridge_to_strk_policy_blocks_cross_chain_destination() {
         assert!(bridge_to_strk_is_disabled(
             "ethereum",
@@ -642,6 +680,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `bridge_pair_matrix_allows_expected_routes` operations.
     fn bridge_pair_matrix_allows_expected_routes() {
         assert!(bridge_pair_supported_for_current_routes(
             "ethereum",

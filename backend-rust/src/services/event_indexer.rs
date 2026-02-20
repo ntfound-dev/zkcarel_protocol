@@ -14,6 +14,7 @@ const INDEXER_DEFAULT_INITIAL_BACKFILL_BLOCKS: u64 = 128;
 const INDEXER_DEFAULT_MAX_BLOCKS_PER_TICK: u64 = 32;
 const INDEXER_TRANSIENT_BACKOFF_MAX_SECS: u64 = 300;
 
+// Internal helper that checks conditions for `is_env_flag_enabled`.
 fn is_env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
         .ok()
@@ -24,6 +25,7 @@ fn is_env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+// Internal helper that supports `env_non_empty` operations.
 fn env_non_empty(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -31,10 +33,12 @@ fn env_non_empty(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+// Internal helper that supports `indexer_rpc_url` operations.
 fn indexer_rpc_url(config: &Config) -> String {
     env_non_empty("STARKNET_INDEXER_RPC_URL").unwrap_or_else(|| config.starknet_rpc_url.clone())
 }
 
+// Internal helper that checks conditions for `is_transient_indexer_error`.
 fn is_transient_indexer_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("error decoding response body")
@@ -48,6 +52,7 @@ fn is_transient_indexer_error(message: &str) -> bool {
         || lower.contains("eof while parsing")
 }
 
+// Internal helper that supports `transient_backoff_secs` operations.
 fn transient_backoff_secs(failures: u32) -> u64 {
     let exponent = failures.saturating_sub(1).min(5);
     let multiplier = 1_u64 << exponent;
@@ -65,6 +70,17 @@ pub struct EventIndexer {
 }
 
 impl EventIndexer {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         let rpc_url = indexer_rpc_url(&config);
         Self {
@@ -76,6 +92,7 @@ impl EventIndexer {
         }
     }
 
+    // Internal helper that supports `contract_targets` operations.
     fn contract_targets(&self) -> Vec<String> {
         let mut targets = Vec::new();
         push_valid_address(&mut targets, &self.config.bridge_aggregator_address);
@@ -90,6 +107,7 @@ impl EventIndexer {
         targets
     }
 
+    // Internal helper that supports `initial_backfill_blocks` operations.
     fn initial_backfill_blocks(&self) -> u64 {
         std::env::var("INDEXER_INITIAL_BACKFILL_BLOCKS")
             .ok()
@@ -98,6 +116,7 @@ impl EventIndexer {
             .unwrap_or(INDEXER_DEFAULT_INITIAL_BACKFILL_BLOCKS)
     }
 
+    // Internal helper that supports `max_blocks_per_tick` operations.
     fn max_blocks_per_tick(&self) -> u64 {
         std::env::var("INDEXER_MAX_BLOCKS_PER_TICK")
             .ok()
@@ -348,6 +367,7 @@ impl EventIndexer {
         Ok(())
     }
 
+    // Internal helper that supports `handle_swap_event` operations.
     async fn handle_swap_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
         // Parse swap event data
         let user = event
@@ -397,6 +417,7 @@ impl EventIndexer {
         Ok(())
     }
 
+    // Internal helper that supports `handle_bridge_event` operations.
     async fn handle_bridge_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
         let user = event
             .data
@@ -424,6 +445,7 @@ impl EventIndexer {
         Ok(())
     }
 
+    // Internal helper that supports `handle_stake_event` operations.
     async fn handle_stake_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
         let user = event
             .data
@@ -451,6 +473,7 @@ impl EventIndexer {
         Ok(())
     }
 
+    // Internal helper that supports `handle_unstake_event` operations.
     async fn handle_unstake_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
         let user = event
             .data
@@ -478,6 +501,7 @@ impl EventIndexer {
         Ok(())
     }
 
+    // Internal helper that supports `handle_claim_event` operations.
     async fn handle_claim_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
         let user = event
             .data
@@ -505,6 +529,7 @@ impl EventIndexer {
         Ok(())
     }
 
+    // Internal helper that supports `handle_order_filled` operations.
     async fn handle_order_filled(&self, event: BlockchainEvent, _block_number: u64) -> Result<()> {
         let order_id = event
             .data
@@ -533,6 +558,7 @@ struct IndexedBlockchainEvent {
     block_number: u64,
 }
 
+// Internal helper that parses or transforms values for `normalize_event_data`.
 fn normalize_event_data(parser: &EventParser, data: &mut serde_json::Value) {
     if let Some(user) = data.get("user").and_then(|v| v.as_str()) {
         let addr = parser.hex_to_address(user);
@@ -544,6 +570,7 @@ fn normalize_event_data(parser: &EventParser, data: &mut serde_json::Value) {
     }
 }
 
+// Internal helper that supports `push_valid_address` operations.
 fn push_valid_address(targets: &mut Vec<String>, address: &str) {
     let trimmed = address.trim();
     if trimmed.is_empty() || trimmed.starts_with("0x0000") {
@@ -557,6 +584,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that parses or transforms values for `normalize_event_data_adds_prefix`.
     fn normalize_event_data_adds_prefix() {
         // Memastikan user di-normalisasi ke format 0x
         let parser = EventParser::new();

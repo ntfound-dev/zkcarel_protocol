@@ -148,40 +148,48 @@ struct CachedOhlcvResponse {
     value: PortfolioOHLCVResponse,
 }
 
+// Internal helper that supports `onchain_holdings_cache` operations.
 fn onchain_holdings_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOnchainHoldings>>
 {
     ONCHAIN_HOLDINGS_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `portfolio_balance_cache` operations.
 fn portfolio_balance_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedBalanceResponse>>
 {
     PORTFOLIO_BALANCE_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `portfolio_history_cache` operations.
 fn portfolio_history_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedHistoryResponse>>
 {
     PORTFOLIO_HISTORY_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `portfolio_ohlcv_cache` operations.
 fn portfolio_ohlcv_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedOhlcvResponse>> {
     PORTFOLIO_OHLCV_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `portfolio_balance_fetch_locks` operations.
 fn portfolio_balance_fetch_locks(
 ) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
     PORTFOLIO_BALANCE_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `portfolio_history_fetch_locks` operations.
 fn portfolio_history_fetch_locks(
 ) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
     PORTFOLIO_HISTORY_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `portfolio_ohlcv_fetch_locks` operations.
 fn portfolio_ohlcv_fetch_locks(
 ) -> &'static tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
     PORTFOLIO_OHLCV_FETCH_LOCKS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `portfolio_balance_fetch_lock_for` operations.
 async fn portfolio_balance_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = portfolio_balance_fetch_locks();
     {
@@ -206,6 +214,7 @@ async fn portfolio_balance_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<(
     lock
 }
 
+// Internal helper that supports `portfolio_history_fetch_lock_for` operations.
 async fn portfolio_history_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = portfolio_history_fetch_locks();
     {
@@ -230,6 +239,7 @@ async fn portfolio_history_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<(
     lock
 }
 
+// Internal helper that supports `portfolio_ohlcv_fetch_lock_for` operations.
 async fn portfolio_ohlcv_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = portfolio_ohlcv_fetch_locks();
     {
@@ -254,6 +264,7 @@ async fn portfolio_ohlcv_fetch_lock_for(key: &str) -> Arc<tokio::sync::Mutex<()>
     lock
 }
 
+// Internal helper that supports `portfolio_scope_cache_key` operations.
 fn portfolio_scope_cache_key(user_addresses: &[String]) -> String {
     let normalized = normalize_scope_addresses(user_addresses);
     if normalized.is_empty() {
@@ -262,6 +273,7 @@ fn portfolio_scope_cache_key(user_addresses: &[String]) -> String {
     normalized.join(",")
 }
 
+// Internal helper that supports `portfolio_balance_cache_key` operations.
 fn portfolio_balance_cache_key(auth_subject: &str, user_addresses: &[String]) -> String {
     format!(
         "{}|{}",
@@ -270,6 +282,7 @@ fn portfolio_balance_cache_key(auth_subject: &str, user_addresses: &[String]) ->
     )
 }
 
+// Internal helper that supports `portfolio_history_cache_key` operations.
 fn portfolio_history_cache_key(
     auth_subject: &str,
     user_addresses: &[String],
@@ -283,6 +296,7 @@ fn portfolio_history_cache_key(
     )
 }
 
+// Internal helper that supports `portfolio_ohlcv_cache_key` operations.
 fn portfolio_ohlcv_cache_key(
     auth_subject: &str,
     user_addresses: &[String],
@@ -298,6 +312,7 @@ fn portfolio_ohlcv_cache_key(
     )
 }
 
+// Internal helper that fetches data for `get_cached_portfolio_balance`.
 async fn get_cached_portfolio_balance(key: &str, max_age: Duration) -> Option<BalanceResponse> {
     let cache = portfolio_balance_cache();
     let guard = cache.read().await;
@@ -308,6 +323,7 @@ async fn get_cached_portfolio_balance(key: &str, max_age: Duration) -> Option<Ba
     None
 }
 
+// Internal helper that supports `cache_portfolio_balance` operations.
 async fn cache_portfolio_balance(key: &str, value: BalanceResponse) {
     let cache = portfolio_balance_cache();
     let mut guard = cache.write().await;
@@ -324,6 +340,7 @@ async fn cache_portfolio_balance(key: &str, value: BalanceResponse) {
     }
 }
 
+// Internal helper that fetches data for `get_cached_portfolio_history`.
 async fn get_cached_portfolio_history(key: &str, max_age: Duration) -> Option<HistoryResponse> {
     let cache = portfolio_history_cache();
     let guard = cache.read().await;
@@ -334,6 +351,7 @@ async fn get_cached_portfolio_history(key: &str, max_age: Duration) -> Option<Hi
     None
 }
 
+// Internal helper that supports `cache_portfolio_history` operations.
 async fn cache_portfolio_history(key: &str, value: HistoryResponse) {
     let cache = portfolio_history_cache();
     let mut guard = cache.write().await;
@@ -350,6 +368,7 @@ async fn cache_portfolio_history(key: &str, value: HistoryResponse) {
     }
 }
 
+// Internal helper that fetches data for `get_cached_portfolio_ohlcv`.
 async fn get_cached_portfolio_ohlcv(
     key: &str,
     max_age: Duration,
@@ -363,6 +382,7 @@ async fn get_cached_portfolio_ohlcv(
     None
 }
 
+// Internal helper that supports `cache_portfolio_ohlcv` operations.
 async fn cache_portfolio_ohlcv(key: &str, value: PortfolioOHLCVResponse) {
     let cache = portfolio_ohlcv_cache();
     let mut guard = cache.write().await;
@@ -379,6 +399,7 @@ async fn cache_portfolio_ohlcv(key: &str, value: PortfolioOHLCVResponse) {
     }
 }
 
+// Internal helper that parses or transforms values for `normalize_cache_part`.
 fn normalize_cache_part(value: Option<&str>) -> String {
     value
         .map(|v| v.trim().to_ascii_lowercase())
@@ -386,6 +407,7 @@ fn normalize_cache_part(value: Option<&str>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+// Internal helper that supports `onchain_holdings_cache_key` operations.
 fn onchain_holdings_cache_key(
     auth_subject: &str,
     starknet: Option<&str>,
@@ -401,6 +423,7 @@ fn onchain_holdings_cache_key(
     )
 }
 
+// Internal helper that fetches data for `get_cached_onchain_holdings`.
 async fn get_cached_onchain_holdings(key: &str, max_age: Duration) -> Option<HashMap<String, f64>> {
     let cache = onchain_holdings_cache();
     let guard = cache.read().await;
@@ -411,6 +434,7 @@ async fn get_cached_onchain_holdings(key: &str, max_age: Duration) -> Option<Has
     None
 }
 
+// Internal helper that supports `cache_onchain_holdings` operations.
 async fn cache_onchain_holdings(key: String, values: HashMap<String, f64>) {
     let cache = onchain_holdings_cache();
     let mut guard = cache.write().await;
@@ -427,6 +451,7 @@ async fn cache_onchain_holdings(key: String, values: HashMap<String, f64>) {
     }
 }
 
+// Internal helper that supports `apply_onchain_overrides` operations.
 fn apply_onchain_overrides(
     holdings: &mut HashMap<String, f64>,
     onchain_values: &HashMap<String, f64>,
@@ -436,6 +461,7 @@ fn apply_onchain_overrides(
     }
 }
 
+// Internal helper that supports `prune_testnet_holdings_without_onchain` operations.
 fn prune_testnet_holdings_without_onchain(
     holdings: &mut HashMap<String, f64>,
     resolved_onchain: &HashMap<String, f64>,
@@ -466,10 +492,12 @@ fn prune_testnet_holdings_without_onchain(
     }
 }
 
+// Internal helper that supports `total_value_usd` operations.
 fn total_value_usd(balances: &[TokenBalance]) -> f64 {
     balances.iter().map(|b| b.value_usd).sum()
 }
 
+// Internal helper that supports `period_to_interval` operations.
 fn period_to_interval(period: &str) -> (&'static str, i64) {
     match period {
         "1d" => ("1h", 24),
@@ -479,6 +507,7 @@ fn period_to_interval(period: &str) -> (&'static str, i64) {
     }
 }
 
+// Internal helper that supports `fallback_price_for` operations.
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_uppercase().as_str() {
         "USDT" | "USDC" | "CAREL" => 1.0,
@@ -486,10 +515,12 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+// Internal helper that supports `decimal_to_f64` operations.
 fn decimal_to_f64(value: rust_decimal::Decimal) -> f64 {
     value.to_f64().unwrap_or(0.0)
 }
 
+// Internal helper that supports `interval_seconds` operations.
 fn interval_seconds(interval: &str) -> i64 {
     match interval {
         "1h" => 3600,
@@ -500,10 +531,12 @@ fn interval_seconds(interval: &str) -> i64 {
     }
 }
 
+// Internal helper that parses or transforms values for `clamp_ohlcv_limit`.
 fn clamp_ohlcv_limit(limit: Option<i32>) -> i64 {
     limit.unwrap_or(24).clamp(2, 200) as i64
 }
 
+// Internal helper that parses or transforms values for `normalize_scope_addresses`.
 fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for address in user_addresses {
@@ -520,6 +553,7 @@ fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
     normalized
 }
 
+// Internal helper that supports `align_timestamp` operations.
 fn align_timestamp(timestamp: i64, interval: i64) -> i64 {
     if interval <= 0 {
         return timestamp;
@@ -527,6 +561,7 @@ fn align_timestamp(timestamp: i64, interval: i64) -> i64 {
     timestamp - (timestamp % interval)
 }
 
+// Internal helper that supports `tick_prices` operations.
 fn tick_prices(tick: &PriceTick) -> (f64, f64, f64, f64, f64) {
     (
         decimal_to_f64(tick.open),
@@ -537,6 +572,7 @@ fn tick_prices(tick: &PriceTick) -> (f64, f64, f64, f64, f64) {
     )
 }
 
+// Internal helper that supports `latest_price` operations.
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     let token_upper = token.to_ascii_uppercase();
     let mut price: Option<f64> = sqlx::query_scalar(
@@ -559,6 +595,7 @@ async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
         .unwrap_or_else(|| fallback_price_for(&token_upper)))
 }
 
+// Internal helper that supports `latest_price_with_change` operations.
 async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64, f64)> {
     let token_upper = token.to_ascii_uppercase();
     let mut rows: Vec<f64> = sqlx::query_scalar(
@@ -594,6 +631,7 @@ async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64,
     Ok((latest, change))
 }
 
+// Internal helper that fetches data for `fetch_token_holdings`.
 async fn fetch_token_holdings(
     state: &AppState,
     user_addresses: &[String],
@@ -625,6 +663,7 @@ async fn fetch_token_holdings(
     Ok(rows)
 }
 
+// Internal helper that supports `override_holding` operations.
 fn override_holding(holdings: &mut HashMap<String, f64>, token: &str, amount: f64) {
     if !amount.is_finite() {
         return;
@@ -636,6 +675,7 @@ fn override_holding(holdings: &mut HashMap<String, f64>, token: &str, amount: f6
     holdings.insert(token.to_string(), amount);
 }
 
+// Internal helper that supports `looks_like_transient_rpc_error` operations.
 fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("jsonrpcresponse")
@@ -646,6 +686,7 @@ fn looks_like_transient_rpc_error(message: &str) -> bool {
         || lower.contains("timed out")
 }
 
+// Internal helper that fetches data for `fetch_optional_balance_with_timeout`.
 async fn fetch_optional_balance_with_timeout<F>(label: &str, fut: F) -> Option<f64>
 where
     F: std::future::Future<Output = Result<Option<f64>>>,
@@ -672,6 +713,7 @@ where
     }
 }
 
+// Internal helper that supports `merge_onchain_holdings` operations.
 async fn merge_onchain_holdings(
     state: &AppState,
     auth_subject: &str,
@@ -918,6 +960,7 @@ async fn merge_onchain_holdings(
     Ok(())
 }
 
+// Internal helper that builds inputs for `build_balances`.
 async fn build_balances(
     state: &AppState,
     auth_subject: &str,
@@ -952,6 +995,7 @@ async fn build_balances(
     Ok(balances)
 }
 
+// Internal helper that builds inputs for `build_portfolio_ohlcv`.
 async fn build_portfolio_ohlcv(
     state: &AppState,
     auth_subject: &str,
@@ -1237,6 +1281,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `total_value_usd_sums_balances` operations.
     fn total_value_usd_sums_balances() {
         // Memastikan total nilai dihitung dari seluruh saldo
         let balances = vec![
@@ -1259,6 +1304,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `period_to_interval_defaults_to_weekly` operations.
     fn period_to_interval_defaults_to_weekly() {
         // Memastikan periode tidak dikenal memakai default 1w
         let (interval, limit) = period_to_interval("unknown");
@@ -1267,12 +1313,14 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `interval_seconds_defaults_to_hour` operations.
     fn interval_seconds_defaults_to_hour() {
         // Memastikan interval tidak dikenal memakai 1 jam
         assert_eq!(interval_seconds("unknown"), 3600);
     }
 
     #[test]
+    // Internal helper that supports `align_timestamp_rounds_down` operations.
     fn align_timestamp_rounds_down() {
         // Memastikan timestamp di-align ke interval
         assert_eq!(align_timestamp(10005, 3600), 7200);

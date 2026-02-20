@@ -76,6 +76,14 @@ const TIER2_ONCHAIN_COMMAND_REGEX =
 const TIER3_ONCHAIN_COMMAND_REGEX =
   /\b(swap|bridge|stake|unstake|claim|limit(?:\s|-)?order|cancel\s+order|portfolio|rebalance|alert|price alert)\b/i
 
+/**
+ * Parses or transforms values for `encodeShortByteArray`.
+ *
+ * @param value - Input used by `encodeShortByteArray` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function encodeShortByteArray(value: string): Array<string | number> {
   const normalized = value.trim()
   const byteLen = new TextEncoder().encode(normalized).length
@@ -86,10 +94,27 @@ function encodeShortByteArray(value: string): Array<string | number> {
   return [0, toHexFelt(normalized), byteLen]
 }
 
+/**
+ * Handles `actionTypeForTier` logic.
+ *
+ * @param tier - Input used by `actionTypeForTier` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function actionTypeForTier(tier: number): number {
   return tier >= 3 ? AI_ACTION_TYPE_MULTI_STEP : AI_ACTION_TYPE_SWAP
 }
 
+/**
+ * Handles `requiresOnchainActionForCommand` logic.
+ *
+ * @param tier - Input used by `requiresOnchainActionForCommand` to compute state, payload, or request behavior.
+ * @param command - Input used by `requiresOnchainActionForCommand` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function requiresOnchainActionForCommand(tier: number, command: string): boolean {
   if (tier < 2) return false
   const normalized = command.trim()
@@ -98,16 +123,41 @@ function requiresOnchainActionForCommand(tier: number, command: string): boolean
   return TIER3_ONCHAIN_COMMAND_REGEX.test(normalized)
 }
 
+/**
+ * Checks conditions for `isInvalidUserSignatureError`.
+ *
+ * @param error - Input used by `isInvalidUserSignatureError` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function isInvalidUserSignatureError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? "")
   return /invalid user signature/i.test(message)
 }
 
+/**
+ * Fetches data for `resolveStarknetProviderHint`.
+ *
+ * @param provider - Input used by `resolveStarknetProviderHint` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function resolveStarknetProviderHint(provider: string | null): "starknet" | "argentx" | "braavos" {
   if (provider === "argentx" || provider === "braavos") return provider
   return "starknet"
 }
 
+/**
+ * Fetches data for `findNewPendingAction`.
+ *
+ * @param after - Input used by `findNewPendingAction` to compute state, payload, or request behavior.
+ * @param before - Input used by `findNewPendingAction` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function findNewPendingAction(after: number[], before: number[]): number | null {
   const beforeSet = new Set(before)
   for (const id of after) {
@@ -116,6 +166,14 @@ function findNewPendingAction(after: number[], before: number[]): number | null 
   return after.length > 0 ? after[after.length - 1] : null
 }
 
+/**
+ * Handles `pickLatestPendingAction` logic.
+ *
+ * @param pending - Input used by `pickLatestPendingAction` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function pickLatestPendingAction(pending: number[]): number | null {
   if (pending.length === 0) return null
   return Math.max(...pending)
@@ -126,6 +184,12 @@ interface Message {
   content: string
 }
 
+/**
+ * Handles `FloatingAIAssistant` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function FloatingAIAssistant() {
   const notifications = useNotifications()
   const wallet = useWallet()
@@ -155,6 +219,12 @@ export function FloatingAIAssistant() {
     [staticExecutorAddress, runtimeExecutorAddress]
   )
 
+  /**
+   * Handles `scrollToBottom` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
@@ -251,6 +321,12 @@ export function FloatingAIAssistant() {
     }
   }
 
+  /**
+   * Handles `handleSend` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleSend = async () => {
     const command = input.trim()
     if (!command || isSending) return
@@ -357,6 +433,12 @@ export function FloatingAIAssistant() {
 
       await new Promise((resolve) => setTimeout(resolve, 2000))
 
+      /**
+       * Runs `submitOnchainAction` and handles related side effects.
+       *
+       * @returns Result consumed by caller flow, UI state updates, or async chaining.
+       * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+       */
       const submitOnchainAction = async () =>
         invokeStarknetCallFromWallet(
           {

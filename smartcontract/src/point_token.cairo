@@ -1,16 +1,14 @@
 use starknet::ContractAddress;
 
-/// @title Point Token Interface
-/// @notice ERC20 point token with admin-only minting.
+// Point-token interface for admin-controlled reward issuance.
 #[starknet::interface]
 pub trait IPointToken<TContractState> {
-    /// @notice Mint points to a recipient.
-    /// @dev Callable only by admin_address in storage.
+    // Applies mint points after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn mint_points(ref self: TContractState, recipient: ContractAddress, amount: u256);
 }
 
-/// @title Point Token
-/// @notice ERC20 token used for bridge reward points.
+// ERC20-compatible token used for points and reward accounting.
 #[starknet::contract]
 pub mod PointToken {
     use openzeppelin::introspection::src5::SRC5Component;
@@ -49,6 +47,8 @@ pub mod PointToken {
     }
 
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, admin_address: ContractAddress) {
         let name: ByteArray = "Point";
         let symbol: ByteArray = "PT";
@@ -59,6 +59,8 @@ pub mod PointToken {
 
     #[abi(embed_v0)]
     impl PointTokenImpl of super::IPointToken<ContractState> {
+        // Applies mint points after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn mint_points(ref self: ContractState, recipient: ContractAddress, amount: u256) {
             assert!(get_caller_address() == self.admin_address.read(), "Unauthorized");
             self.erc20.mint(recipient, amount);

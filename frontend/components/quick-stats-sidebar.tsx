@@ -31,6 +31,20 @@ interface StatCardProps {
   className?: string
 }
 
+/**
+ * Handles `StatCard` logic.
+ *
+ * @param icon - Input used by `StatCard` to compute state, payload, or request behavior.
+ * @param label - Input used by `StatCard` to compute state, payload, or request behavior.
+ * @param value - Input used by `StatCard` to compute state, payload, or request behavior.
+ * @param subValue - Input used by `StatCard` to compute state, payload, or request behavior.
+ * @param progress - Input used by `StatCard` to compute state, payload, or request behavior.
+ * @param trend - Input used by `StatCard` to compute state, payload, or request behavior.
+ * @param className - Input used by `StatCard` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function StatCard({ icon: Icon, label, value, subValue, progress, trend, className }: StatCardProps) {
   return (
     <div className={cn(
@@ -87,6 +101,16 @@ interface LeaderboardRankProps {
   }[]
 }
 
+/**
+ * Handles `LeaderboardRank` logic.
+ *
+ * @param rank - Input used by `LeaderboardRank` to compute state, payload, or request behavior.
+ * @param change - Input used by `LeaderboardRank` to compute state, payload, or request behavior.
+ * @param categories - Input used by `LeaderboardRank` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
   return (
     <div className="p-4 rounded-xl glass border border-border hover:border-primary/50 transition-all duration-300">
@@ -127,6 +151,14 @@ function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
   )
 }
 
+/**
+ * Handles `QuickStatsSidebar` logic.
+ *
+ * @param className - Input used by `QuickStatsSidebar` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStatsSidebarProps) {
   const wallet = useWallet()
   const [points, setPoints] = React.useState<number | null>(null)
@@ -156,6 +188,12 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
   React.useEffect(() => {
     let active = true
 
+    /**
+     * Handles `loadPoints` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadPoints = async () => {
       try {
         const [response, nfts] = await Promise.all([
@@ -260,6 +298,12 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
     let active = true
 
     const rankAddress = wallet.starknetAddress || wallet.address
+    /**
+     * Updates state for `resetRank`.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const resetRank = () => {
       setRankData({ rank: null, change: 0, total: 0 })
       setCategoryRanks([
@@ -269,6 +313,12 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
       ])
     }
 
+    /**
+     * Handles `loadRanks` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadRanks = async () => {
       try {
         if (!rankAddress) {

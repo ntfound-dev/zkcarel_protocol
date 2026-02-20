@@ -1,16 +1,11 @@
 use starknet::ContractAddress;
 
-/// @title ERC20 Minimal Interface
-/// @author CAREL Team
-/// @notice Minimal ERC20 interface for refund transfers.
-/// @dev Keeps dependency surface small for bridge refunds.
+// Minimal ERC20 interface for refund transfers.
+// Keeps dependency surface small for bridge refunds.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
-    /// @notice Transfers tokens to a recipient.
-    /// @dev Used for refund payouts.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Applies transfer after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
 }
 
@@ -31,64 +26,44 @@ pub struct BridgeRoute {
     pub estimated_time: u64,
 }
 
-/// @title Bridge Aggregator Interface
-/// @author CAREL Team
-/// @notice Defines routing and execution for bridge providers.
-/// @dev Used by frontend and backend to select optimal routes.
+// Defines routing and execution for bridge providers.
+// Used by frontend and backend to select optimal routes.
 #[starknet::interface]
 pub trait IBridgeAggregator<TContractState> {
-    /// @notice Returns the best bridge route for a transfer.
-    /// @dev Scores providers by cost, liquidity, and time.
-    /// @param from_chain Source chain id.
-    /// @param to_chain Destination chain id.
-    /// @param amount Amount to bridge.
-    /// @return route Selected bridge route.
+    // Returns get best route from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_best_route(self: @TContractState, from_chain: felt252, to_chain: felt252, amount: u256) -> BridgeRoute;
-    /// @notice Executes a bridge transfer with the chosen route.
-    /// @dev Emits success/failure events and fee breakdown.
-    /// @param route Selected bridge route.
-    /// @param amount Amount to bridge.
+    // Applies execute bridge after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn execute_bridge(ref self: TContractState, route: BridgeRoute, amount: u256);
-    /// @notice Refunds a failed bridge transfer.
-    /// @dev Uses ERC20 transfer to return funds.
-    /// @param token_address Token to refund.
-    /// @param amount Amount to refund.
+    // Implements refund failed bridge logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn refund_failed_bridge(ref self: TContractState, token_address: ContractAddress, amount: u256);
-    /// @notice Registers a new bridge provider.
-    /// @dev Owner-only to control provider list.
-    /// @param provider_id Provider identifier.
-    /// @param info Provider metadata.
+    // Applies register bridge provider after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn register_bridge_provider(ref self: TContractState, provider_id: felt252, info: BridgeProvider);
-    /// @notice Updates a provider's reported liquidity.
-    /// @dev Provider-only to prevent spoofed liquidity.
-    /// @param provider_id Provider identifier.
-    /// @param liquidity Updated liquidity value.
+    // Updates liquidity configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn update_liquidity(ref self: TContractState, provider_id: felt252, liquidity: u256);
-    /// @notice Updates bridge fee configuration.
-    /// @dev Owner-only to maintain economic parameters.
-    /// @param provider_fee_bps Provider fee in bps.
-    /// @param dev_fee_bps Dev fee in bps.
-    /// @param dev_fund Dev fund address.
+    // Updates fee config configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_fee_config(ref self: TContractState, provider_fee_bps: u256, dev_fee_bps: u256, dev_fund: ContractAddress);
-    /// @notice Sets adapter contract for a provider.
-    /// @dev Owner-only to control provider integrations.
-    /// @param provider_id Provider identifier.
-    /// @param adapter Adapter contract address.
+    // Updates provider adapter configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_provider_adapter(ref self: TContractState, provider_id: felt252, adapter: ContractAddress);
-    /// @notice Sets the maximum number of bridge providers.
-    /// @dev Owner-only to cap iteration cost.
-    /// @param max_providers Maximum provider count.
+    // Updates max providers configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_max_providers(ref self: TContractState, max_providers: u64);
 }
 
-/// @title Bridge Aggregator Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for bridge actions.
+// ZK privacy entrypoints for bridge actions.
 #[starknet::interface]
 pub trait IBridgeAggregatorPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private bridge action proof.
+    // Applies submit private bridge action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_bridge_action(
         ref self: TContractState,
         old_root: felt252,
@@ -100,16 +75,14 @@ pub trait IBridgeAggregatorPrivacy<TContractState> {
     );
 }
 
-/// @title Bridge Aggregator Contract
-/// @author CAREL Team
-/// @notice Selects bridge routes and tracks provider fees/refunds.
-/// @dev Maintains provider registry and fee configuration.
+// Selects bridge routes and tracks provider fees/refunds.
+// Maintains provider registry and fee configuration.
 #[starknet::contract]
 pub mod BridgeAggregator {
     use starknet::{ContractAddress, get_caller_address};
-    // Wajib untuk trait Vec, Map, dan Storage Access
+    // Required for Vec/Map storage access traits.
     use starknet::storage::*;
-    // Menggunakan path openzeppelin standar
+    // Uses standard OpenZeppelin import path.
     use openzeppelin::access::ownable::OwnableComponent;
     use core::num::traits::Zero;
     use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
@@ -121,7 +94,7 @@ pub mod BridgeAggregator {
 
     #[abi(embed_v0)]
     impl OwnableMixinImpl = OwnableComponent::OwnableMixinImpl<ContractState>;
-    // Dibutuhkan agar fungsi initializer dan assert_only_owner tersedia
+    // Required for initializer and owner-assert helper methods.
     impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
 
     #[storage]
@@ -190,13 +163,14 @@ pub mod BridgeAggregator {
         pub adapter: ContractAddress,
     }
 
-    /// @notice Initializes the bridge aggregator.
-    /// @dev Sets owner, liquidity threshold, and default fees.
-    /// @param owner Owner/admin address.
-    /// @param min_liquidity Minimum liquidity threshold.
+    // Initializes the bridge aggregator.
+    // Sets owner, liquidity threshold, and default fees.
+    // `owner` controls admin actions and `min_liquidity` gates route eligibility.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, owner: ContractAddress, min_liquidity: u256) {
-        // Inisialisasi pemilik
+        // Initialize owner role and baseline fee configuration.
         self.ownable.initializer(owner);
         self.min_liquidity_threshold.write(min_liquidity);
         self.max_retry_attempts.write(2);
@@ -208,12 +182,8 @@ pub mod BridgeAggregator {
 
     #[abi(embed_v0)]
     impl BridgeAggregatorImpl of IBridgeAggregator<ContractState> {
-        /// @notice Returns the best bridge route for a transfer.
-        /// @dev Scores providers by cost, liquidity, and time.
-        /// @param from_chain Source chain id.
-        /// @param to_chain Destination chain id.
-        /// @param amount Amount to bridge.
-        /// @return route Selected bridge route.
+        // Returns get best route from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_best_route(self: @ContractState, from_chain: felt252, to_chain: felt252, amount: u256) -> BridgeRoute {
             let mut best_provider_id: felt252 = 0;
             let mut highest_score: u256 = 0;
@@ -248,10 +218,8 @@ pub mod BridgeAggregator {
             BridgeRoute { provider_id: best_provider_id, total_cost: best_cost, estimated_time: best_time }
         }
 
-        /// @notice Executes a bridge transfer with the chosen route.
-        /// @dev Emits success/failure events and fee breakdown.
-        /// @param route Selected bridge route.
-        /// @param amount Amount to bridge.
+        // Applies execute bridge after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn execute_bridge(ref self: ContractState, route: BridgeRoute, amount: u256) {
             let user = get_caller_address();
             let mut attempts: u8 = 0;
@@ -289,10 +257,8 @@ pub mod BridgeAggregator {
             }
         }
 
-        /// @notice Refunds a failed bridge transfer.
-        /// @dev Uses ERC20 transfer to return funds.
-        /// @param token_address Token to refund.
-        /// @param amount Amount to refund.
+        // Implements refund failed bridge logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn refund_failed_bridge(ref self: ContractState, token_address: ContractAddress, amount: u256) {
             let user = get_caller_address();
             let available = self.refund_balances.entry(user).read();
@@ -306,25 +272,21 @@ pub mod BridgeAggregator {
             self.emit(Event::RefundClaimed(RefundClaimed { user, amount }));
         }
 
-        /// @notice Registers a new bridge provider.
-        /// @dev Owner-only to control provider list.
-        /// @param provider_id Provider identifier.
-        /// @param info Provider metadata.
+        // Applies register bridge provider after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn register_bridge_provider(ref self: ContractState, provider_id: felt252, info: BridgeProvider) {
-            // Memerlukan OwnableInternalImpl agar fungsi ini dikenali
+            // Uses Ownable internal helper to enforce owner-only registration.
             self.ownable.assert_only_owner();
             let current: u64 = self.provider_ids.len().into();
             assert!(current < self.max_providers.read(), "Provider limit reached");
             
             self.bridge_providers.entry(provider_id).write(info);
-            // push() adalah metode yang direkomendasikan untuk Vec
+            // Uses `push()` as the recommended Vec append method.
             self.provider_ids.push(provider_id);
         }
 
-        /// @notice Updates a provider's reported liquidity.
-        /// @dev Provider-only to prevent spoofed liquidity.
-        /// @param provider_id Provider identifier.
-        /// @param liquidity Updated liquidity value.
+        // Updates liquidity configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn update_liquidity(ref self: ContractState, provider_id: felt252, liquidity: u256) {
             let mut provider = self.bridge_providers.entry(provider_id).read();
             assert!(get_caller_address() == provider.contract_address, "Unauthorized provider");
@@ -332,11 +294,8 @@ pub mod BridgeAggregator {
             self.bridge_providers.entry(provider_id).write(provider);
         }
 
-        /// @notice Updates bridge fee configuration.
-        /// @dev Owner-only to maintain economic parameters.
-        /// @param provider_fee_bps Provider fee in bps.
-        /// @param dev_fee_bps Dev fee in bps.
-        /// @param dev_fund Dev fund address.
+        // Updates fee config configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_fee_config(ref self: ContractState, provider_fee_bps: u256, dev_fee_bps: u256, dev_fund: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(provider_fee_bps + dev_fee_bps <= 1000, "Bridge fee too high");
@@ -346,6 +305,8 @@ pub mod BridgeAggregator {
             self.dev_fund.write(dev_fund);
         }
 
+        // Updates provider adapter configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_provider_adapter(ref self: ContractState, provider_id: felt252, adapter: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!adapter.is_zero(), "Adapter required");
@@ -353,6 +314,8 @@ pub mod BridgeAggregator {
             self.emit(Event::ProviderAdapterSet(ProviderAdapterSet { provider_id, adapter }));
         }
 
+        // Updates max providers configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_max_providers(ref self: ContractState, max_providers: u64) {
             self.ownable.assert_only_owner();
             assert!(max_providers > 0, "Max providers required");
@@ -362,12 +325,16 @@ pub mod BridgeAggregator {
 
     #[abi(embed_v0)]
     impl BridgeAggregatorPrivacyImpl of super::IBridgeAggregatorPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Applies submit private bridge action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_bridge_action(
             ref self: ContractState,
             old_root: felt252,

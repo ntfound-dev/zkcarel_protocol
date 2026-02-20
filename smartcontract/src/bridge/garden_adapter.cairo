@@ -1,7 +1,5 @@
-/// @title Garden Bridge Adapter
-/// @author CAREL Team
-/// @notice Adapter for Garden BTC bridge provider.
-/// @dev Placeholder for provider integration hooks.
+// Adapter for Garden BTC bridge provider.
+// Placeholder for provider integration hooks.
 #[starknet::contract]
 pub mod GardenAdapter {
     use starknet::ContractAddress;
@@ -55,6 +53,8 @@ pub mod GardenAdapter {
     }
 
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, admin: ContractAddress, endpoint: ByteArray) {
         self.ownable.initializer(admin);
         self.endpoint.write(endpoint);
@@ -63,6 +63,8 @@ pub mod GardenAdapter {
 
     #[abi(embed_v0)]
     impl AdapterImpl of IBridgeProviderAdapter<ContractState> {
+        // Applies execute bridge after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn execute_bridge(ref self: ContractState, user: ContractAddress, amount: u256, provider_id: felt252) -> bool {
             assert!(self.active.read(), "Adapter inactive");
             self.emit(Event::BridgeRequested(BridgeRequested { user, amount, provider_id }));
@@ -72,12 +74,16 @@ pub mod GardenAdapter {
 
     #[abi(embed_v0)]
     impl AdminImpl of IBridgeAdapterAdmin<ContractState> {
+        // Updates endpoint configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_endpoint(ref self: ContractState, endpoint: ByteArray) {
             self.ownable.assert_only_owner();
             self.endpoint.write(endpoint.clone());
             self.emit(Event::EndpointUpdated(EndpointUpdated { endpoint }));
         }
 
+        // Updates active configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_active(ref self: ContractState, active: bool) {
             self.ownable.assert_only_owner();
             self.active.write(active);
@@ -87,12 +93,16 @@ pub mod GardenAdapter {
 
     #[abi(embed_v0)]
     impl AdapterPrivacyImpl of IBridgeAdapterPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Applies submit private bridge action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_bridge_action(
             ref self: ContractState,
             old_root: felt252,

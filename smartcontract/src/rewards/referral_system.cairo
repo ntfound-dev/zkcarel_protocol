@@ -1,58 +1,31 @@
 use starknet::ContractAddress;
 
-/// @title Referral System Interface
-/// @author CAREL Team
-/// @notice Defines referral registration and bonus accounting.
-/// @dev Tracks referrers and credits bonus points by epoch.
+// Referral API for linking users and accruing bonus points by epoch.
+// Bonus points are later claimed into PointStorage.
 #[starknet::interface]
 pub trait IReferralSystem<TContractState> {
-    /// @notice Registers a referral relationship.
-    /// @dev Referee must call to prevent spoofing.
-    /// @param referrer Referrer address.
-    /// @param referee Referee address.
+    // Binds a referee to a referrer once.
     fn register_referral(ref self: TContractState, referrer: ContractAddress, referee: ContractAddress);
-    /// @notice Returns the list of referrals for a referrer.
-    /// @dev Read-only helper for UIs.
-    /// @param referrer Referrer address.
-    /// @return referrals Array of referees.
+    // Returns all referees currently associated with `referrer`.
     fn get_referrals(self: @TContractState, referrer: ContractAddress) -> Array<ContractAddress>;
-    /// @notice Returns the referrer for a referee.
-    /// @dev Read-only helper for UIs.
-    /// @param referee Referee address.
-    /// @return referrer Referrer address.
+    // Returns the referrer registered for `referee`.
     fn get_referrer(self: @TContractState, referee: ContractAddress) -> ContractAddress;
-    /// @notice Checks whether a referral is valid for an epoch.
-    /// @dev Uses referee activity threshold.
-    /// @param referee Referee address.
-    /// @param epoch Epoch identifier.
-    /// @return valid True if valid.
+    // Returns whether referee activity in `epoch` meets the minimum threshold.
     fn is_valid_referral(self: @TContractState, referee: ContractAddress, epoch: u64) -> bool;
-    /// @notice Calculates referral bonus from referee points.
-    /// @dev Uses configured bonus rate.
-    /// @param referee_points Points earned by referee.
-    /// @return bonus Bonus points to award.
+    // Computes referral bonus points from referee activity using current bonus rate.
     fn calculate_referral_bonus(self: @TContractState, referee_points: u256) -> u256;
-    /// @notice Records referee points and credits referrer bonus.
-    /// @dev Backend-only to prevent spoofed activity.
-    /// @param epoch Epoch identifier.
-    /// @param referee Referee address.
-    /// @param points Referee points value.
+    // Records referee points and accrues bonus points for the mapped referrer.
     fn record_referee_points(ref self: TContractState, epoch: u64, referee: ContractAddress, points: u256);
-    /// @notice Claims referral bonus points for the caller.
-    /// @dev Mints points in PointStorage and zeroes balance.
-    /// @param epoch Epoch identifier.
-    /// @return claimed Points claimed.
+    // Claims accrued referral points for caller into PointStorage.
     fn claim_referral_bonus(ref self: TContractState, epoch: u64) -> u256;
 }
 
-/// @title Referral System Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for referral actions.
+// Hide Mode hooks for referral actions through the privacy router.
 #[starknet::interface]
 pub trait IReferralSystemPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets the privacy router used for private referral actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private referral action proof.
+    // Forwards nullifier/commitment-bound referral proofs to the router.
     fn submit_private_referral_action(
         ref self: TContractState,
         old_root: felt252,
@@ -64,54 +37,35 @@ pub trait IReferralSystemPrivacy<TContractState> {
     );
 }
 
-/// @title Referral Admin Interface
-/// @author CAREL Team
-/// @notice Administrative controls for referral parameters.
-/// @dev Owner-only configuration for backend and rates.
+// Owner-only configuration for referral dependencies and thresholds.
 #[starknet::interface]
 pub trait IReferralAdmin<TContractState> {
-    /// @notice Sets the backend signer address.
-    /// @dev Owner-only to secure updates.
-    /// @param signer Backend signer address.
+    // Sets the backend signer allowed to record referee activity.
     fn set_backend_signer(ref self: TContractState, signer: ContractAddress);
-    /// @notice Sets the PointStorage contract address.
-    /// @dev Owner-only to secure reward minting.
-    /// @param point_storage PointStorage contract address.
+    // Sets the PointStorage contract where bonus points are credited.
     fn set_point_storage(ref self: TContractState, point_storage: ContractAddress);
-    /// @notice Sets minimum referee activity threshold.
-    /// @dev Owner-only to control referral quality.
-    /// @param min_points Minimum referee points required.
+    // Sets minimum referee points required before bonus accrual starts.
     fn set_min_referee_activity(ref self: TContractState, min_points: u256);
-    /// @notice Sets referral bonus rate in bps.
-    /// @dev Owner-only to control economics.
-    /// @param bps Bonus rate in basis points.
+    // Sets referral bonus rate in basis points.
     fn set_referral_bonus_rate(ref self: TContractState, bps: u256);
 }
 
-/// @title Point Storage Interface
-/// @author CAREL Team
-/// @notice Minimal interface for adding points.
-/// @dev Used to credit referral bonuses.
+// Minimal interface for adding points.
+// Used to credit referral bonuses.
 #[starknet::interface]
 pub trait IPointStorage<TContractState> {
-    /// @notice Adds points for a user in an epoch.
-    /// @dev Called when claiming referral bonuses.
-    /// @param epoch Epoch identifier.
-    /// @param user User address.
-    /// @param points Points to add.
+    // Credits points to a user for a given epoch.
     fn add_points(ref self: TContractState, epoch: u64, user: ContractAddress, points: u256);
 }
 
-/// @title Referral System Contract
-/// @author CAREL Team
-/// @notice Tracks referrals and awards bonus points.
-/// @dev Backend-driven point updates with on-chain claiming.
+// Tracks referral graph and bonus points earned from referee activity.
+// Bonus points are claimed into PointStorage on demand.
 #[starknet::contract]
 pub mod ReferralSystem {
     use starknet::ContractAddress;
     use starknet::storage::*;
     use starknet::get_caller_address;
-    // Impor trait Zero untuk mengaktifkan metode .is_zero() pada ContractAddress
+    // Enables `.is_zero()` checks on contract addresses.
     use core::num::traits::Zero;
     use openzeppelin::access::ownable::OwnableComponent;
     use super::{IPointStorageDispatcher, IPointStorageDispatcherTrait};
@@ -172,11 +126,7 @@ pub mod ReferralSystem {
         pub bonus_points: u256,
     }
 
-    /// @notice Initializes the referral system.
-    /// @dev Sets admin, backend signer, and point storage.
-    /// @param admin Owner/admin address.
-    /// @param signer Backend signer address.
-    /// @param point_storage PointStorage contract address.
+    // Initializes owner, backend signer, and point storage dependencies.
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -193,14 +143,12 @@ pub mod ReferralSystem {
 
     #[abi(embed_v0)]
     pub impl ReferralSystemImpl of super::IReferralSystem<ContractState> {
-        /// @notice Registers a referral relationship.
-        /// @dev Referee must call to prevent spoofing.
-        /// @param referrer Referrer address.
-        /// @param referee Referee address.
+        // Registers one referral edge (`referrer -> referee`).
+        // The referee must self-register and can only be linked once.
         fn register_referral(ref self: ContractState, referrer: ContractAddress, referee: ContractAddress) {
             let caller = get_caller_address();
             assert!(caller == referee, "Referee must be caller");
-            // Penggunaan .is_zero() sekarang valid karena trait Zero telah diimpor
+            // Reject duplicate mappings so a referee cannot change referrer later.
             assert!(self.referrer_of.entry(referee).read().is_zero(), "Referee already has a referrer");
             assert!(referrer != referee, "Cannot refer yourself");
             assert!(!referrer.is_zero(), "Invalid referrer");
@@ -214,10 +162,7 @@ pub mod ReferralSystem {
             self.emit(Event::ReferralRegistered(ReferralRegistered { referrer, referee }));
         }
 
-        /// @notice Returns the list of referrals for a referrer.
-        /// @dev Read-only helper for UIs.
-        /// @param referrer Referrer address.
-        /// @return referrals Array of referees.
+        // Returns the stored referral list for `referrer`.
         fn get_referrals(self: @ContractState, referrer: ContractAddress) -> Array<ContractAddress> {
             let count = self.referral_count.entry(referrer).read();
             let mut referrals = array![];
@@ -229,37 +174,24 @@ pub mod ReferralSystem {
             referrals
         }
 
-        /// @notice Returns the referrer for a referee.
-        /// @dev Read-only helper for UIs.
-        /// @param referee Referee address.
-        /// @return referrer Referrer address.
+        // Returns the referrer currently mapped to `referee`.
         fn get_referrer(self: @ContractState, referee: ContractAddress) -> ContractAddress {
             self.referrer_of.entry(referee).read()
         }
 
-        /// @notice Checks whether a referral is valid for an epoch.
-        /// @dev Uses referee activity threshold.
-        /// @param referee Referee address.
-        /// @param epoch Epoch identifier.
-        /// @return valid True if valid.
+        // Checks if referee points in `epoch` pass the configured activity floor.
         fn is_valid_referral(self: @ContractState, referee: ContractAddress, epoch: u64) -> bool {
             let points = self.referee_points.entry((referee, epoch)).read();
             points >= self.min_referee_activity.read()
         }
 
-        /// @notice Calculates referral bonus from referee points.
-        /// @dev Uses configured bonus rate.
-        /// @param referee_points Points earned by referee.
-        /// @return bonus Bonus points to award.
+        // Computes bonus points using basis points over referee points.
         fn calculate_referral_bonus(self: @ContractState, referee_points: u256) -> u256 {
             (referee_points * self.referral_bonus_rate.read()) / 10000
         }
 
-        /// @notice Records referee points and credits referrer bonus.
-        /// @dev Backend-only to prevent spoofed activity.
-        /// @param epoch Epoch identifier.
-        /// @param referee Referee address.
-        /// @param points Referee points value.
+        // Updates referee points for an epoch and accrues only the delta as new bonus.
+        // This prevents double-counting when backend reports cumulative totals.
         fn record_referee_points(ref self: ContractState, epoch: u64, referee: ContractAddress, points: u256) {
             assert!(get_caller_address() == self.backend_signer.read(), "Caller is not authorized");
             let referrer = self.referrer_of.entry(referee).read();
@@ -291,10 +223,7 @@ pub mod ReferralSystem {
             }));
         }
 
-        /// @notice Claims referral bonus points for the caller.
-        /// @dev Mints points in PointStorage and zeroes balance.
-        /// @param epoch Epoch identifier.
-        /// @return claimed Points claimed.
+        // Moves caller's accrued referral bonus into PointStorage and clears local balance.
         fn claim_referral_bonus(ref self: ContractState, epoch: u64) -> u256 {
             let caller = get_caller_address();
             let available_points = self.referral_points.entry((caller, epoch)).read();
@@ -314,33 +243,25 @@ pub mod ReferralSystem {
 
     #[abi(embed_v0)]
     pub impl ReferralAdminImpl of super::IReferralAdmin<ContractState> {
-        /// @notice Sets the backend signer address.
-        /// @dev Owner-only to secure updates.
-        /// @param signer Backend signer address.
+        // Updates the backend signer used by `record_referee_points`.
         fn set_backend_signer(ref self: ContractState, signer: ContractAddress) {
             self.ownable.assert_only_owner();
             self.backend_signer.write(signer);
         }
 
-        /// @notice Sets the PointStorage contract address.
-        /// @dev Owner-only to secure reward minting.
-        /// @param point_storage PointStorage contract address.
+        // Updates the PointStorage dependency for bonus crediting.
         fn set_point_storage(ref self: ContractState, point_storage: ContractAddress) {
             self.ownable.assert_only_owner();
             self.point_storage.write(point_storage);
         }
 
-        /// @notice Sets minimum referee activity threshold.
-        /// @dev Owner-only to control referral quality.
-        /// @param min_points Minimum referee points required.
+        // Updates minimum referee activity required for bonus accrual.
         fn set_min_referee_activity(ref self: ContractState, min_points: u256) {
             self.ownable.assert_only_owner();
             self.min_referee_activity.write(min_points);
         }
 
-        /// @notice Sets referral bonus rate in bps.
-        /// @dev Owner-only to control economics.
-        /// @param bps Bonus rate in basis points.
+        // Updates referral bonus rate in basis points.
         fn set_referral_bonus_rate(ref self: ContractState, bps: u256) {
             self.ownable.assert_only_owner();
             self.referral_bonus_rate.write(bps);
@@ -349,12 +270,15 @@ pub mod ReferralSystem {
 
     #[abi(embed_v0)]
     impl ReferralSystemPrivacyImpl of super::IReferralSystemPrivacy<ContractState> {
+        // Configures the privacy router for Hide Mode referral actions.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Forwards private referral payload to privacy router for proof verification and execution.
+        // `nullifiers` prevent replay and `commitments` bind the intended state transition.
         fn submit_private_referral_action(
             ref self: ContractState,
             old_root: felt252,

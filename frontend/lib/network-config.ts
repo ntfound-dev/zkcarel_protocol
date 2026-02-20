@@ -17,6 +17,12 @@ export const STARKSCAN_SEPOLIA_BASE_URL = STARKNET_EXPLORER_SEPOLIA_BASE_URL
 export const BTC_TESTNET_EXPLORER_BASE_URL =
   process.env.NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL || "https://mempool.space/testnet4"
 
+/**
+ * Parses or transforms values for `normalizeStarknetChainValue`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function normalizeStarknetChainValue(chainId?: string): string {
   if (!chainId) return ""
   const normalized = chainId.trim()
@@ -35,6 +41,12 @@ export function normalizeStarknetChainValue(chainId?: string): string {
   return decoded.toUpperCase()
 }
 
+/**
+ * Checks conditions for `isStarknetSepolia`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function isStarknetSepolia(chainId?: string): boolean {
   const normalized = normalizeStarknetChainValue(chainId)
   return normalized.includes("SEPOLIA") || normalized === STARKNET_SEPOLIA_CHAIN_ID_TEXT
@@ -42,6 +54,12 @@ export function isStarknetSepolia(chainId?: string): boolean {
 
 export type BtcAddressNetwork = "mainnet" | "testnet" | "unknown"
 
+/**
+ * Handles `detectBtcAddressNetwork` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function detectBtcAddressNetwork(address?: string | null): BtcAddressNetwork {
   if (!address) return "unknown"
   const lower = address.trim().toLowerCase()
@@ -64,6 +82,14 @@ export function detectBtcAddressNetwork(address?: string | null): BtcAddressNetw
   return "unknown"
 }
 
+/**
+ * Parses or transforms values for `formatNetworkLabel`.
+ *
+ * @param network - Input used by `formatNetworkLabel` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function formatNetworkLabel(network: "starknet" | "evm" | "btc"): string {
   if (network === "starknet") return "Starknet Sepolia"
   if (network === "evm") return "Ethereum Sepolia"

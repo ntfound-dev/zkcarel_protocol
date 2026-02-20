@@ -19,20 +19,11 @@ pub struct LimitOrderState {
     pub status: u8, // 1=active, 2=filled, 3=cancelled
 }
 
-/// @title Keeper Network Interface
-/// @author CAREL Team
-/// @notice Defines keeper registration and execution entrypoints.
-/// @dev Tracks keeper performance and earnings.
+// Keeper network API for automated order execution.
+// Tracks keeper registration, execution stats, and fee earnings.
 #[starknet::interface]
 pub trait IKeeperNetwork<TContractState> {
-    /// @notice Creates a new on-chain limit order.
-    /// @param order_id Client-generated felt id.
-    /// @param from_token Token sold.
-    /// @param to_token Token bought.
-    /// @param amount Amount sold.
-    /// @param target_price Target execution price.
-    /// @param expiry Expiry timestamp in seconds.
-    /// @return created_order_id Stored order id.
+    // Creates a limit order and stores it as active state.
     fn create_limit_order(
         ref self: TContractState,
         order_id: felt252,
@@ -42,53 +33,32 @@ pub trait IKeeperNetwork<TContractState> {
         target_price: u256,
         expiry: u64
     ) -> felt252;
-    /// @notice Cancels an active on-chain limit order.
-    /// @param order_id Order id to cancel.
+    // Cancels an active limit order owned by caller.
     fn cancel_limit_order(ref self: TContractState, order_id: felt252);
-    /// @notice Registers the caller as a keeper.
-    /// @dev Initializes keeper stats.
+    // Registers caller as keeper and initializes performance stats.
     fn register_keeper(ref self: TContractState);
-    /// @notice Unregisters the caller as a keeper.
-    /// @dev Stops keeper from executing jobs.
+    // Unregisters caller from keeper set.
     fn unregister_keeper(ref self: TContractState);
-    /// @notice Executes a limit order job.
-    /// @dev Rewards keeper based on order value.
-    /// @param order_id Limit order id.
-    /// @param order_value Order value used for fee calculation.
+    // Executes an active limit order and credits keeper fee stats.
     fn execute_limit_order(ref self: TContractState, order_id: felt252, order_value: u256);
-    /// @notice Executes a DCA job.
-    /// @dev Rewards keeper based on execution value.
-    /// @param dca_id DCA order id.
-    /// @param execution_value Execution value used for fee calculation.
+    // Records a DCA execution and credits keeper fee stats.
     fn execute_dca(ref self: TContractState, dca_id: u64, execution_value: u256);
-    /// @notice Claims accumulated keeper earnings.
-    /// @dev Resets earnings after claim.
-    /// @return amount Claimed earnings.
+    // Claims accumulated keeper earnings and resets claimable balance.
     fn claim_earnings(ref self: TContractState) -> u256;
-    /// @notice Slashes a keeper.
-    /// @dev Owner-only to remove misbehaving keepers.
-    /// @param keeper Keeper address to slash.
+    // Slashes a keeper by disabling registration (owner only).
     fn slash_keeper(ref self: TContractState, keeper: ContractAddress);
-    /// @notice Returns keeper performance stats.
-    /// @dev Read-only helper for dashboards.
-    /// @param keeper Keeper address.
-    /// @return stats Keeper stats.
+    // Returns keeper performance counters and earnings.
     fn get_keeper_stats(self: @TContractState, keeper: ContractAddress) -> KeeperStats;
-    /// @notice Checks if an address is a registered keeper.
-    /// @dev Read-only helper for gating.
-    /// @param keeper Keeper address.
-    /// @return is_keeper True if registered.
+    // Returns whether account is currently registered as keeper.
     fn is_keeper(self: @TContractState, keeper: ContractAddress) -> bool;
 }
 
-/// @title Keeper Network Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for keeper execution.
+// Hide Mode hooks for keeper actions through the privacy router.
 #[starknet::interface]
 pub trait IKeeperNetworkPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets privacy router used for private keeper actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private keeper action proof.
+    // Forwards nullifier/commitment-bound keeper payload to privacy router.
     fn submit_private_keeper_action(
         ref self: TContractState,
         old_root: felt252,
@@ -100,15 +70,13 @@ pub trait IKeeperNetworkPrivacy<TContractState> {
     );
 }
 
-/// @title Keeper Network Contract
-/// @author CAREL Team
-/// @notice Manages keeper registration and execution rewards.
-/// @dev Tracks executions and earnings per keeper.
+// On-chain keeper registry with execution accounting for limit orders and DCA tasks.
+// Keepers accrue fees per execution and claim earnings from stored counters.
 #[starknet::contract]
 pub mod KeeperNetwork {
     use starknet::ContractAddress;
     use starknet::{get_caller_address, get_block_timestamp};
-    // Selalu gunakan wildcard import untuk storage sesuai panduan dokumentasi
+    // Uses wildcard storage import for storage access traits.
     use starknet::storage::*;
     use super::{KeeperStats, LimitOrderState};
     use core::num::traits::Zero;
@@ -171,9 +139,8 @@ pub mod KeeperNetwork {
         pub keeper: ContractAddress,
     }
 
-    /// @notice Initializes the keeper network.
-    /// @dev Sets owner and default execution fee rate.
-    /// @param owner Owner/admin address.
+    // Initializes owner authority and default execution fee rate.
+    // `owner` can slash keepers and update governance/privacy settings.
     #[constructor]
     fn constructor(ref self: ContractState, owner: ContractAddress) {
         self.owner.write(owner);
@@ -182,6 +149,7 @@ pub mod KeeperNetwork {
 
     #[abi(embed_v0)]
     impl KeeperNetworkImpl of super::IKeeperNetwork<ContractState> {
+        // Creates a limit order and stores it as active state.
         fn create_limit_order(
             ref self: ContractState,
             order_id: felt252,
@@ -213,6 +181,7 @@ pub mod KeeperNetwork {
             order_id
         }
 
+        // Cancels an active limit order owned by caller.
         fn cancel_limit_order(ref self: ContractState, order_id: felt252) {
             let caller = get_caller_address();
             let owner = self.limit_order_owner.entry(order_id).read();
@@ -225,8 +194,7 @@ pub mod KeeperNetwork {
             self.emit(Event::LimitOrderCancelled(LimitOrderCancelled { order_id, owner: caller }));
         }
 
-        /// @notice Registers the caller as a keeper.
-        /// @dev Initializes keeper stats.
+        // Registers caller as keeper and initializes performance stats.
         fn register_keeper(ref self: ContractState) {
             let caller = get_caller_address();
             assert!(!self.registered_keepers.entry(caller).read(), "Already registered");
@@ -242,8 +210,7 @@ pub mod KeeperNetwork {
             self.emit(Event::KeeperRegistered(KeeperRegistered { keeper: caller }));
         }
 
-        /// @notice Unregisters the caller as a keeper.
-        /// @dev Stops keeper from executing jobs.
+        // Unregisters caller from keeper set.
         fn unregister_keeper(ref self: ContractState) {
             let caller = get_caller_address();
             assert!(self.registered_keepers.entry(caller).read(), "Not a registered keeper");
@@ -251,10 +218,7 @@ pub mod KeeperNetwork {
             self.emit(Event::KeeperUnregistered(KeeperUnregistered { keeper: caller }));
         }
 
-        /// @notice Executes a limit order job.
-        /// @dev Rewards keeper based on order value.
-        /// @param order_id Limit order id.
-        /// @param order_value Order value used for fee calculation.
+        // Executes an active limit order and credits keeper fee stats.
         fn execute_limit_order(ref self: ContractState, order_id: felt252, order_value: u256) {
             let caller = get_caller_address();
             assert!(self.registered_keepers.entry(caller).read(), "Unauthorized keeper");
@@ -277,10 +241,7 @@ pub mod KeeperNetwork {
             self.emit(Event::ExecutionProcessed(ExecutionProcessed { keeper: caller, id: order_id, fee_earned: fee }));
         }
 
-        /// @notice Executes a DCA job.
-        /// @dev Rewards keeper based on execution value.
-        /// @param dca_id DCA order id.
-        /// @param execution_value Execution value used for fee calculation.
+        // Records a DCA execution and credits keeper fee stats.
         fn execute_dca(ref self: ContractState, dca_id: u64, execution_value: u256) {
             let caller = get_caller_address();
             assert!(self.registered_keepers.entry(caller).read(), "Unauthorized keeper");
@@ -296,9 +257,7 @@ pub mod KeeperNetwork {
             self.emit(Event::ExecutionProcessed(ExecutionProcessed { keeper: caller, id: dca_id.into(), fee_earned: fee }));
         }
 
-        /// @notice Claims accumulated keeper earnings.
-        /// @dev Resets earnings after claim.
-        /// @return amount Claimed earnings.
+        // Claims accumulated keeper earnings and resets claimable balance.
         fn claim_earnings(ref self: ContractState) -> u256 {
             let caller = get_caller_address();
             let mut stats = self.keeper_performance.entry(caller).read();
@@ -309,9 +268,7 @@ pub mod KeeperNetwork {
             amount
         }
 
-        /// @notice Slashes a keeper.
-        /// @dev Owner-only to remove misbehaving keepers.
-        /// @param keeper Keeper address to slash.
+        // Slashes a keeper by disabling registration (owner only).
         fn slash_keeper(ref self: ContractState, keeper: ContractAddress) {
             let caller = get_caller_address();
             assert!(caller == self.owner.read(), "Only owner can slash");
@@ -319,19 +276,12 @@ pub mod KeeperNetwork {
             self.emit(Event::KeeperSlashed(KeeperSlashed { keeper }));
         }
 
-        /// @notice Returns keeper performance stats.
-        /// @dev Read-only helper for dashboards.
-        /// @param keeper Keeper address.
-        /// @return stats Keeper stats.
+        // Returns keeper performance counters and earnings.
         fn get_keeper_stats(self: @ContractState, keeper: ContractAddress) -> KeeperStats {
             self.keeper_performance.entry(keeper).read()
         }
 
-        // Perbaikan: Gunakan @ContractState agar compiler dapat mengakses Storage
-        /// @notice Checks if an address is a registered keeper.
-        /// @dev Read-only helper for gating.
-        /// @param keeper Keeper address.
-        /// @return is_keeper True if registered.
+        // Returns whether account is currently registered as keeper.
         fn is_keeper(self: @ContractState, keeper: ContractAddress) -> bool {
             self.registered_keepers.entry(keeper).read()
         }
@@ -339,12 +289,15 @@ pub mod KeeperNetwork {
 
     #[abi(embed_v0)]
     impl KeeperNetworkPrivacyImpl of super::IKeeperNetworkPrivacy<ContractState> {
+        // Sets router used by Hide Mode keeper actions (owner only).
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Relays private keeper payload to privacy router for proof verification.
+        // `nullifiers` prevent replay and `commitments` bind intended execution state.
         fn submit_private_keeper_action(
             ref self: ContractState,
             old_root: felt252,

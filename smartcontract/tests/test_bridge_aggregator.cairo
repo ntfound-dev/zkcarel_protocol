@@ -10,13 +10,14 @@ use snforge_std::{
 
 use starknet::ContractAddress;
 
-// Fungsi pembantu untuk menyiapkan state awal pengujian
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (IBridgeAggregatorDispatcher, ContractAddress) {
     let owner: ContractAddress = 0x123.try_into().unwrap();
     let min_liquidity: u256 = 1000;
 
-    // 1. Declare dan Deploy BridgeAggregator
-    // Berdasarkan Contract Testing Template, kita mendeklarasikan nama kontrak sesuai Scarb.toml
+    // 1. Declare and deploy BridgeAggregator.
+    // Contract name follows the target declared in `Scarb.toml`.
     let contract = declare("BridgeAggregator").expect('Declaration failed').contract_class();
     let mut constructor_args = array![];
     owner.serialize(ref constructor_args);
@@ -25,7 +26,7 @@ fn setup() -> (IBridgeAggregatorDispatcher, ContractAddress) {
     let (contract_address, _) = contract.deploy(@constructor_args).expect('Deployment failed');
     let dispatcher = IBridgeAggregatorDispatcher { contract_address };
 
-    // 2. Registrasi Provider awal oleh Owner
+    // 2. Register initial providers as owner.
     start_cheat_caller_address(contract_address, owner);
 
     let provider_a = BridgeProvider {
@@ -54,17 +55,21 @@ fn setup() -> (IBridgeAggregatorDispatcher, ContractAddress) {
 }
 
 #[test]
+// Test case: validates get best route selection behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_get_best_route_selection() {
     let (dispatcher, _) = setup();
 
-    // Simulasi permintaan rute untuk 2000 unit
+    // Simulate a route request for 2000 units.
     let route = dispatcher.get_best_route('ETH', 'STRK', 2000);
 
-    // Memastikan LayerSwap terpilih karena keunggulan likuiditas dan waktu
+    // Ensure LayerSwap is selected due to better liquidity and time.
     assert(route.provider_id == 'LSWAP', 'Should select LayerSwap');
 }
 
 #[test]
+// Test case: validates execute bridge and event behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_execute_bridge_and_event() {
     let (dispatcher, _) = setup();
     let user: ContractAddress = 0x444.try_into().unwrap();
@@ -75,7 +80,7 @@ fn test_execute_bridge_and_event() {
     start_cheat_caller_address(dispatcher.contract_address, user);
     dispatcher.execute_bridge(route, 1000);
 
-    // Verifikasi emisi event menggunakan EventSpyAssertionsTrait
+    // Verify event emission via EventSpyAssertionsTrait.
     spy.assert_emitted(
         @array![
             (
@@ -95,6 +100,8 @@ fn test_execute_bridge_and_event() {
 
 #[test]
 #[should_panic(expected: 'Caller is not the owner')]
+// Test case: validates unauthorized registration fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unauthorized_registration_fails() {
     let (dispatcher, _) = setup();
     let attacker: ContractAddress = 0x666.try_into().unwrap();
@@ -113,11 +120,13 @@ fn test_unauthorized_registration_fails() {
 }
 
 #[test]
+// Test case: validates update liquidity by provider behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_update_liquidity_by_provider() {
     let (dispatcher, _) = setup();
     let provider_addr: ContractAddress = 0xaaa.try_into().unwrap();
 
-    // Verifikasi bahwa provider dapat memperbarui data likuiditasnya sendiri
+    // Verify provider can update its own liquidity data.
     start_cheat_caller_address(dispatcher.contract_address, provider_addr);
     dispatcher.update_liquidity('LSWAP', 75000);
     stop_cheat_caller_address(dispatcher.contract_address);

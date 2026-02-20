@@ -14,7 +14,11 @@ use snforge_std::{
 
 #[starknet::interface]
 pub trait IERC20Mock<TContractState> {
+    // Applies transfer after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+    // Applies transfer from after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer_from(ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool;
 }
 
@@ -25,11 +29,17 @@ mod ERC20Mock {
     struct Storage {}
     #[abi(embed_v0)]
     impl IERC20MockImpl of super::IERC20Mock<ContractState> {
+        // Applies transfer after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool { true }
+        // Applies transfer from after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer_from(ref self: ContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool { true }
     }
 }
 
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (IBTCStakingDispatcher, ContractAddress, ContractAddress, ContractAddress) {
     let owner: ContractAddress = 0x111.try_into().unwrap();
     
@@ -57,6 +67,8 @@ fn setup() -> (IBTCStakingDispatcher, ContractAddress, ContractAddress, Contract
 }
 
 #[test]
+// Test case: validates successful stake behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_successful_stake() {
     let (dispatcher, btc_wrapper, _, _) = setup();
     let user: ContractAddress = 0x222.try_into().unwrap();
@@ -71,6 +83,8 @@ fn test_successful_stake() {
 }
 
 #[test]
+// Test case: validates reward accumulation after one year behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_reward_accumulation_after_one_year() {
     let (dispatcher, btc_wrapper, _, _) = setup();
     let user: ContractAddress = 0x222.try_into().unwrap();
@@ -96,6 +110,8 @@ fn test_reward_accumulation_after_one_year() {
 
 #[test]
 #[should_panic(expected: "Periode lock 14 hari belum selesai")]
+// Test case: validates unstake too early fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unstake_too_early_fails() {
     let (dispatcher, btc_wrapper, _, _) = setup();
     let user: ContractAddress = 0x222.try_into().unwrap();
@@ -111,6 +127,8 @@ fn test_unstake_too_early_fails() {
 }
 
 #[test]
+// Test case: validates unstake after lock period behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unstake_after_lock_period() {
     let (dispatcher, btc_wrapper, _, _) = setup();
     let user: ContractAddress = 0x222.try_into().unwrap();

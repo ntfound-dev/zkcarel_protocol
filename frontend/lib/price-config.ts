@@ -15,6 +15,12 @@ export const DEFAULT_FALLBACK_PRICES: Record<string, number> = {
   CAREL: 1,
 }
 
+/**
+ * Parses or transforms values for `parseKeyValueMap`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function parseKeyValueMap(input?: string): Record<string, string> {
   if (!input) return {}
   return input
@@ -30,6 +36,12 @@ export function parseKeyValueMap(input?: string): Record<string, string> {
     }, {})
 }
 
+/**
+ * Parses or transforms values for `parsePriceMap`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function parsePriceMap(input?: string): Record<string, number> {
   if (!input) return {}
   return input

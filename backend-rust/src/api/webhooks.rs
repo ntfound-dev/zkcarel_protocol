@@ -27,6 +27,7 @@ pub struct WebhookInfo {
     pub created_at: i64,
 }
 
+// Internal helper that parses or transforms values for `format_webhook_log`.
 fn format_webhook_log(
     event: &str,
     status: &str,
@@ -148,6 +149,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     #[test]
+    // Internal helper that parses or transforms values for `format_webhook_log_includes_fields`.
     fn format_webhook_log_includes_fields() {
         // Memastikan format log berisi waktu, event, dan status
         let ts = Utc.timestamp_opt(1_700_000_000, 0).unwrap();

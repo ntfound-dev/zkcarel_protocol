@@ -47,12 +47,15 @@ pub struct GlobalMetricsResponse {
 
 #[async_trait]
 trait GlobalMetricsStore {
+    // Internal helper that supports `points_total` operations.
     async fn points_total(&self, epoch: i64) -> Result<f64>;
+    // Internal helper that supports `volume_total` operations.
     async fn volume_total(
         &self,
         start: chrono::DateTime<chrono::Utc>,
         end: chrono::DateTime<chrono::Utc>,
     ) -> Result<f64>;
+    // Internal helper that supports `referral_total` operations.
     async fn referral_total(
         &self,
         start: chrono::DateTime<chrono::Utc>,
@@ -66,6 +69,7 @@ struct PgMetricsStore<'a> {
 
 #[async_trait]
 impl<'a> GlobalMetricsStore for PgMetricsStore<'a> {
+    // Internal helper that supports `points_total` operations.
     async fn points_total(&self, epoch: i64) -> Result<f64> {
         let value: Decimal = sqlx::query_scalar::<_, Decimal>(
             "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1",
@@ -76,6 +80,7 @@ impl<'a> GlobalMetricsStore for PgMetricsStore<'a> {
         Ok(value.to_string().parse().unwrap_or(0.0))
     }
 
+    // Internal helper that supports `volume_total` operations.
     async fn volume_total(
         &self,
         start: chrono::DateTime<chrono::Utc>,
@@ -95,6 +100,7 @@ impl<'a> GlobalMetricsStore for PgMetricsStore<'a> {
         Ok(value.to_string().parse().unwrap_or(0.0))
     }
 
+    // Internal helper that supports `referral_total` operations.
     async fn referral_total(
         &self,
         start: chrono::DateTime<chrono::Utc>,
@@ -111,6 +117,7 @@ impl<'a> GlobalMetricsStore for PgMetricsStore<'a> {
     }
 }
 
+// Internal helper that supports `epoch_window` operations.
 fn epoch_window(
     epoch: i64,
 ) -> Result<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
@@ -120,6 +127,7 @@ fn epoch_window(
     Ok((start, end))
 }
 
+// Internal helper that fetches data for `get_global_metrics_epoch_with`.
 async fn get_global_metrics_epoch_with<S: GlobalMetricsStore + Sync>(
     store: &S,
     epoch: i64,
@@ -143,6 +151,7 @@ pub struct UserRankResponse {
     pub value: f64,
 }
 
+// Internal helper that supports `compute_percentile` operations.
 fn compute_percentile(rank: i64, total_users: i64) -> f64 {
     if total_users <= 0 {
         return 0.0;
@@ -151,6 +160,7 @@ fn compute_percentile(rank: i64, total_users: i64) -> f64 {
     (1.0 - (safe_rank as f64 / total_users as f64)) * 100.0
 }
 
+// Internal helper that parses or transforms values for `normalize_scope_addresses`.
 fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for address in user_addresses {
@@ -167,6 +177,7 @@ fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
     normalized
 }
 
+// Internal helper that fetches data for `resolve_leaderboard_identity`.
 async fn resolve_leaderboard_identity(
     state: &AppState,
     address: &str,
@@ -577,6 +588,7 @@ pub async fn get_user_categories(
     })))
 }
 
+// Internal helper that fetches data for `get_points_leaderboard`.
 async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
@@ -611,6 +623,7 @@ async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
     Ok(entries)
 }
 
+// Internal helper that fetches data for `get_volume_leaderboard`.
 async fn get_volume_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
         r#"
@@ -642,6 +655,7 @@ async fn get_volume_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
     Ok(entries)
 }
 
+// Internal helper that fetches data for `get_referrals_leaderboard`.
 async fn get_referrals_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
         r#"
@@ -680,6 +694,7 @@ mod tests {
     use async_trait::async_trait;
 
     #[test]
+    // Internal helper that supports `compute_percentile_handles_basic_case` operations.
     fn compute_percentile_handles_basic_case() {
         // Memastikan perhitungan percentile sesuai formula
         let percentile = compute_percentile(1, 100);
@@ -687,6 +702,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `compute_percentile_zero_total` operations.
     fn compute_percentile_zero_total() {
         // Memastikan total user 0 menghasilkan 0
         let percentile = compute_percentile(1, 0);
@@ -694,6 +710,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `compute_percentile_clamps_rank` operations.
     fn compute_percentile_clamps_rank() {
         // Memastikan rank di atas total menghasilkan 0
         let percentile = compute_percentile(10, 5);
@@ -708,10 +725,12 @@ mod tests {
 
     #[async_trait]
     impl GlobalMetricsStore for MockMetricsStore {
+        // Internal helper that supports `points_total` operations.
         async fn points_total(&self, _epoch: i64) -> Result<f64> {
             Ok(self.points_total)
         }
 
+        // Internal helper that supports `volume_total` operations.
         async fn volume_total(
             &self,
             _start: chrono::DateTime<chrono::Utc>,
@@ -720,6 +739,7 @@ mod tests {
             Ok(self.volume_total)
         }
 
+        // Internal helper that supports `referral_total` operations.
         async fn referral_total(
             &self,
             _start: chrono::DateTime<chrono::Utc>,
@@ -730,6 +750,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Internal helper that supports `global_metrics_epoch_uses_store_values` operations.
     async fn global_metrics_epoch_uses_store_values() {
         let store = MockMetricsStore {
             points_total: 1234.0,

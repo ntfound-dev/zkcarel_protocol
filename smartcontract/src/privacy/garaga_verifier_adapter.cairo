@@ -1,7 +1,5 @@
-/// @title Garaga Verifier Adapter
-/// @author CAREL Team
-/// @notice Adapter for Garaga proof verification on Starknet.
-/// @dev Forwards proof verification to Garaga verifier contract.
+// Adapter for Garaga proof verification on Starknet.
+// Forwards proof verification to Garaga verifier contract.
 #[starknet::contract]
 pub mod GaragaVerifierAdapter {
     use starknet::ContractAddress;
@@ -9,51 +7,59 @@ pub mod GaragaVerifierAdapter {
     use core::num::traits::Zero;
     use openzeppelin::access::ownable::OwnableComponent;
 
-    /// Legacy generic interface (used by mock verifier and older adapters).
+// Legacy generic interface (used by mock verifier and older adapters).
     #[starknet::interface]
     pub trait IGaragaVerifier<TContractState> {
-        fn verify_proof(self: @TContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool;
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @TContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool;
     }
 
-    /// Garaga generated Starknet Honk verifier interface.
+// Garaga generated Starknet Honk verifier interface.
     #[starknet::interface]
     pub trait IGaragaUltraStarknetHonkVerifier<TContractState> {
-        fn verify_ultra_starknet_honk_proof(self: @TContractState, full_proof_with_hints: Span<felt252>) -> bool;
+        // Verifies UltraStarknet Honk proofs when Garaga mode is configured for honk payloads.
+            fn verify_ultra_starknet_honk_proof(self: @TContractState, full_proof_with_hints: Span<felt252>) -> bool;
     }
 
-    /// Garaga generated Groth16 BN254 verifier interface.
+// Garaga generated Groth16 BN254 verifier interface.
     #[starknet::interface]
     pub trait IGaragaGroth16Bn254Verifier<TContractState> {
-        fn verify_groth16_proof_bn254(self: @TContractState, full_proof_with_hints: Span<felt252>) -> bool;
+        // Verifies Groth16 BN254 proof payloads through the configured Garaga verifier endpoint.
+            fn verify_groth16_proof_bn254(self: @TContractState, full_proof_with_hints: Span<felt252>) -> bool;
     }
 
-    /// Garaga maintained Groth16 BN254 verifier interface (returns optional output).
+// Garaga maintained Groth16 BN254 verifier interface (returns optional output).
     #[starknet::interface]
     pub trait IGaragaGroth16Bn254VerifierWithOutput<TContractState> {
-        fn verify_groth16_proof_bn254(
+        // Verifies Groth16 BN254 proof payloads through the configured Garaga verifier endpoint.
+            fn verify_groth16_proof_bn254(
             self: @TContractState, full_proof_with_hints: Span<felt252>
         ) -> Option<Span<u256>>;
     }
 
-    /// Garaga generated Groth16 BLS12-381 verifier interface.
+// Garaga generated Groth16 BLS12-381 verifier interface.
     #[starknet::interface]
     pub trait IGaragaGroth16Bls12381Verifier<TContractState> {
-        fn verify_groth16_proof_bls12_381(self: @TContractState, full_proof_with_hints: Span<felt252>) -> bool;
+        // Verifies Groth16 BLS12-381 proof payloads for private action submission and execution.
+            fn verify_groth16_proof_bls12_381(self: @TContractState, full_proof_with_hints: Span<felt252>) -> bool;
     }
 
-    /// Garaga maintained Groth16 BLS12-381 verifier interface (returns optional output).
+// Garaga maintained Groth16 BLS12-381 verifier interface (returns optional output).
     #[starknet::interface]
     pub trait IGaragaGroth16Bls12381VerifierWithOutput<TContractState> {
-        fn verify_groth16_proof_bls12_381(
+        // Verifies Groth16 BLS12-381 proof payloads for private action submission and execution.
+            fn verify_groth16_proof_bls12_381(
             self: @TContractState, full_proof_with_hints: Span<felt252>
         ) -> Option<Span<u256>>;
     }
 
-    /// Admin interface for selecting Garaga verifier function mode.
+// Admin interface for selecting Garaga verifier function mode.
     #[starknet::interface]
     pub trait IGaragaVerifierModeAdmin<TContractState> {
-        fn set_verification_mode(ref self: TContractState, mode: u8);
-        fn get_verification_mode(self: @TContractState) -> u8;
+        // Owner/admin-only setter for selecting which Garaga verifier entrypoint is used.
+            fn set_verification_mode(ref self: TContractState, mode: u8);
+        // Returns the active Garaga verification mode used to route proof validation calls.
+            fn get_verification_mode(self: @TContractState) -> u8;
     }
 
     const MODE_LEGACY: u8 = 0;
@@ -97,6 +103,7 @@ pub mod GaragaVerifierAdapter {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, verifier: ContractAddress) {
         self.ownable.initializer(admin);
         assert!(!verifier.is_zero(), "Verifier required");
@@ -106,7 +113,8 @@ pub mod GaragaVerifierAdapter {
 
     #[abi(embed_v0)]
     impl VerifierImpl of super::super::zk_privacy_router::IProofVerifier<ContractState> {
-        fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
             let verifier_address = self.verifier.read();
             assert!(!verifier_address.is_zero(), "Verifier not set");
 
@@ -143,7 +151,8 @@ pub mod GaragaVerifierAdapter {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::super::privacy_adapter::IPrivacyVerifierAdmin<ContractState> {
-        fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
+        // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
+            fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!verifier.is_zero(), "Verifier required");
             self.verifier.write(verifier);
@@ -153,14 +162,16 @@ pub mod GaragaVerifierAdapter {
 
     #[abi(embed_v0)]
     impl ModeAdminImpl of IGaragaVerifierModeAdmin<ContractState> {
-        fn set_verification_mode(ref self: ContractState, mode: u8) {
+        // Owner/admin-only setter for selecting which Garaga verifier entrypoint is used.
+            fn set_verification_mode(ref self: ContractState, mode: u8) {
             self.ownable.assert_only_owner();
             assert!(mode <= MODE_GROTH16_BLS12_381_OUTPUT, "Unsupported mode");
             self.verification_mode.write(mode);
             self.emit(Event::VerificationModeUpdated(VerificationModeUpdated { mode }));
         }
 
-        fn get_verification_mode(self: @ContractState) -> u8 {
+        // Returns the active Garaga verification mode used to route proof validation calls.
+            fn get_verification_mode(self: @ContractState) -> u8 {
             self.verification_mode.read()
         }
     }

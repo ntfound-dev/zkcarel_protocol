@@ -1,7 +1,5 @@
-/// @title Utilities Module
-/// @author CAREL Team
-/// @notice Shared utilities for access control, oracles, and admin tooling.
-/// @dev Centralizes reusable helpers used across protocol contracts.
+// Shared utilities for access control, oracles, and admin tooling.
+// Centralizes reusable helpers used across protocol contracts.
 pub mod leaderboard_view;
 pub mod price_oracle;
 pub mod access_control;

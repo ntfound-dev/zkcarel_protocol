@@ -12,15 +12,25 @@ pub const BURNER_ROLE: felt252 = selector!("BURNER_ROLE");
 // Interface for testing token interactions
 #[starknet::interface]
 pub trait ICarelTokenTest<TContractState> {
+    // Applies mint after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn mint(ref self: TContractState, recipient: ContractAddress, amount: u256);
+    // Implements burn logic while keeping state transitions deterministic.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn burn(ref self: TContractState, amount: u256);
+    // Implements balance of logic while keeping state transitions deterministic.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
+    // Applies grant role after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn grant_role(ref self: TContractState, role: felt252, account: ContractAddress);
 }
 
 // Import Treasury Dispatchers and the module for event assertions
 use smartcontract::core::treasury::{ITreasuryDispatcher, ITreasuryDispatcherTrait, Treasury};
 
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (ContractAddress, ContractAddress, ITreasuryDispatcher, ICarelTokenTestDispatcher) {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     
@@ -44,6 +54,8 @@ fn setup() -> (ContractAddress, ContractAddress, ITreasuryDispatcher, ICarelToke
 }
 
 #[test]
+// Test case: validates full treasury flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_full_treasury_flow() {
     let (admin, treasury_addr, treasury, token) = setup();
     let collector: ContractAddress = 0x2.try_into().unwrap();
@@ -97,6 +109,8 @@ fn test_full_treasury_flow() {
 
 #[test]
 #[should_panic(expected: "Not an authorized collector")]
+// Test case: validates unauthorized fee fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unauthorized_fee_fails() {
     let (_, treasury_addr, treasury, _) = setup();
     let stranger: ContractAddress = 0x999.try_into().unwrap();
@@ -107,6 +121,8 @@ fn test_unauthorized_fee_fails() {
 
 #[test]
 #[should_panic(expected: "Epoch burn quota exceeded")]
+// Test case: validates burn quota enforced behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_burn_quota_enforced() {
     let (admin, treasury_addr, treasury, token) = setup();
     let limit: u256 = 5_000_000_000_000_000_000_000_000_u256;

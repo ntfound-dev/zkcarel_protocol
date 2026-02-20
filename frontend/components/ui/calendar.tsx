@@ -11,6 +11,12 @@ import { DayButton, DayPicker, getDefaultClassNames } from 'react-day-picker'
 import { cn } from '@/lib/utils'
 import { Button, buttonVariants } from '@/components/ui/button'
 
+/**
+ * Handles `Calendar` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Calendar({
   className,
   classNames,
@@ -172,6 +178,12 @@ function Calendar({
   )
 }
 
+/**
+ * Handles `CalendarDayButton` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CalendarDayButton({
   className,
   day,

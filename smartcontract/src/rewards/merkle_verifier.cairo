@@ -1,17 +1,10 @@
 use starknet::ContractAddress;
 
-/// @title Merkle Verifier Interface
-/// @author CAREL Team
-/// @notice Defines Merkle proof verification helpers for rewards.
-/// @dev Uses Poseidon hashing for deterministic proofs.
+// Merkle helpers for reward claims using Poseidon-based trees.
+// Leaf format is `Poseidon(user, amount, epoch)` to prevent cross-epoch replay.
 #[starknet::interface]
 pub trait IMerkleVerifier<TContractState> {
-    /// @notice Verifies a Merkle proof against a root.
-    /// @dev Recomputes the root from the leaf and proof.
-    /// @param leaf Leaf hash.
-    /// @param proof Merkle proof array.
-    /// @param root Expected Merkle root.
-    /// @return valid True if proof is valid.
+    // Recomputes the path from `leaf` and returns true when it matches `root`.
     fn verify_proof(
         self: @TContractState, 
         leaf: felt252, 
@@ -19,12 +12,7 @@ pub trait IMerkleVerifier<TContractState> {
         root: felt252
     ) -> bool;
 
-    /// @notice Hashes a reward leaf from user data.
-    /// @dev Ensures a deterministic leaf for reward claims.
-    /// @param user User address.
-    /// @param amount Claimable amount.
-    /// @param epoch Reward epoch.
-    /// @return leaf Leaf hash.
+    // Builds the canonical claim leaf from user, allocation amount, and epoch.
     fn hash_leaf(
         self: @TContractState, 
         user: ContractAddress, 
@@ -32,11 +20,7 @@ pub trait IMerkleVerifier<TContractState> {
         epoch: u64
     ) -> felt252;
 
-    /// @notice Hashes a pair of nodes for Merkle tree construction.
-    /// @dev Orders pair to keep hashes deterministic.
-    /// @param left Left node hash.
-    /// @param right Right node hash.
-    /// @return hash Parent hash.
+    // Hashes two sibling nodes after sorting them to enforce deterministic ordering.
     fn hash_pair(
         self: @TContractState, 
         left: felt252, 
@@ -44,10 +28,7 @@ pub trait IMerkleVerifier<TContractState> {
     ) -> felt252;
 }
 
-/// @title Merkle Verifier Contract
-/// @author CAREL Team
-/// @notice On-chain Merkle verification utilities for reward claims.
-/// @dev Uses Poseidon hashing consistent with off-chain generation.
+// On-chain implementation used by reward contracts to validate claim proofs.
 #[starknet::contract]
 pub mod MerkleVerifier {
     use starknet::ContractAddress;
@@ -60,12 +41,7 @@ pub mod MerkleVerifier {
 
     #[abi(embed_v0)]
     pub impl MerkleVerifierImpl of super::IMerkleVerifier<ContractState> {
-        /// @notice Verifies a Merkle proof against a root.
-        /// @dev Recomputes the root from the leaf and proof.
-        /// @param leaf Leaf hash.
-        /// @param proof Merkle proof array.
-        /// @param root Expected Merkle root.
-        /// @return valid True if proof is valid.
+        // Walks the proof and compares the computed root with the submitted root.
         fn verify_proof(
             self: @ContractState, 
             leaf: felt252, 
@@ -81,12 +57,7 @@ pub mod MerkleVerifier {
             computed_hash == root
         }
 
-        /// @notice Hashes a reward leaf from user data.
-        /// @dev Ensures a deterministic leaf for reward claims.
-        /// @param user User address.
-        /// @param amount Claimable amount.
-        /// @param epoch Reward epoch.
-        /// @return leaf Leaf hash.
+        // Produces a Poseidon leaf for `(user, amount, epoch)`.
         fn hash_leaf(
             self: @ContractState, 
             user: ContractAddress, 
@@ -100,11 +71,7 @@ pub mod MerkleVerifier {
                 .finalize()
         }
 
-        /// @notice Hashes a pair of nodes for Merkle tree construction.
-        /// @dev Orders pair to keep hashes deterministic.
-        /// @param left Left node hash.
-        /// @param right Right node hash.
-        /// @return hash Parent hash.
+        // Sorts sibling nodes before hashing so proof verification is order-stable.
         fn hash_pair(
             self: @ContractState, 
             left: felt252, 

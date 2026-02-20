@@ -136,6 +136,7 @@ pub async fn is_nullifier_used(
     })))
 }
 
+// Internal helper that builds inputs for `build_submit_call`.
 fn build_submit_call(contract: &str, req: &SubmitPrivatePaymentRequest) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("submit_private_payment")
@@ -171,6 +172,7 @@ fn build_submit_call(contract: &str, req: &SubmitPrivatePaymentRequest) -> Resul
     })
 }
 
+// Internal helper that builds inputs for `build_finalize_call`.
 fn build_finalize_call(contract: &str, req: &FinalizePrivatePaymentRequest) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("finalize_private_payment")

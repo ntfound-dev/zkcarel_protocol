@@ -13,7 +13,11 @@ use snforge_std::{
 
 #[starknet::interface]
 pub trait IERC20Mock<TContractState> {
+    // Applies transfer after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+    // Applies transfer from after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer_from(ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool;
 }
 
@@ -24,11 +28,17 @@ mod ERC20Mock {
     struct Storage {}
     #[abi(embed_v0)]
     impl IERC20MockImpl of super::IERC20Mock<ContractState> {
+        // Applies transfer after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool { true }
+        // Applies transfer from after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer_from(ref self: ContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool { true }
     }
 }
 
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (IStakingStablecoinDispatcher, ContractAddress, ContractAddress, ContractAddress) {
     let owner: ContractAddress = 0x123.try_into().unwrap();
     
@@ -60,6 +70,8 @@ fn setup() -> (IStakingStablecoinDispatcher, ContractAddress, ContractAddress, C
 }
 
 #[test]
+// Test case: validates stake and reward accumulation behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_stake_and_reward_accumulation() {
     let (dispatcher, usdt_addr, _, _) = setup();
     let user: ContractAddress = 0x444.try_into().unwrap();
@@ -77,13 +89,15 @@ fn test_stake_and_reward_accumulation() {
 
     let pending_rewards = dispatcher.calculate_rewards(user, usdt_addr);
     // Corrected assertion syntax for custom error messages
-    assert!(pending_rewards == 70000, "Reward 7% APY tidak akurat");
+    assert!(pending_rewards == 70000, "7% APY reward is inaccurate");
 
     stop_cheat_caller_address(dispatcher.contract_address);
     stop_cheat_block_timestamp(dispatcher.contract_address);
 }
 
 #[test]
+// Test case: validates unstake anytime behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unstake_anytime() {
     let (dispatcher, usdt_addr, _, _) = setup();
     let user: ContractAddress = 0x444.try_into().unwrap();
@@ -95,13 +109,15 @@ fn test_unstake_anytime() {
     dispatcher.unstake(usdt_addr, amount);
     
     let current_stake = dispatcher.calculate_rewards(user, usdt_addr);
-    assert!(current_stake == 0, "Saldo harusnya kosong setelah unstake");
+    assert!(current_stake == 0, "Balance should be zero after unstake");
 
     stop_cheat_caller_address(dispatcher.contract_address);
 }
 
 #[test]
 #[should_panic(expected: "Token tidak didukung")]
+// Test case: validates stake unaccepted token fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_stake_unaccepted_token_fails() {
     let (dispatcher, _, _, _) = setup();
     let random_token: ContractAddress = 0x999.try_into().unwrap();

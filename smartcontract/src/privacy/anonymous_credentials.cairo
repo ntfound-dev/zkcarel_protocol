@@ -1,40 +1,28 @@
 use starknet::ContractAddress;
 
-/// @title Anonymous Credentials Interface
-/// @author CAREL Team
-/// @notice Proves attributes without revealing identity.
-/// @dev Uses external verifier for proof validation.
+// Proves attributes without revealing identity.
+// Uses external verifier for proof validation.
 #[starknet::interface]
 pub trait IAnonymousCredentials<TContractState> {
-    /// @notice Submits a credential proof.
-    /// @dev Consumes nullifier to prevent reuse.
-    /// @param nullifier Nullifier to prevent replay.
-    /// @param proof ZK proof.
-    /// @param public_inputs Public inputs.
+    // Verifies an anonymous-credential proof and marks its nullifier as consumed.
     fn submit_credential_proof(
         ref self: TContractState,
         nullifier: felt252,
         proof: Span<felt252>,
         public_inputs: Span<felt252>
     );
-    /// @notice Checks if a nullifier has been used.
-    /// @param nullifier Nullifier to check.
-    /// @return used True if used.
+    // Read-only check for whether a nullifier has been consumed (double-spend protection).
     fn is_nullifier_used(self: @TContractState, nullifier: felt252) -> bool;
-    /// @notice Updates verifier address.
-    /// @dev Owner-only.
-    /// @param verifier New verifier address.
+    // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
 }
 
-/// @title Anonymous Credentials Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for credential proofs.
+// ZK privacy hooks for credential proofs.
 #[starknet::interface]
 pub trait IAnonymousCredentialsPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Owner/admin-only setter for wiring the PrivacyRouter dependency.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private credentials action proof.
+    // Forwards credential privacy actions to the router with nullifier/commitment arrays.
     fn submit_private_credentials_action(
         ref self: TContractState,
         old_root: felt252,
@@ -46,10 +34,8 @@ pub trait IAnonymousCredentialsPrivacy<TContractState> {
     );
 }
 
-/// @title Anonymous Credentials Contract
-/// @author CAREL Team
-/// @notice Verifies anonymous credentials using ZK proofs.
-/// @dev Integrates an external verifier contract.
+// Verifies anonymous credentials using ZK proofs.
+// Integrates an external verifier contract.
 #[starknet::contract]
 pub mod AnonymousCredentials {
     use starknet::ContractAddress;
@@ -95,6 +81,7 @@ pub mod AnonymousCredentials {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, verifier: ContractAddress) {
         self.ownable.initializer(admin);
         self.verifier.write(verifier);
@@ -102,7 +89,8 @@ pub mod AnonymousCredentials {
 
     #[abi(embed_v0)]
     impl AnonymousCredentialsImpl of super::IAnonymousCredentials<ContractState> {
-        fn submit_credential_proof(
+        // Verifies an anonymous-credential proof and marks its nullifier as consumed.
+            fn submit_credential_proof(
             ref self: ContractState,
             nullifier: felt252,
             proof: Span<felt252>,
@@ -116,11 +104,13 @@ pub mod AnonymousCredentials {
             self.emit(Event::CredentialVerified(CredentialVerified { nullifier }));
         }
 
-        fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
+        // Read-only check for whether a nullifier has been consumed (double-spend protection).
+            fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
             self.nullifiers.entry(nullifier).read()
         }
 
-        fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
+        // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
+            fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!verifier.is_zero(), "Verifier required");
             self.verifier.write(verifier);
@@ -130,13 +120,15 @@ pub mod AnonymousCredentials {
 
     #[abi(embed_v0)]
     impl AnonymousCredentialsPrivacyImpl of super::IAnonymousCredentialsPrivacy<ContractState> {
-        fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
+        // Owner/admin-only setter for wiring the PrivacyRouter dependency.
+            fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
-        fn submit_private_credentials_action(
+        // Forwards credential privacy actions to the router with nullifier/commitment arrays.
+            fn submit_private_credentials_action(
             ref self: ContractState,
             old_root: felt252,
             new_root: felt252,

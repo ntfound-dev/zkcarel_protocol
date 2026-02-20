@@ -38,8 +38,22 @@ const STABLE_FLOOR_PRICE: Record<string, number> = {
   CAREL: 1,
 }
 
+/**
+ * Fetches data for `getEnv`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const getEnv = () => (typeof process !== "undefined" ? process.env : undefined)
 
+/**
+ * Builds inputs required by `buildCoinGeckoUrl`.
+ *
+ * @param ids - Input used by `buildCoinGeckoUrl` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function buildCoinGeckoUrl(ids: string[], apiKey?: string) {
   const params = new URLSearchParams({
     vs_currencies: "usd",
@@ -50,6 +64,12 @@ function buildCoinGeckoUrl(ids: string[], apiKey?: string) {
   return `https://api.coingecko.com/api/v3/simple/price?${params.toString()}`
 }
 
+/**
+ * Handles `mergePrices` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function mergePrices(
   prev: Record<string, number>,
   updates: Record<string, number>
@@ -72,6 +92,14 @@ function mergePrices(
   return changed ? next : prev
 }
 
+/**
+ * Handles `withBtcAliases` logic.
+ *
+ * @param values - Input used by `withBtcAliases` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function withBtcAliases(values: Record<string, number>): Record<string, number> {
   if (!values || Object.keys(values).length === 0) {
     return values
@@ -89,6 +117,15 @@ function withBtcAliases(values: Record<string, number>): Record<string, number> 
   return next
 }
 
+/**
+ * Exposes `useLivePrices` as a reusable hook.
+ *
+ * @param tokens - Input used by `useLivePrices` to compute state, payload, or request behavior.
+ * @param options - Input used by `useLivePrices` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function useLivePrices(tokens: string[], options: UseLivePricesOptions = {}): LivePriceState {
   const {
     enabled = true,
@@ -232,6 +269,12 @@ export function useLivePrices(tokens: string[], options: UseLivePricesOptions = 
     let active = true
     const apiKey = env?.NEXT_PUBLIC_COINGECKO_API_KEY || env?.NEXT_PUBLIC_COINGECKO_KEY
 
+    /**
+     * Handles `runFetch` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const runFetch = async () => {
       const ids = uniqueTokens
         .map((token) => coingeckoIds[token])

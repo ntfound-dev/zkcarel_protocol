@@ -6,12 +6,24 @@ import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog'
 import { cn } from '@/lib/utils'
 import { buttonVariants } from '@/components/ui/button'
 
+/**
+ * Handles `AlertDialog` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialog({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
   return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />
 }
 
+/**
+ * Handles `AlertDialogTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogTrigger({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Trigger>) {
@@ -20,6 +32,12 @@ function AlertDialogTrigger({
   )
 }
 
+/**
+ * Handles `AlertDialogPortal` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogPortal({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Portal>) {
@@ -28,6 +46,12 @@ function AlertDialogPortal({
   )
 }
 
+/**
+ * Handles `AlertDialogOverlay` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogOverlay({
   className,
   ...props
@@ -44,6 +68,12 @@ function AlertDialogOverlay({
   )
 }
 
+/**
+ * Handles `AlertDialogContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogContent({
   className,
   ...props
@@ -63,6 +93,12 @@ function AlertDialogContent({
   )
 }
 
+/**
+ * Handles `AlertDialogHeader` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogHeader({
   className,
   ...props
@@ -76,6 +112,12 @@ function AlertDialogHeader({
   )
 }
 
+/**
+ * Handles `AlertDialogFooter` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogFooter({
   className,
   ...props
@@ -92,6 +134,12 @@ function AlertDialogFooter({
   )
 }
 
+/**
+ * Handles `AlertDialogTitle` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogTitle({
   className,
   ...props
@@ -105,6 +153,12 @@ function AlertDialogTitle({
   )
 }
 
+/**
+ * Handles `AlertDialogDescription` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogDescription({
   className,
   ...props
@@ -118,6 +172,12 @@ function AlertDialogDescription({
   )
 }
 
+/**
+ * Handles `AlertDialogAction` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogAction({
   className,
   ...props
@@ -130,6 +190,12 @@ function AlertDialogAction({
   )
 }
 
+/**
+ * Handles `AlertDialogCancel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDialogCancel({
   className,
   ...props

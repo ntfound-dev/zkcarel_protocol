@@ -50,6 +50,12 @@ const BIGINT_ONE = BigInt(1)
 const TWO_POW_128 = powBigInt(2, 128)
 const MAX_U128 = TWO_POW_128 - BIGINT_ONE
 
+/**
+ * Runs `invokeStarknetCallsFromWallet` and handles related side effects.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export async function invokeStarknetCallsFromWallet(
   calls: StarknetInvokeCall[],
   providerHint: StarknetWalletHint = "starknet"
@@ -167,6 +173,12 @@ export async function invokeStarknetCallsFromWallet(
   throw new Error("Failed to submit Starknet transaction from wallet.")
 }
 
+/**
+ * Runs `invokeStarknetCallFromWallet` and handles related side effects.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export async function invokeStarknetCallFromWallet(
   call: StarknetInvokeCall,
   providerHint: StarknetWalletHint = "starknet"
@@ -174,6 +186,12 @@ export async function invokeStarknetCallFromWallet(
   return invokeStarknetCallsFromWallet([call], providerHint)
 }
 
+/**
+ * Runs `sendEvmNativeTransferFromWallet` and handles related side effects.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export async function sendEvmNativeTransferFromWallet(
   to: string,
   amountEth: string
@@ -212,6 +230,14 @@ export async function sendEvmNativeTransferFromWallet(
   return normalized
 }
 
+/**
+ * Runs `sendEvmTransactionFromWallet` and handles related side effects.
+ *
+ * @param tx - Input used by `sendEvmTransactionFromWallet` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export async function sendEvmTransactionFromWallet(tx: {
   to: string
   value?: string
@@ -266,6 +292,12 @@ export async function sendEvmTransactionFromWallet(tx: {
   return normalized
 }
 
+/**
+ * Fetches data for `getConnectedEvmAddressFromWallet`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export async function getConnectedEvmAddressFromWallet(): Promise<string> {
   const evm = getInjectedEvmMetaMask()
   if (!evm) {
@@ -279,6 +311,14 @@ export async function getConnectedEvmAddressFromWallet(): Promise<string> {
   return normalized
 }
 
+/**
+ * Runs `sendEvmStarkgateEthDepositFromWallet` and handles related side effects.
+ *
+ * @param params - Input used by `sendEvmStarkgateEthDepositFromWallet` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export async function sendEvmStarkgateEthDepositFromWallet(params: {
   bridgeAddress: string
   tokenAddress: string
@@ -360,6 +400,12 @@ export async function sendEvmStarkgateEthDepositFromWallet(params: {
   return normalized
 }
 
+/**
+ * Handles `estimateStarkgateDepositFeeWei` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export async function estimateStarkgateDepositFeeWei(
   bridgeAddress: string
 ): Promise<bigint | null> {
@@ -405,6 +451,12 @@ export async function estimateStarkgateDepositFeeWei(
   return null
 }
 
+/**
+ * Handles `estimateEvmNetworkFeeWei` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export async function estimateEvmNetworkFeeWei(
   gasLimit: bigint = BigInt(210000)
 ): Promise<bigint | null> {
@@ -450,6 +502,15 @@ export async function estimateEvmNetworkFeeWei(
   return null
 }
 
+/**
+ * Handles `bigintWeiToUnitNumber` logic.
+ *
+ * @param value - Input used by `bigintWeiToUnitNumber` to compute state, payload, or request behavior.
+ * @param decimals - Input used by `bigintWeiToUnitNumber` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function bigintWeiToUnitNumber(value: bigint, decimals: number): number {
   if (decimals <= 0) return Number(value)
   const divisor = powBigInt(10, decimals)
@@ -458,6 +519,15 @@ export function bigintWeiToUnitNumber(value: bigint, decimals: number): number {
   return whole + fraction
 }
 
+/**
+ * Handles `unitNumberToScaledBigInt` logic.
+ *
+ * @param value - Input used by `unitNumberToScaledBigInt` to compute state, payload, or request behavior.
+ * @param decimals - Input used by `unitNumberToScaledBigInt` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function unitNumberToScaledBigInt(value: number, decimals: number): bigint {
   if (!Number.isFinite(value) || value < 0) {
     throw new Error("Invalid unit amount.")
@@ -469,6 +539,15 @@ export function unitNumberToScaledBigInt(value: number, decimals: number): bigin
   return parseDecimalToScaledBigInt(normalized, decimals)
 }
 
+/**
+ * Handles `decimalToU256Parts` logic.
+ *
+ * @param value - Input used by `decimalToU256Parts` to compute state, payload, or request behavior.
+ * @param decimals - Input used by `decimalToU256Parts` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function decimalToU256Parts(value: string, decimals: number): [string, string] {
   const scaled = parseDecimalToScaledBigInt(value, decimals)
   if (scaled < BIGINT_ZERO) {
@@ -479,6 +558,12 @@ export function decimalToU256Parts(value: string, decimals: number): [string, st
   return [toHexFelt(low), toHexFelt(high)]
 }
 
+/**
+ * Parses or transforms values for `parseEstimatedMinutes`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function parseEstimatedMinutes(label?: string): number {
   if (!label) return 15
   const match = label.match(/\d+/)
@@ -488,6 +573,14 @@ export function parseEstimatedMinutes(label?: string): number {
   return parsed
 }
 
+/**
+ * Handles `toHexFelt` logic.
+ *
+ * @param value - Input used by `toHexFelt` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function toHexFelt(value: string | number | bigint): string {
   if (typeof value === "bigint") {
     return `0x${value.toString(16)}`
@@ -510,6 +603,12 @@ export function toHexFelt(value: string | number | bigint): string {
   return stringToFelt(raw)
 }
 
+/**
+ * Handles `providerIdToFeltHex` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function providerIdToFeltHex(provider?: string): string {
   const normalized = (provider || "").trim().toLowerCase()
   const known: Record<string, string> = {
@@ -523,6 +622,15 @@ export function providerIdToFeltHex(provider?: string): string {
   return stringToFelt(provider || "unknown")
 }
 
+/**
+ * Parses or transforms values for `parseDecimalToScaledBigInt`.
+ *
+ * @param value - Input used by `parseDecimalToScaledBigInt` to compute state, payload, or request behavior.
+ * @param decimals - Input used by `parseDecimalToScaledBigInt` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function parseDecimalToScaledBigInt(value: string, decimals: number): bigint {
   const raw = value.trim()
   if (!raw) return BIGINT_ZERO
@@ -536,6 +644,14 @@ function parseDecimalToScaledBigInt(value: string, decimals: number): bigint {
   return whole * powBigInt(10, decimals) + frac
 }
 
+/**
+ * Parses or transforms values for `parseUint256`.
+ *
+ * @param value - Input used by `parseUint256` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function parseUint256(value: string): bigint {
   const raw = value.trim()
   if (!raw) return BIGINT_ZERO
@@ -548,6 +664,14 @@ function parseUint256(value: string): bigint {
   throw new Error("Invalid uint256 value.")
 }
 
+/**
+ * Parses or transforms values for `normalizeEvmAddress`.
+ *
+ * @param address - Input used by `normalizeEvmAddress` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function normalizeEvmAddress(address: string): string | null {
   const raw = address.trim()
   if (!raw) return null
@@ -556,6 +680,12 @@ function normalizeEvmAddress(address: string): string | null {
   return normalized
 }
 
+/**
+ * Parses or transforms values for `encodeStarkgateDepositV2`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function encodeStarkgateDepositV2(
   tokenAddress: string,
   amountWei: bigint,
@@ -570,12 +700,29 @@ function encodeStarkgateDepositV2(
   return `${selector}${encoded}`
 }
 
+/**
+ * Parses or transforms values for `encodeStarkgateDepositLegacy`.
+ *
+ * @param amountWei - Input used by `encodeStarkgateDepositLegacy` to compute state, payload, or request behavior.
+ * @param l2Recipient - Input used by `encodeStarkgateDepositLegacy` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function encodeStarkgateDepositLegacy(amountWei: bigint, l2Recipient: bigint): string {
   const selector = "0xe2bbb158" // deposit(uint256,uint256)
   const encoded = [encodeAbiUint256(amountWei), encodeAbiUint256(l2Recipient)].join("")
   return `${selector}${encoded}`
 }
 
+/**
+ * Parses or transforms values for `encodeAbiUint256`.
+ *
+ * @param value - Input used by `encodeAbiUint256` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function encodeAbiUint256(value: bigint): string {
   if (value < BIGINT_ZERO) {
     throw new Error("uint256 cannot be negative.")
@@ -588,6 +735,14 @@ function encodeAbiUint256(value: bigint): string {
   return hex
 }
 
+/**
+ * Parses or transforms values for `encodeAbiAddress`.
+ *
+ * @param address - Input used by `encodeAbiAddress` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function encodeAbiAddress(address: string): string {
   const normalized = normalizeEvmAddress(address)
   if (!normalized) {
@@ -596,6 +751,12 @@ function encodeAbiAddress(address: string): string {
   return normalized.slice(2).toLowerCase().padStart(64, "0")
 }
 
+/**
+ * Fetches data for `getInjectedEvmMetaMask`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function getInjectedEvmMetaMask(): InjectedEvm | null {
   if (typeof window === "undefined") return null
   const anyWindow = window as any
@@ -610,6 +771,14 @@ function getInjectedEvmMetaMask(): InjectedEvm | null {
   return null
 }
 
+/**
+ * Runs `requestEvmAccount` and handles related side effects.
+ *
+ * @param evm - Input used by `requestEvmAccount` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 async function requestEvmAccount(evm: InjectedEvm): Promise<string> {
   const accounts = await evm.request({ method: "eth_requestAccounts" })
   const first = Array.isArray(accounts) ? accounts[0] : null
@@ -619,6 +788,14 @@ async function requestEvmAccount(evm: InjectedEvm): Promise<string> {
   return first
 }
 
+/**
+ * Runs `ensureEvmSepolia` and handles related side effects.
+ *
+ * @param evm - Input used by `ensureEvmSepolia` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 async function ensureEvmSepolia(evm: InjectedEvm): Promise<void> {
   const chainId = await readEvmChainId(evm)
   if (chainId === EVM_SEPOLIA_CHAIN_ID) return
@@ -645,6 +822,14 @@ async function ensureEvmSepolia(evm: InjectedEvm): Promise<void> {
   }
 }
 
+/**
+ * Fetches data for `readEvmChainId`.
+ *
+ * @param evm - Input used by `readEvmChainId` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 async function readEvmChainId(evm: InjectedEvm): Promise<number> {
   const raw = await evm.request({ method: "eth_chainId" })
   if (typeof raw === "string") {
@@ -657,6 +842,14 @@ async function readEvmChainId(evm: InjectedEvm): Promise<number> {
   return NaN
 }
 
+/**
+ * Fetches data for `getInjectedStarknet`.
+ *
+ * @param providerHint - Input used by `getInjectedStarknet` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function getInjectedStarknet(providerHint: StarknetWalletHint): InjectedStarknet | null {
   if (typeof window === "undefined") return null
   const anyWindow = window as any
@@ -678,6 +871,12 @@ function getInjectedStarknet(providerHint: StarknetWalletHint): InjectedStarknet
   return defaultProvider || argent || braavos
 }
 
+/**
+ * Handles `pickProviderByAlias` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function pickProviderByAlias(
   provider: InjectedStarknet | null,
   kind: "argentx" | "braavos"
@@ -693,10 +892,24 @@ function pickProviderByAlias(
   return matches ? provider : null
 }
 
+/**
+ * Parses or transforms values for `normalizeAlias`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function normalizeAlias(value?: string): string {
   return (value || "").toLowerCase().replace(/[^a-z0-9]/g, "")
 }
 
+/**
+ * Checks conditions for `isUsableInjected`.
+ *
+ * @param candidate - Input used by `isUsableInjected` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function isUsableInjected(candidate: unknown): candidate is InjectedStarknet {
   if (!candidate || typeof candidate !== "object") return false
   const injected = candidate as InjectedStarknet
@@ -707,6 +920,14 @@ function isUsableInjected(candidate: unknown): candidate is InjectedStarknet {
   )
 }
 
+/**
+ * Handles `pickInjectedStarknet` logic.
+ *
+ * @param candidates - Input used by `pickInjectedStarknet` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function pickInjectedStarknet(...candidates: unknown[]): InjectedStarknet | null {
   for (const candidate of candidates) {
     if (isUsableInjected(candidate)) return candidate
@@ -714,6 +935,14 @@ function pickInjectedStarknet(...candidates: unknown[]): InjectedStarknet | null
   return null
 }
 
+/**
+ * Runs `ensureStarknetAccounts` and handles related side effects.
+ *
+ * @param injected - Input used by `ensureStarknetAccounts` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 async function ensureStarknetAccounts(injected: InjectedStarknet): Promise<void> {
   if (injected.selectedAddress || injected.account?.address) return
   if (injected.request) {
@@ -744,6 +973,14 @@ async function ensureStarknetAccounts(injected: InjectedStarknet): Promise<void>
   }
 }
 
+/**
+ * Runs `ensureStarknetSepolia` and handles related side effects.
+ *
+ * @param injected - Input used by `ensureStarknetSepolia` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 async function ensureStarknetSepolia(injected: InjectedStarknet): Promise<string | undefined> {
   let chainId = await readStarknetChainId(injected)
   if (isStarknetSepolia(chainId)) return chainId
@@ -760,6 +997,14 @@ async function ensureStarknetSepolia(injected: InjectedStarknet): Promise<string
   return chainId
 }
 
+/**
+ * Fetches data for `readStarknetChainId`.
+ *
+ * @param injected - Input used by `readStarknetChainId` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 async function readStarknetChainId(injected: InjectedStarknet): Promise<string | undefined> {
   if (typeof injected.chainId === "string" && injected.chainId.trim()) {
     return injected.chainId
@@ -795,6 +1040,12 @@ async function readStarknetChainId(injected: InjectedStarknet): Promise<string |
   return undefined
 }
 
+/**
+ * Fetches data for `readChainIdGetter`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 async function readChainIdGetter(
   getter?: (() => Promise<unknown> | unknown) | undefined
 ): Promise<string | undefined> {
@@ -807,6 +1058,14 @@ async function readChainIdGetter(
   }
 }
 
+/**
+ * Parses or transforms values for `parseChainId`.
+ *
+ * @param value - Input used by `parseChainId` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function parseChainId(value: unknown): string | null {
   if (typeof value === "string" && value.trim()) return value.trim()
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -828,6 +1087,12 @@ function parseChainId(value: unknown): string | null {
   return null
 }
 
+/**
+ * Runs `requestStarknet` and handles related side effects.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 async function requestStarknet(
   injected: InjectedStarknet,
   payload: { type: string; params?: unknown }
@@ -853,6 +1118,14 @@ async function requestStarknet(
   throw lastError || new Error("Starknet wallet request failed.")
 }
 
+/**
+ * Handles `extractTxHash` logic.
+ *
+ * @param value - Input used by `extractTxHash` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function extractTxHash(value: unknown): string | null {
   if (typeof value === "string") {
     return isHexHash(value) ? value.toLowerCase() : null
@@ -880,6 +1153,14 @@ function extractTxHash(value: unknown): string | null {
   return null
 }
 
+/**
+ * Checks conditions for `isHexHash`.
+ *
+ * @param value - Input used by `isHexHash` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function isHexHash(value: string): boolean {
   const v = value.trim()
   if (!v.startsWith("0x")) return false
@@ -887,6 +1168,14 @@ function isHexHash(value: string): boolean {
   return /^[0-9a-fA-F]+$/.test(v.slice(2))
 }
 
+/**
+ * Handles `stringToFelt` logic.
+ *
+ * @param value - Input used by `stringToFelt` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function stringToFelt(value: string): string {
   if (!value) return "0x0"
   const bytes = new TextEncoder().encode(value)
@@ -897,6 +1186,15 @@ function stringToFelt(value: string): string {
   return `0x${hex || "0"}`
 }
 
+/**
+ * Handles `powBigInt` logic.
+ *
+ * @param base - Input used by `powBigInt` to compute state, payload, or request behavior.
+ * @param exponent - Input used by `powBigInt` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function powBigInt(base: number, exponent: number): bigint {
   let result = BIGINT_ONE
   const baseBigInt = BigInt(base)

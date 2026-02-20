@@ -15,6 +15,14 @@ const tabs: { id: TabId; label: string }[] = [
   { id: "referral", label: "Referral" },
 ]
 
+/**
+ * Parses or transforms values for `formatCompact`.
+ *
+ * @param value - Input used by `formatCompact` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatCompact = (value: number) => {
   try {
     return new Intl.NumberFormat("en-US", {
@@ -26,6 +34,14 @@ const formatCompact = (value: number) => {
   }
 }
 
+/**
+ * Handles `RankBadge` logic.
+ *
+ * @param rank - Input used by `RankBadge` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function RankBadge({ rank }: { rank: number }) {
   if (rank === 1) {
     return (
@@ -64,6 +80,15 @@ interface LeaderboardEntry {
   label?: string
 }
 
+/**
+ * Handles `LeaderboardRow` logic.
+ *
+ * @param entry - Input used by `LeaderboardRow` to compute state, payload, or request behavior.
+ * @param showLabel - Input used by `LeaderboardRow` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function LeaderboardRow({ entry, showLabel }: { entry: LeaderboardEntry; showLabel?: boolean }) {
   return (
     <div className={cn(
@@ -117,6 +142,12 @@ function LeaderboardRow({ entry, showLabel }: { entry: LeaderboardEntry; showLab
   )
 }
 
+/**
+ * Handles `Leaderboard` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function Leaderboard() {
   const wallet = useWallet()
   const [activeTab, setActiveTab] = React.useState<TabId>("total")
@@ -150,6 +181,12 @@ export function Leaderboard() {
     const leaderboardType =
       activeTab === "total" ? "points" : activeTab === "trading" ? "volume" : "referrals"
 
+    /**
+     * Handles `loadLeaderboard` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadLeaderboard = async () => {
       setIsLoading(true)
       setLoadError(null)

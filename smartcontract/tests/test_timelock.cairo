@@ -10,6 +10,8 @@ use snforge_std::{
 // Replace 'smartcontract' with the actual [package] name in your Scarb.toml
 #[starknet::interface]
 pub trait ITargetMock<TContractState> {
+    // Implements execute logic while keeping state transitions deterministic.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn execute(ref self: TContractState) -> Span<felt252>;
 }
 
@@ -22,19 +24,24 @@ mod TargetMock {
 
     #[abi(embed_v0)]
     impl TargetMockImpl of super::ITargetMock<ContractState> {
+        // Implements execute logic while keeping state transitions deterministic.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn execute(ref self: ContractState) -> Span<felt252> {
             array![].span()
         }
     }
 }
 
+// Deploys target fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_target() -> ContractAddress {
     let contract = declare("TargetMock").unwrap().contract_class();
     let (addr, _) = contract.deploy(@array![]).unwrap();
     addr
 }
 
-/// Helper to deploy Timelock
+// Deploys timelock fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_timelock(admin: ContractAddress, min_delay: u64) -> ITimelockDispatcher {
     let contract = declare("Timelock").expect('Declaration failed');
     
@@ -47,6 +54,8 @@ fn deploy_timelock(admin: ContractAddress, min_delay: u64) -> ITimelockDispatche
 }
 
 #[test]
+// Test case: validates queue transaction success behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_queue_transaction_success() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let min_delay = 172800_u64; // 48 hours
@@ -68,6 +77,8 @@ fn test_queue_transaction_success() {
 
 #[test]
 #[should_panic(expected: "ETA below minimum delay")]
+// Test case: validates queue fails below min delay behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_queue_fails_below_min_delay() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let min_delay = 100_u64;
@@ -81,6 +92,8 @@ fn test_queue_fails_below_min_delay() {
 }
 
 #[test]
+// Test case: validates execute after delay behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_execute_after_delay() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let min_delay = 100_u64;
@@ -105,6 +118,8 @@ fn test_execute_after_delay() {
 
 #[test]
 #[should_panic(expected: "Transaction not ready")]
+// Test case: validates execute fails too early behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_execute_fails_too_early() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let min_delay = 100_u64;
@@ -123,6 +138,8 @@ fn test_execute_fails_too_early() {
 }
 
 #[test]
+// Test case: validates cancel by authorized proposer behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_cancel_by_authorized_proposer() {
     let admin: ContractAddress = 0x123.try_into().unwrap();
     let dispatcher = deploy_timelock(admin, 100);

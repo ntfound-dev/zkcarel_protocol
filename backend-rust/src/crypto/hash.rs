@@ -22,6 +22,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `keccak256_hex_matches_empty_string_vector` operations.
     fn keccak256_hex_matches_empty_string_vector() {
         let digest = keccak256_hex(b"");
         assert_eq!(
@@ -32,6 +33,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `hash_string_matches_hex_helper` operations.
     fn hash_string_matches_hex_helper() {
         let input = "zkcare";
         let digest = hash_string(input);

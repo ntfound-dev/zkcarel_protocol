@@ -18,68 +18,33 @@ pub struct PoolInfo {
     pub active: bool,
 }
 
-/// @title ERC20 Interface
-/// @author CAREL Team
-/// @notice Minimal ERC20 interface for LP staking transfers.
-/// @dev Used for LP token deposits and withdrawals.
+// Minimal ERC20 interface for LP staking transfers.
+// Used for LP token deposits and withdrawals.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
-    /// @notice Transfers tokens to a recipient.
-    /// @dev Used for withdrawals and rewards.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Transfers tokens from this contract to `recipient`.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
-    /// @notice Transfers tokens from a sender.
-    /// @dev Used for staking deposits.
-    /// @param sender Token holder address.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Transfers tokens from `sender` to `recipient` using allowance.
     fn transfer_from(
         ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256
     ) -> bool;
 }
 
-/// @title LP Staking Interface
-/// @author CAREL Team
-/// @notice Defines staking entrypoints for LP tokens.
-/// @dev Pool-based staking with per-pool APY.
+// Public staking API for LP pool positions.
+// Each pool carries its own APY and metadata.
 #[starknet::interface]
 pub trait ILPStaking<TContractState> {
-    /// @notice Stakes LP tokens in a pool.
-    /// @dev Requires pool to be active.
-    /// @param pool_address Pool address.
-    /// @param amount Amount to stake.
+    // Stakes assets and updates caller position.
     fn stake(ref self: TContractState, pool_address: ContractAddress, amount: u256);
-    /// @notice Unstakes LP tokens from a pool.
-    /// @dev Releases principal to the user.
-    /// @param pool_address Pool address.
-    /// @param amount Amount to unstake.
+    // Unstakes assets and updates caller position.
     fn unstake(ref self: TContractState, pool_address: ContractAddress, amount: u256);
-    /// @notice Claims rewards for an LP stake.
-    /// @dev Transfers rewards in reward token.
-    /// @param pool_address Pool address.
+    // Claims accrued staking rewards.
     fn claim_rewards(ref self: TContractState, pool_address: ContractAddress);
-    /// @notice Returns pool configuration.
-    /// @dev Read-only helper for UI.
-    /// @param pool_address Pool address.
-    /// @return info Pool info.
+    // Returns metadata for an LP pool.
     fn get_pool_info(self: @TContractState, pool_address: ContractAddress) -> PoolInfo;
-    /// @notice Calculates rewards for an LP stake.
-    /// @dev Includes accumulated and pending rewards.
-    /// @param user User address.
-    /// @param pool_address Pool address.
-    /// @return rewards Total rewards.
+    // Returns total rewards (stored + pending) for a position.
     fn calculate_rewards(self: @TContractState, user: ContractAddress, pool_address: ContractAddress) -> u256;
-    /// @notice Adds a new LP pool.
-    /// @dev Owner-only to control supported pools.
-    /// @param pool_address Pool address.
-    /// @param lp_token LP token address.
-    /// @param token0 Token0 address.
-    /// @param token1 Token1 address.
-    /// @param apy Pool APY in bps.
-    /// @param multiplier Point multiplier.
+    // Registers or updates LP pool configuration.
     fn add_pool(
         ref self: TContractState, 
         pool_address: ContractAddress, 
@@ -91,14 +56,12 @@ pub trait ILPStaking<TContractState> {
     );
 }
 
-/// @title LP Staking Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for LP staking actions.
+// Hide Mode hooks for LP staking actions.
 #[starknet::interface]
 pub trait ILPStakingPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets the privacy router used for Hide Mode staking actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private staking action proof.
+    // Forwards nullifier/commitment-bound staking payload to the privacy router.
     fn submit_private_staking_action(
         ref self: TContractState,
         old_root: felt252,
@@ -110,10 +73,8 @@ pub trait ILPStakingPrivacy<TContractState> {
     );
 }
 
-/// @title LP Staking Contract
-/// @author CAREL Team
-/// @notice Pool-based LP staking with reward distribution.
-/// @dev Tracks per-pool stakes and APY for rewards.
+// LP staking contract with per-pool APY configuration.
+// Rewards are paid from shared `reward_token`.
 #[starknet::contract]
 pub mod LPStaking {
     use starknet::ContractAddress;
@@ -164,11 +125,9 @@ pub mod LPStaking {
         pub amount: u256
     }
 
-    /// @notice Initializes LP staking.
-    /// @dev Sets reward token and owner.
-    /// @param reward_token Reward token address.
-    /// @param owner Owner/admin address.
+    // Initializes reward token dependency and owner authority.
     #[constructor]
+    // Initializes contract storage during deployment.
     fn constructor(ref self: ContractState, reward_token: ContractAddress, owner: ContractAddress) {
         self.reward_token.write(reward_token);
         self.owner.write(owner);
@@ -176,10 +135,7 @@ pub mod LPStaking {
 
     #[abi(embed_v0)]
     impl LPStakingImpl of ILPStaking<ContractState> {
-        /// @notice Stakes LP tokens in a pool.
-        /// @dev Requires pool to be active.
-        /// @param pool_address Pool address.
-        /// @param amount Amount to stake.
+        // Stakes LP tokens in an active pool and updates caller accrual checkpoint.
         fn stake(ref self: ContractState, pool_address: ContractAddress, amount: u256) {
             let pool = self.lp_pools.entry(pool_address).read();
             assert!(pool.active, "Pool tidak aktif");
@@ -205,10 +161,7 @@ pub mod LPStaking {
             self.emit(Event::Staked(Staked { user, pool: pool_address, amount }));
         }
 
-        /// @notice Unstakes LP tokens from a pool.
-        /// @dev Releases principal to the user.
-        /// @param pool_address Pool address.
-        /// @param amount Amount to unstake.
+        // Unstakes LP principal from a pool while preserving accrued rewards.
         fn unstake(ref self: ContractState, pool_address: ContractAddress, amount: u256) {
             let user = get_caller_address();
             let now = get_block_timestamp();
@@ -228,9 +181,7 @@ pub mod LPStaking {
             self.emit(Event::Unstaked(Unstaked { user, pool: pool_address, amount }));
         }
 
-        /// @notice Claims rewards for an LP stake.
-        /// @dev Transfers rewards in reward token.
-        /// @param pool_address Pool address.
+        // Claims caller rewards for a specific pool position.
         fn claim_rewards(ref self: ContractState, pool_address: ContractAddress) {
             let user = get_caller_address();
             let now = get_block_timestamp();
@@ -249,33 +200,19 @@ pub mod LPStaking {
             self.emit(Event::RewardsClaimed(RewardsClaimed { user, amount: total_reward }));
         }
 
-        /// @notice Returns pool configuration.
-        /// @dev Read-only helper for UI.
-        /// @param pool_address Pool address.
-        /// @return info Pool info.
+        // Returns metadata for an LP pool.
         fn get_pool_info(self: @ContractState, pool_address: ContractAddress) -> PoolInfo {
             self.lp_pools.entry(pool_address).read()
         }
 
-        /// @notice Calculates rewards for an LP stake.
-        /// @dev Includes accumulated and pending rewards.
-        /// @param user User address.
-        /// @param pool_address Pool address.
-        /// @return rewards Total rewards.
+        // Returns total claimable rewards (stored + pending) for a pool position.
         fn calculate_rewards(self: @ContractState, user: ContractAddress, pool_address: ContractAddress) -> u256 {
             let stake = self.stakes.entry(pool_address).entry(user).read();
             let pool = self.lp_pools.entry(pool_address).read();
             stake.accumulated_rewards + self._calculate_pending(@stake, pool.apy)
         }
 
-        /// @notice Adds a new LP pool.
-        /// @dev Owner-only to control supported pools.
-        /// @param pool_address Pool address.
-        /// @param lp_token LP token address.
-        /// @param token0 Token0 address.
-        /// @param token1 Token1 address.
-        /// @param apy Pool APY in bps.
-        /// @param multiplier Point multiplier.
+        // Registers/updates LP pool metadata, APY, and points multiplier.
         fn add_pool(
             ref self: ContractState, 
             pool_address: ContractAddress, 
@@ -293,8 +230,7 @@ pub mod LPStaking {
 
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
-        /// @notice Calculates pending rewards since last claim.
-        /// @dev Uses pool APY and elapsed time.
+        // Computes linear rewards using pool APY since last claim checkpoint.
         fn _calculate_pending(self: @ContractState, stake: @Stake, apy: u256) -> u256 {
             if *stake.amount == 0 { return 0; }
             let now = get_block_timestamp();
@@ -305,12 +241,15 @@ pub mod LPStaking {
 
     #[abi(embed_v0)]
     impl LPStakingPrivacyImpl of super::ILPStakingPrivacy<ContractState> {
+        // Sets router used by Hide Mode LP staking flow.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Unauthorized owner");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Forwards private staking payload to privacy router for proof validation.
+        // `nullifiers` prevent replay and `commitments` bind action intent.
         fn submit_private_staking_action(
             ref self: ContractState,
             old_root: felt252,

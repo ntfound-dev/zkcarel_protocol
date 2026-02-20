@@ -1,19 +1,13 @@
-/// @title Mock Verifier Admin Interface
-/// @author CAREL Team
-/// @notice Admin controls for mock verifier contracts.
-/// @dev Test-only helpers to toggle verification results.
+// Admin controls for mock verifier contracts.
+// Test-only helpers to toggle verification results.
 #[starknet::interface]
 pub trait IMockVerifierAdmin<TContractState> {
-    /// @notice Updates the verification result.
-    /// @dev Owner-only to keep tests deterministic.
-    /// @param result New verification result.
+    // Test-admin setter for forcing mock verifier pass/fail outcomes in test scenarios.
     fn set_result(ref self: TContractState, result: bool);
 }
 
-/// @title Mock Garaga Verifier
-/// @author CAREL Team
-/// @notice Test-only verifier for Garaga adapter.
-/// @dev Returns a configurable boolean result.
+// Test-only verifier for Garaga adapter.
+// Returns a configurable boolean result.
 #[starknet::contract]
 pub mod MockGaragaVerifier {
     use starknet::storage::*;
@@ -22,7 +16,8 @@ pub mod MockGaragaVerifier {
 
     #[starknet::interface]
     pub trait IGaragaVerifier<TContractState> {
-        fn verify_proof(self: @TContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool;
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @TContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool;
     }
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
@@ -46,6 +41,7 @@ pub mod MockGaragaVerifier {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, result: bool) {
         self.ownable.initializer(admin);
         self.result.write(result);
@@ -53,7 +49,8 @@ pub mod MockGaragaVerifier {
 
     #[abi(embed_v0)]
     impl VerifierImpl of IGaragaVerifier<ContractState> {
-        fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
             let _ = proof;
             let _ = public_inputs;
             self.result.read()
@@ -62,17 +59,16 @@ pub mod MockGaragaVerifier {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::IMockVerifierAdmin<ContractState> {
-        fn set_result(ref self: ContractState, result: bool) {
+        // Test-admin setter for forcing mock verifier pass/fail outcomes in test scenarios.
+            fn set_result(ref self: ContractState, result: bool) {
             self.ownable.assert_only_owner();
             self.result.write(result);
         }
     }
 }
 
-/// @title Mock Tongo Verifier
-/// @author CAREL Team
-/// @notice Test-only verifier for Tongo adapter.
-/// @dev Returns a configurable boolean result.
+// Test-only verifier for Tongo adapter.
+// Returns a configurable boolean result.
 #[starknet::contract]
 pub mod MockTongoVerifier {
     use starknet::storage::*;
@@ -81,7 +77,8 @@ pub mod MockTongoVerifier {
 
     #[starknet::interface]
     pub trait ITongoVerifier<TContractState> {
-        fn verify_proof(self: @TContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool;
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @TContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool;
     }
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
@@ -105,6 +102,7 @@ pub mod MockTongoVerifier {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, result: bool) {
         self.ownable.initializer(admin);
         self.result.write(result);
@@ -112,7 +110,8 @@ pub mod MockTongoVerifier {
 
     #[abi(embed_v0)]
     impl VerifierImpl of ITongoVerifier<ContractState> {
-        fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
             let _ = proof;
             let _ = public_inputs;
             self.result.read()
@@ -121,17 +120,16 @@ pub mod MockTongoVerifier {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::IMockVerifierAdmin<ContractState> {
-        fn set_result(ref self: ContractState, result: bool) {
+        // Test-admin setter for forcing mock verifier pass/fail outcomes in test scenarios.
+            fn set_result(ref self: ContractState, result: bool) {
             self.ownable.assert_only_owner();
             self.result.write(result);
         }
     }
 }
 
-/// @title Mock Semaphore Verifier
-/// @author CAREL Team
-/// @notice Test-only verifier for Semaphore adapter.
-/// @dev Returns a configurable boolean result.
+// Test-only verifier for Semaphore adapter.
+// Returns a configurable boolean result.
 #[starknet::contract]
 pub mod MockSemaphoreVerifier {
     use starknet::storage::*;
@@ -140,7 +138,8 @@ pub mod MockSemaphoreVerifier {
 
     #[starknet::interface]
     pub trait ISemaphoreVerifier<TContractState> {
-        fn verify_proof(
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(
             self: @TContractState,
             root: felt252,
             nullifier_hash: felt252,
@@ -170,6 +169,7 @@ pub mod MockSemaphoreVerifier {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, result: bool) {
         self.ownable.initializer(admin);
         self.result.write(result);
@@ -177,7 +177,8 @@ pub mod MockSemaphoreVerifier {
 
     #[abi(embed_v0)]
     impl VerifierImpl of ISemaphoreVerifier<ContractState> {
-        fn verify_proof(
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(
             self: @ContractState,
             root: felt252,
             nullifier_hash: felt252,
@@ -194,7 +195,8 @@ pub mod MockSemaphoreVerifier {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::IMockVerifierAdmin<ContractState> {
-        fn set_result(ref self: ContractState, result: bool) {
+        // Test-admin setter for forcing mock verifier pass/fail outcomes in test scenarios.
+            fn set_result(ref self: ContractState, result: bool) {
             self.ownable.assert_only_owner();
             self.result.write(result);
         }

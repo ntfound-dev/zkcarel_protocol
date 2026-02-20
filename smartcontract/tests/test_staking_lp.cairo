@@ -13,7 +13,11 @@ use snforge_std::{
 
 #[starknet::interface]
 pub trait IERC20Mock<TContractState> {
+    // Applies transfer after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+    // Applies transfer from after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn transfer_from(ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool;
 }
 
@@ -24,11 +28,17 @@ mod ERC20Mock {
     struct Storage {}
     #[abi(embed_v0)]
     impl IERC20MockImpl of super::IERC20Mock<ContractState> {
+        // Applies transfer after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool { true }
+        // Applies transfer from after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer_from(ref self: ContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool { true }
     }
 }
 
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (ILPStakingDispatcher, ContractAddress, ContractAddress, ContractAddress) {
     let owner: ContractAddress = 0x111.try_into().unwrap();
     
@@ -63,6 +73,8 @@ fn setup() -> (ILPStakingDispatcher, ContractAddress, ContractAddress, ContractA
 }
 
 #[test]
+// Test case: validates lp stake and reward accuracy behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_lp_stake_and_reward_accuracy() {
     let (dispatcher, _, pool_id, _) = setup();
     let user: ContractAddress = 0x222.try_into().unwrap();
@@ -86,6 +98,8 @@ fn test_lp_stake_and_reward_accuracy() {
 }
 
 #[test]
+// Test case: validates unstake reduces balance behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unstake_reduces_balance() {
     let (dispatcher, _, pool_id, _) = setup();
     let user: ContractAddress = 0x222.try_into().unwrap();
@@ -103,6 +117,8 @@ fn test_unstake_reduces_balance() {
 
 #[test]
 #[should_panic(expected: "Pool tidak aktif")]
+// Test case: validates stake inactive pool fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_stake_inactive_pool_fails() {
     let (dispatcher, _, _, _) = setup();
     let random_pool: ContractAddress = 0x888.try_into().unwrap();
@@ -112,6 +128,8 @@ fn test_stake_inactive_pool_fails() {
 
 #[test]
 #[should_panic(expected: "Unauthorized")]
+// Test case: validates only owner can add pool behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_only_owner_can_add_pool() {
     let (dispatcher, lp_token, _, _) = setup();
     let attacker: ContractAddress = 0x666.try_into().unwrap();

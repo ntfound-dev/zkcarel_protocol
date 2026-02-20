@@ -1,7 +1,5 @@
-/// @title Bridge Module
-/// @author CAREL Team
-/// @notice Bridge and swap aggregation components for multi-chain routing.
-/// @dev Groups aggregator, private swap, and BTC-native bridge contracts.
+// Bridge and swap-aggregation contracts for cross-network routing.
+// Groups provider adapters, bridge aggregator, and private bridge flows.
 pub mod bridge_aggregator;
 pub mod swap_aggregator;
 pub mod private_swap;

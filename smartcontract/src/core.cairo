@@ -1,7 +1,5 @@
-/// @title Core Module
-/// @author CAREL Team
-/// @notice Core contracts for tokenomics, treasury, fees, and protocol registry.
-/// @dev Consolidates foundational components that other modules depend on.
+// Core contracts for tokenomics, treasury, fees, and registry state.
+// Other protocol modules depend on these primitives.
 pub mod token;
 pub mod vesting_manager;
 pub mod treasury;

@@ -6,6 +6,12 @@ import { CircleIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `RadioGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function RadioGroup({
   className,
   ...props
@@ -19,6 +25,12 @@ function RadioGroup({
   )
 }
 
+/**
+ * Handles `RadioGroupItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function RadioGroupItem({
   className,
   ...props

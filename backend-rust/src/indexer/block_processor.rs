@@ -9,6 +9,17 @@ pub struct BlockProcessor {
 }
 
 impl BlockProcessor {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(client: StarknetClient, db: Database) -> Self {
         Self {
             client,
@@ -74,6 +85,7 @@ impl BlockProcessor {
         Ok(())
     }
 
+    // Internal helper that supports `handle_swap` operations.
     async fn handle_swap(
         &self,
         tx_hash: &str,
@@ -88,6 +100,7 @@ impl BlockProcessor {
         Ok(())
     }
 
+    // Internal helper that supports `handle_bridge` operations.
     async fn handle_bridge(
         &self,
         tx_hash: &str,
@@ -102,6 +115,7 @@ impl BlockProcessor {
         Ok(())
     }
 
+    // Internal helper that supports `handle_stake` operations.
     async fn handle_stake(
         &self,
         tx_hash: &str,
@@ -116,6 +130,7 @@ impl BlockProcessor {
         Ok(())
     }
 
+    // Internal helper that supports `handle_unstake` operations.
     async fn handle_unstake(
         &self,
         tx_hash: &str,
@@ -130,6 +145,7 @@ impl BlockProcessor {
         Ok(())
     }
 
+    // Internal helper that supports `handle_order_filled` operations.
     async fn handle_order_filled(&self, _tx_hash: &str, data: serde_json::Value) -> Result<()> {
         let order_id = data.get("order_id").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -138,6 +154,7 @@ impl BlockProcessor {
     }
 }
 
+// Internal helper that builds inputs for `build_simple_transaction`.
 fn build_simple_transaction(
     tx_hash: &str,
     block_number: u64,
@@ -161,6 +178,7 @@ fn build_simple_transaction(
     }
 }
 
+// Internal helper that builds inputs for `build_swap_transaction`.
 fn build_swap_transaction(
     tx_hash: &str,
     block_number: u64,
@@ -195,6 +213,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that builds inputs for `build_simple_transaction_sets_fields`.
     fn build_simple_transaction_sets_fields() {
         // Memastikan field dasar transaksi terisi dengan benar
         let tx = build_simple_transaction("0xhash", 10, "0xuser", "bridge");
@@ -206,6 +225,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that builds inputs for `build_swap_transaction_maps_tokens`.
     fn build_swap_transaction_maps_tokens() {
         // Memastikan token_in dan token_out terambil dari data event
         let data = serde_json::json!({

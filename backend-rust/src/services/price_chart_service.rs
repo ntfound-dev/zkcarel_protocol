@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+// Internal helper that supports `candle_start_time` operations.
 fn candle_start_time(time: DateTime<Utc>, interval: &str) -> DateTime<Utc> {
     let minutes = match interval {
         "1m" => 1,
@@ -43,6 +44,17 @@ pub struct PriceChartService {
 }
 
 impl PriceChartService {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self {
             db,
@@ -67,6 +79,7 @@ impl PriceChartService {
         });
     }
 
+    // Internal helper that updates state for `update_prices`.
     async fn update_prices(&self) -> Result<()> {
         let tokens = self.config.price_tokens_list();
 
@@ -99,6 +112,7 @@ impl PriceChartService {
         Ok(())
     }
 
+    // Internal helper that fetches data for `fetch_price`.
     async fn fetch_price(&self, token: &str) -> Result<Decimal> {
         if self.config.coingecko_id_for(token).is_some() {
             match self.fetch_price_from_coingecko(token).await {
@@ -111,6 +125,7 @@ impl PriceChartService {
         self.fetch_price_from_oracle(token).await
     }
 
+    // Internal helper that fetches data for `fetch_price_from_oracle`.
     async fn fetch_price_from_oracle(&self, token: &str) -> Result<Decimal> {
         let asset_id = self
             .config
@@ -133,6 +148,7 @@ impl PriceChartService {
         Ok(raw / Decimal::from(100_000_000u64))
     }
 
+    // Internal helper that fetches data for `fetch_price_from_coingecko`.
     async fn fetch_price_from_coingecko(&self, token: &str) -> Result<Decimal> {
         let coin_id = self
             .coingecko_id_or_default(token)
@@ -178,6 +194,17 @@ impl PriceChartService {
             .ok_or_else(|| AppError::Internal("Failed to convert price".into()))
     }
 
+    /// Fetches data for `get_ohlcv_from_coingecko`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_ohlcv_from_coingecko(
         &self,
         token: &str,
@@ -276,6 +303,7 @@ impl PriceChartService {
         Ok(candles)
     }
 
+    // Internal helper that updates state for `update_ohlcv_candles`.
     async fn update_ohlcv_candles(
         &self,
         token: &str,
@@ -337,6 +365,7 @@ impl PriceChartService {
         Ok(())
     }
 
+    // Internal helper that updates state for `save_candle`.
     async fn save_candle(
         &self,
         token: &str,
@@ -368,6 +397,17 @@ impl PriceChartService {
         Ok(())
     }
 
+    /// Fetches data for `get_current_price`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_current_price(&self, token: &str) -> Result<Decimal> {
         self.price_cache
             .read()
@@ -377,6 +417,17 @@ impl PriceChartService {
             .ok_or_else(|| AppError::NotFound("Price not found".into()))
     }
 
+    /// Fetches data for `get_latest_candles`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_latest_candles(
         &self,
         token: &str,
@@ -412,6 +463,17 @@ impl PriceChartService {
         self.db.get_price_history(token, interval, from, to).await
     }
 
+    /// Handles `calculate_indicators` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn calculate_indicators(
         &self,
         token: &str,
@@ -426,6 +488,7 @@ impl PriceChartService {
         }
     }
 
+    // Internal helper that supports `calculate_sma` operations.
     async fn calculate_sma(
         &self,
         token: &str,
@@ -446,6 +509,7 @@ impl PriceChartService {
         Ok(out)
     }
 
+    // Internal helper that supports `calculate_ema` operations.
     async fn calculate_ema(
         &self,
         token: &str,
@@ -466,6 +530,7 @@ impl PriceChartService {
         Ok(out)
     }
 
+    // Internal helper that supports `calculate_rsi` operations.
     async fn calculate_rsi(
         &self,
         token: &str,
@@ -509,6 +574,7 @@ impl PriceChartService {
         Ok(out)
     }
 
+    // Internal helper that supports `coingecko_id_or_default` operations.
     fn coingecko_id_or_default(&self, token: &str) -> Option<String> {
         if let Some(mapped) = self.config.coingecko_id_for(token) {
             let trimmed = mapped.trim();
@@ -526,6 +592,7 @@ impl PriceChartService {
         }
     }
 
+    // Internal helper that supports `coingecko_days_for` operations.
     fn coingecko_days_for(interval: &str, limit: i32) -> &'static str {
         let capped_limit = limit.max(1);
         match interval {
@@ -560,6 +627,7 @@ impl PriceChartService {
         }
     }
 
+    // Internal helper that supports `synthetic_flat_ohlcv` operations.
     fn synthetic_flat_ohlcv(
         &self,
         symbol: &str,
@@ -609,6 +677,7 @@ struct CoinGeckoUsdPrice {
     usd: Option<f64>,
 }
 
+// Internal helper that parses or transforms values for `parse_u256_low`.
 fn parse_u256_low(values: &[String]) -> Result<u128> {
     if values.len() < 2 {
         return Err(AppError::Internal("Invalid u256 response".into()));
@@ -621,6 +690,7 @@ fn parse_u256_low(values: &[String]) -> Result<u128> {
     Ok(low)
 }
 
+// Internal helper that parses or transforms values for `parse_felt_u128`.
 fn parse_felt_u128(value: &str) -> Result<u128> {
     if let Some(stripped) = value.strip_prefix("0x") {
         u128::from_str_radix(stripped, 16)
@@ -638,6 +708,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     #[test]
+    // Internal helper that supports `candle_start_time_rounds_down` operations.
     fn candle_start_time_rounds_down() {
         // Memastikan waktu dibulatkan ke interval terdekat ke bawah
         let time = Utc.with_ymd_and_hms(2024, 1, 1, 10, 37, 45).unwrap();

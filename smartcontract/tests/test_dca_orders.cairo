@@ -5,11 +5,13 @@ mod tests {
     use snforge_std::{start_cheat_caller_address, stop_cheat_caller_address, spy_events, EventSpyAssertionsTrait};
     use starknet::storage::*;
     
-    // Perbaikan: Hanya mengimpor apa yang benar-benar digunakan untuk menghilangkan warning
+    // Imports only the symbols required in this test module to avoid warnings.
     use smartcontract::trading::dca_orders::{IKeeperNetworkDispatcher, IKeeperNetworkDispatcherTrait};
     use smartcontract::trading::dca_orders::KeeperNetwork;
     use smartcontract::trading::dca_orders::KeeperNetwork::KeeperRegistered;
 
+    // Deploys keeper fixture and returns handles used by dependent test flows.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn deploy_keeper(owner: ContractAddress) -> IKeeperNetworkDispatcher {
         let contract = declare("KeeperNetwork").unwrap().contract_class();
         let mut constructor_calldata = array![owner.into()];
@@ -18,6 +20,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates registration and stats behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_registration_and_stats() {
         let owner: ContractAddress = 0x123.try_into().unwrap();
         let keeper: ContractAddress = 0x456.try_into().unwrap();
@@ -33,7 +37,7 @@ mod tests {
         let stats = dispatcher.get_keeper_stats(keeper);
         assert!(stats.total_executions == 0, "Initial stats wrong");
 
-        // KeeperRegistered digunakan di sini, sehingga tidak memicu warning
+        // KeeperRegistered is used here to prevent unused-import warnings.
         spy.assert_emitted(@array![
             (
                 dispatcher.contract_address,
@@ -43,6 +47,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates execution fee logic behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_execution_fee_logic() {
         let owner: ContractAddress = 0x123.try_into().unwrap();
         let keeper: ContractAddress = 0x456.try_into().unwrap();
@@ -64,6 +70,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates claim earnings behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_claim_earnings() {
         let owner: ContractAddress = 0x123.try_into().unwrap();
         let keeper: ContractAddress = 0x456.try_into().unwrap();
@@ -85,6 +93,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected: "Only owner can slash")]
+    // Test case: validates slash unauthorized behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_slash_unauthorized() {
         let owner: ContractAddress = 0x123.try_into().unwrap();
         let keeper: ContractAddress = 0x456.try_into().unwrap();
@@ -95,6 +105,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates slash by owner behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_slash_by_owner() {
         let owner: ContractAddress = 0x123.try_into().unwrap();
         let keeper: ContractAddress = 0x456.try_into().unwrap();

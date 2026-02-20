@@ -70,6 +70,7 @@ pub struct PrepareAIActionResponse {
     pub to_timestamp: u64,
 }
 
+// Internal helper that builds inputs for `build_command`.
 fn build_command(command: &str, context: &Option<String>) -> String {
     match context {
         Some(ctx) => format!("{} | context: {}", command, ctx),
@@ -77,6 +78,7 @@ fn build_command(command: &str, context: &Option<String>) -> String {
     }
 }
 
+// Internal helper that supports `confidence_score` operations.
 fn confidence_score(has_llm_provider: bool) -> f64 {
     if has_llm_provider {
         0.9
@@ -85,6 +87,7 @@ fn confidence_score(has_llm_provider: bool) -> f64 {
     }
 }
 
+// Internal helper that runs side-effecting logic for `ensure_ai_level_scope`.
 fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
     let scope = classify_command_scope(command);
     match level {
@@ -130,6 +133,7 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
     Ok(())
 }
 
+// Internal helper that supports `requires_onchain_action_id` operations.
 fn requires_onchain_action_id(level: u8, command: &str) -> bool {
     if level < 2 {
         return false;
@@ -140,6 +144,7 @@ fn requires_onchain_action_id(level: u8, command: &str) -> bool {
     )
 }
 
+// Internal helper that supports `ai_level_limit` operations.
 fn ai_level_limit(state: &AppState, level: u8) -> u32 {
     match level {
         1 => state.config.ai_rate_limit_level_1_per_window,
@@ -149,6 +154,7 @@ fn ai_level_limit(state: &AppState, level: u8) -> u32 {
     }
 }
 
+// Internal helper that supports `time_bucket` operations.
 fn time_bucket(window_seconds: u64) -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -158,6 +164,7 @@ fn time_bucket(window_seconds: u64) -> u64 {
     now / window
 }
 
+// Internal helper that supports `enforce_ai_rate_limit` operations.
 async fn enforce_ai_rate_limit(
     state: &AppState,
     user_address: &str,
@@ -268,6 +275,7 @@ pub async fn execute_command(
     Ok(Json(ApiResponse::success(response)))
 }
 
+// Internal helper that supports `action_type_for_level` operations.
 fn action_type_for_level(level: u8) -> Option<u64> {
     match level {
         2 => Some(0), // Swap
@@ -276,6 +284,7 @@ fn action_type_for_level(level: u8) -> Option<u64> {
     }
 }
 
+// Internal helper that parses or transforms values for `encode_bytes_as_felt`.
 fn encode_bytes_as_felt(chunk: &[u8]) -> Result<CryptoFelt> {
     if chunk.is_empty() {
         return Ok(CryptoFelt::from(0_u8));
@@ -285,6 +294,7 @@ fn encode_bytes_as_felt(chunk: &[u8]) -> Result<CryptoFelt> {
         .map_err(|e| crate::error::AppError::BadRequest(format!("Invalid byte chunk: {}", e)))
 }
 
+// Internal helper that supports `serialize_byte_array` operations.
 fn serialize_byte_array(value: &str) -> Result<Vec<CryptoFelt>> {
     let bytes = value.as_bytes();
     let mut data = Vec::new();
@@ -310,6 +320,7 @@ fn serialize_byte_array(value: &str) -> Result<Vec<CryptoFelt>> {
     Ok(data)
 }
 
+// Internal helper that parses or transforms values for `parse_crypto_felt`.
 fn parse_crypto_felt(value: &str) -> Result<CryptoFelt> {
     let trimmed = value.trim();
     let normalized = if trimmed.starts_with("0x") {
@@ -321,6 +332,7 @@ fn parse_crypto_felt(value: &str) -> Result<CryptoFelt> {
         .map_err(|e| crate::error::AppError::BadRequest(format!("Invalid felt value: {}", e)))
 }
 
+// Internal helper that supports `compute_action_hash` operations.
 fn compute_action_hash(
     user_address: &str,
     action_type: u64,
@@ -334,6 +346,7 @@ fn compute_action_hash(
     Ok(poseidon_hash_many(&data))
 }
 
+// Internal helper that builds inputs for `build_set_valid_hash_call`.
 fn build_set_valid_hash_call(
     verifier_address: &str,
     user_address: &str,
@@ -481,6 +494,7 @@ pub async fn get_runtime_config(
     Ok(Json(ApiResponse::success(response)))
 }
 
+// Internal helper that runs side-effecting logic for `ensure_onchain_action`.
 async fn ensure_onchain_action(
     config: &crate::config::Config,
     user_address: &str,
@@ -529,6 +543,7 @@ async fn ensure_onchain_action(
     Ok(())
 }
 
+// Internal helper that parses or transforms values for `parse_felt_u64`.
 fn parse_felt_u64(value: &str) -> Option<u64> {
     if let Some(stripped) = value.strip_prefix("0x") {
         u64::from_str_radix(stripped, 16).ok()
@@ -542,6 +557,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that builds inputs for `build_command_without_context`.
     fn build_command_without_context() {
         // Memastikan command tidak berubah saat context kosong
         let command = build_command("ping", &None);
@@ -549,6 +565,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that builds inputs for `build_command_with_context`.
     fn build_command_with_context() {
         // Memastikan context ditambahkan ke command
         let command = build_command("ping", &Some("beta".to_string()));
@@ -556,6 +573,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `confidence_score_depends_on_api_key` operations.
     fn confidence_score_depends_on_api_key() {
         // Memastikan skor confidence mengikuti status API key
         assert!((confidence_score(true) - 0.9).abs() < f64::EPSILON);
@@ -563,6 +581,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `action_type_for_level_matches_expected` operations.
     fn action_type_for_level_matches_expected() {
         // Memastikan level AI dipetakan ke action_type executor
         assert_eq!(action_type_for_level(2), Some(0));
@@ -571,12 +590,14 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `level_1_allows_generic_chat_prompt` operations.
     fn level_1_allows_generic_chat_prompt() {
         // Memastikan level 1 tetap bisa dipakai untuk chat umum/non-trading
         assert!(ensure_ai_level_scope(1, "hello, can we chat?").is_ok());
     }
 
     #[test]
+    // Internal helper that supports `level_1_rejects_swap_execution_scope` operations.
     fn level_1_rejects_swap_execution_scope() {
         // Memastikan level 1 tetap memblokir intent eksekusi trading
         let err = ensure_ai_level_scope(1, "swap 1 STRK to CAREL").expect_err("must reject");
@@ -587,18 +608,21 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `level_2_allows_generic_chat_prompt` operations.
     fn level_2_allows_generic_chat_prompt() {
         // Memastikan level 2 tetap bisa dipakai ngobrol umum tanpa intent trading.
         assert!(ensure_ai_level_scope(2, "hello, can we chat about strategy?").is_ok());
     }
 
     #[test]
+    // Internal helper that supports `level_3_allows_generic_chat_prompt` operations.
     fn level_3_allows_generic_chat_prompt() {
         // Memastikan level 3 tetap menerima prompt umum/non-intent.
         assert!(ensure_ai_level_scope(3, "what do you think about market mood today?").is_ok());
     }
 
     #[test]
+    // Internal helper that supports `requires_onchain_action_only_for_execution_scopes` operations.
     fn requires_onchain_action_only_for_execution_scopes() {
         // Memastikan action_id hanya diwajibkan untuk scope eksekusi.
         assert!(!requires_onchain_action_id(1, "hello"));
@@ -615,6 +639,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `serialize_byte_array_short_ascii_layout` operations.
     fn serialize_byte_array_short_ascii_layout() {
         // Memastikan ByteArray pendek terserialisasi sebagai [len_words, pending, pending_len]
         let encoded = serialize_byte_array("tier:2").expect("serialize");
@@ -624,6 +649,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `compute_action_hash_is_deterministic` operations.
     fn compute_action_hash_is_deterministic() {
         // Memastikan hash action konsisten untuk input identik
         let hash_a = compute_action_hash("0x123", 0, "tier:2", 10).expect("hash A");

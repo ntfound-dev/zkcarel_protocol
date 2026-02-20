@@ -27,6 +27,7 @@ use constants::API_VERSION;
 use db::Database;
 
 #[tokio::main]
+// Internal helper that supports `main` operations.
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
@@ -140,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Internal helper that builds inputs for `build_router`.
 fn build_router(state: api::AppState) -> Router {
     // CORS configuration
     let cors = cors_from_config(&state.config);
@@ -440,6 +442,7 @@ fn build_router(state: api::AppState) -> Router {
         .with_state(state)
 }
 
+// Internal helper that supports `cors_from_config` operations.
 fn cors_from_config(config: &Config) -> CorsLayer {
     let raw = config.cors_allowed_origins.trim();
     if raw.is_empty() || raw == "*" {

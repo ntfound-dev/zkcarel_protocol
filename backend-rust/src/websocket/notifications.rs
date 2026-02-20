@@ -21,6 +21,7 @@ pub(crate) struct WsAuthQuery {
     token: Option<String>,
 }
 
+// Internal helper that supports `token_from_headers` operations.
 fn token_from_headers(headers: &HeaderMap) -> Option<String> {
     let header_value = headers.get(AUTHORIZATION)?.to_str().ok()?;
     header_value
@@ -28,6 +29,7 @@ fn token_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(|token| token.to_string())
 }
 
+// Internal helper that supports `connected_payload` operations.
 fn connected_payload() -> String {
     serde_json::json!({
         "type": "connected",
@@ -79,6 +81,7 @@ pub async fn handler(
     ws.on_upgrade(|socket| handle_socket(socket, state, user_address))
 }
 
+// Internal helper that supports `handle_socket` operations.
 async fn handle_socket(socket: WebSocket, state: AppState, user_address: String) {
     let (mut sender, mut receiver) = socket.split();
 
@@ -170,6 +173,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `connected_payload_has_type` operations.
     fn connected_payload_has_type() {
         // Memastikan payload memiliki tipe connected
         let payload = connected_payload();

@@ -19,6 +19,12 @@ const alertVariants = cva(
   },
 )
 
+/**
+ * Handles `Alert` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Alert({
   className,
   variant,
@@ -34,6 +40,15 @@ function Alert({
   )
 }
 
+/**
+ * Handles `AlertTitle` logic.
+ *
+ * @param className - Input used by `AlertTitle` to compute state, payload, or request behavior.
+ * @param props - Input used by `AlertTitle` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertTitle({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -47,6 +62,12 @@ function AlertTitle({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `AlertDescription` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AlertDescription({
   className,
   ...props

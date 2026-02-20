@@ -135,6 +135,7 @@ pub async fn is_nullifier_used(
     })))
 }
 
+// Internal helper that builds inputs for `build_initiate_call`.
 fn build_initiate_call(contract: &str, req: &InitiatePrivateBtcSwapRequest) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("initiate_private_btc_swap")
@@ -168,6 +169,7 @@ fn build_initiate_call(contract: &str, req: &InitiatePrivateBtcSwapRequest) -> R
     })
 }
 
+// Internal helper that builds inputs for `build_finalize_call`.
 fn build_finalize_call(contract: &str, req: &FinalizePrivateBtcSwapRequest) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("finalize_private_btc_swap")

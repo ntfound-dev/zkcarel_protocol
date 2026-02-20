@@ -7,11 +7,13 @@ use starknet_crypto::{poseidon_hash_many, Felt};
 
 const ONE_CAREL_WEI: i128 = 1_000_000_000_000_000_000;
 
+// Internal helper that supports `carel_to_wei` operations.
 fn carel_to_wei(carel_amount: Decimal) -> u128 {
     let wei = carel_amount * Decimal::from_i128(ONE_CAREL_WEI).unwrap();
     wei.trunc().to_u128().unwrap_or(0)
 }
 
+// Internal helper that supports `felt_from_address` operations.
 fn felt_from_address(address: &str) -> Result<Felt> {
     let addr = address.trim();
     let normalized = if addr.starts_with("0x") {
@@ -23,6 +25,7 @@ fn felt_from_address(address: &str) -> Result<Felt> {
         .map_err(|e| crate::error::AppError::Internal(format!("Invalid address: {}", e)))?)
 }
 
+// Internal helper that builds inputs for `create_leaf_hash`.
 fn create_leaf_hash(address: &str, amount_wei: u128, epoch: i64) -> Result<Felt> {
     let user = felt_from_address(address)?;
     let amount_low = Felt::from(amount_wei);
@@ -36,6 +39,7 @@ fn create_leaf_hash(address: &str, amount_wei: u128, epoch: i64) -> Result<Felt>
     ]))
 }
 
+// Internal helper that supports `hash_pair_sorted` operations.
 fn hash_pair_sorted(left: Felt, right: Felt) -> Felt {
     if left <= right {
         poseidon_hash_many(&[left, right])
@@ -44,6 +48,7 @@ fn hash_pair_sorted(left: Felt, right: Felt) -> Felt {
     }
 }
 
+// Internal helper that builds inputs for `build_merkle_tree_from_leaves`.
 fn build_merkle_tree_from_leaves(mut leaves: Vec<Felt>) -> Result<MerkleTree> {
     if leaves.is_empty() {
         return Err(crate::error::AppError::BadRequest(
@@ -84,6 +89,7 @@ fn build_merkle_tree_from_leaves(mut leaves: Vec<Felt>) -> Result<MerkleTree> {
     })
 }
 
+// Internal helper that supports `verify_merkle_proof` operations.
 fn verify_merkle_proof(root: Felt, leaf: Felt, proof: &[Felt]) -> bool {
     let mut current_hash = leaf;
 
@@ -101,6 +107,17 @@ pub struct MerkleGenerator {
 }
 
 impl MerkleGenerator {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self { db, config }
     }
@@ -111,6 +128,17 @@ impl MerkleGenerator {
             .await
     }
 
+    /// Builds inputs required by `generate_for_epoch_with_distribution`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn generate_for_epoch_with_distribution(
         &self,
         epoch: i64,
@@ -176,6 +204,17 @@ impl MerkleGenerator {
         Ok(tree)
     }
 
+    /// Handles `calculate_reward_amount_wei` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn calculate_reward_amount_wei(&self, user_points: Decimal, total_points: Decimal) -> u128 {
         self.calculate_reward_amount_wei_with_distribution(
             user_points,
@@ -184,6 +223,17 @@ impl MerkleGenerator {
         )
     }
 
+    /// Handles `calculate_reward_amount_wei_with_distribution` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn calculate_reward_amount_wei_with_distribution(
         &self,
         user_points: Decimal,
@@ -208,6 +258,17 @@ impl MerkleGenerator {
         build_merkle_tree_from_leaves(leaves)
     }
 
+    /// Builds inputs required by `generate_proof`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn generate_proof(
         &self,
         tree: &MerkleTree,
@@ -238,14 +299,37 @@ impl MerkleGenerator {
         Ok(proof)
     }
 
+    /// Handles `verify_proof` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn verify_proof(&self, root: Felt, leaf: Felt, proof: &[Felt]) -> bool {
         verify_merkle_proof(root, leaf, proof)
     }
 
+    // Internal helper that supports `default_distribution_pool` operations.
     fn default_distribution_pool(&self) -> Decimal {
         rewards_distribution_pool_for_environment(&self.config.environment)
     }
 
+    /// Updates state for `save_merkle_root`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn save_merkle_root(&self, epoch: i64, root: Felt) -> Result<()> {
         let root_hex = root.to_fixed_hex_string();
 
@@ -263,6 +347,17 @@ impl MerkleGenerator {
         Ok(())
     }
 
+    /// Fetches data for `get_merkle_root`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_merkle_root(&self, epoch: i64) -> Result<Felt> {
         let row = sqlx::query("SELECT root FROM merkle_roots WHERE epoch = $1")
             .bind(epoch)
@@ -289,6 +384,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that builds inputs for `create_leaf_hash_is_deterministic`.
     fn create_leaf_hash_is_deterministic() {
         // Memastikan hash leaf sama untuk input yang sama
         let a = create_leaf_hash("0xabc", 150_u128, 1).unwrap();
@@ -297,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that builds inputs for `build_merkle_tree_from_leaves_rejects_empty`.
     fn build_merkle_tree_from_leaves_rejects_empty() {
         // Memastikan tree tidak dibuat jika leaf kosong
         let result = build_merkle_tree_from_leaves(vec![]);
@@ -304,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `verify_merkle_proof_valid_for_two_leaves` operations.
     fn verify_merkle_proof_valid_for_two_leaves() {
         // Memastikan proof valid untuk tree sederhana
         let leaf_a = create_leaf_hash("0x1", 100_u128, 1).unwrap();

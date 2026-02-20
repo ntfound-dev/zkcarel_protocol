@@ -9,53 +9,33 @@ pub struct Escrow {
     pub vesting_duration: u64,
 }
 
-/// @title Rewards Escrow Interface
-/// @author CAREL Team
-/// @notice Defines vesting escrow entrypoints for rewards.
-/// @dev Supports linear vesting and emergency release.
+// Escrow API for vested reward payouts.
+// Supports normal linear release and owner-triggered emergency release.
 #[starknet::interface]
 pub trait IRewardsEscrow<TContractState> {
-    /// @notice Creates a new escrow for a user.
-    /// @dev Owner-only and requires escrow enabled.
-    /// @param user User address.
-    /// @param amount Total escrow amount.
+    // Creates a vesting position for `user` with `amount`.
     fn create_escrow(ref self: TContractState, user: ContractAddress, amount: u256);
-    /// @notice Releases vested tokens for a user.
-    /// @dev Callable by user or owner when enabled.
-    /// @param user User address.
+    // Releases currently vested tokens for `user`.
     fn release_vested(ref self: TContractState, user: ContractAddress);
-    /// @notice Returns releasable amount for a user.
-    /// @dev Read-only helper for UI.
-    /// @param user User address.
-    /// @return amount Releasable amount.
+    // Returns the amount currently releasable for `user`.
     fn get_releasable(self: @TContractState, user: ContractAddress) -> u256;
-    /// @notice Emergency release with penalty.
-    /// @dev Owner-only to handle exceptional cases.
-    /// @param user User address.
-    /// @return payout Amount released to user.
+    // Releases remaining escrow with penalty and clears position state.
     fn emergency_release(ref self: TContractState, user: ContractAddress) -> u256;
 }
 
-/// @title Rewards Escrow Admin Interface
-/// @author CAREL Team
-/// @notice Administrative controls for escrow enablement.
-/// @dev Owner-only to toggle escrow usage.
+// Owner-only operational controls.
 #[starknet::interface]
 pub trait IRewardsEscrowAdmin<TContractState> {
-    /// @notice Enables or disables escrow functionality.
-    /// @dev Owner-only to park or activate escrow.
-    /// @param enabled Enable flag.
+    // Enables or disables escrow actions.
     fn set_enabled(ref self: TContractState, enabled: bool);
 }
 
-/// @title Rewards Escrow Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for rewards escrow.
+// Hide Mode hooks for rewards actions through the privacy router.
 #[starknet::interface]
 pub trait IRewardsEscrowPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets the privacy router used for private rewards actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private rewards escrow action proof.
+    // Forwards a nullifier/commitment-bound rewards payload to the router.
     fn submit_private_rewards_action(
         ref self: TContractState,
         old_root: felt252,
@@ -67,24 +47,16 @@ pub trait IRewardsEscrowPrivacy<TContractState> {
     );
 }
 
-/// @title ERC20 Minimal Interface
-/// @author CAREL Team
-/// @notice Minimal ERC20 transfer interface for escrow payouts.
-/// @dev Used to transfer vested tokens.
+// Minimal ERC20 transfer interface for escrow payouts.
+// Used to transfer vested tokens.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
-    /// @notice Transfers tokens to a recipient.
-    /// @dev Used for vested and emergency payouts.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Transfers tokens from this contract to a recipient.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
 }
 
-/// @title Rewards Escrow Contract
-/// @author CAREL Team
-/// @notice Holds reward escrows with linear vesting.
-/// @dev Can be parked via admin toggle.
+// Holds reward escrows and handles vesting-based token release.
+// Contract starts disabled and is enabled by owner when configured.
 #[starknet::contract]
 pub mod RewardsEscrow {
     use starknet::ContractAddress;
@@ -150,10 +122,7 @@ pub mod RewardsEscrow {
         pub enabled: bool,
     }
 
-    /// @notice Initializes the rewards escrow.
-    /// @dev Sets admin, token address, and disabled state.
-    /// @param admin Owner/admin address.
-    /// @param token ERC20 token address for payouts.
+    // Initializes owner and payout token, with escrow disabled by default.
     #[constructor]
     fn constructor(ref self: ContractState, admin: ContractAddress, token: ContractAddress) {
         self.ownable.initializer(admin);
@@ -163,10 +132,8 @@ pub mod RewardsEscrow {
 
     #[abi(embed_v0)]
     impl RewardsEscrowImpl of super::IRewardsEscrow<ContractState> {
-        /// @notice Creates a new escrow for a user.
-        /// @dev Owner-only and requires escrow enabled.
-        /// @param user User address.
-        /// @param amount Total escrow amount.
+        // Creates one escrow position per user with a fixed 30-day vesting period.
+        // Only owner can create and contract must be enabled.
         fn create_escrow(ref self: ContractState, user: ContractAddress, amount: u256) {
             assert!(self.enabled.read(), "Escrow not enabled");
             self.ownable.assert_only_owner();
@@ -185,10 +152,7 @@ pub mod RewardsEscrow {
             self.emit(Event::EscrowCreated(EscrowCreated { user, amount }));
         }
 
-        /// @notice Returns releasable amount for a user.
-        /// @dev Read-only helper for UI.
-        /// @param user User address.
-        /// @return amount Releasable amount.
+        // Computes vested-but-unreleased amount using linear vesting over time.
         fn get_releasable(self: @ContractState, user: ContractAddress) -> u256 {
             let escrow = self.escrows.entry(user).read();
             if escrow.total_amount == 0 {
@@ -210,9 +174,8 @@ pub mod RewardsEscrow {
             vested_amount - escrow.released_amount
         }
 
-        /// @notice Releases vested tokens for a user.
-        /// @dev Callable by user or owner when enabled.
-        /// @param user User address.
+        // Releases currently vested tokens to `user`.
+        // Callable by the user or owner for operational recovery.
         fn release_vested(ref self: ContractState, user: ContractAddress) {
             assert!(self.enabled.read(), "Escrow not enabled");
             let caller = get_caller_address();
@@ -234,10 +197,8 @@ pub mod RewardsEscrow {
             self.emit(Event::Released(Released { user, amount: releasable }));
         }
 
-        /// @notice Emergency release with penalty.
-        /// @dev Owner-only to handle exceptional cases.
-        /// @param user User address.
-        /// @return payout Amount released to user.
+        // Owner emergency path: release remaining escrow with a 10% penalty.
+        // Escrow state is zeroed after payout.
         fn emergency_release(ref self: ContractState, user: ContractAddress) -> u256 {
             assert!(self.enabled.read(), "Escrow not enabled");
             self.ownable.assert_only_owner();
@@ -249,7 +210,7 @@ pub mod RewardsEscrow {
             let penalty = (remaining_balance * 10) / 100;
             let payout = remaining_balance - penalty;
 
-            // Bersihkan state escrow setelah penarikan darurat
+            // Clear escrow so the position cannot be released again.
             let cleared_escrow = Escrow {
                 user: escrow.user,
                 total_amount: 0,
@@ -270,12 +231,15 @@ pub mod RewardsEscrow {
 
     #[abi(embed_v0)]
     impl RewardsEscrowPrivacyImpl of super::IRewardsEscrowPrivacy<ContractState> {
+        // Configures the privacy router for Hide Mode rewards actions.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Sends private rewards payload to privacy router for proof verification and execution.
+        // `nullifiers` enforce one-time use and `commitments` bind intended action data.
         fn submit_private_rewards_action(
             ref self: ContractState,
             old_root: felt252,
@@ -302,9 +266,7 @@ pub mod RewardsEscrow {
 
     #[abi(embed_v0)]
     impl RewardsEscrowAdminImpl of super::IRewardsEscrowAdmin<ContractState> {
-        /// @notice Enables or disables escrow functionality.
-        /// @dev Owner-only to park or activate escrow.
-        /// @param enabled Enable flag.
+        // Toggles escrow functionality without redeploying the contract.
         fn set_enabled(ref self: ContractState, enabled: bool) {
             self.ownable.assert_only_owner();
             self.enabled.write(enabled);

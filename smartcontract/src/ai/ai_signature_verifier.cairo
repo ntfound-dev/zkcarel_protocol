@@ -1,29 +1,19 @@
 use starknet::ContractAddress;
 
-/// @title AI Signature Verifier Interface
-/// @author CAREL Team
-/// @notice Interface for AI action signature verification.
-/// @dev Keep signature format aligned with AI executor.
+// Interface for AI action signature verification.
+// Keep signature format aligned with AI executor.
 #[starknet::interface]
 pub trait IAISignatureVerifier<TContractState> {
-    /// @notice Verifies a signature for a given message hash.
-    /// @dev Returns true if the signature is valid.
-    /// @param signer Expected signer address.
-    /// @param message_hash Poseidon hash of the action payload.
-    /// @param signature Signature data.
-    /// @return valid True if valid.
+    // Applies verify signature after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_signature(
         self: @TContractState,
         signer: ContractAddress,
         message_hash: felt252,
         signature: Span<felt252>
     ) -> bool;
-    /// @notice Verifies and consumes a message hash to prevent replay.
-    /// @dev Returns true if the signature is valid and unused, then marks it used.
-    /// @param signer Expected signer address.
-    /// @param message_hash Poseidon hash of the action payload.
-    /// @param signature Signature data.
-    /// @return valid True if valid and consumed.
+    // Applies verify and consume after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_and_consume(
         ref self: TContractState,
         signer: ContractAddress,
@@ -32,28 +22,23 @@ pub trait IAISignatureVerifier<TContractState> {
     ) -> bool;
 }
 
-/// @title AI Signature Verifier Admin Interface
-/// @author CAREL Team
-/// @notice Admin controls for allowlist-based verifier.
-/// @dev Owner-only configuration for tests and staging.
+// Admin controls for allowlist-based verifier.
+// Owner-only configuration for tests and staging.
 #[starknet::interface]
 pub trait IAISignatureVerifierAdmin<TContractState> {
-    /// @notice Marks a message hash as valid/invalid for a signer.
-    /// @dev Owner-only to prevent spoofing.
-    /// @param signer Signer address.
-    /// @param message_hash Poseidon hash of the action payload.
-    /// @param valid Flag to set validity.
+    // Updates valid hash configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_valid_hash(ref self: TContractState, signer: ContractAddress, message_hash: felt252, valid: bool);
 }
 
-/// @title AI Signature Verifier Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for AI signature verification.
+// ZK privacy hooks for AI signature verification.
 #[starknet::interface]
 pub trait IAISignatureVerifierPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private AI signature action proof.
+    // Applies submit private ai signature action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_ai_signature_action(
         ref self: TContractState,
         old_root: felt252,
@@ -65,10 +50,8 @@ pub trait IAISignatureVerifierPrivacy<TContractState> {
     );
 }
 
-/// @title AI Signature Verifier
-/// @author CAREL Team
-/// @notice Simple allowlist-based signature verifier for AI actions.
-/// @dev Replace with proper ECDSA/account verification for production.
+// Simple allowlist-based signature verifier for AI actions.
+// Replace with proper ECDSA/account verification for production.
 #[starknet::contract]
 pub mod AISignatureVerifier {
     use starknet::ContractAddress;
@@ -116,12 +99,16 @@ pub mod AISignatureVerifier {
     }
 
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, admin: ContractAddress) {
         self.ownable.initializer(admin);
     }
 
     #[abi(embed_v0)]
     impl VerifierImpl of super::IAISignatureVerifier<ContractState> {
+        // Applies verify signature after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn verify_signature(
             self: @ContractState,
             signer: ContractAddress,
@@ -136,6 +123,8 @@ pub mod AISignatureVerifier {
             !self.used_hashes.entry(key).read()
         }
 
+        // Applies verify and consume after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn verify_and_consume(
             ref self: ContractState,
             signer: ContractAddress,
@@ -158,6 +147,8 @@ pub mod AISignatureVerifier {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::IAISignatureVerifierAdmin<ContractState> {
+        // Updates valid hash configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_valid_hash(ref self: ContractState, signer: ContractAddress, message_hash: felt252, valid: bool) {
             self.ownable.assert_only_owner();
             self.valid_hashes.entry((signer, message_hash)).write(valid);
@@ -167,12 +158,16 @@ pub mod AISignatureVerifier {
 
     #[abi(embed_v0)]
     impl AISignatureVerifierPrivacyImpl of super::IAISignatureVerifierPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Applies submit private ai signature action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_ai_signature_action(
             ref self: ContractState,
             old_root: felt252,

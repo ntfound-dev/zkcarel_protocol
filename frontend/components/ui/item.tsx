@@ -5,6 +5,15 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 import { Separator } from '@/components/ui/separator'
 
+/**
+ * Handles `ItemGroup` logic.
+ *
+ * @param className - Input used by `ItemGroup` to compute state, payload, or request behavior.
+ * @param props - Input used by `ItemGroup` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemGroup({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -16,6 +25,12 @@ function ItemGroup({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `ItemSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemSeparator({
   className,
   ...props
@@ -51,6 +66,12 @@ const itemVariants = cva(
   },
 )
 
+/**
+ * Handles `Item` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Item({
   className,
   variant = 'default',
@@ -88,6 +109,12 @@ const itemMediaVariants = cva(
   },
 )
 
+/**
+ * Handles `ItemMedia` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemMedia({
   className,
   variant = 'default',
@@ -103,6 +130,15 @@ function ItemMedia({
   )
 }
 
+/**
+ * Handles `ItemContent` logic.
+ *
+ * @param className - Input used by `ItemContent` to compute state, payload, or request behavior.
+ * @param props - Input used by `ItemContent` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemContent({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -116,6 +152,15 @@ function ItemContent({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `ItemTitle` logic.
+ *
+ * @param className - Input used by `ItemTitle` to compute state, payload, or request behavior.
+ * @param props - Input used by `ItemTitle` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemTitle({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -129,6 +174,15 @@ function ItemTitle({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `ItemDescription` logic.
+ *
+ * @param className - Input used by `ItemDescription` to compute state, payload, or request behavior.
+ * @param props - Input used by `ItemDescription` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemDescription({ className, ...props }: React.ComponentProps<'p'>) {
   return (
     <p
@@ -143,6 +197,15 @@ function ItemDescription({ className, ...props }: React.ComponentProps<'p'>) {
   )
 }
 
+/**
+ * Handles `ItemActions` logic.
+ *
+ * @param className - Input used by `ItemActions` to compute state, payload, or request behavior.
+ * @param props - Input used by `ItemActions` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemActions({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -153,6 +216,15 @@ function ItemActions({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `ItemHeader` logic.
+ *
+ * @param className - Input used by `ItemHeader` to compute state, payload, or request behavior.
+ * @param props - Input used by `ItemHeader` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -166,6 +238,15 @@ function ItemHeader({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `ItemFooter` logic.
+ *
+ * @param className - Input used by `ItemFooter` to compute state, payload, or request behavior.
+ * @param props - Input used by `ItemFooter` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ItemFooter({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div

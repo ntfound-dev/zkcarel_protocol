@@ -2,6 +2,15 @@ import { cva, type VariantProps } from 'class-variance-authority'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Empty` logic.
+ *
+ * @param className - Input used by `Empty` to compute state, payload, or request behavior.
+ * @param props - Input used by `Empty` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Empty({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -15,6 +24,15 @@ function Empty({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `EmptyHeader` logic.
+ *
+ * @param className - Input used by `EmptyHeader` to compute state, payload, or request behavior.
+ * @param props - Input used by `EmptyHeader` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function EmptyHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -43,6 +61,12 @@ const emptyMediaVariants = cva(
   },
 )
 
+/**
+ * Handles `EmptyMedia` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function EmptyMedia({
   className,
   variant = 'default',
@@ -58,6 +82,15 @@ function EmptyMedia({
   )
 }
 
+/**
+ * Handles `EmptyTitle` logic.
+ *
+ * @param className - Input used by `EmptyTitle` to compute state, payload, or request behavior.
+ * @param props - Input used by `EmptyTitle` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function EmptyTitle({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -68,6 +101,15 @@ function EmptyTitle({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `EmptyDescription` logic.
+ *
+ * @param className - Input used by `EmptyDescription` to compute state, payload, or request behavior.
+ * @param props - Input used by `EmptyDescription` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function EmptyDescription({ className, ...props }: React.ComponentProps<'p'>) {
   return (
     <div
@@ -81,6 +123,15 @@ function EmptyDescription({ className, ...props }: React.ComponentProps<'p'>) {
   )
 }
 
+/**
+ * Handles `EmptyContent` logic.
+ *
+ * @param className - Input used by `EmptyContent` to compute state, payload, or request behavior.
+ * @param props - Input used by `EmptyContent` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function EmptyContent({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div

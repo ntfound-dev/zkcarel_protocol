@@ -24,6 +24,12 @@ type ChartContextProps = {
 
 const ChartContext = React.createContext<ChartContextProps | null>(null)
 
+/**
+ * Exposes `useChart` as a reusable hook.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function useChart() {
   const context = React.useContext(ChartContext)
 
@@ -34,6 +40,12 @@ function useChart() {
   return context
 }
 
+/**
+ * Handles `ChartContainer` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ChartContainer({
   id,
   className,
@@ -69,6 +81,15 @@ function ChartContainer({
   )
 }
 
+/**
+ * Handles `ChartStyle` logic.
+ *
+ * @param id - Input used by `ChartStyle` to compute state, payload, or request behavior.
+ * @param config - Input used by `ChartStyle` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   const colorConfig = Object.entries(config).filter(
     ([, config]) => config.theme || config.color,
@@ -104,6 +125,12 @@ ${colorConfig
 
 const ChartTooltip = RechartsPrimitive.Tooltip
 
+/**
+ * Handles `ChartTooltipContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ChartTooltipContent({
   active,
   payload,
@@ -250,6 +277,12 @@ function ChartTooltipContent({
 
 const ChartLegend = RechartsPrimitive.Legend
 
+/**
+ * Handles `ChartLegendContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ChartLegendContent({
   className,
   hideIcon = false,

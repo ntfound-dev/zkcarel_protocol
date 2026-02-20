@@ -1,501 +1,418 @@
-# CAREL Backend (Rust)
+# CAREL Backend (Rust + Axum)
+This README documents backend architecture, configuration, API surface, workers, and deployment paths used by CAREL Protocol.
 
-This backend is built with Rust + Axum for HTTP APIs and WebSocket. PostgreSQL is used for primary data storage, Redis for cache/session, and multiple background services run on startup.
+## Table of Contents
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Environment Variables](#environment-variables)
+  - [Required - Boot](#required---boot)
+  - [Required - On-chain Integration](#required---on-chain-integration)
+  - [Hide Mode / Privacy](#hide-mode--privacy)
+  - [AI and Rate Limiting](#ai-and-rate-limiting)
+  - [Bridge Providers](#bridge-providers)
+  - [Price Feeds](#price-feeds)
+  - [Optional Features](#optional-features)
+  - [Optional Dev/Debug](#optional-devdebug)
+- [Current Sepolia Wiring](#current-sepolia-wiring)
+- [API Endpoints by Domain](#api-endpoints-by-domain)
+- [Background Services](#background-services)
+- [Docker](#docker)
+- [Operational Constraints](#operational-constraints)
 
-## README Scope
-- Dokumen ini fokus ke **teknis backend**: API, service, config, deployment, observability, troubleshooting.
-- Untuk konteks produk, business model, dan roadmap level monorepo, lihat `README.md` di root.
+## Architecture
+- Framework: Axum + Tokio.
+- Storage: PostgreSQL (`sqlx`) + Redis.
+- Chain integrations: Starknet Sepolia, Ethereum Sepolia, BTC testnet (provider-dependent).
+- Runtime responsibilities:
+  - API for auth, trading, privacy, rewards, social, AI, and game flows.
+  - Relayer path for Hide Mode (`swap`, `limit order`, `stake`).
+  - Background workers for indexing, prices, points, and order execution.
 
-**Architecture Summary**
-- **HTTP API (Axum)**: Auth, swap, bridge, limit order, staking, portfolio, rewards, NFT, referral, social, faucet, deposit, notifications, transactions, charts, webhooks, AI.
-- **WebSocket**: `notifications`, `prices`, `orders`.
-- **Background Services**: event indexer, point calculator, price updater, limit order executor, snapshot/merkle job (optional).
-- **Storage**: PostgreSQL (primary), Redis (notif/session pool).
-- **Integrations**: Starknet/EVM RPC via HTTP, DEX/bridge aggregator (mock/heuristic in services).
-
-**Folder Structure**
-- `src/api`: HTTP handlers.
-- `src/services`: business logic/background jobs.
-- `src/indexer`: Starknet RPC + event parsing.
-- `src/integrations`: third‑party integrations (bridge, etc).
-- `src/models`: DTO + DB models.
-- `src/websocket`: WS handlers.
-- `migrations`: SQL schema/migrations.
-
-**Main Flow**
-1. `main.rs` loads config → connects DB → runs migrations → initializes Redis → builds router → starts background services → serves HTTP/WS.
-2. Background services run in parallel (indexer, point calculator, price updater, limit order executor).
-3. WebSocket streams push data to clients (notif/prices/orders).
-
-**Configuration (.env)**
-Required (minimum to boot API):
-- `DATABASE_URL`
-- `STARKNET_RPC_URL`
-- `ETHEREUM_RPC_URL`
-- `BACKEND_PRIVATE_KEY`, `BACKEND_PUBLIC_KEY`
-- `JWT_SECRET`
-
-Required for full on-chain integration (use placeholders for local-only dev):
-- `CAREL_TOKEN_ADDRESS`
-- `SNAPSHOT_DISTRIBUTOR_ADDRESS`
-- `POINT_STORAGE_ADDRESS`
-- `PRICE_ORACLE_ADDRESS`
-- `LIMIT_ORDER_BOOK_ADDRESS`
-- `AI_EXECUTOR_ADDRESS`
-- `BRIDGE_AGGREGATOR_ADDRESS`
-- `ZK_PRIVACY_ROUTER_ADDRESS`
-- `PRIVATE_BTC_SWAP_ADDRESS`
-- `DARK_POOL_ADDRESS`
-- `PRIVATE_PAYMENTS_ADDRESS`
-- `ANONYMOUS_CREDENTIALS_ADDRESS`
-
-Optional (defaults apply if empty):
-- `JWT_EXPIRY_HOURS`
-- `FAUCET_*` (amount/cooldown/private key)
-- `OPENAI_API_KEY`, `TWITTER_BEARER_TOKEN`, `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`
-- `GEMINI_API_KEY` (Google Gemini API key)
-- `GEMINI_API_URL` (default: `https://generativelanguage.googleapis.com/v1beta`)
-- `GEMINI_MODEL` (default: `gemini-2.0-flash`)
-- `AI_RATE_LIMIT_WINDOW_SECONDS` (default: `60`)
-- `AI_RATE_LIMIT_GLOBAL_PER_WINDOW` (default: `40`)
-- `AI_RATE_LIMIT_LEVEL_1_PER_WINDOW` (default: `20`)
-- `AI_RATE_LIMIT_LEVEL_2_PER_WINDOW` (default: `10`)
-- `AI_RATE_LIMIT_LEVEL_3_PER_WINDOW` (default: `8`)
-- `POINT_CALCULATOR_BATCH_SIZE` (default: `500`, jumlah transaksi per batch saat kalkulasi points)
-- `POINT_CALCULATOR_MAX_BATCHES_PER_TICK` (default: `20`, jumlah batch maksimum per interval worker)
-- `PRIVACY_ROUTER_ADDRESS`
-- `POINT_STORAGE_ADDRESS` (enables on-chain points→CAREL conversion)
-- `STAKING_CAREL_ADDRESS` (optional, enables on-chain stake deposit/withdraw + position reads)
-- `DISCOUNT_SOULBOUND_ADDRESS` (optional, enables on-chain NFT mint/discount reads)
-- `TREASURY_ADDRESS` (optional, uses on-chain treasury balance as total distribution)
-- `REFERRAL_SYSTEM_ADDRESS` (optional, enables on-chain referral syncing)
-- `PRIVATE_BTC_SWAP_ADDRESS`, `DARK_POOL_ADDRESS`, `PRIVATE_PAYMENTS_ADDRESS`, `ANONYMOUS_CREDENTIALS_ADDRESS`
-- `BRIDGE_PROVIDER_IDS` (map provider -> felt id)
-  Example: `LayerSwap:0x4c535750,Atomiq:0x41544d51,Garden:0x47415244,StarkGate:0x53544754`
-- `ORACLE_ASSET_IDS` (map token -> Pragma pair id for `TOKEN/USD`)
-  Example: `BTC:18669995996566340,ETH:19514442401534788,STRK:6004514686061859652,USDT:6148333044652921668,USDC:6148332971638477636,CAREL:0`
-  - `CAREL:0` berarti skip Pragma dan gunakan fallback price di `PriceOracle`.
-- `PRICE_TOKENS` (list token untuk price updater, default: `BTC,ETH,STRK,CAREL,USDT,USDC`)
-- `COINGECKO_API_URL` (default `https://api.coingecko.com/api/v3`)
-- `COINGECKO_API_KEY` (opsional; pakai header `x-cg-demo-api-key`)
-- `COINGECKO_IDS` (map symbol -> CoinGecko id)
-  Example: `BTC:bitcoin,ETH:ethereum,STRK:starknet,USDT:tether,USDC:usd-coin`
-- `LAYERSWAP_API_KEY`, `LAYERSWAP_API_URL`
-- `ATOMIQ_API_KEY`, `ATOMIQ_API_URL`
-- `GARDEN_APP_ID` (preferred) or `GARDEN_API_KEY` (legacy alias), `GARDEN_API_URL`
-  - `GARDEN_APP_ID` is sent as header `garden-app-id` for Garden auth.
-  - `GARDEN_API_URL` is the Garden base endpoint (ex: `https://testnet.api.garden.finance`).
-- `SUMO_LOGIN_API_KEY`, `SUMO_LOGIN_API_URL`
-- `XVERSE_API_KEY`, `XVERSE_API_URL`
-- `PRIVACY_VERIFIER_ROUTERS` (map verifier -> router address)
-- `PRIVACY_AUTO_GARAGA_PROVER_CMD` (wajib; prover command per-request, baca JSON dari stdin, output JSON berisi `nullifier`, `commitment`, `proof[]`, `public_inputs[]`)
-- `PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS` (timeout command prover, default `45000`)
-- `GARAGA_PROVE_CMD` (wajib; command prover real yang dijalankan oleh script bridge per request)
-- `GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX` + `GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX` (default `0` + `1`, harus match urutan public input circuit)
-- `GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX` (default `2`, dipakai flow hide executor untuk bind intent hash)
-- `BATTLESHIP_GARAGA_ADDRESS` (opsional; alamat kontrak `BattleshipGaraga` untuk target integrasi on-chain mode game)
-- `PRIVATE_ACTION_EXECUTOR_ADDRESS` (opsional tapi direkomendasikan; alamat hide executor on-chain: `PrivateActionExecutor` v1 atau `ShieldedPoolV2`)
-- `HIDE_BALANCE_EXECUTOR_KIND` (default `private_action_executor_v1`; set `shielded_pool_v2` jika executor yang dipakai adalah `ShieldedPoolV2`)
-- `HIDE_BALANCE_RELAYER_POOL_ENABLED` (default `true`; berlaku untuk hide-mode `swap` + `limit order` + `stake` via backend relayer/pool, tanpa `onchain_tx_hash` dari wallet user)
-- `STAKING_STABLECOIN_ADDRESS` (opsional tapi direkomendasikan; target staking relayer untuk `USDC/USDT/STRK`)
-- `STAKING_BTC_ADDRESS` (opsional tapi direkomendasikan; target staking relayer untuk `WBTC`)
-- `SOCIAL_TASKS_JSON` (dynamic social task catalog tanpa ubah frontend)
-  Example:
-  ```json
-  [
-    { "id": "twitter_follow", "title": "X: Follow", "description": "Follow official X", "points": 5, "provider": "twitter" },
-    { "id": "telegram_join_channel", "points": 5, "provider": "telegram" }
-  ]
-  ```
-- `ADMIN_MANUAL_KEY` (aktifkan endpoint manual reset points)
-- `DEV_WALLET_ADDRESS` (wajib untuk verifikasi rename display-name berbayar 1 CAREL)
-- `SWAP_CONTRACT_EVENT_ONLY` (`1/true` untuk memblokir `/swap/quote` dan `/swap/execute` jika kontrak swap masih event-only)
-- `STARKNET_SWAP_CONTRACT_ADDRESS` harus menunjuk kontrak swap real (interface `get_best_swap_route` + `execute_swap`) untuk flow wallet `approve + execute_swap`.
-  - `/api/v1/swap/quote` sekarang mengembalikan `onchain_calls` siap-sign wallet (multicall `approve` lalu `execute_swap`).
-  - Jika kontrak aggregator belum punya DEX router aktif/oracle quote, `/swap/quote` akan gagal dengan pesan konfigurasi aggregator belum siap.
-  Example: `garaga:0x...,tongo:0x...,semaphore:0x...`
-- `STRIPE_SECRET_KEY`, `MOONPAY_API_KEY`
-- `RUN_EPOCH_JOBS`, `USE_STARKNET_RPC`, `USE_BLOCK_PROCESSOR`, `INDEXER_DIAGNOSTICS`
-
-Testnet template:
-- Copy `.env.testnet.example` and fill deployed contract addresses + keys.
-- Hide Balance supports 2 modes:
-  - Dev shared mode: team pakai `garaga_payload.json` + dynamic binding (mudah dipakai semua developer).
-  - Strict production mode: prover real per-request (tanpa fallback static payload).
-- Relayer/pool mode: backend submit call hide executor dari akun relayer, bukan dari wallet user (`swap|limit|stake`).
-  - `PrivateActionExecutor` v1: `submit_private_intent + execute_private_*`
-  - `ShieldedPoolV2`: `submit_private_action + execute_private_*`
-
-Current Sepolia wiring used by this repo (latest):
-- `PRIVATE_ACTION_EXECUTOR_ADDRESS=0x07e18b8314a17989a74ba12e6a68856a9e4791ce254d8491ad2b4addc7e5bf8e`
-- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2`
-- `ZK_PRIVACY_ROUTER_ADDRESS=0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f`
-- `BATTLESHIP_GARAGA_ADDRESS=0x04ea26d455d6d79f185a728ac59cac029a6a5bf2a3ca3b4b75f04b4e8c267dd2`
-- `STARKNET_SWAP_CONTRACT_ADDRESS=0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28`
-- `LIMIT_ORDER_BOOK_ADDRESS=0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a`
-- `STAKING_CAREL_ADDRESS=0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb`
-- `STAKING_STABLECOIN_ADDRESS=0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff`
-- `STAKING_BTC_ADDRESS=0x030098330968d105bf0a0068011b3f166e595582828dbbfaf8e5e204420b1f3b`
-
-One-click auto prover command (dev shared mode):
+## Quick Start
 ```bash
-# backend-rust/.env
+# terminal 1
+cd backend-rust
+cargo run
+```
+
+For full demo setup, use [`../DEMO.md`](../DEMO.md).
+
+## Environment Variables
+
+### Required - Boot
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `HOST` | No | `0.0.0.0` | Bind host |
+| `PORT` | No | `3000` | API port |
+| `ENVIRONMENT` | No | `development` | Runtime mode (`development`, `testnet`, etc.) |
+| `DATABASE_URL` | Yes | None | PostgreSQL DSN |
+| `DATABASE_MAX_CONNECTIONS` | No | `100` | SQL pool size |
+| `REDIS_URL` | No | `redis://localhost:6379` | Redis endpoint |
+| `STARKNET_RPC_URL` | Yes | None | Base Starknet RPC |
+| `STARKNET_CHAIN_ID` | No | `SN_MAIN` | Chain id (`SN_SEPOLIA` for current testnet wiring) |
+| `ETHEREUM_RPC_URL` | Yes | None | EVM RPC endpoint |
+| `BACKEND_PRIVATE_KEY` | Yes | None | Relayer signer private key |
+| `BACKEND_PUBLIC_KEY` | Yes | None | Relayer signer public key |
+| `BACKEND_ACCOUNT_ADDRESS` | No | Derived fallback | Explicit Starknet account address override |
+| `JWT_SECRET` | Yes | None | JWT signing secret |
+| `JWT_EXPIRY_HOURS` | No | `24` | JWT TTL |
+| `CORS_ALLOWED_ORIGINS` | No | `*` | CORS allowlist |
+
+### Required - On-chain Integration
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `CAREL_TOKEN_ADDRESS` | Yes | None | CAREL ERC20 |
+| `SNAPSHOT_DISTRIBUTOR_ADDRESS` | Yes | None | Rewards distributor |
+| `POINT_STORAGE_ADDRESS` | Yes | None | Points storage/convert contract |
+| `PRICE_ORACLE_ADDRESS` | Yes | None | Oracle contract |
+| `LIMIT_ORDER_BOOK_ADDRESS` | Yes | None | Limit order book contract |
+| `AI_EXECUTOR_ADDRESS` | Yes | None | AI executor contract |
+| `BRIDGE_AGGREGATOR_ADDRESS` | Yes | None | Bridge aggregator contract |
+| `ZK_PRIVACY_ROUTER_ADDRESS` | Yes | None | V1 privacy router |
+| `PRIVATE_BTC_SWAP_ADDRESS` | Yes | None | Private BTC swap contract |
+| `DARK_POOL_ADDRESS` | Yes | None | Dark pool contract |
+| `PRIVATE_PAYMENTS_ADDRESS` | Yes | None | Private payments contract |
+| `ANONYMOUS_CREDENTIALS_ADDRESS` | Yes | None | Anonymous credentials contract |
+| `STARKNET_SWAP_CONTRACT_ADDRESS` | Required for live swap execute | Empty | Swap execution contract |
+| `SWAP_AGGREGATOR_ADDRESS` | No | Empty | Alias/fallback for swap contract |
+| `CAREL_PROTOCOL_ADDRESS` | No | Empty | Legacy event-only protocol contract reference |
+| `PRIVATE_ACTION_EXECUTOR_ADDRESS` | Required for Hide Mode | Empty | `PrivateActionExecutor/ShieldedPoolV2` |
+| `HIDE_BALANCE_EXECUTOR_KIND` | No | `private_action_executor_v1` | Set `shielded_pool_v2` for current Sepolia wiring |
+| `HIDE_BALANCE_RELAYER_POOL_ENABLED` | No | `true` | Enables relayer pool path for hide-mode flows |
+| `PRIVACY_ROUTER_ADDRESS` | No | Empty | Optional V2 privacy router |
+| `BATTLESHIP_GARAGA_ADDRESS` | No | Empty | Battleship on-chain target |
+| `BATTLESHIP_CONTRACT_ADDRESS` | No | Empty | Legacy alias for Battleship address |
+| `STAKING_CAREL_ADDRESS` | No | Empty | CAREL staking pool |
+| `STAKING_STABLECOIN_ADDRESS` | No | Empty | Stablecoin staking pool |
+| `STAKING_BTC_ADDRESS` | No | Empty | BTC/WBTC staking pool |
+| `DISCOUNT_SOULBOUND_ADDRESS` | No | Empty | Discount NFT contract |
+| `TREASURY_ADDRESS` | No | Empty | Treasury contract |
+| `REFERRAL_SYSTEM_ADDRESS` | No | Empty | Referral contract |
+| `AI_SIGNATURE_VERIFIER_ADDRESS` | No | Empty | Optional signature gate for AI action prep |
+
+### Hide Mode / Privacy
+Key variables:
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `PRIVACY_AUTO_GARAGA_PROVER_CMD` | Yes for one-click hide flow | Auto-detected if script exists | Command used to generate payload per request |
+| `PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS` | No | `45000` | Timeout for prover command |
+| `PRIVACY_AUTO_GARAGA_PAYLOAD_FILE` | No | Auto-detected if present | Static payload fallback source |
+| `PRIVACY_AUTO_GARAGA_PROOF_FILE` | No | Empty | Standalone proof JSON path |
+| `PRIVACY_AUTO_GARAGA_PUBLIC_INPUTS_FILE` | No | Empty | Standalone public inputs JSON path |
+| `PRIVACY_VERIFIER_ROUTERS` | No | Empty | Mapping `verifier:router` |
+| `GARAGA_PRECOMPUTED_PAYLOAD_PATH` | No | Empty | Precomputed payload JSON for shared dev mode |
+| `GARAGA_ALLOW_PRECOMPUTED_PAYLOAD` | No | `false` | Explicitly allow precomputed payload usage |
+| `GARAGA_DYNAMIC_BINDING` | No | `false` | Rebind nullifier/commitment per request |
+| `GARAGA_PROVE_CMD` | Required in strict mode | Empty | Real prover command |
+| `GARAGA_VK_PATH` | Required in strict mode | Empty | Verification key JSON |
+| `GARAGA_PROOF_PATH` | Required in strict mode | Empty | Proof JSON output/input path |
+| `GARAGA_PUBLIC_INPUTS_PATH` | Conditional | Empty | Public input JSON path |
+| `GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX` | No | `0` | Public input index for nullifier |
+| `GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX` | No | `1` | Public input index for commitment |
+| `GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX` | No | `2` | Public input index for intent hash binding |
+| `GARAGA_TIMEOUT_SECS` | No | `45` | Timeout used by auto prover script |
+| `GARAGA_UVX_CMD` | No | `uvx --python 3.10` | CLI launcher used by script |
+| `GARAGA_SYSTEM` | No | `groth16` | Proof system mode in script |
+| `GARAGA_OUTPUT_DIR` | No | `/tmp/garaga_auto_prover` | Working dir for generated artifacts |
+| `GARAGA_REAL_PROVER_CMD` | No | Empty | Optional wrapper for external real prover |
+| `GARAGA_REAL_PROVER_TIMEOUT_SECS` | No | `180` | Timeout for `garaga_prove_static.py` wrapper |
+
+Dev shared mode example:
+```bash
 PRIVACY_AUTO_GARAGA_PROVER_CMD="python3 scripts/garaga_auto_prover.py"
 PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS=45000
-HIDE_BALANCE_RELAYER_POOL_ENABLED=true
+PRIVATE_ACTION_EXECUTOR_ADDRESS=0x07e18b8314a17989a74ba12e6a68856a9e4791ce254d8491ad2b4addc7e5bf8e
 HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2
+HIDE_BALANCE_RELAYER_POOL_ENABLED=true
 GARAGA_PRECOMPUTED_PAYLOAD_PATH=garaga_payload.json
 GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=true
 GARAGA_DYNAMIC_BINDING=true
-GARAGA_PROVE_CMD=
 GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX=0
 GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX=1
+GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 ```
 
-One-click auto prover command (strict real per-request mode):
+Strict production mode example:
 ```bash
-# backend-rust/.env
 PRIVACY_AUTO_GARAGA_PROVER_CMD="python3 scripts/garaga_auto_prover.py"
 PRIVACY_AUTO_GARAGA_PROVER_TIMEOUT_MS=45000
-
-# Script input/output paths
-GARAGA_VK_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_vk_bls12381.json
-GARAGA_PROOF_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_proof_bls12381.json
-GARAGA_PUBLIC_INPUTS_PATH=/home/frend/.cache/uv/archive-v0/2CAwRqVRwTyQG0W0y5eWE/lib/python3.10/site-packages/garaga/starknet/groth16_contract_generator/examples/snarkjs_public_bls12381.json
+PRIVATE_ACTION_EXECUTOR_ADDRESS=0x07e18b8314a17989a74ba12e6a68856a9e4791ce254d8491ad2b4addc7e5bf8e
+HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2
+HIDE_BALANCE_RELAYER_POOL_ENABLED=true
 GARAGA_PRECOMPUTED_PAYLOAD_PATH=
 GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=false
-GARAGA_PROVE_CMD="python3 /abs/path/to/your_real_prover.py"
+GARAGA_DYNAMIC_BINDING=false
+GARAGA_PROVE_CMD="python3 /abs/path/to/real_prover.py"
+GARAGA_VK_PATH=/abs/path/vk.json
+GARAGA_PROOF_PATH=/tmp/zkcare_garaga/proof.json
+GARAGA_PUBLIC_INPUTS_PATH=/tmp/zkcare_garaga/public_inputs.json
 GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX=0
 GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX=1
-```
-`GARAGA_PROVE_CMD` menerima env:
-- `GARAGA_CONTEXT_PATH` (JSON context request dari frontend/backend)
-- `GARAGA_PROOF_PATH`
-- `GARAGA_PUBLIC_INPUTS_PATH`
-- `GARAGA_OUTPUT_DIR`
-
-Contract expectation (router strict check):
-- `public_inputs[0] == nullifier`
-- `public_inputs[1] == commitment`
-
-**Run Locally**
-1. Start PostgreSQL + Redis (system services) or use docker-compose.
-2. Fill `.env`.
-3. Run:
-```bash
-cd backend-rust
-cargo run
-```
-Migrations run automatically at startup.
-
-**Quick Start (from repo root)**
-```bash
-./scripts/quick-start.sh
-```
-Stop:
-```bash
-./scripts/quick-stop.sh
+GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 ```
 
-**Local Dev Without Docker (Recommended for low‑spec PC)**
-Start services:
-```bash
-sudo service postgresql start
-sudo service redis-server start
+### AI and Rate Limiting
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | No | Empty | Optional LLM provider key |
+| `GEMINI_API_KEY` | No | Empty | Gemini API key |
+| `GOOGLE_GEMINI_API_KEY` | No | Empty | Alias for Gemini key |
+| `GEMINI_API_URL` | No | `https://generativelanguage.googleapis.com/v1beta` | Gemini base URL |
+| `GEMINI_MODEL` | No | `gemini-2.0-flash` | Gemini model name |
+| `TWITTER_BEARER_TOKEN` | No | Empty | Optional token for social verification features |
+| `TELEGRAM_BOT_TOKEN` | No | Empty | Optional token for social verification features |
+| `DISCORD_BOT_TOKEN` | No | Empty | Optional token for social verification features |
+| `AI_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Rate-limit window size |
+| `AI_RATE_LIMIT_GLOBAL_PER_WINDOW` | No | `40` | Global AI cap/window |
+| `AI_RATE_LIMIT_LEVEL_1_PER_WINDOW` | No | `20` | Tier 1 cap/window |
+| `AI_RATE_LIMIT_LEVEL_2_PER_WINDOW` | No | `10` | Tier 2 cap/window |
+| `AI_RATE_LIMIT_LEVEL_3_PER_WINDOW` | No | `8` | Tier 3 cap/window |
+| `RATE_LIMIT_PUBLIC` | No | `100` | Global unauthenticated API cap/window |
+| `RATE_LIMIT_AUTHENTICATED` | No | `300` | Authenticated API cap/window |
 
-pg_isready
-redis-cli ping
-```
+### Bridge Providers
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `LAYERSWAP_API_KEY` | No | Empty | LayerSwap auth |
+| `LAYERSWAP_API_URL` | No | `https://api.layerswap.io/api/v2` | LayerSwap base URL |
+| `ATOMIQ_API_KEY` | No | Empty | Atomiq auth |
+| `ATOMIQ_API_URL` | No | Empty | Atomiq base URL |
+| `GARDEN_APP_ID` | Recommended for Garden | Empty | Garden app-id header |
+| `GARDEN_API_KEY` | No | Empty | Legacy Garden auth alias |
+| `GARDEN_API_URL` | No | Empty | Garden base URL |
+| `SUMO_LOGIN_API_KEY` | No | Empty | Sumo Login auth |
+| `SUMO_LOGIN_API_URL` | No | Empty | Sumo Login base URL |
+| `XVERSE_API_KEY` | No | Empty | Xverse auth |
+| `XVERSE_API_URL` | No | Empty | Xverse base URL |
+| `UNISAT_API_KEY` | No | Empty | UniSat API key for BTC reads |
+| `BRIDGE_PROVIDER_IDS` | No | Empty | Provider felt mapping (`LayerSwap`, `Atomiq`, `Garden`, `StarkGate`) |
 
-Initialize DB user + database (matches `.env` default):
-```bash
-sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '100720';"
-sudo -u postgres createdb zkcare_db
-```
+### Price Feeds
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `ORACLE_ASSET_IDS` | No | Empty | Oracle symbol-to-id mapping |
+| `PRICE_TOKENS` | No | `BTC,ETH,STRK,CAREL,USDT,USDC` | Price updater token set |
+| `COINGECKO_API_URL` | No | `https://api.coingecko.com/api/v3` | CoinGecko base URL |
+| `COINGECKO_API_KEY` | No | Empty | CoinGecko API key |
+| `COINGECKO_IDS` | No | Empty | Symbol-to-CoinGecko id map |
 
-If you want a different user/password, update `DATABASE_URL` in `.env`.
+### Optional Features
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `TOKEN_STRK_ADDRESS` | No | Empty | STRK token address cache/source |
+| `TOKEN_ETH_ADDRESS` | No | Empty | ETH token address cache/source |
+| `TOKEN_BTC_ADDRESS` | No | Empty | BTC token address cache/source |
+| `TOKEN_STRK_L1_ADDRESS` | No | Empty | L1 STRK token address |
+| `SOCIAL_TASKS_JSON` | No | Empty | Dynamic social-task catalog JSON |
+| `ADMIN_MANUAL_KEY` | No | Empty | Protects `/api/v1/admin/points/reset` |
+| `DEV_WALLET_ADDRESS` | No | Empty | Dev wallet for paid rename verification |
+| `DEV_WALLET` | No | Empty | Legacy alias for `DEV_WALLET_ADDRESS` |
+| `FAUCET_BTC_AMOUNT` | No | Contract constant fallback | BTC faucet amount override |
+| `FAUCET_STRK_AMOUNT` | No | Contract constant fallback | STRK faucet amount override |
+| `FAUCET_CAREL_AMOUNT` | No | Contract constant fallback | CAREL faucet amount override |
+| `FAUCET_COOLDOWN_HOURS` | No | Contract constant fallback | Faucet cooldown override |
+| `FAUCET_CAREL_UNLIMITED` | No | `false` | Disables CAREL cooldown limits |
+| `STRIPE_SECRET_KEY` | No | Empty | Fiat on-ramp provider key |
+| `MOONPAY_API_KEY` | No | Empty | Fiat on-ramp provider key |
+| `POINT_CALCULATOR_BATCH_SIZE` | No | `500` | Points worker batch size |
+| `POINT_CALCULATOR_MAX_BATCHES_PER_TICK` | No | `20` | Max points batches per interval |
 
-**WSL Build Note (Windows mount)**
-If you build from `/mnt/c/...`, Rust sometimes fails with `failed to create encoded metadata`.
-Use a Linux target dir:
-```bash
-export CARGO_TARGET_DIR=/home/frend/.cargo-target/zkcare_backend
-cargo run
-```
+### Optional Dev/Debug
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `STARKNET_API_RPC_URL` | No | Fallback to `STARKNET_RPC_URL` | API call RPC override |
+| `STARKNET_INDEXER_RPC_URL` | No | Fallback to `STARKNET_RPC_URL` | Indexer RPC override |
+| `STARKNET_RPC_MAX_INFLIGHT` | No | `6` | Max concurrent Starknet RPC requests |
+| `EVM_RPC_MAX_INFLIGHT` | No | `8` | Max concurrent EVM RPC requests |
+| `ENABLE_EVENT_INDEXER` | No | `true` | Enable/disable event indexer worker |
+| `USE_STARKNET_RPC` | No | `false` | Toggle Starknet RPC scan path in indexer |
+| `USE_BLOCK_PROCESSOR` | No | `false` | Use block processor mode for indexer |
+| `RUN_EPOCH_JOBS` | No | `false` | Run epoch finalize jobs at startup |
+| `INDEXER_INITIAL_BACKFILL_BLOCKS` | No | `128` | Initial indexer lookback window |
+| `INDEXER_MAX_BLOCKS_PER_TICK` | No | `32` | Max blocks processed per indexer tick |
+| `ENABLE_BTC_BRIDGE_WATCHER` | No | `false` | Enable BTC watcher process |
+| `BTC_VAULT_ADDRESS` | No | Placeholder | Vault address watched by BTC bridge worker |
+| `BTC_PRICE_API_URL` | No | CoinGecko simple price endpoint | BTC/USD source for bridge worker |
+| `POINT_TOKEN_ADDRESS` | No | Empty | Bridge worker mint target (preferred) |
+| `POINT_TOKEN_CONTRACT_ADDRESS` | No | Empty | Legacy alias for mint target |
+| `BRIDGE_ADMIN_PRIVATE_KEY` | No | Uses `BACKEND_PRIVATE_KEY` | Bridge watcher signer key |
+| `BRIDGE_ADMIN_ACCOUNT_ADDRESS` | No | Uses `BACKEND_ACCOUNT_ADDRESS` | Bridge watcher signer address |
+| `DEFAULT_STARKNET_RECIPIENT` | No | Empty | BTC watcher fallback recipient |
+| `BTC_TO_STARKNET_MAP` | No | Empty | JSON map for BTC address-to-Starknet recipient |
+| `SWAP_CONTRACT_EVENT_ONLY` | No | `false` | Forces swap execute guard |
+| `NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY` | No | `false` | Frontend alias accepted by backend |
+| `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` | No | Empty | Frontend alias fallback |
+| `NEXT_PUBLIC_CAREL_PROTOCOL_ADDRESS` | No | Empty | Frontend alias fallback for event-only detection |
+| `NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS` | No | Empty | Frontend alias fallback |
+| `NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS` | No | Empty | Frontend alias fallback |
+| `NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS` | No | Empty | Frontend alias fallback |
+| `NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS` | No | Empty | Frontend alias fallback |
 
-**Run Tests**
-```bash
-cd backend-rust
-cargo test
-```
+## Current Sepolia Wiring
+Active wiring currently used in this repo:
 
-**Smoke Test (API)**
-Quick end-to-end check with curl:
-```bash
-cd backend-rust
-./scripts/smoke_test_api.sh
-```
-Env overrides: `BASE_URL`, `AUTH_TOKEN`, `BRIDGE_*`, `ORDER_*`, `STAKE_*`.
+| Variable | Value |
+| --- | --- |
+| `PRIVATE_ACTION_EXECUTOR_ADDRESS` | `0x07e18b8314a17989a74ba12e6a68856a9e4791ce254d8491ad2b4addc7e5bf8e` |
+| `HIDE_BALANCE_EXECUTOR_KIND` | `shielded_pool_v2` |
+| `ZK_PRIVACY_ROUTER_ADDRESS` | `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f` |
+| `STARKNET_SWAP_CONTRACT_ADDRESS` | `0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28` |
+| `LIMIT_ORDER_BOOK_ADDRESS` | `0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a` |
+| `BATTLESHIP_GARAGA_ADDRESS` | `0x04ea26d455d6d79f185a728ac59cac029a6a5bf2a3ca3b4b75f04b4e8c267dd2` |
+| `STAKING_CAREL_ADDRESS` | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` |
+| `STAKING_STABLECOIN_ADDRESS` | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` |
+| `STAKING_BTC_ADDRESS` | `0x030098330968d105bf0a0068011b3f166e595582828dbbfaf8e5e204420b1f3b` |
+| `PRIVACY_AUTO_GARAGA_PROVER_CMD` | `python3 scripts/garaga_auto_prover.py` |
+| `GARAGA_ALLOW_PRECOMPUTED_PAYLOAD` | `true` |
+| `GARAGA_DYNAMIC_BINDING` | `true` |
+| `GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX` | `0` |
+| `GARAGA_COMMITMENT_PUBLIC_INPUT_INDEX` | `1` |
+| `GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX` | `2` |
 
-**Docker**
-Dockerfile: `backend-rust/docker`
-```bash
-docker build -f docker -t carel-backend .
+## API Endpoints by Domain
 
-docker run --env-file .env -p 8080:8080 \
-  -e HOST=0.0.0.0 \
-  carel-backend
-```
+### Health
+- `GET /health`
 
-**Docker Compose**
-Gunakan compose root monorepo:
-```bash
-cd ..
-docker compose up --build
-```
-Atau jalankan service backend saja:
-```bash
-cd ..
-docker compose up --build backend postgres redis
-```
+### Auth and Profile
+- `POST /api/v1/auth/connect`
+- `POST /api/v1/auth/refresh`
+- `GET /api/v1/profile/me`
+- `PUT /api/v1/profile/display-name`
 
-**Key Endpoints**
-- Health: `GET /health`
-- Auth: `POST /api/v1/auth/connect`, `POST /api/v1/auth/refresh`
-- Profile: `GET /api/v1/profile/me`, `PUT /api/v1/profile/display-name`
-- Swap/Bridge: `POST /api/v1/swap/quote`, `POST /api/v1/bridge/quote`, `GET /api/v1/bridge/status/{bridge_id}`
-- Orders: `POST /api/v1/limit-order/create`, `GET /api/v1/limit-order/list`
-- Social: `GET /api/v1/social/tasks`, `POST /api/v1/social/verify`
-- Admin manual: `POST /api/v1/admin/points/reset` (header `x-admin-key`)
-- AI:
-  - `GET /api/v1/ai/config` (runtime config untuk frontend: apakah executor terkonfigurasi + alamat executor)
-  - `POST /api/v1/ai/prepare-action`
-  - `POST /api/v1/ai/execute`
-  - `GET /api/v1/ai/pending`
-- Webhook: `POST /api/v1/webhooks/register`
-- Privacy:
-  - `POST /api/v1/privacy/submit` (manual submit payload)
-  - `POST /api/v1/privacy/auto-submit` (auto-prepare payload dari file config backend, opsional auto submit on-chain)
-  - `POST /api/v1/privacy/prepare-private-execution` (prepare hide-mode calldata untuk `PrivateActionExecutor`: `submit_private_intent + execute_private_*` untuk flow `swap|limit|stake`)
-- Battleship:
-  - `POST /api/v1/battleship/create`
-  - `POST /api/v1/battleship/join`
-  - `POST /api/v1/battleship/place-ships`
-  - `POST /api/v1/battleship/fire`
-  - `POST /api/v1/battleship/claim-timeout`
-  - `GET /api/v1/battleship/state/{game_id}`
-- Private BTC swap: `POST /api/v1/private-btc-swap/initiate`, `POST /api/v1/private-btc-swap/finalize`
-- Dark pool: `POST /api/v1/dark-pool/order`, `POST /api/v1/dark-pool/match`
-- Private payments: `POST /api/v1/private-payments/submit`, `POST /api/v1/private-payments/finalize`
-- Anonymous credentials: `POST /api/v1/credentials/submit`
-- Nullifier checks:
-  - `GET /api/v1/credentials/nullifier/{nullifier}`
-  - `GET /api/v1/dark-pool/nullifier/{nullifier}`
-  - `GET /api/v1/private-payments/nullifier/{nullifier}`
-  - `GET /api/v1/private-btc-swap/nullifier/{nullifier}`
-- Leaderboard global metrics: `GET /api/v1/leaderboard/global`
-- Leaderboard global metrics (epoch): `GET /api/v1/leaderboard/global/{epoch}`
+### Trading
+- `POST /api/v1/swap/quote`
+- `POST /api/v1/swap/execute`
+- `POST /api/v1/bridge/quote`
+- `POST /api/v1/bridge/execute`
+- `GET /api/v1/bridge/status/{bridge_id}`
+- `POST /api/v1/limit-order/create`
+- `GET /api/v1/limit-order/list`
+- `DELETE /api/v1/limit-order/{order_id}`
+- `GET /api/v1/stake/pools`
+- `POST /api/v1/stake/deposit`
+- `POST /api/v1/stake/withdraw`
+- `POST /api/v1/stake/claim`
+- `GET /api/v1/stake/positions`
 
-**WebSocket**
+### Garden Proxy
+- `GET /api/v1/garden/volume`
+- `GET /api/v1/garden/fees`
+- `GET /api/v1/garden/chains`
+- `GET /api/v1/garden/assets`
+- `GET /api/v1/garden/liquidity`
+- `GET /api/v1/garden/orders`
+- `GET /api/v1/garden/orders/{order_id}`
+- `GET /api/v1/garden/orders/{order_id}/instant-refund-hash`
+- `GET /api/v1/garden/schemas/{name}`
+- `GET /api/v1/garden/apps/earnings`
+
+### Portfolio and Wallet
+- `GET /api/v1/portfolio/balance`
+- `GET /api/v1/portfolio/history`
+- `GET /api/v1/portfolio/ohlcv`
+- `GET /api/v1/portfolio/analytics`
+- `POST /api/v1/wallet/onchain-balances`
+- `POST /api/v1/wallet/link`
+- `GET /api/v1/wallet/linked`
+
+### Leaderboard and Rewards
+- `GET /api/v1/leaderboard/{type}`
+- `GET /api/v1/leaderboard/global`
+- `GET /api/v1/leaderboard/global/{epoch}`
+- `GET /api/v1/leaderboard/user/{address}`
+- `GET /api/v1/leaderboard/user/{address}/categories`
+- `GET /api/v1/rewards/points`
+- `POST /api/v1/rewards/sync-onchain`
+- `POST /api/v1/rewards/claim`
+- `POST /api/v1/rewards/convert`
+
+### Referral, NFT, Social, and Admin
+- `POST /api/v1/nft/mint`
+- `GET /api/v1/nft/owned`
+- `GET /api/v1/referral/code`
+- `GET /api/v1/referral/stats`
+- `GET /api/v1/referral/history`
+- `GET /api/v1/social/tasks`
+- `POST /api/v1/social/verify`
+- `POST /api/v1/admin/points/reset`
+
+### Privacy and Private Apps
+- `POST /api/v1/privacy/submit`
+- `POST /api/v1/privacy/auto-submit`
+- `POST /api/v1/privacy/prepare-private-execution`
+- `POST /api/v1/private-btc-swap/initiate`
+- `POST /api/v1/private-btc-swap/finalize`
+- `GET /api/v1/private-btc-swap/nullifier/{nullifier}`
+- `POST /api/v1/dark-pool/order`
+- `POST /api/v1/dark-pool/match`
+- `GET /api/v1/dark-pool/nullifier/{nullifier}`
+- `POST /api/v1/private-payments/submit`
+- `POST /api/v1/private-payments/finalize`
+- `GET /api/v1/private-payments/nullifier/{nullifier}`
+- `POST /api/v1/credentials/submit`
+- `GET /api/v1/credentials/nullifier/{nullifier}`
+
+### AI
+- `POST /api/v1/ai/prepare-action`
+- `GET /api/v1/ai/config`
+- `POST /api/v1/ai/execute`
+- `GET /api/v1/ai/pending`
+
+### Battleship
+- `POST /api/v1/battleship/create`
+- `POST /api/v1/battleship/join`
+- `POST /api/v1/battleship/place-ships`
+- `POST /api/v1/battleship/fire`
+- `POST /api/v1/battleship/respond`
+- `POST /api/v1/battleship/claim-timeout`
+- `GET /api/v1/battleship/state/{game_id}`
+
+### Other API Domains
+- Faucet: `POST /api/v1/faucet/claim`, `GET /api/v1/faucet/status`, `GET /api/v1/faucet/stats`
+- Deposit: `POST /api/v1/deposit/bank-transfer`, `POST /api/v1/deposit/qris`, `POST /api/v1/deposit/card`, `GET /api/v1/deposit/status/{id}`
+- Notifications: `GET /api/v1/notifications/list`, `POST /api/v1/notifications/mark-read`, `PUT /api/v1/notifications/preferences`, `GET /api/v1/notifications/stats`
+- Transactions: `GET /api/v1/transactions/history`, `GET /api/v1/transactions/{tx_hash}`, `POST /api/v1/transactions/export`
+- Charts/Market: `GET /api/v1/chart/{token}/ohlcv`, `GET /api/v1/chart/{token}/indicators`, `GET /api/v1/market/depth/{token}`
+- Webhooks: `POST /api/v1/webhooks/register`, `GET /api/v1/webhooks/list`, `DELETE /api/v1/webhooks/{id}`, `GET /api/v1/webhooks/logs`
+
+### WebSocket
 - `GET /ws/notifications`
 - `GET /ws/prices`
 - `GET /ws/orders`
 
-**Technical Notes**
-- Testnet mode (`ENVIRONMENT=development/testnet`) changes several calculations (gas/score).
-- `RUN_EPOCH_JOBS=1` triggers epoch finalize + merkle root at startup.
-- `USE_STARKNET_RPC=1` & `USE_BLOCK_PROCESSOR=1` enable full RPC indexer.
-- Rewards conversion (`/api/v1/rewards/convert`) uses on-chain `PointStorage.convert_points_to_carel(...)` when `POINT_STORAGE_ADDRESS` is configured.
-- Event indexer reads contract addresses from `.env` and skips placeholder `0x0000...` entries. Populate `BRIDGE_AGGREGATOR_ADDRESS`, `SNAPSHOT_DISTRIBUTOR_ADDRESS`, `LIMIT_ORDER_BOOK_ADDRESS`, plus optional `STAKING_CAREL_ADDRESS`/`REFERRAL_SYSTEM_ADDRESS` to enable indexing.
-- Private flow supports verifier selector per request: `garaga|tongo|semaphore`. If omitted, default is `garaga`.
-- Hide Balance auto-flow:
-  - frontend bisa minta payload ke `POST /api/v1/privacy/auto-submit` (UI saat ini dipakai untuk swap Starknet ↔ Starknet),
-  - backend prioritas jalankan `PRIVACY_AUTO_GARAGA_PROVER_CMD` (jika di-set),
-  - fallback ke file payload real (bukan `0x1`) dari env `PRIVACY_AUTO_GARAGA_*`,
-  - payload dikembalikan ke frontend untuk dipakai di call `submit_private_action` saat execute swap.
-- Bridge policy saat ini:
-  - destination `STRK` untuk route cross-chain diblokir (`Bridge -> STRK` disabled),
-  - pair terkait `STRK` seperti `STRK/WBTC` harus lewat Swap di Starknet L2.
-  - pair bridge yang didukung pada testnet saat ini: `ETH<->BTC`, `BTC<->WBTC`, `ETH<->WBTC`.
-- Bridge flow validates on-chain tx hash receipt for source Starknet/Ethereum. Source BTC native (Garden order-first) can proceed without user tx hash at submit time.
-- Battleship API saat ini state game disimpan di backend memory store (`OnceLock<RwLock<...>>`) untuk gameplay cepat. Kontrak `BattleshipGaraga` sudah tersedia di Sepolia untuk wiring on-chain tahap berikutnya.
-- AI assistant:
-  - level 1: free,
-  - level 2: 1 CAREL,
-  - level 3: 2 CAREL,
-  - fee level 2/3 diproses on-chain lewat `AIExecutor.submit_action(...)`,
-  - kontrak AI executor saat ini menarik fee lalu `burn(fee)` CAREL.
-- Frontend dapat auto-resolve executor address via endpoint `GET /api/v1/ai/config`.
-  - Jika `AI_EXECUTOR_ADDRESS` kosong/placeholder (`0x0000...`), endpoint akan menandai `executor_configured=false`.
-  - Ini dipakai UI untuk menampilkan error setup yang lebih jelas sebelum user submit action on-chain.
-- AI action guard per level aktif:
-  - level 1 hanya read-only query (price/balance/points/market),
-  - level 2 hanya swap/bridge,
-  - level 3 hanya portfolio/alert.
-- AI rate limiter per-user aktif via Redis (bucket global + mode on-chain/off-chain).
-- Jika `GEMINI_API_KEY` terisi, backend akan memakai Gemini untuk menyusun response natural language (dengan fallback ke deterministic intent bila Gemini error/timeout).
-- Display-name rename flow:
-  - first set display name: gratis (langsung tersimpan di backend),
-  - rename berikutnya wajib transfer `>=1 CAREL` ke `DEV_WALLET_ADDRESS`,
-  - client kirim `rename_onchain_tx_hash`,
-  - backend verifikasi sender + calldata `transfer` + receipt confirmed di Starknet sebelum update nama,
-  - tx hash disimpan sebagai `rename_fee` untuk mencegah reuse/replay.
-- Manual reset points:
-  - endpoint `POST /api/v1/admin/points/reset`,
-  - mode per-user (`user_address`) atau global (`reset_all=true`),
-  - opsional `clear_transactions=true` untuk hapus histori transaksi terkait points.
+## Background Services
+- Event indexer (`EventIndexer`) for Starknet events.
+- Point calculator worker.
+- Price updater worker.
+- Limit order executor worker.
+- Optional epoch finalization jobs (`RUN_EPOCH_JOBS`).
+- Optional BTC bridge watcher (`ENABLE_BTC_BRIDGE_WATCHER`).
 
-**Latest Integration Update**
-- Detail perubahan bridge verification, provider routing, dynamic verifier selector, dan link referensi: `../docs/integration_update_2026_02_13.md`
-
-**Example Payloads**
-Auth connect (Sumo Login)
-```json
-{
-  "address": "0x1234",
-  "signature": "",
-  "message": "",
-  "chain_id": 0,
-  "sumo_login_token": "sumo_token_here"
-}
-```
-Private BTC swap (initiate)
-```json
-{
-  "ciphertext": "0x1234",
-  "commitment": "0xabcd",
-  "proof": ["0x1", "0x2"],
-  "public_inputs": ["0x99"]
-}
-```
-Private BTC swap (finalize)
-```json
-{
-  "swap_id": 1,
-  "recipient": "0x123456",
-  "nullifier": "0xdeadbeef",
-  "proof": ["0x1", "0x2"],
-  "public_inputs": ["0x99"]
-}
-```
-Bridge execute with Xverse recipient
-```json
-{
-  "from_chain": "btc",
-  "to_chain": "starknet",
-  "token": "BTC",
-  "amount": "0.01",
-  "recipient": "0x1234...",
-  "xverse_user_id": "user_123",
-  "onchain_tx_hash": "fa28fab8ae02404513796fbb4674347bff278e8806c8f5d29fecff534e94a07d"
-}
-```
-Dark pool submit
-```json
-{
-  "ciphertext": "0xaaaa",
-  "commitment": "0xbbbb",
-  "proof": ["0x1"],
-  "public_inputs": ["0x2"]
-}
-```
-Dark pool match
-```json
-{
-  "order_id": 1,
-  "nullifier": "0x1111",
-  "proof": ["0x1"],
-  "public_inputs": ["0x2"]
-}
-```
-Private payments submit
-```json
-{
-  "ciphertext": "0xaaaa",
-  "commitment": "0xbbbb",
-  "amount_commitment": "0xcccc",
-  "proof": ["0x1"],
-  "public_inputs": ["0x2"]
-}
-```
-Private payments finalize
-```json
-{
-  "payment_id": 1,
-  "recipient": "0x123456",
-  "nullifier": "0x2222",
-  "proof": ["0x1"],
-  "public_inputs": ["0x2"]
-}
-```
-Anonymous credentials submit
-```json
-{
-  "nullifier": "0x3333",
-  "proof": ["0x1"],
-  "public_inputs": ["0x2"]
-}
-```
-Nullifier check response
-```json
-{
-  "nullifier": "0xdeadbeef",
-  "used": true
-}
+## Docker
+Build image:
+```bash
+cd backend-rust
+docker build -f docker -t carel-backend .
 ```
 
-**Integrations Roadmap (Backend)**
-- ZK social login dApp using Sumo Login (privacy auth).
-- BTC wallet + bridge integration using Xverse API.
-
-**Leaderboard Global Metrics**
-- Global points, total volume, and total referrals are aggregated on the backend and exposed via leaderboard endpoints for analytics and UI widgets.
-Privacy submit (V2 / PrivacyRouter)
-```json
-{
-  "action_type": "BRIDGE",
-  "old_root": "0x1",
-  "new_root": "0x2",
-  "nullifiers": ["0xaaa"],
-  "commitments": ["0xbbb"],
-  "proof": ["0x1"],
-  "public_inputs": ["0x2"]
-}
-```
-Privacy submit (V1 / ZkPrivacyRouter)
-```json
-{
-  "nullifier": "0xaaa",
-  "commitment": "0xbbb",
-  "proof": ["0x1"],
-  "public_inputs": ["0x2"]
-}
+Run image:
+```bash
+docker run --env-file .env -p 8080:8080 -e HOST=0.0.0.0 carel-backend
 ```
 
-AI execute (Tier 2/3 requires `action_id`)
-```json
-{
-  "command": "analyze",
-  "context": "tier:2",
-  "level": 2,
-  "action_id": 12
-}
+Compose from monorepo root:
+```bash
+docker compose up --build backend postgres redis
 ```
 
-AI prepare signature window (for signature_verification ON)
-```json
-{
-  "level": 2,
-  "context": "tier:2",
-  "window_seconds": 45
-}
-```
-
-Rewards convert (epoch/distribution optional)
-```json
-{
-  "points": 1200,
-  "epoch": 5,
-  "total_distribution_carel": 27777777.77
-}
-```
+## Operational Constraints
+- Hide Mode improves unlinkability, but public chain metadata is still observable.
+- Bridge flow depends on third-party provider availability.
+- RPC rate limits can affect quotes, indexer progression, and wallet reads.
+- TWAP currently uses a running average, not a strict fixed-time window.
+- Gas targets are not met yet for AI rate-limit path (~4.9-5.1M) and TWAP (~3.4M).
+- `MockGaragaVerifier` is for testnet only and must not be used on mainnet.
+- Battleship state is currently stored in backend memory; full on-chain state is pending.
+- No proxy upgrade mechanism is deployed; upgrades require redeploy plus migration.

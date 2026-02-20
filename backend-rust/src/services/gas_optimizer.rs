@@ -4,6 +4,7 @@ use crate::{
     error::Result,
 };
 
+// Internal helper that supports `base_gas_for` operations.
 fn base_gas_for(tx_type: &str) -> u64 {
     match tx_type {
         "swap" => 150000,
@@ -14,6 +15,7 @@ fn base_gas_for(tx_type: &str) -> u64 {
     }
 }
 
+// Internal helper that supports `apply_testnet_discount` operations.
 fn apply_testnet_discount(mut gas: GasPrice, is_testnet: bool) -> GasPrice {
     if is_testnet {
         gas.slow *= 0.5;
@@ -30,6 +32,17 @@ pub struct GasOptimizer {
 }
 
 impl GasOptimizer {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(config: Config) -> Self {
         Self { config }
     }
@@ -74,12 +87,14 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `base_gas_for_defaults` operations.
     fn base_gas_for_defaults() {
         // Memastikan tx_type tidak dikenal memakai default
         assert_eq!(base_gas_for("unknown"), 100000);
     }
 
     #[test]
+    // Internal helper that supports `apply_testnet_discount_halves_values` operations.
     fn apply_testnet_discount_halves_values() {
         // Memastikan diskon testnet memotong harga gas jadi setengah
         let gas = GasPrice {

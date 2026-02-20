@@ -12,10 +12,12 @@ use crate::{
 
 use rust_decimal::Decimal;
 
+// Internal helper that supports `decimal_or_zero` operations.
 fn decimal_or_zero(value: f64) -> Decimal {
     Decimal::from_f64_retain(value).unwrap_or(Decimal::ZERO)
 }
 
+// Internal helper that supports `estimated_carel_from_points` operations.
 fn estimated_carel_from_points(
     total_points: Decimal,
     total_epoch_points: Decimal,
@@ -28,6 +30,7 @@ fn estimated_carel_from_points(
     gross * claim_fee_multiplier()
 }
 
+// Internal helper that parses or transforms values for `normalize_scope_addresses`.
 fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for address in user_addresses {
@@ -174,6 +177,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `decimal_or_zero_returns_zero_for_nan` operations.
     fn decimal_or_zero_returns_zero_for_nan() {
         // Memastikan nilai NaN dipetakan menjadi 0
         let value = decimal_or_zero(f64::NAN);
@@ -181,6 +185,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `estimated_carel_uses_pool_math` operations.
     fn estimated_carel_uses_pool_math() {
         // Memastikan konversi poin memakai pool distribusi + claim fee multiplier
         let points = Decimal::from_f64_retain(100.0).unwrap();

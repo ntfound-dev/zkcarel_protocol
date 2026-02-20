@@ -7,6 +7,15 @@ import { cn } from '@/lib/utils'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 
+/**
+ * Handles `FieldSet` logic.
+ *
+ * @param className - Input used by `FieldSet` to compute state, payload, or request behavior.
+ * @param props - Input used by `FieldSet` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldSet({ className, ...props }: React.ComponentProps<'fieldset'>) {
   return (
     <fieldset
@@ -21,6 +30,12 @@ function FieldSet({ className, ...props }: React.ComponentProps<'fieldset'>) {
   )
 }
 
+/**
+ * Handles `FieldLegend` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldLegend({
   className,
   variant = 'legend',
@@ -41,6 +56,15 @@ function FieldLegend({
   )
 }
 
+/**
+ * Handles `FieldGroup` logic.
+ *
+ * @param className - Input used by `FieldGroup` to compute state, payload, or request behavior.
+ * @param props - Input used by `FieldGroup` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldGroup({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -78,6 +102,12 @@ const fieldVariants = cva(
   },
 )
 
+/**
+ * Handles `Field` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Field({
   className,
   orientation = 'vertical',
@@ -94,6 +124,15 @@ function Field({
   )
 }
 
+/**
+ * Handles `FieldContent` logic.
+ *
+ * @param className - Input used by `FieldContent` to compute state, payload, or request behavior.
+ * @param props - Input used by `FieldContent` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldContent({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -107,6 +146,12 @@ function FieldContent({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `FieldLabel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldLabel({
   className,
   ...props
@@ -125,6 +170,15 @@ function FieldLabel({
   )
 }
 
+/**
+ * Handles `FieldTitle` logic.
+ *
+ * @param className - Input used by `FieldTitle` to compute state, payload, or request behavior.
+ * @param props - Input used by `FieldTitle` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldTitle({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -138,6 +192,15 @@ function FieldTitle({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+/**
+ * Handles `FieldDescription` logic.
+ *
+ * @param className - Input used by `FieldDescription` to compute state, payload, or request behavior.
+ * @param props - Input used by `FieldDescription` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldDescription({ className, ...props }: React.ComponentProps<'p'>) {
   return (
     <p
@@ -153,6 +216,12 @@ function FieldDescription({ className, ...props }: React.ComponentProps<'p'>) {
   )
 }
 
+/**
+ * Handles `FieldSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldSeparator({
   children,
   className,
@@ -183,6 +252,12 @@ function FieldSeparator({
   )
 }
 
+/**
+ * Handles `FieldError` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FieldError({
   className,
   children,

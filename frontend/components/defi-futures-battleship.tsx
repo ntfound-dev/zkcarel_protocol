@@ -27,10 +27,27 @@ const EXPECTED_FLEET_GROUPS = [1, 1, 2, 2, 3]
 const POLL_INTERVAL_MS = 4000
 const LAST_OPPONENT_STORAGE_KEY = "battleship_last_opponent"
 
+/**
+ * Handles `cellKey` logic.
+ *
+ * @param x - Input used by `cellKey` to compute state, payload, or request behavior.
+ * @param y - Input used by `cellKey` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function cellKey(x: number, y: number) {
   return `${x},${y}`
 }
 
+/**
+ * Parses or transforms values for `parseCellKey`.
+ *
+ * @param key - Input used by `parseCellKey` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function parseCellKey(key: string): BattleshipCell | null {
   const [xRaw, yRaw] = key.split(",")
   const x = Number(xRaw)
@@ -40,10 +57,24 @@ function parseCellKey(key: string): BattleshipCell | null {
   return { x, y }
 }
 
+/**
+ * Parses or transforms values for `normalizeAddress`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function normalizeAddress(value?: string | null) {
   return (value || "").trim().toLowerCase()
 }
 
+/**
+ * Handles `toInvokeCalls` logic.
+ *
+ * @param calls - Input used by `toInvokeCalls` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function toInvokeCalls(calls: StarknetWalletCall[]) {
   return calls.map((call) => ({
     contractAddress: call.contract_address,
@@ -52,6 +83,15 @@ function toInvokeCalls(calls: StarknetWalletCall[]) {
   }))
 }
 
+/**
+ * Handles `orthogonalNeighbors` logic.
+ *
+ * @param x - Input used by `orthogonalNeighbors` to compute state, payload, or request behavior.
+ * @param y - Input used by `orthogonalNeighbors` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function orthogonalNeighbors(x: number, y: number) {
   return [
     [x - 1, y],
@@ -67,6 +107,14 @@ type FleetValidation = {
   groupSizes: number[]
 }
 
+/**
+ * Handles `validateFleetCells` logic.
+ *
+ * @param keys - Input used by `validateFleetCells` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function validateFleetCells(keys: Set<string>): FleetValidation {
   if (keys.size !== REQUIRED_SHIP_CELLS) {
     return {
@@ -164,6 +212,12 @@ function validateFleetCells(keys: Set<string>): FleetValidation {
   }
 }
 
+/**
+ * Handles `DefiFuturesBattleship` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function DefiFuturesBattleship() {
   const wallet = useWallet()
   const notifications = useNotifications()
@@ -263,6 +317,12 @@ export function DefiFuturesBattleship() {
     if (!wallet.isConnected || !activeGameId) return
     let cancelled = false
 
+    /**
+     * Handles `tick` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const tick = async () => {
       try {
         const next = await getBattleshipState(activeGameId)

@@ -10,10 +10,32 @@ pub struct LayerSwapClient {
 }
 
 impl LayerSwapClient {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(api_key: String, api_url: String) -> Self {
         Self { api_key, api_url }
     }
 
+    /// Fetches data for `get_quote`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_quote(
         &self,
         from_chain: &str,
@@ -110,6 +132,17 @@ impl LayerSwapClient {
         })
     }
 
+    /// Runs `execute_bridge` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn execute_bridge(&self, quote: &LayerSwapQuote, recipient: &str) -> Result<String> {
         if self.api_url.trim().is_empty() {
             return Err(crate::error::AppError::ExternalAPI(
@@ -178,6 +211,7 @@ pub struct LayerSwapQuote {
 
 #[cfg(test)]
 impl LayerSwapQuote {
+    // Internal helper that supports `simulated` operations.
     fn simulated(from_chain: &str, to_chain: &str, token: &str, amount: f64) -> Self {
         Self {
             from_chain: from_chain.to_string(),
@@ -190,6 +224,7 @@ impl LayerSwapQuote {
         }
     }
 
+    // Internal helper that supports `simulated_id` operations.
     fn simulated_id(quote: &LayerSwapQuote, recipient: &str) -> String {
         let id_bytes: [u8; 16] = rand::random();
         let id_hex = hex::encode(id_bytes);
@@ -222,6 +257,7 @@ struct LayerSwapExecuteRequest {
     destination_address: String,
 }
 
+// Internal helper that supports `map_layerswap_network` operations.
 fn map_layerswap_network(chain: &str) -> &'static str {
     match chain.trim().to_ascii_lowercase().as_str() {
         "bitcoin" | "btc" => "BTC",
@@ -231,6 +267,7 @@ fn map_layerswap_network(chain: &str) -> &'static str {
     }
 }
 
+// Internal helper that supports `map_layerswap_asset` operations.
 fn map_layerswap_asset(token: &str) -> &'static str {
     match token.trim().to_ascii_uppercase().as_str() {
         "BTC" => "BTC",
@@ -243,6 +280,7 @@ fn map_layerswap_asset(token: &str) -> &'static str {
     }
 }
 
+// Internal helper that supports `pick_f64` operations.
 fn pick_f64(body: &Value, paths: &[&[&str]]) -> Option<f64> {
     for path in paths {
         let mut current = body;
@@ -269,6 +307,7 @@ fn pick_f64(body: &Value, paths: &[&[&str]]) -> Option<f64> {
     None
 }
 
+// Internal helper that supports `pick_u64` operations.
 fn pick_u64(body: &Value, paths: &[&[&str]]) -> Option<u64> {
     for path in paths {
         let mut current = body;
@@ -295,6 +334,7 @@ fn pick_u64(body: &Value, paths: &[&[&str]]) -> Option<u64> {
     None
 }
 
+// Internal helper that supports `pick_string` operations.
 fn pick_string(body: &Value, paths: &[&[&str]]) -> Option<String> {
     for path in paths {
         let mut current = body;
@@ -325,6 +365,7 @@ mod tests {
     const EPSILON: f64 = 1e-9;
 
     #[test]
+    // Internal helper that supports `simulated_quote_returns_expected_fields` operations.
     fn simulated_quote_returns_expected_fields() {
         let quote = LayerSwapQuote::simulated("bitcoin", "starknet", "BTC", 100.0);
 
@@ -338,6 +379,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `simulated_bridge_id_is_traceable` operations.
     fn simulated_bridge_id_is_traceable() {
         let quote = LayerSwapQuote::simulated("bitcoin", "starknet", "BTC", 100.0);
         let recipient = "recipient_1234567890";

@@ -117,6 +117,12 @@ const STORAGE_KEYS = {
 const XVERSE_PROVIDER_ID = "XverseProviders.BitcoinProvider"
 const XVERSE_CONNECT_MESSAGE = "Carel Protocol wants to connect your Bitcoin testnet wallet."
 
+/**
+ * Handles `normalizeReferralCode` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeReferralCode(raw?: string | null): string | null {
   if (!raw) return null
   const upper = raw.trim().toUpperCase()
@@ -126,6 +132,12 @@ function normalizeReferralCode(raw?: string | null): string | null {
   return `CAREL_${suffix}`
 }
 
+/**
+ * Handles `readPendingReferralCode` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function readPendingReferralCode(): string | undefined {
   if (typeof window === "undefined") return undefined
 
@@ -144,6 +156,12 @@ function readPendingReferralCode(): string | undefined {
   return undefined
 }
 
+/**
+ * Handles `createInitialWalletState` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function createInitialWalletState(): WalletState {
   return {
     isConnected: false,
@@ -170,6 +188,12 @@ function createInitialWalletState(): WalletState {
   }
 }
 
+/**
+ * Handles `clearWalletStorage` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function clearWalletStorage() {
   if (typeof window === "undefined") return
   window.localStorage.removeItem(STORAGE_KEYS.token)
@@ -183,6 +207,14 @@ function clearWalletStorage() {
   window.sessionStorage.removeItem(STORAGE_KEYS.sumoAddress)
 }
 
+/**
+ * Handles `WalletProvider` in the wallet client flow.
+ *
+ * @param children - Input used to compute or dispatch the `WalletProvider` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<WalletState>(() => createInitialWalletState())
   const onchainRefreshInFlightRef = useRef(false)
@@ -1169,6 +1201,14 @@ type InjectedStarknet = {
   }
 }
 
+/**
+ * Handles `isUsableStarknetInjected` in the wallet client flow.
+ *
+ * @param candidate - Input used to compute or dispatch the `isUsableStarknetInjected` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function isUsableStarknetInjected(candidate: unknown): candidate is InjectedStarknet {
   if (!candidate || typeof candidate !== "object") return false
   const injected = candidate as InjectedStarknet
@@ -1180,6 +1220,14 @@ function isUsableStarknetInjected(candidate: unknown): candidate is InjectedStar
   )
 }
 
+/**
+ * Handles `pickInjectedStarknet` in the wallet client flow.
+ *
+ * @param candidates - Input used to compute or dispatch the `pickInjectedStarknet` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function pickInjectedStarknet(...candidates: unknown[]): InjectedStarknet | null {
   for (const candidate of candidates) {
     if (isUsableStarknetInjected(candidate)) {
@@ -1189,6 +1237,12 @@ function pickInjectedStarknet(...candidates: unknown[]): InjectedStarknet | null
   return null
 }
 
+/**
+ * Handles `getInjectedStarknet` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function getInjectedStarknet(provider?: WalletProviderType): InjectedStarknet | null {
   if (typeof window === "undefined") return null
   const anyWindow = window as any
@@ -1249,6 +1303,14 @@ type InjectedBtc = {
   disconnect?: () => Promise<void>
 }
 
+/**
+ * Handles `isInjectedBtc` in the wallet client flow.
+ *
+ * @param candidate - Input used to compute or dispatch the `isInjectedBtc` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function isInjectedBtc(candidate: unknown): candidate is InjectedBtc {
   if (!candidate || typeof candidate !== "object") return false
   const provider = candidate as InjectedBtc
@@ -1260,6 +1322,14 @@ function isInjectedBtc(candidate: unknown): candidate is InjectedBtc {
   )
 }
 
+/**
+ * Handles `pickInjectedBtc` in the wallet client flow.
+ *
+ * @param candidates - Input used to compute or dispatch the `pickInjectedBtc` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function pickInjectedBtc(...candidates: unknown[]): InjectedBtc | null {
   for (const candidate of candidates) {
     if (isInjectedBtc(candidate)) return candidate
@@ -1267,18 +1337,38 @@ function pickInjectedBtc(...candidates: unknown[]): InjectedBtc | null {
   return null
 }
 
+/**
+ * Handles `isStarknetWalletProvider` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function isStarknetWalletProvider(
   provider: WalletProviderType
 ): provider is "starknet" | "argentx" | "braavos" {
   return provider === "starknet" || provider === "argentx" || provider === "braavos"
 }
 
+/**
+ * Handles `getInjectedEvm` in the wallet client flow.
+ *
+ * @param provider - Input used to compute or dispatch the `getInjectedEvm` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function getInjectedEvm(provider: WalletProviderType): InjectedEvm | null {
   if (typeof window === "undefined") return null
   const anyWindow = window as any
   const ethereum = anyWindow.ethereum as InjectedEvm | undefined
   const providers = ethereum?.providers?.length ? ethereum.providers : []
 
+  /**
+   * Handles `isMetaMask` in the wallet client flow.
+   *
+   * @returns Result used by UI state, request lifecycle, or callback chaining.
+   * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+   */
   const isMetaMask = (p?: InjectedEvm) => !!p?.isMetaMask
 
   if (provider === "metamask") {
@@ -1293,6 +1383,12 @@ function getInjectedEvm(provider: WalletProviderType): InjectedEvm | null {
   return ethereum || null
 }
 
+/**
+ * Handles `getPreferredEvmProvider` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function getPreferredEvmProvider(provider?: WalletProviderType | null): InjectedEvm | null {
   if (provider === "metamask") {
     return getInjectedEvm("metamask")
@@ -1300,6 +1396,14 @@ function getPreferredEvmProvider(provider?: WalletProviderType | null): Injected
   return getInjectedEvm("metamask")
 }
 
+/**
+ * Handles `getInjectedBtc` in the wallet client flow.
+ *
+ * @param provider - Input used to compute or dispatch the `getInjectedBtc` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function getInjectedBtc(provider: BtcWalletProviderType): InjectedBtc | null {
   if (typeof window === "undefined") return null
   const anyWindow = window as any
@@ -1342,6 +1446,14 @@ function getInjectedBtc(provider: BtcWalletProviderType): InjectedBtc | null {
   return genericBtc
 }
 
+/**
+ * Handles `connectStarknetWallet` in the wallet client flow.
+ *
+ * @param provider - Input used to compute or dispatch the `connectStarknetWallet` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function connectStarknetWallet(provider: WalletProviderType): Promise<InjectedStarknet | null> {
   const injected = getInjectedStarknet(provider)
 
@@ -1384,6 +1496,14 @@ async function connectStarknetWallet(provider: WalletProviderType): Promise<Inje
   return injected || null
 }
 
+/**
+ * Handles `getStarknetIncludeFilter` in the wallet client flow.
+ *
+ * @param provider - Input used to compute or dispatch the `getStarknetIncludeFilter` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function getStarknetIncludeFilter(provider: WalletProviderType): string[] | undefined {
   if (provider === "argentx" || provider === "braavos") {
     return STARKNET_PROVIDER_ID_ALIASES[provider]
@@ -1391,6 +1511,12 @@ function getStarknetIncludeFilter(provider: WalletProviderType): string[] | unde
   return undefined
 }
 
+/**
+ * Handles `selectStarknetWallet` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function selectStarknetWallet(
   wallets: InjectedStarknet[],
   provider: WalletProviderType,
@@ -1415,6 +1541,15 @@ function selectStarknetWallet(
   return wallets[0] || null
 }
 
+/**
+ * Handles `hasStarknetProviderAlias` in the wallet client flow.
+ *
+ * @param wallet - Input used to compute or dispatch the `hasStarknetProviderAlias` operation.
+ * @param aliases - Input used to compute or dispatch the `hasStarknetProviderAlias` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function hasStarknetProviderAlias(wallet: InjectedStarknet, aliases: string[]): boolean {
   const id = normalizeProviderHint(wallet.id)
   const name = normalizeProviderHint(wallet.name)
@@ -1424,11 +1559,23 @@ function hasStarknetProviderAlias(wallet: InjectedStarknet, aliases: string[]): 
   })
 }
 
+/**
+ * Handles `normalizeProviderHint` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeProviderHint(value?: string): string {
   if (!value) return ""
   return value.toLowerCase().replace(/[^a-z0-9]/g, "")
 }
 
+/**
+ * Handles `normalizeChainId` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeChainId(chainId?: string): number {
   if (!chainId) return 1
   if (isStarknetSepolia(chainId)) return 2
@@ -1441,6 +1588,12 @@ function normalizeChainId(chainId?: string): number {
   return 1
 }
 
+/**
+ * Handles `signStarknetMessage` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function signStarknetMessage(
   injected: InjectedStarknet,
   address: string,
@@ -1495,6 +1648,14 @@ async function signStarknetMessage(
   }
 }
 
+/**
+ * Handles `requestAccounts` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `requestAccounts` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function requestAccounts(injected: InjectedStarknet): Promise<string[] | null> {
   if (injected.request) {
     const attempts: Array<{ type: string; params?: unknown }> = [{ type: "wallet_requestAccounts" }]
@@ -1535,6 +1696,12 @@ async function requestAccounts(injected: InjectedStarknet): Promise<string[] | n
   return null
 }
 
+/**
+ * Handles `fetchStarknetBalance` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function fetchStarknetBalance(
   injected: InjectedStarknet,
   address: string
@@ -1542,6 +1709,12 @@ async function fetchStarknetBalance(
   return fetchStarknetTokenBalance(injected, address, STRK_TOKEN_ADDRESS, STRK_DECIMALS)
 }
 
+/**
+ * Handles `fetchStarknetTokenBalance` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function fetchStarknetTokenBalance(
   injected: InjectedStarknet,
   address: string,
@@ -1570,6 +1743,15 @@ async function fetchStarknetTokenBalance(
   return null
 }
 
+/**
+ * Handles `fetchEvmBalance` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `fetchEvmBalance` operation.
+ * @param address - Input used to compute or dispatch the `fetchEvmBalance` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function fetchEvmBalance(injected: InjectedEvm, address: string): Promise<number | null> {
   try {
     const raw = await injected.request({ method: "eth_getBalance", params: [address, "latest"] })
@@ -1579,6 +1761,12 @@ async function fetchEvmBalance(injected: InjectedEvm, address: string): Promise<
   }
 }
 
+/**
+ * Handles `fetchEvmErc20Balance` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function fetchEvmErc20Balance(
   injected: InjectedEvm,
   address: string,
@@ -1608,6 +1796,14 @@ async function fetchEvmErc20Balance(
   }
 }
 
+/**
+ * Handles `normalizeEvmBalance` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `normalizeEvmBalance` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeEvmBalance(value: any): number | null {
   if (typeof value !== "string") return null
   try {
@@ -1621,6 +1817,14 @@ function normalizeEvmBalance(value: any): number | null {
   }
 }
 
+/**
+ * Handles `ensureEvmSepolia` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `ensureEvmSepolia` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function ensureEvmSepolia(injected: InjectedEvm): Promise<number> {
   let chainId = await readEvmChainId(injected)
   if (chainId === EVM_SEPOLIA_CHAIN_ID) return chainId
@@ -1646,6 +1850,14 @@ async function ensureEvmSepolia(injected: InjectedEvm): Promise<number> {
   return chainId
 }
 
+/**
+ * Handles `ensureStarknetSepolia` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `ensureStarknetSepolia` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function ensureStarknetSepolia(injected: InjectedStarknet): Promise<string | undefined> {
   let chainId = await readStarknetChainId(injected)
   if (isStarknetSepolia(chainId)) return chainId
@@ -1664,6 +1876,14 @@ async function ensureStarknetSepolia(injected: InjectedStarknet): Promise<string
   return chainId
 }
 
+/**
+ * Handles `readStarknetChainId` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `readStarknetChainId` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function readStarknetChainId(injected: InjectedStarknet): Promise<string | undefined> {
   const fromCurrent = parseStarknetChainIdResult(injected.chainId)
   if (fromCurrent) {
@@ -1712,6 +1932,12 @@ async function readStarknetChainId(injected: InjectedStarknet): Promise<string |
   return injected.chainId
 }
 
+/**
+ * Handles `requestStarknet` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function requestStarknet(
   injected: InjectedStarknet,
   payload: { type: string; params?: unknown }
@@ -1731,6 +1957,14 @@ async function requestStarknet(
   throw lastError || new Error("Starknet wallet request failed.")
 }
 
+/**
+ * Handles `buildStarknetRequestVariants` in the wallet client flow.
+ *
+ * @param payload - Input used to compute or dispatch the `buildStarknetRequestVariants` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function buildStarknetRequestVariants(payload: {
   type: string
   params?: unknown
@@ -1748,6 +1982,14 @@ function buildStarknetRequestVariants(payload: {
   return variants
 }
 
+/**
+ * Handles `parseStarknetChainIdResult` in the wallet client flow.
+ *
+ * @param result - Input used to compute or dispatch the `parseStarknetChainIdResult` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function parseStarknetChainIdResult(result: unknown): string | null {
   if (typeof result === "string" && result) {
     const trimmed = result.trim()
@@ -1781,6 +2023,12 @@ function parseStarknetChainIdResult(result: unknown): string | null {
   return null
 }
 
+/**
+ * Handles `isReadableStarknetChainId` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function isReadableStarknetChainId(chainId?: string): boolean {
   if (!chainId) return false
   const normalized = normalizeStarknetChainValue(chainId)
@@ -1789,6 +2037,15 @@ function isReadableStarknetChainId(chainId?: string): boolean {
   return upper !== "UNKNOWN" && upper !== "NULL" && upper !== "UNDEFINED"
 }
 
+/**
+ * Handles `normalizeWalletError` in the wallet client flow.
+ *
+ * @param error - Input used to compute or dispatch the `normalizeWalletError` operation.
+ * @param fallbackMessage - Input used to compute or dispatch the `normalizeWalletError` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeWalletError(error: unknown, fallbackMessage: string): Error {
   if (error instanceof Error) {
     return error
@@ -1829,6 +2086,12 @@ function normalizeWalletError(error: unknown, fallbackMessage: string): Error {
   return new Error(fallbackMessage)
 }
 
+/**
+ * Handles `readStarknetChainIdFromGetter` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function readStarknetChainIdFromGetter(
   getter?: (() => Promise<unknown> | unknown) | null
 ): Promise<string | undefined> {
@@ -1841,11 +2104,27 @@ async function readStarknetChainIdFromGetter(
   }
 }
 
+/**
+ * Handles `readEvmChainId` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `readEvmChainId` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function readEvmChainId(injected: InjectedEvm): Promise<number> {
   const chainHex = await injected.request({ method: "eth_chainId" })
   return parseEvmChainId(chainHex)
 }
 
+/**
+ * Handles `parseEvmChainId` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `parseEvmChainId` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function parseEvmChainId(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string") {
@@ -1859,18 +2138,42 @@ function parseEvmChainId(value: unknown): number {
   return 0
 }
 
+/**
+ * Handles `sanitizeEvmAddress` in the wallet client flow.
+ *
+ * @param address - Input used to compute or dispatch the `sanitizeEvmAddress` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function sanitizeEvmAddress(address: string): string | null {
   const trimmed = address.trim()
   if (!/^0x[0-9a-fA-F]{40}$/.test(trimmed)) return null
   return trimmed
 }
 
+/**
+ * Handles `sanitizeEvmAddressToWord` in the wallet client flow.
+ *
+ * @param address - Input used to compute or dispatch the `sanitizeEvmAddressToWord` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function sanitizeEvmAddressToWord(address: string): string | null {
   const normalized = sanitizeEvmAddress(address)
   if (!normalized) return null
   return normalized.slice(2).toLowerCase().padStart(64, "0")
 }
 
+/**
+ * Handles `normalizeEvmDecimals` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `normalizeEvmDecimals` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeEvmDecimals(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return clampDecimals(value)
@@ -1890,6 +2193,14 @@ function normalizeEvmDecimals(value: unknown): number {
   return 18
 }
 
+/**
+ * Handles `clampDecimals` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `clampDecimals` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function clampDecimals(value: number): number {
   const rounded = Math.floor(value)
   if (rounded < 0) return 0
@@ -1897,6 +2208,14 @@ function clampDecimals(value: number): number {
   return rounded
 }
 
+/**
+ * Handles `parseBigIntLike` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `parseBigIntLike` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function parseBigIntLike(value: unknown): bigint | null {
   if (typeof value === "bigint") return value
   if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.floor(value))
@@ -1911,6 +2230,15 @@ function parseBigIntLike(value: unknown): bigint | null {
   return null
 }
 
+/**
+ * Handles `scaleBigIntBalance` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `scaleBigIntBalance` operation.
+ * @param decimals - Input used to compute or dispatch the `scaleBigIntBalance` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function scaleBigIntBalance(value: bigint, decimals: number): number | null {
   try {
     const divisor = pow10BigInt(decimals)
@@ -1922,6 +2250,14 @@ function scaleBigIntBalance(value: bigint, decimals: number): number | null {
   }
 }
 
+/**
+ * Handles `requestBtcAccounts` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `requestBtcAccounts` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function requestBtcAccounts(injected: InjectedBtc): Promise<string[] | null> {
   const attempts = [
     () => injected.requestAccounts?.(),
@@ -1948,6 +2284,14 @@ async function requestBtcAccounts(injected: InjectedBtc): Promise<string[] | nul
   return null
 }
 
+/**
+ * Handles `normalizeBtcAuthSignature` in the wallet client flow.
+ *
+ * @param raw - Input used to compute or dispatch the `normalizeBtcAuthSignature` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeBtcAuthSignature(raw: unknown): string {
   if (typeof raw === "string") {
     const trimmed = raw.trim()
@@ -1974,6 +2318,12 @@ function normalizeBtcAuthSignature(raw: unknown): string {
   return `0x${"b".repeat(64)}`
 }
 
+/**
+ * Handles `requestBtcAuthSignature` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function requestBtcAuthSignature(
   injected: InjectedBtc | null,
   message: string
@@ -2006,6 +2356,14 @@ type BtcChainInfo = {
   network?: string
 }
 
+/**
+ * Handles `normalizeBtcChainInfo` in the wallet client flow.
+ *
+ * @param raw - Input used to compute or dispatch the `normalizeBtcChainInfo` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeBtcChainInfo(raw: unknown): BtcChainInfo | null {
   if (!raw || typeof raw !== "object") return null
   const record = raw as Record<string, unknown>
@@ -2020,6 +2378,14 @@ function normalizeBtcChainInfo(raw: unknown): BtcChainInfo | null {
   }
 }
 
+/**
+ * Handles `getBtcChainInfo` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `getBtcChainInfo` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function getBtcChainInfo(injected: InjectedBtc): Promise<BtcChainInfo | null> {
   const attempts = [
     () => injected.getChain?.(),
@@ -2037,6 +2403,15 @@ async function getBtcChainInfo(injected: InjectedBtc): Promise<BtcChainInfo | nu
   return null
 }
 
+/**
+ * Handles `switchBtcChain` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `switchBtcChain` operation.
+ * @param chainEnum - Input used to compute or dispatch the `switchBtcChain` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function switchBtcChain(injected: InjectedBtc, chainEnum: string): Promise<BtcChainInfo | null> {
   const attempts = [
     () => injected.switchChain?.(chainEnum),
@@ -2054,6 +2429,14 @@ async function switchBtcChain(injected: InjectedBtc, chainEnum: string): Promise
   return null
 }
 
+/**
+ * Handles `ensureUniSatTestnet4` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `ensureUniSatTestnet4` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function ensureUniSatTestnet4(injected: InjectedBtc): Promise<void> {
   const current = await getBtcChainInfo(injected)
   if (current?.enum === "BITCOIN_TESTNET4") return
@@ -2078,6 +2461,14 @@ type SatsConnectResultLike<T> =
       error?: { message?: string }
     }
 
+/**
+ * Handles `unwrapSatsConnectResult` in the wallet client flow.
+ *
+ * @param response - Raw sats-connect response object returned by provider SDK calls.
+ * @param fallbackMessage - Default message used when provider response has no explicit error.
+ * @returns Unwrapped success payload typed as `T`.
+ * @remarks Throws when provider reports error status so caller can surface wallet UX feedback.
+ */
 function unwrapSatsConnectResult<T>(response: unknown, fallbackMessage: string): T {
   const parsed = response as SatsConnectResultLike<unknown> | null
   if (parsed?.status === "success") {
@@ -2087,6 +2478,14 @@ function unwrapSatsConnectResult<T>(response: unknown, fallbackMessage: string):
   throw new Error(message || fallbackMessage)
 }
 
+/**
+ * Handles `normalizeXverseConnectError` in the wallet client flow.
+ *
+ * @param error - Input used to compute or dispatch the `normalizeXverseConnectError` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeXverseConnectError(error: unknown): Error {
   if (error instanceof Error) {
     const message = error.message.trim()
@@ -2106,6 +2505,14 @@ function normalizeXverseConnectError(error: unknown): Error {
   return new Error("Failed to connect Xverse wallet.")
 }
 
+/**
+ * Handles `extractBtcAddressFromSatsConnectAddresses` in the wallet client flow.
+ *
+ * @param payload - Input used to compute or dispatch the `extractBtcAddressFromSatsConnectAddresses` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function extractBtcAddressFromSatsConnectAddresses(payload: unknown): string | null {
   if (!Array.isArray(payload)) return null
   const records = payload as Array<{
@@ -2121,6 +2528,14 @@ function extractBtcAddressFromSatsConnectAddresses(payload: unknown): string | n
   return normalizeBtcAddress(fallback.address)
 }
 
+/**
+ * Handles `isXverseTestnetNetwork` in the wallet client flow.
+ *
+ * @param name - Input used to compute or dispatch the `isXverseTestnetNetwork` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function isXverseTestnetNetwork(name: unknown): boolean {
   if (typeof name !== "string") return false
   const normalized = name.toLowerCase()
@@ -2132,6 +2547,14 @@ function isXverseTestnetNetwork(name: unknown): boolean {
   )
 }
 
+/**
+ * Handles `normalizeBtcTxHash` in the wallet client flow.
+ *
+ * @param raw - Input used to compute or dispatch the `normalizeBtcTxHash` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeBtcTxHash(raw: unknown): string | null {
   if (typeof raw === "string") {
     const trimmed = raw.trim()
@@ -2171,6 +2594,12 @@ function normalizeBtcTxHash(raw: unknown): string | null {
   return null
 }
 
+/**
+ * Handles `sendBtcTransferWithInjectedWallet` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function sendBtcTransferWithInjectedWallet(
   injected: InjectedBtc,
   toAddress: string,
@@ -2211,6 +2640,15 @@ async function sendBtcTransferWithInjectedWallet(
   throw normalizeWalletError(lastError, "Failed to send BTC transaction from wallet.")
 }
 
+/**
+ * Handles `sendBtcTransferViaXverse` in the wallet client flow.
+ *
+ * @param toAddress - Input used to compute or dispatch the `sendBtcTransferViaXverse` operation.
+ * @param amountSats - Input used to compute or dispatch the `sendBtcTransferViaXverse` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function sendBtcTransferViaXverse(toAddress: string, amountSats: number): Promise<string> {
   const sats = await import("sats-connect")
   const providerId = sats.DefaultAdaptersInfo?.xverse?.id || XVERSE_PROVIDER_ID
@@ -2242,6 +2680,12 @@ async function sendBtcTransferViaXverse(toAddress: string, amountSats: number): 
   return txHash
 }
 
+/**
+ * Handles `connectBtcWalletViaXverse` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function connectBtcWalletViaXverse(): Promise<{ address: string; balance: number | null }> {
   try {
     const sats = await import("sats-connect")
@@ -2336,6 +2780,14 @@ async function connectBtcWalletViaXverse(): Promise<{ address: string; balance: 
   }
 }
 
+/**
+ * Handles `normalizeBtcAccounts` in the wallet client flow.
+ *
+ * @param result - Input used to compute or dispatch the `normalizeBtcAccounts` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeBtcAccounts(result: unknown): string[] {
   if (typeof result === "string") {
     const normalized = normalizeBtcAddress(result)
@@ -2367,6 +2819,14 @@ function normalizeBtcAccounts(result: unknown): string[] {
   return []
 }
 
+/**
+ * Handles `normalizeBtcAddress` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `normalizeBtcAddress` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeBtcAddress(value: string): string | null {
   const trimmed = value.trim()
   if (!trimmed) return null
@@ -2383,6 +2843,15 @@ function normalizeBtcAddress(value: string): string | null {
   return looksLikeBtcAddress ? trimmed : null
 }
 
+/**
+ * Handles `fetchBtcBalance` in the wallet client flow.
+ *
+ * @param injected - Input used to compute or dispatch the `fetchBtcBalance` operation.
+ * @param address - Input used to compute or dispatch the `fetchBtcBalance` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function fetchBtcBalance(injected: InjectedBtc, address: string): Promise<number | null> {
   const attempts = [
     () => injected.getBalanceV2?.(),
@@ -2405,6 +2874,14 @@ async function fetchBtcBalance(injected: InjectedBtc, address: string): Promise<
   return null
 }
 
+/**
+ * Handles `fetchBtcBalanceFromPublicApis` in the wallet client flow.
+ *
+ * @param address - Input used to compute or dispatch the `fetchBtcBalanceFromPublicApis` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function fetchBtcBalanceFromPublicApis(address: string): Promise<number | null> {
   const normalizedAddress = address.trim()
   if (!normalizedAddress) return null
@@ -2437,6 +2914,14 @@ async function fetchBtcBalanceFromPublicApis(address: string): Promise<number | 
   return null
 }
 
+/**
+ * Handles `parseExplorerAddressBalance` in the wallet client flow.
+ *
+ * @param payload - Input used to compute or dispatch the `parseExplorerAddressBalance` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function parseExplorerAddressBalance(payload: any): number | null {
   if (!payload || typeof payload !== "object") return null
   const chainFunded = Number(payload?.chain_stats?.funded_txo_sum)
@@ -2461,6 +2946,14 @@ function parseExplorerAddressBalance(payload: any): number | null {
   return fallback / 100_000_000
 }
 
+/**
+ * Handles `normalizeBtcBalance` in the wallet client flow.
+ *
+ * @param raw - Input used to compute or dispatch the `normalizeBtcBalance` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeBtcBalance(raw: any): number | null {
   if (raw === null || raw === undefined) return null
   const normalizeScaled = (value: number): number | null => {
@@ -2506,6 +2999,15 @@ function normalizeBtcBalance(raw: any): number | null {
   return null
 }
 
+/**
+ * Handles `normalizeTokenBalance` in the wallet client flow.
+ *
+ * @param raw - Input used to compute or dispatch the `normalizeTokenBalance` operation.
+ * @param decimals - Input used to compute or dispatch the `normalizeTokenBalance` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeTokenBalance(raw: any, decimals: number): number | null {
   if (raw === null || raw === undefined) return null
   const dec =
@@ -2522,6 +3024,14 @@ function normalizeTokenBalance(raw: any, decimals: number): number | null {
   }
 }
 
+/**
+ * Handles `toBigInt` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `toBigInt` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function toBigInt(value: any): bigint | null {
   if (typeof value === "bigint") return value
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -2551,6 +3061,14 @@ function toBigInt(value: any): bigint | null {
   return null
 }
 
+/**
+ * Handles `pow10BigInt` in the wallet client flow.
+ *
+ * @param exponent - Input used to compute or dispatch the `pow10BigInt` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function pow10BigInt(exponent: number): bigint {
   const safeExponent = Number.isFinite(exponent) && exponent > 0 ? Math.floor(exponent) : 0
   let result = BigInt(1)
@@ -2561,15 +3079,39 @@ function pow10BigInt(exponent: number): bigint {
   return result
 }
 
+/**
+ * Handles `toShortString` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `toShortString` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function toShortString(value: string): string {
   if (value.length <= 31) return value
   return value.slice(0, 31)
 }
 
+/**
+ * Handles `signatureToHex` in the wallet client flow.
+ *
+ * @param signature - Input used to compute or dispatch the `signatureToHex` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function signatureToHex(signature: any): string {
   return normalizeSignatureValue(signature) || randomHex(32)
 }
 
+/**
+ * Handles `normalizeSignatureValue` in the wallet client flow.
+ *
+ * @param signature - Input used to compute or dispatch the `normalizeSignatureValue` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeSignatureValue(signature: any): string | null {
   if (!signature) return null
   if (typeof signature === "string") {
@@ -2588,11 +3130,27 @@ function normalizeSignatureValue(signature: any): string | null {
   return null
 }
 
+/**
+ * Handles `feltToPaddedHex` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `feltToPaddedHex` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function feltToPaddedHex(value: string | number): string {
   const hex = normalizeHex(value)
   return hex.padStart(64, "0")
 }
 
+/**
+ * Handles `normalizeHex` in the wallet client flow.
+ *
+ * @param value - Input used to compute or dispatch the `normalizeHex` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function normalizeHex(value: string | number): string {
   if (typeof value === "number") {
     return value.toString(16)
@@ -2610,6 +3168,14 @@ function normalizeHex(value: string | number): string {
   return value
 }
 
+/**
+ * Handles `randomHex` in the wallet client flow.
+ *
+ * @param bytes - Input used to compute or dispatch the `randomHex` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function randomHex(bytes: number): string {
   if (typeof window === "undefined" || !window.crypto?.getRandomValues) {
     return `0x${"a".repeat(bytes * 2)}`
@@ -2619,6 +3185,12 @@ function randomHex(bytes: number): string {
   return `0x${Array.from(buffer).map((b) => b.toString(16).padStart(2, "0")).join("")}`
 }
 
+/**
+ * Handles `useWallet` in the wallet client flow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export function useWallet() {
   const context = useContext(WalletContext)
   if (context === undefined) {

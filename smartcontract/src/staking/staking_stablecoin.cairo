@@ -7,79 +7,44 @@ pub struct Stake {
     pub accumulated_rewards: u256,
 }
 
-/// @title ERC20 Interface
-/// @author CAREL Team
-/// @notice Minimal ERC20 interface for staking transfers.
-/// @dev Used for stablecoin staking and rewards.
+// Minimal ERC20 interface for staking transfers.
+// Used for stablecoin staking and rewards.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
-    /// @notice Transfers tokens to a recipient.
-    /// @dev Used for withdrawals and rewards.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Transfers tokens from this contract to `recipient`.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
-    /// @notice Transfers tokens from a sender.
-    /// @dev Used for staking deposits.
-    /// @param sender Token holder address.
-    /// @param recipient Recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Transfers tokens from `sender` to `recipient` using allowance.
     fn transfer_from(
         ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256
     ) -> bool;
-    /// @notice Returns token balance of an account.
-    /// @dev Read-only helper.
-    /// @param account Account address.
-    /// @return balance Token balance.
+    // Returns token balance for `account`.
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
 }
 
-/// @title Stablecoin Staking Interface
-/// @author CAREL Team
-/// @notice Defines staking entrypoints for stablecoins.
-/// @dev Fixed APY staking with accepted token list.
+// Public staking API for supported stablecoins.
+// Uses fixed APY and owner-managed token allowlist.
 #[starknet::interface]
 pub trait IStakingStablecoin<TContractState> {
-    /// @notice Stakes a supported stablecoin.
-    /// @dev Records stake and reward accrual.
-    /// @param token Stablecoin address.
-    /// @param amount Amount to stake.
+    // Stakes assets and updates caller position.
     fn stake(ref self: TContractState, token: ContractAddress, amount: u256);
-    /// @notice Unstakes a supported stablecoin.
-    /// @dev Releases principal to the user.
-    /// @param token Stablecoin address.
-    /// @param amount Amount to unstake.
+    // Unstakes assets and updates caller position.
     fn unstake(ref self: TContractState, token: ContractAddress, amount: u256);
-    /// @notice Claims rewards for a stablecoin stake.
-    /// @dev Transfers rewards in reward token.
-    /// @param token Stablecoin address.
+    // Claims accrued staking rewards.
     fn claim_rewards(ref self: TContractState, token: ContractAddress);
-    /// @notice Calculates rewards for a stablecoin stake.
-    /// @dev Includes accumulated and pending rewards.
-    /// @param user User address.
-    /// @param token Stablecoin address.
-    /// @return rewards Total rewards.
+    // Returns total rewards (stored + pending) for a position.
     fn calculate_rewards(self: @TContractState, user: ContractAddress, token: ContractAddress) -> u256;
-    /// @notice Checks if a token is accepted.
-    /// @dev Read-only helper for UI.
-    /// @param token Stablecoin address.
-    /// @return accepted True if supported.
+    // Returns whether a stablecoin is allowlisted.
     fn is_accepted_token(self: @TContractState, token: ContractAddress) -> bool;
-    /// @notice Adds a stablecoin to the accepted list.
-    /// @dev Owner-only to control supported tokens.
-    /// @param token Stablecoin address.
+    // Adds a stablecoin to the staking allowlist.
     fn add_stablecoin(ref self: TContractState, token: ContractAddress);
 }
 
-/// @title Stablecoin Staking Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for stablecoin staking actions.
+// Hide Mode hooks for stablecoin staking actions.
 #[starknet::interface]
 pub trait IStakingStablecoinPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets the privacy router used for Hide Mode staking actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private staking action proof.
+    // Forwards nullifier/commitment-bound staking payload to the privacy router.
     fn submit_private_staking_action(
         ref self: TContractState,
         old_root: felt252,
@@ -91,10 +56,8 @@ pub trait IStakingStablecoinPrivacy<TContractState> {
     );
 }
 
-/// @title Stablecoin Staking Contract
-/// @author CAREL Team
-/// @notice Fixed-APY staking for supported stablecoins.
-/// @dev Uses a shared reward token for payouts.
+// Fixed-APY stablecoin staking contract.
+// Rewards are paid from shared `reward_token`.
 #[starknet::contract]
 pub mod StakingStablecoin {
     use starknet::ContractAddress;
@@ -146,11 +109,9 @@ pub mod StakingStablecoin {
         pub amount: u256
     }
 
-    /// @notice Initializes stablecoin staking.
-    /// @dev Sets reward token and owner.
-    /// @param reward_token Reward token address.
-    /// @param owner Owner/admin address.
+    // Initializes reward token dependency and owner authority.
     #[constructor]
+    // Initializes contract storage during deployment.
     fn constructor(ref self: ContractState, reward_token: ContractAddress, owner: ContractAddress) {
         self.reward_token.write(reward_token);
         self.owner.write(owner);
@@ -158,10 +119,7 @@ pub mod StakingStablecoin {
 
     #[abi(embed_v0)]
     impl StakingStablecoinImpl of IStakingStablecoin<ContractState> {
-        /// @notice Stakes a supported stablecoin.
-        /// @dev Records stake and reward accrual.
-        /// @param token Stablecoin address.
-        /// @param amount Amount to stake.
+        // Stakes allowlisted stablecoin and updates caller accrual checkpoint.
         fn stake(ref self: ContractState, token: ContractAddress, amount: u256) {
             assert!(self.accepted_tokens.entry(token).read(), "Token tidak didukung");
             
@@ -180,14 +138,10 @@ pub mod StakingStablecoin {
             assert!(ok, "Token transfer failed");
             self.stakes.entry((user, token)).write(current_stake);
 
-            // Correct emission syntax: Event::Variant(Struct)
             self.emit(Event::Staked(Staked { user, token, amount }));
         }
 
-        /// @notice Unstakes a supported stablecoin.
-        /// @dev Releases principal to the user.
-        /// @param token Stablecoin address.
-        /// @param amount Amount to unstake.
+        // Unstakes stablecoin principal and preserves accrued rewards.
         fn unstake(ref self: ContractState, token: ContractAddress, amount: u256) {
             let user = get_caller_address();
             let now = get_block_timestamp();
@@ -206,9 +160,7 @@ pub mod StakingStablecoin {
             self.emit(Event::Unstaked(Unstaked { user, token, amount }));
         }
 
-        /// @notice Claims rewards for a stablecoin stake.
-        /// @dev Transfers rewards in reward token.
-        /// @param token Stablecoin address.
+        // Claims caller rewards for a specific stablecoin position.
         fn claim_rewards(ref self: ContractState, token: ContractAddress) {
             let user = get_caller_address();
             let now = get_block_timestamp();
@@ -226,27 +178,18 @@ pub mod StakingStablecoin {
             self.emit(Event::RewardsClaimed(RewardsClaimed { user, amount: total_reward }));
         }
 
-        /// @notice Calculates rewards for a stablecoin stake.
-        /// @dev Includes accumulated and pending rewards.
-        /// @param user User address.
-        /// @param token Stablecoin address.
-        /// @return rewards Total rewards.
+        // Returns total claimable rewards (stored + pending) for a position.
         fn calculate_rewards(self: @ContractState, user: ContractAddress, token: ContractAddress) -> u256 {
             let stake = self.stakes.entry((user, token)).read();
             stake.accumulated_rewards + self._calculate_pending(@stake)
         }
 
-        /// @notice Checks if a token is accepted.
-        /// @dev Read-only helper for UI.
-        /// @param token Stablecoin address.
-        /// @return accepted True if supported.
+        // Returns whether a stablecoin is allowlisted.
         fn is_accepted_token(self: @ContractState, token: ContractAddress) -> bool {
             self.accepted_tokens.entry(token).read()
         }
 
-        /// @notice Adds a stablecoin to the accepted list.
-        /// @dev Owner-only to control supported tokens.
-        /// @param token Stablecoin address.
+        // Adds a stablecoin to the staking allowlist.
         fn add_stablecoin(ref self: ContractState, token: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Unauthorized");
             self.accepted_tokens.entry(token).write(true);
@@ -255,8 +198,7 @@ pub mod StakingStablecoin {
 
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
-        /// @notice Calculates pending rewards since last claim.
-        /// @dev Uses fixed APY and elapsed time.
+        // Computes linear rewards since `last_claim_time` using fixed APY.
         fn _calculate_pending(self: @ContractState, stake: @Stake) -> u256 {
             if *stake.amount == 0 { return 0; }
             let now = get_block_timestamp();
@@ -268,12 +210,15 @@ pub mod StakingStablecoin {
 
     #[abi(embed_v0)]
     impl StakingStablecoinPrivacyImpl of super::IStakingStablecoinPrivacy<ContractState> {
+        // Sets router used by Hide Mode stablecoin staking flow.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Unauthorized owner");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Forwards private staking payload to privacy router for proof verification.
+        // `nullifiers` prevent replay and `commitments` bind action intent.
         fn submit_private_staking_action(
             ref self: ContractState,
             old_root: felt252,

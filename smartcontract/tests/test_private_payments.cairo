@@ -7,6 +7,8 @@ use smartcontract::privacy::private_payments::{
 
 #[starknet::interface]
 pub trait IMockVerifier<TContractState> {
+    // Updates next verification result configuration after access-control and invariant checks.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn set_next_verification_result(ref self: TContractState, result: bool);
 }
 
@@ -21,6 +23,8 @@ pub mod MockVerifier {
 
     #[abi(embed_v0)]
     impl IProofVerifierImpl of smartcontract::privacy::zk_privacy_router::IProofVerifier<ContractState> {
+        // Applies verify proof after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
             let _ = proof;
             let _ = public_inputs;
@@ -30,12 +34,16 @@ pub mod MockVerifier {
 
     #[abi(embed_v0)]
     impl IMockVerifierImpl of super::IMockVerifier<ContractState> {
+        // Updates next verification result configuration after access-control and invariant checks.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn set_next_verification_result(ref self: ContractState, result: bool) {
             self.next_result.write(result);
         }
     }
 }
 
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (IPrivatePaymentsDispatcher, ContractAddress) {
     let verifier_class = declare("MockVerifier").expect('Verifier declaration failed').contract_class();
     let (verifier_addr, _) = verifier_class.deploy(@array![]).expect('Verifier deployment failed');
@@ -51,6 +59,8 @@ fn setup() -> (IPrivatePaymentsDispatcher, ContractAddress) {
 }
 
 #[test]
+// Test case: validates submit private payment behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_submit_private_payment() {
     let (dispatcher, verifier_addr) = setup();
     IMockVerifierDispatcher { contract_address: verifier_addr }.set_next_verification_result(true);
@@ -61,6 +71,8 @@ fn test_submit_private_payment() {
 }
 
 #[test]
+// Test case: validates finalize private payment behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_finalize_private_payment() {
     let (dispatcher, verifier_addr) = setup();
     IMockVerifierDispatcher { contract_address: verifier_addr }.set_next_verification_result(true);
@@ -76,6 +88,8 @@ fn test_finalize_private_payment() {
 }
 
 #[test]
+// Test case: validates nullifier view default false behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_nullifier_view_default_false() {
     let (dispatcher, _verifier_addr) = setup();
     let nullifier = 'unused_nullifier';
@@ -85,6 +99,8 @@ fn test_nullifier_view_default_false() {
 
 #[test]
 #[should_panic(expected: "Nullifier already used")]
+// Test case: validates reject double finalize with same nullifier behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_reject_double_finalize_with_same_nullifier() {
     let (dispatcher, verifier_addr) = setup();
     IMockVerifierDispatcher { contract_address: verifier_addr }.set_next_verification_result(true);

@@ -1,6 +1,7 @@
 use crate::{config::Config, constants::EPOCH_DURATION_SECONDS, db::Database, error::Result};
 use sqlx::Row;
 
+// Internal helper that supports `epoch_from_timestamp` operations.
 fn epoch_from_timestamp(timestamp: i64) -> i64 {
     timestamp / EPOCH_DURATION_SECONDS
 }
@@ -12,6 +13,17 @@ pub struct SnapshotManager {
 }
 
 impl SnapshotManager {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self { db, config }
     }
@@ -82,6 +94,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `epoch_from_timestamp_calculates_epoch` operations.
     fn epoch_from_timestamp_calculates_epoch() {
         // Memastikan epoch dihitung dari timestamp
         let timestamp = EPOCH_DURATION_SECONDS * 2 + 10;

@@ -6,6 +6,8 @@ use snforge_std::{declare, DeclareResultTrait, ContractClassTrait};
 use smartcontract::privacy::sigma_verifier::{ISigmaVerifierDispatcher, ISigmaVerifierDispatcherTrait};
 
 #[test]
+// Test case: validates sigma verifier accepts valid proof behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_sigma_verifier_accepts_valid_proof() {
     let contract = declare("SigmaVerifier").unwrap().contract_class();
     let (address, _) = contract.deploy(@array![]).unwrap();
@@ -24,6 +26,8 @@ fn test_sigma_verifier_accepts_valid_proof() {
 }
 
 #[test]
+// Test case: validates sigma verifier rejects invalid proof behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_sigma_verifier_rejects_invalid_proof() {
     let contract = declare("SigmaVerifier").unwrap().contract_class();
     let (address, _) = contract.deploy(@array![]).unwrap();

@@ -1,7 +1,5 @@
-/// @title Privacy Action Types
-/// @author CAREL Team
-/// @notice Shared action identifiers for ZK privacy routing.
-/// @dev Short felt252 literals to keep calldata compact.
+// Shared action identifiers for ZK privacy routing.
+// Short felt252 literals to keep calldata compact.
 
 pub const ACTION_ACCESS: felt252 = 'ACCESS';
 pub const ACTION_TOKEN: felt252 = 'TOKEN';

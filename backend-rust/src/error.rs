@@ -69,6 +69,7 @@ pub struct ErrorDetail {
 }
 
 impl IntoResponse for AppError {
+    // Internal helper that supports `into_response` operations.
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
             AppError::Database(ref e) => (

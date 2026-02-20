@@ -7,29 +7,20 @@ pub struct PrivateBTCSwapData {
     pub finalized: bool,
 }
 
-/// @title Private BTC Swap Interface
-/// @author CAREL Team
-/// @notice Private BTC swap flow with ZK proofs.
-/// @dev Uses external verifier for proof validation.
+// Private BTC swap flow with ZK proofs.
+// Uses external verifier for proof validation.
 #[starknet::interface]
 pub trait IPrivateBTCSwap<TContractState> {
-    /// @notice Initiates a private BTC swap.
-    /// @param swap Encrypted swap payload.
-    /// @param proof ZK proof.
-    /// @param public_inputs Public inputs.
-    /// @return swap_id New swap id.
+    // Implements initiate private btc swap logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn initiate_private_btc_swap(
         ref self: TContractState,
         swap: PrivateBTCSwapData,
         proof: Span<felt252>,
         public_inputs: Span<felt252>
     ) -> u64;
-    /// @notice Finalizes a private BTC swap.
-    /// @param swap_id Swap id.
-    /// @param recipient Recipient address.
-    /// @param nullifier Nullifier to prevent replay.
-    /// @param proof ZK proof.
-    /// @param public_inputs Public inputs.
+    // Applies finalize private btc swap after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn finalize_private_btc_swap(
         ref self: TContractState,
         swap_id: u64,
@@ -38,31 +29,27 @@ pub trait IPrivateBTCSwap<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>
     );
-    /// @notice Checks if a nullifier has been used.
-    /// @param nullifier Nullifier to check.
-    /// @return used True if used.
+    // Returns is nullifier used from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn is_nullifier_used(self: @TContractState, nullifier: felt252) -> bool;
 }
 
-/// @title Private BTC Swap Admin Interface
-/// @author CAREL Team
-/// @notice Admin controls for verifier configuration.
+// Admin controls for verifier configuration.
 #[starknet::interface]
 pub trait IPrivateBTCSwapAdmin<TContractState> {
-    /// @notice Updates verifier address.
-    /// @dev Owner-only.
-    /// @param verifier New verifier address.
+    // Updates verifier configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
 }
 
-/// @title Private BTC Swap Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for private BTC swaps.
+// ZK privacy hooks for private BTC swaps.
 #[starknet::interface]
 pub trait IPrivateBTCSwapPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private BTC swap action proof.
+    // Applies submit private btc swap action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_btc_swap_action(
         ref self: TContractState,
         old_root: felt252,
@@ -74,10 +61,8 @@ pub trait IPrivateBTCSwapPrivacy<TContractState> {
     );
 }
 
-/// @title Private BTC Swap Contract
-/// @author CAREL Team
-/// @notice Private BTC swap with ZK verification and nullifiers.
-/// @dev Integrates external verifier.
+// Private BTC swap with ZK verification and nullifiers.
+// Integrates external verifier.
 #[starknet::contract]
 pub mod PrivateBTCSwap {
     use starknet::ContractAddress;
@@ -134,6 +119,8 @@ pub mod PrivateBTCSwap {
     }
 
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, admin: ContractAddress, verifier: ContractAddress) {
         self.ownable.initializer(admin);
         self.verifier.write(verifier);
@@ -141,6 +128,8 @@ pub mod PrivateBTCSwap {
 
     #[abi(embed_v0)]
     impl PrivateBTCSwapImpl of super::IPrivateBTCSwap<ContractState> {
+        // Implements initiate private btc swap logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn initiate_private_btc_swap(
             ref self: ContractState,
             swap: PrivateBTCSwapData,
@@ -158,6 +147,8 @@ pub mod PrivateBTCSwap {
             id
         }
 
+        // Applies finalize private btc swap after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn finalize_private_btc_swap(
             ref self: ContractState,
             swap_id: u64,
@@ -178,6 +169,8 @@ pub mod PrivateBTCSwap {
             self.emit(Event::SwapFinalized(SwapFinalized { swap_id, recipient }));
         }
 
+        // Returns is nullifier used from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
             self.nullifiers.entry(nullifier).read()
         }
@@ -185,12 +178,16 @@ pub mod PrivateBTCSwap {
 
     #[abi(embed_v0)]
     impl PrivateBTCSwapPrivacyImpl of super::IPrivateBTCSwapPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Applies submit private btc swap action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_btc_swap_action(
             ref self: ContractState,
             old_root: felt252,
@@ -217,6 +214,8 @@ pub mod PrivateBTCSwap {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::IPrivateBTCSwapAdmin<ContractState> {
+        // Updates verifier configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!verifier.is_zero(), "Verifier required");

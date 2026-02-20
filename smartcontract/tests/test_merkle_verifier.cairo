@@ -4,7 +4,8 @@ use snforge_std::{declare, ContractClassTrait, DeclareResultTrait};
 // Import dispatcher and traits from the module path
 use smartcontract::rewards::merkle_verifier::{IMerkleVerifierDispatcher, IMerkleVerifierDispatcherTrait};
 
-/// Helper function to deploy the MerkleVerifier contract
+// Deploys merkle verifier fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_merkle_verifier() -> IMerkleVerifierDispatcher {
     let contract = declare("MerkleVerifier").unwrap().contract_class();
     // Constructor is empty, so no calldata needed
@@ -13,6 +14,8 @@ fn deploy_merkle_verifier() -> IMerkleVerifierDispatcher {
 }
 
 #[test]
+// Test case: validates hash leaf consistency behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_hash_leaf_consistency() {
     let dispatcher = deploy_merkle_verifier();
     
@@ -28,6 +31,8 @@ fn test_hash_leaf_consistency() {
 }
 
 #[test]
+// Test case: validates hash pair sorting behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_hash_pair_sorting() {
     let dispatcher = deploy_merkle_verifier();
     
@@ -42,6 +47,8 @@ fn test_hash_pair_sorting() {
 }
 
 #[test]
+// Test case: validates verify valid proof single level behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_verify_valid_proof_single_level() {
     let dispatcher = deploy_merkle_verifier();
     
@@ -61,6 +68,8 @@ fn test_verify_valid_proof_single_level() {
 }
 
 #[test]
+// Test case: validates verify valid proof multi level behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_verify_valid_proof_multi_level() {
     let dispatcher = deploy_merkle_verifier();
     
@@ -85,6 +94,8 @@ fn test_verify_valid_proof_multi_level() {
 }
 
 #[test]
+// Test case: validates verify invalid proof fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_verify_invalid_proof_fails() {
     let dispatcher = deploy_merkle_verifier();
     
@@ -104,6 +115,8 @@ fn test_verify_invalid_proof_fails() {
 }
 
 #[test]
+// Test case: validates verify empty proof is leaf behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_verify_empty_proof_is_leaf() {
     let dispatcher = deploy_merkle_verifier();
     

@@ -26,6 +26,7 @@ pub struct ResetPointsResponse {
     pub transactions_rows_deleted: i64,
 }
 
+// Internal helper that supports `require_admin_key` operations.
 fn require_admin_key(headers: &HeaderMap, state: &AppState) -> Result<()> {
     let expected = state
         .config

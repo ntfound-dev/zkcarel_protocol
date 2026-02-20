@@ -27,6 +27,7 @@ enum HideExecutorKind {
     ShieldedPoolV2,
 }
 
+// Internal helper that supports `hide_executor_kind` operations.
 fn hide_executor_kind() -> HideExecutorKind {
     let raw = std::env::var("HIDE_BALANCE_EXECUTOR_KIND")
         .unwrap_or_default()
@@ -55,10 +56,32 @@ struct ParsedExecuteCall {
     calldata: Vec<Felt>,
 }
 
+/// Checks conditions for `should_run_privacy_verification`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn should_run_privacy_verification(hide_balance: bool) -> bool {
     hide_balance
 }
 
+/// Parses or transforms values for `normalize_onchain_tx_hash`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn normalize_onchain_tx_hash(tx_hash: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = tx_hash.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
@@ -81,6 +104,7 @@ pub fn normalize_onchain_tx_hash(tx_hash: Option<&str>) -> Result<Option<String>
     Ok(Some(raw.to_ascii_lowercase()))
 }
 
+// Internal helper that checks conditions for `is_dummy_garaga_payload`.
 fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
     if proof.len() != 1 || public_inputs.len() != 1 {
         return false;
@@ -89,6 +113,7 @@ fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
         && public_inputs[0].trim().eq_ignore_ascii_case("0x1")
 }
 
+// Internal helper that fetches data for `resolve_privacy_inputs`.
 fn resolve_privacy_inputs(
     seed: &str,
     payload: Option<&PrivacyVerificationPayload>,
@@ -139,6 +164,7 @@ fn resolve_privacy_inputs(
     Ok((nullifier, commitment, proof, public_inputs))
 }
 
+// Internal helper that supports `felt_to_usize` operations.
 fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     let raw = felt_to_u128(value).map_err(|_| {
         AppError::BadRequest(format!(
@@ -152,6 +178,7 @@ fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     })
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls_offset`.
 fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if calldata.is_empty() {
         return Err(AppError::BadRequest(
@@ -216,6 +243,7 @@ fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     Ok(calls)
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls_inline`.
 fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if calldata.is_empty() {
         return Err(AppError::BadRequest(
@@ -260,6 +288,7 @@ fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     Ok(calls)
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls`.
 fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if let Ok(calls) = parse_execute_calls_offset(calldata) {
         return Ok(calls);
@@ -267,6 +296,7 @@ fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     parse_execute_calls_inline(calldata)
 }
 
+// Internal helper that supports `extract_invoke_sender_and_calldata` operations.
 fn extract_invoke_sender_and_calldata(tx: &Transaction) -> Result<(Felt, &[Felt])> {
     let invoke = match tx {
         Transaction::Invoke(invoke) => invoke,
@@ -286,6 +316,7 @@ fn extract_invoke_sender_and_calldata(tx: &Transaction) -> Result<(Felt, &[Felt]
     }
 }
 
+// Internal helper that fetches data for `resolve_allowed_senders`.
 async fn resolve_allowed_senders(
     state: &AppState,
     auth_subject: &str,
@@ -321,6 +352,7 @@ async fn resolve_allowed_senders(
     Ok(out)
 }
 
+// Internal helper that supports `verify_sender_matches_invoke_payload` operations.
 fn verify_sender_matches_invoke_payload(tx: &Transaction, allowed_senders: &[Felt]) -> Result<()> {
     if allowed_senders.is_empty() {
         return Err(AppError::BadRequest(
@@ -342,6 +374,7 @@ fn verify_sender_matches_invoke_payload(tx: &Transaction, allowed_senders: &[Fel
     )))
 }
 
+// Internal helper that supports `verify_hide_balance_privacy_call_in_invoke_payload` operations.
 fn verify_hide_balance_privacy_call_in_invoke_payload(
     tx: &Transaction,
     expected_router: Felt,
@@ -480,6 +513,7 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
     Ok(())
 }
 
+// Internal helper that supports `configured_private_action_executor` operations.
 fn configured_private_action_executor() -> Option<Felt> {
     for key in [
         "PRIVATE_ACTION_EXECUTOR_ADDRESS",
@@ -502,6 +536,17 @@ fn configured_private_action_executor() -> Option<Felt> {
     None
 }
 
+/// Handles `verify_onchain_hide_balance_invoke_tx` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub async fn verify_onchain_hide_balance_invoke_tx(
     state: &AppState,
     tx_hash: &str,

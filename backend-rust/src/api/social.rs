@@ -45,6 +45,7 @@ struct SocialTaskDefinitionInput {
     provider: Option<String>,
 }
 
+// Internal helper that supports `infer_provider` operations.
 fn infer_provider(task_id: &str) -> Option<&'static str> {
     if task_id.starts_with("twitter_") {
         return Some("twitter");
@@ -58,6 +59,7 @@ fn infer_provider(task_id: &str) -> Option<&'static str> {
     None
 }
 
+// Internal helper that fetches data for `resolve_task_alias`.
 fn resolve_task_alias(task_type: &str) -> &str {
     if task_type.eq_ignore_ascii_case("telegram_join") {
         "telegram_join_channel"
@@ -66,6 +68,7 @@ fn resolve_task_alias(task_type: &str) -> &str {
     }
 }
 
+// Internal helper that supports `default_social_tasks` operations.
 fn default_social_tasks() -> Vec<SocialTaskDefinition> {
     vec![
         SocialTaskDefinition {
@@ -134,6 +137,7 @@ fn default_social_tasks() -> Vec<SocialTaskDefinition> {
     ]
 }
 
+// Internal helper that supports `social_task_catalog` operations.
 fn social_task_catalog(config: &Config) -> Vec<SocialTaskDefinition> {
     let Some(raw) = config
         .social_tasks_json
@@ -274,6 +278,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `default_social_task_catalog_contains_expected_rules` operations.
     fn default_social_task_catalog_contains_expected_rules() {
         let tasks = default_social_tasks();
         let twitter_follow = tasks
@@ -289,6 +294,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that fetches data for `resolve_task_alias_maps_legacy_telegram_join`.
     fn resolve_task_alias_maps_legacy_telegram_join() {
         assert_eq!(resolve_task_alias("telegram_join"), "telegram_join_channel");
         assert_eq!(resolve_task_alias("discord_join"), "discord_join");

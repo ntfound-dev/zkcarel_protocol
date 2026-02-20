@@ -50,6 +50,12 @@ interface ReferralLogProps {
   showTrigger?: boolean
 }
 
+/**
+ * Handles `ReferralLog` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function ReferralLog({ 
   isOpen, 
   onOpenChange, 
@@ -122,6 +128,14 @@ export function ReferralLog({
     }
   }, [])
 
+  /**
+   * Handles `copyToClipboard` logic.
+   *
+   * @param text - Input used by `copyToClipboard` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
     setCopied(true)

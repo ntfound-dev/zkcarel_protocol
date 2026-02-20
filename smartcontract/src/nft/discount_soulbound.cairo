@@ -11,88 +11,68 @@ pub struct DiscountNFT {
 }
 
 impl DiscountNFTDefault of Default<DiscountNFT> {
+    // Implements default logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn default() -> DiscountNFT {
         DiscountNFT {
             tier: 0,
             discount_rate: 0,
             max_usage: 0,
             used_in_period: 0,
-            // Menggunakan TryInto untuk menggantikan contract_address_const yang deprecated
+            // Uses TryInto instead of deprecated contract_address_const helper.
             owner: 0.try_into().unwrap(),
             last_reset: 0,
         }
     }
 }
 
-/// @title Point Storage Interface
-/// @author CAREL Team
-/// @notice Minimal interface for point balance and consumption.
-/// @dev Used to charge points when minting discount NFTs.
+// Minimal interface for point balance and consumption.
+// Used to charge points when minting discount NFTs.
 #[starknet::interface]
 pub trait IPointStorage<TContractState> {
-    /// @notice Returns user points for a given epoch.
-    /// @dev Read-only helper for eligibility checks.
-    /// @param epoch Epoch identifier.
-    /// @param user User address.
-    /// @return points User points for the epoch.
+    // Returns get user points from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_user_points(self: @TContractState, epoch: u64, user: ContractAddress) -> u256;
-    /// @notice Consumes user points for a given epoch.
-    /// @dev Used to charge points for NFT minting.
-    /// @param epoch Epoch identifier.
-    /// @param user User address.
-    /// @param amount Amount of points to consume.
+    // Applies consume points after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn consume_points(ref self: TContractState, epoch: u64, user: ContractAddress, amount: u256);
 }
 
-/// @title Discount Soulbound Interface
-/// @author CAREL Team
-/// @notice Defines minting and usage for discount NFTs.
-/// @dev Soulbound NFTs provide fee discounts with limited uses.
+// Defines minting and usage for discount NFTs.
+// Soulbound NFTs provide fee discounts with limited uses.
 #[starknet::interface]
 pub trait IDiscountSoulbound<TContractState> {
-    /// @notice Mints a discount NFT for the caller.
-    /// @dev Charges points based on tier.
-    /// @param tier Tier id to mint.
+    // Applies mint nft after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn mint_nft(ref self: TContractState, tier: u8);
-    /// @notice Consumes a discount use for a user.
-    /// @dev NFT tetap dimiliki user; menjadi inactive saat usage habis.
-    /// @param user User address.
-    /// @return discount Discount percentage or rate.
+    // Implements use discount logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn use_discount(ref self: TContractState, user: ContractAddress) -> u256;
-    /// @notice Consumes multiple discount uses for a user.
-    /// @dev Bounded by remaining usage; returns 0 if insufficient.
-    /// @param user User address.
-    /// @param uses Number of uses to consume.
-    /// @return discount Discount percentage or rate.
+    // Implements use discount batch logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn use_discount_batch(ref self: TContractState, user: ContractAddress, uses: u256) -> u256;
-    /// @notice Recharges usage quota for the caller's NFT.
-    /// @dev Optional path if recharge cost is configured (>0).
+    // Implements recharge nft logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn recharge_nft(ref self: TContractState);
-    /// @notice Returns a user's current discount rate.
-    /// @dev Read-only helper for pricing.
-    /// @param user User address.
-    /// @return discount Discount rate.
+    // Returns get user discount from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_user_discount(self: @TContractState, user: ContractAddress) -> u256;
-    /// @notice Checks if a user has an active discount.
-    /// @dev Returns active flag and discount rate.
-    /// @param user User address.
-    /// @return active_and_discount Tuple of active flag and discount rate.
+    // Returns has active discount from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn has_active_discount(self: @TContractState, user: ContractAddress) -> (bool, u256);
-    /// @notice Returns NFT metadata by token id.
-    /// @dev Read-only helper for UIs.
-    /// @param token_id Token id.
-    /// @return nft Discount NFT metadata.
+    // Returns get nft info from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_nft_info(self: @TContractState, token_id: u256) -> DiscountNFT;
 }
 
-/// @title Discount Soulbound Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for discount NFT actions.
+// ZK privacy entrypoints for discount NFT actions.
 #[starknet::interface]
 pub trait IDiscountSoulboundPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private NFT action proof.
+    // Applies submit private nft action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_nft_action(
         ref self: TContractState,
         old_root: felt252,
@@ -104,36 +84,24 @@ pub trait IDiscountSoulboundPrivacy<TContractState> {
     );
 }
 
-/// @title Soulbound Transfer Interface
-/// @author CAREL Team
-/// @notice ERC20-like transfer interface overridden to prevent transfers.
-/// @dev Ensures NFTs remain non-transferable.
+// ERC20-like transfer interface overridden to prevent transfers.
+// Ensures NFTs remain non-transferable.
 #[starknet::interface]
 pub trait ISoulbound<TContractState> {
-    /// @notice Attempted transfer (always reverts).
-    /// @dev Enforces soulbound behavior.
-    /// @param recipient Transfer recipient address.
-    /// @param amount Transfer amount (unused).
+    // Applies transfer after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256);
 }
 
-/// @title Discount Soulbound Admin Interface
-/// @author CAREL Team
-/// @notice Administrative controls for NFT tiers and epochs.
-/// @dev Admin-only updates for configuration.
+// Administrative controls for NFT tiers and epochs.
+// Admin-only updates for configuration.
 #[starknet::interface]
 pub trait IDiscountSoulboundAdmin<TContractState> {
-    /// @notice Sets the current points epoch.
-    /// @dev Admin-only to align with reward snapshots.
-    /// @param epoch New current epoch.
+    // Updates current epoch configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_current_epoch(ref self: TContractState, epoch: u64);
-    /// @notice Updates tier configuration.
-    /// @dev Admin-only to control pricing and usage limits.
-    /// @param tier Tier id.
-    /// @param cost Points cost for minting.
-    /// @param discount Discount rate for the tier.
-    /// @param max_usage Max usage count per period.
-    /// @param recharge_cost Points cost to recharge usage.
+    // Updates tier config configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_tier_config(
         ref self: TContractState,
         tier: u8,
@@ -144,10 +112,8 @@ pub trait IDiscountSoulboundAdmin<TContractState> {
     );
 }
 
-/// @title Discount Soulbound Contract
-/// @author CAREL Team
-/// @notice Soulbound discount NFTs backed by point spending.
-/// @dev NFT tidak diburn saat usage habis; status jadi inactive sampai mint ulang/recharge.
+// Soulbound discount NFTs backed by point spending.
+// NFTs are not burned on usage exhaustion and become inactive until recharge or remint.
 #[starknet::contract]
 pub mod DiscountSoulbound {
     use starknet::ContractAddress;
@@ -204,18 +170,19 @@ pub mod DiscountSoulbound {
         pub max_usage: u256
     }
 
-    /// @notice Initializes the discount NFT contract.
-    /// @dev Sets admin, point storage, and default tier configs.
-    /// @param point_storage Point storage contract address.
-    /// @param epoch Initial epoch for point consumption.
+    // Initializes the discount NFT contract.
+    // Sets admin, point storage, and default tier configs.
+    // `point_storage` tracks point balances and `epoch` sets initial accounting period.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, point_storage: ContractAddress, epoch: u64) {
         self.admin.write(get_caller_address());
         self.point_storage_contract.write(point_storage);
         self.current_epoch.write(epoch);
         self.next_token_id.write(1);
 
-        // Tier config sesuai model bisnis:
+        // Tier configuration used by discount and usage policies:
         // Bronze 5% (5 use), Silver 10% (7), Gold 25% (10), Platinum 35% (15), Onyx 50% (20).
         self.tier_costs.entry(1).write(5000);
         self.tier_discounts.entry(1).write(5);
@@ -245,9 +212,8 @@ pub mod DiscountSoulbound {
 
     #[abi(embed_v0)]
     impl DiscountSoulboundImpl of super::IDiscountSoulbound<ContractState> {
-        /// @notice Mints a discount NFT for the caller.
-        /// @dev Charges points based on tier.
-        /// @param tier Tier id to mint.
+        // Applies mint nft after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn mint_nft(ref self: ContractState, tier: u8) {
             let user = get_caller_address();
             assert!(tier >= 1 && tier <= 5, "Tier tidak valid");
@@ -282,19 +248,14 @@ pub mod DiscountSoulbound {
             self.emit(Event::NFTMinted(NFTMinted { user, token_id, tier }));
         }
 
-        /// @notice Consumes a discount use for a user.
-        /// @dev Enforces finite usage limits.
-        /// @param user User address.
-        /// @return discount Discount percentage or rate.
+        // Implements use discount logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn use_discount(ref self: ContractState, user: ContractAddress) -> u256 {
             self.use_discount_batch(user, 1_u256)
         }
 
-        /// @notice Consumes multiple discount uses for a user.
-        /// @dev Enforces finite usage limits in O(1).
-        /// @param user User address.
-        /// @param uses Number of uses to consume.
-        /// @return discount Discount percentage or rate.
+        // Implements use discount batch logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn use_discount_batch(ref self: ContractState, user: ContractAddress, uses: u256) -> u256 {
             if uses == 0 {
                 return 0;
@@ -328,8 +289,8 @@ pub mod DiscountSoulbound {
             discount
         }
 
-        /// @notice Recharges usage quota for the caller's NFT.
-        /// @dev Consumes points based on tier recharge cost (if enabled).
+        // Implements recharge nft logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn recharge_nft(ref self: ContractState) {
             let user = get_caller_address();
             let token_id = self.user_nft.entry(user).read();
@@ -350,10 +311,8 @@ pub mod DiscountSoulbound {
             self.nfts.entry(token_id).write(nft);
         }
 
-        /// @notice Returns a user's current discount rate.
-        /// @dev Read-only helper for pricing.
-        /// @param user User address.
-        /// @return discount Discount rate.
+        // Returns get user discount from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_user_discount(self: @ContractState, user: ContractAddress) -> u256 {
             let token_id = self.user_nft.entry(user).read();
             if token_id == 0 {
@@ -364,10 +323,8 @@ pub mod DiscountSoulbound {
             nft.discount_rate
         }
 
-        /// @notice Checks if a user has an active discount.
-        /// @dev Returns active flag and discount rate.
-        /// @param user User address.
-        /// @return active_and_discount Tuple of active flag and discount rate.
+        // Returns has active discount from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn has_active_discount(self: @ContractState, user: ContractAddress) -> (bool, u256) {
             let token_id = self.user_nft.entry(user).read();
             if token_id == 0 {
@@ -379,10 +336,8 @@ pub mod DiscountSoulbound {
             (active, rate)
         }
 
-        /// @notice Returns NFT metadata by token id.
-        /// @dev Read-only helper for UIs.
-        /// @param token_id Token id.
-        /// @return nft Discount NFT metadata.
+        // Returns get nft info from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_nft_info(self: @ContractState, token_id: u256) -> DiscountNFT {
             self.nfts.entry(token_id).read()
         }
@@ -390,20 +345,15 @@ pub mod DiscountSoulbound {
 
     #[abi(embed_v0)]
     impl DiscountSoulboundAdminImpl of super::IDiscountSoulboundAdmin<ContractState> {
-        /// @notice Sets the current points epoch.
-        /// @dev Admin-only to align with reward snapshots.
-        /// @param epoch New current epoch.
+        // Updates current epoch configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_current_epoch(ref self: ContractState, epoch: u64) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized");
             self.current_epoch.write(epoch);
         }
 
-        /// @notice Updates tier configuration.
-        /// @dev Admin-only to control pricing and usage limits.
-        /// @param tier Tier id.
-        /// @param cost Points cost for minting.
-        /// @param discount Discount rate for the tier.
-        /// @param max_usage Max usage count (0 for unlimited).
+        // Updates tier config configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_tier_config(
             ref self: ContractState,
             tier: u8,
@@ -422,12 +372,16 @@ pub mod DiscountSoulbound {
 
     #[abi(embed_v0)]
     impl DiscountSoulboundPrivacyImpl of super::IDiscountSoulboundPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Applies submit private nft action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_nft_action(
             ref self: ContractState,
             old_root: felt252,
@@ -454,10 +408,8 @@ pub mod DiscountSoulbound {
 
     #[abi(embed_v0)]
     impl SoulboundTransferImpl of super::ISoulbound<ContractState> {
-        /// @notice Attempted transfer (always reverts).
-        /// @dev Enforces soulbound behavior.
-        /// @param recipient Transfer recipient address.
-        /// @param amount Transfer amount (unused).
+        // Applies transfer after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) {
             panic!("NFT ini bersifat Soulbound dan tidak dapat dipindahtangankan");
         }

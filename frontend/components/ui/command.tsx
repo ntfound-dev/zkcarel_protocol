@@ -13,6 +13,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 
+/**
+ * Handles `Command` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Command({
   className,
   ...props
@@ -29,6 +35,12 @@ function Command({
   )
 }
 
+/**
+ * Handles `CommandDialog` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CommandDialog({
   title = 'Command Palette',
   description = 'Search for a command to run...',
@@ -60,6 +72,12 @@ function CommandDialog({
   )
 }
 
+/**
+ * Handles `CommandInput` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CommandInput({
   className,
   ...props
@@ -82,6 +100,12 @@ function CommandInput({
   )
 }
 
+/**
+ * Handles `CommandList` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CommandList({
   className,
   ...props
@@ -98,6 +122,12 @@ function CommandList({
   )
 }
 
+/**
+ * Handles `CommandEmpty` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CommandEmpty({
   ...props
 }: React.ComponentProps<typeof CommandPrimitive.Empty>) {
@@ -110,6 +140,12 @@ function CommandEmpty({
   )
 }
 
+/**
+ * Handles `CommandGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CommandGroup({
   className,
   ...props
@@ -126,6 +162,12 @@ function CommandGroup({
   )
 }
 
+/**
+ * Handles `CommandSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CommandSeparator({
   className,
   ...props
@@ -139,6 +181,12 @@ function CommandSeparator({
   )
 }
 
+/**
+ * Handles `CommandItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CommandItem({
   className,
   ...props
@@ -155,6 +203,12 @@ function CommandItem({
   )
 }
 
+/**
+ * Handles `CommandShortcut` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function CommandShortcut({
   className,
   ...props

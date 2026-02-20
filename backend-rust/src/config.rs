@@ -119,6 +119,17 @@ pub struct Config {
 }
 
 impl Config {
+    /// Handles `from_env` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn from_env() -> anyhow::Result<Self> {
         load_env_override(&[".env", "backend-rust/.env"]);
 
@@ -311,6 +322,17 @@ impl Config {
         })
     }
 
+    /// Handles `validate` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.database_url.trim().is_empty() {
             anyhow::bail!("DATABASE_URL is empty");
@@ -456,6 +478,17 @@ impl Config {
         Ok(())
     }
 
+    /// Checks conditions for `is_testnet`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn is_testnet(&self) -> bool {
         if self.environment == "development" || self.environment == "testnet" {
             return true;
@@ -465,6 +498,7 @@ impl Config {
     }
 }
 
+// Internal helper that supports `load_env_override` operations.
 fn load_env_override(paths: &[&str]) {
     for path in paths {
         let Ok(content) = fs::read_to_string(path) else {
@@ -497,14 +531,47 @@ fn load_env_override(paths: &[&str]) {
 }
 
 impl Config {
+    /// Handles `oracle_asset_id_for` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn oracle_asset_id_for(&self, symbol: &str) -> Option<String> {
         parse_kv_map(&self.oracle_asset_ids, symbol)
     }
 
+    /// Handles `bridge_provider_id_for` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn bridge_provider_id_for(&self, provider: &str) -> Option<String> {
         parse_kv_map(&self.bridge_provider_ids, provider)
     }
 
+    /// Handles `price_tokens_list` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn price_tokens_list(&self) -> Vec<String> {
         let raw = self.price_tokens.trim();
         if raw.is_empty() {
@@ -523,15 +590,38 @@ impl Config {
             .collect()
     }
 
+    /// Handles `coingecko_id_for` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn coingecko_id_for(&self, symbol: &str) -> Option<String> {
         parse_kv_map(&self.coingecko_ids, symbol)
     }
 
+    /// Handles `privacy_router_for_verifier` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn privacy_router_for_verifier(&self, verifier: &str) -> Option<String> {
         parse_kv_map(&self.privacy_verifier_routers, verifier)
     }
 }
 
+// Internal helper that parses or transforms values for `parse_kv_map`.
 fn parse_kv_map(raw: &str, key: &str) -> Option<String> {
     if raw.trim().is_empty() {
         return None;
@@ -553,6 +643,7 @@ fn parse_kv_map(raw: &str, key: &str) -> Option<String> {
         .next()
 }
 
+// Internal helper that checks conditions for `is_placeholder_address`.
 fn is_placeholder_address(address: &str) -> bool {
     let trimmed = address.trim();
     if trimmed.is_empty() {

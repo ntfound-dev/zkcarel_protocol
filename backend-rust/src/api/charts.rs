@@ -34,6 +34,7 @@ pub struct IndicatorPoint {
     pub value: f64,
 }
 
+// Internal helper that parses or transforms values for `parse_rfc3339_or`.
 fn parse_rfc3339_or(
     value: Option<&str>,
     default: chrono::DateTime<chrono::Utc>,
@@ -44,6 +45,7 @@ fn parse_rfc3339_or(
         .unwrap_or(default)
 }
 
+// Internal helper that supports `map_indicator_points` operations.
 fn map_indicator_points(
     data: Vec<(chrono::DateTime<chrono::Utc>, rust_decimal::Decimal)>,
 ) -> Vec<IndicatorPoint> {
@@ -132,6 +134,7 @@ mod tests {
     use rust_decimal::Decimal;
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_rfc3339_or_uses_default_on_invalid`.
     fn parse_rfc3339_or_uses_default_on_invalid() {
         // Memastikan tanggal invalid memakai default
         let fallback = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
@@ -140,6 +143,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `map_indicator_points_converts_decimal` operations.
     fn map_indicator_points_converts_decimal() {
         // Memastikan konversi indikator ke tipe response benar
         let ts = Utc.timestamp_opt(1_700_000_000, 0).unwrap();

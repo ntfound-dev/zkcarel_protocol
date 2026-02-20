@@ -18,6 +18,14 @@ type UseOrderUpdatesOptions = {
   onUpdate?: (update: OrderUpdate) => void
 }
 
+/**
+ * Exposes `useOrderUpdates` as a reusable hook.
+ *
+ * @param options - Input used by `useOrderUpdates` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function useOrderUpdates(token?: string | null, options: UseOrderUpdatesOptions = {}) {
   const wsUrl = token
     ? `${WS_BASE_URL.replace(/\/$/, "")}/ws/orders?token=${encodeURIComponent(token)}`

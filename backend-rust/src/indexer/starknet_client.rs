@@ -3,6 +3,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use starknet_core::utils::get_selector_from_name;
 use tokio::time::{sleep, Duration};
 
+// Internal helper that supports `rpc_request` operations.
 fn rpc_request(method: &str, params: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -12,6 +13,7 @@ fn rpc_request(method: &str, params: serde_json::Value) -> serde_json::Value {
     })
 }
 
+// Internal helper that supports `call_contract_params` operations.
 fn call_contract_params(
     contract_address: &str,
     entry_point_selector: &str,
@@ -24,6 +26,7 @@ fn call_contract_params(
     })
 }
 
+// Internal helper that fetches data for `resolve_entry_point_selector`.
 fn resolve_entry_point_selector(function: &str) -> Result<String> {
     if function.starts_with("0x") {
         return Ok(function.to_string());
@@ -38,6 +41,7 @@ const RPC_RETRY_BACKOFF_MS: u64 = 1_000;
 const RPC_RESPONSE_PREVIEW_LEN: usize = 220;
 const EVENTS_MAX_PAGES: usize = 64;
 
+// Internal helper that supports `preview_rpc_body` operations.
 fn preview_rpc_body(raw: &str) -> String {
     let compact = raw.trim().replace(['\r', '\n', '\t'], " ");
     if compact.len() <= RPC_RESPONSE_PREVIEW_LEN {
@@ -47,6 +51,7 @@ fn preview_rpc_body(raw: &str) -> String {
     }
 }
 
+// Internal helper that checks conditions for `is_transient_rpc_failure`.
 fn is_transient_rpc_failure(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("timeout")
@@ -60,6 +65,7 @@ fn is_transient_rpc_failure(message: &str) -> bool {
         || lower.contains("error decoding response body")
 }
 
+// Internal helper that supports `retry_backoff_delay` operations.
 fn retry_backoff_delay(attempt: usize) -> Duration {
     let exponent = attempt.min(5) as u32;
     let multiplier = 1_u64 << exponent;
@@ -73,6 +79,17 @@ pub struct StarknetClient {
 }
 
 impl StarknetClient {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(rpc_url: String) -> Self {
         Self {
             rpc_url,
@@ -80,6 +97,7 @@ impl StarknetClient {
         }
     }
 
+    // Internal helper that supports `rpc_call` operations.
     async fn rpc_call<T>(&self, method: &str, params: serde_json::Value) -> Result<T>
     where
         T: DeserializeOwned,
@@ -332,6 +350,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `rpc_request_sets_method_and_id` operations.
     fn rpc_request_sets_method_and_id() {
         // Memastikan payload RPC berisi method dan id default
         let req = rpc_request("starknet_blockNumber", serde_json::json!([]));
@@ -343,6 +362,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `call_contract_params_contains_fields` operations.
     fn call_contract_params_contains_fields() {
         // Memastikan parameter call_contract terbentuk lengkap
         let params = call_contract_params("0xabc", "balance", vec!["1".to_string()]);

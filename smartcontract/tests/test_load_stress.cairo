@@ -11,6 +11,8 @@ use smartcontract::ai::ai_executor::{
     IAIExecutorAdminDispatcher, IAIExecutorAdminDispatcherTrait
 };
 
+// Deploys executor fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_executor() -> (IAIExecutorDispatcher, ContractAddress, ContractAddress) {
     let carel_token: ContractAddress = 0x111.try_into().unwrap();
     let admin: ContractAddress = 0x222.try_into().unwrap();
@@ -26,6 +28,8 @@ fn deploy_executor() -> (IAIExecutorDispatcher, ContractAddress, ContractAddress
 }
 
 #[test]
+// Test case: validates ai executor burst load behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_ai_executor_burst_load() {
     let (dispatcher, admin, user) = deploy_executor();
 

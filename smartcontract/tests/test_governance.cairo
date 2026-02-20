@@ -6,32 +6,36 @@ use snforge_std::{
     start_cheat_caller_address, stop_cheat_caller_address
 };
 
-// Pastikan path ini sesuai dengan struktur folder src Anda
-// Jika interface berada di src/governance/governance.cairo:
+// Ensure this import path matches your `src` folder structure.
+// Interface path expected at `src/governance/governance.cairo`.
 use smartcontract::governance::governance::{
     IGovernanceDispatcher,
     IGovernanceDispatcherTrait
 };
 
+// Deploys governance fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_governance() -> IGovernanceDispatcher {
-    // declare mengembalikan Result<DeclareResult, Array<felt252>>
+    // `declare` returns `Result<DeclareResult, Array<felt252>>`.
     let contract = declare("Governance").expect('Declaration failed');
     let mut constructor_calldata = array![];
     1_u64.serialize(ref constructor_calldata); // voting_delay
     10_u64.serialize(ref constructor_calldata); // voting_period
     
-    // Gunakan trait ContractClassTrait dan DeclareResultTrait
+    // Uses ContractClassTrait and DeclareResultTrait for deployment.
     let (contract_address, _) = contract.contract_class().deploy(@constructor_calldata).expect('Deployment failed');
     
     IGovernanceDispatcher { contract_address }
 }
 
 #[test]
+// Test case: validates propose action behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_propose_action() {
     let dispatcher = deploy_governance();
     let proposer: ContractAddress = 0x123.try_into().unwrap();
     
-    // start_cheat_caller_address memerlukan import dari snforge_std
+    // `start_cheat_caller_address` requires the `snforge_std` import.
     start_cheat_caller_address(dispatcher.contract_address, proposer);
 
     let targets: Span<ContractAddress> = array![].span();

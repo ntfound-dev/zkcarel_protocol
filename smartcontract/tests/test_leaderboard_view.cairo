@@ -13,6 +13,8 @@ mod tests {
         LeaderboardType, LeaderboardEntry
     };
 
+    // Deploys contract fixture and returns handles used by dependent test flows.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn deploy_contract() -> (ILeaderboardViewDispatcher, ContractAddress, ContractAddress) {
         let owner: ContractAddress = 0x123_felt252.try_into().unwrap();
         let backend: ContractAddress = 0x456_felt252.try_into().unwrap();
@@ -29,6 +31,8 @@ mod tests {
         (dispatcher, owner, backend)
     }
 
+    // Applies create sample entries after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn create_sample_entries() -> Array<LeaderboardEntry> {
         let mut entries: Array<LeaderboardEntry> = array![];
         
@@ -57,6 +61,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates constructor behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_constructor() {
         let (dispatcher, owner, backend) = deploy_contract();
         
@@ -67,6 +73,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates update leaderboard as backend behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_update_leaderboard_as_backend() {
         let (dispatcher, _owner, backend) = deploy_contract();
         
@@ -95,6 +103,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected: "Caller is not authorized backend")]
+    // Test case: validates update leaderboard unauthorized behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_update_leaderboard_unauthorized() {
         let (dispatcher, _owner, _backend) = deploy_contract();
         
@@ -113,6 +123,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates get user rank behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_get_user_rank() {
         let (dispatcher, _owner, backend) = deploy_contract();
         
@@ -139,6 +151,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates set backend address behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_set_backend_address() {
         let (dispatcher, owner, _backend) = deploy_contract();
         let new_backend: ContractAddress = 0x789_felt252.try_into().unwrap();
@@ -151,6 +165,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates pause unpause behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_pause_unpause() {
         let (dispatcher, owner, _backend) = deploy_contract();
         
@@ -172,6 +188,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected: "Contract is paused")]
+    // Test case: validates update when paused behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_update_when_paused() {
         let (dispatcher, owner, backend) = deploy_contract();
         
@@ -193,6 +211,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected: "Update too frequent - cooldown active")]
+    // Test case: validates cooldown enforcement behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_cooldown_enforcement() {
         let (dispatcher, _owner, backend) = deploy_contract();
         
@@ -218,6 +238,8 @@ mod tests {
     }
 
     #[test]
+    // Test case: validates cooldown passes after timeout behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_cooldown_passes_after_timeout() {
         let (dispatcher, _owner, backend) = deploy_contract();
         
@@ -243,6 +265,8 @@ mod tests {
     }
 
     #[test]
+// Test case: validates max entries enforcement behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_max_entries_enforcement() {
     let (dispatcher, owner, backend) = deploy_contract();
     
@@ -277,6 +301,8 @@ fn test_max_entries_enforcement() {
 
 #[test]
 #[should_panic(expected: "Exceeds max entries per update")]
+// Test case: validates exceeds max entries behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_exceeds_max_entries() {
     let (dispatcher, owner, backend) = deploy_contract();
     
@@ -308,6 +334,8 @@ fn test_exceeds_max_entries() {
     stop_cheat_block_timestamp_global();
 }
     #[test]
+    // Test case: validates set max entries behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_set_max_entries() {
         let (dispatcher, owner, _backend) = deploy_contract();
         
@@ -322,6 +350,8 @@ fn test_exceeds_max_entries() {
 
     #[test]
     #[should_panic(expected: "Rank must be positive")]
+    // Test case: validates invalid rank validation behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_invalid_rank_validation() {
         let (dispatcher, _owner, backend) = deploy_contract();
         
@@ -343,6 +373,8 @@ fn test_exceeds_max_entries() {
     }
 
     #[test]
+    // Test case: validates multiple leaderboard types behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_multiple_leaderboard_types() {
         let (dispatcher, _owner, backend) = deploy_contract();
         
@@ -379,6 +411,8 @@ fn test_exceeds_max_entries() {
     }
 
     #[test]
+    // Test case: validates get leaderboard pagination behavior with expected assertions and revert boundaries.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn test_get_leaderboard_pagination() {
         let (dispatcher, _owner, backend) = deploy_contract();
         

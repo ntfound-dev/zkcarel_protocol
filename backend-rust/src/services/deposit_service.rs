@@ -9,6 +9,7 @@ use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use serde::Serialize; // Disederhanakan (menghapus Deserialize yang tidak terpakai)
 use sqlx::Row; // Tambahkan ini untuk akses .get()
 
+// Internal helper that builds inputs for `build_bank_details`.
 fn build_bank_details(deposit_id: &str) -> BankDetails {
     BankDetails {
         account_name: "CAREL Protocol".to_string(),
@@ -18,10 +19,12 @@ fn build_bank_details(deposit_id: &str) -> BankDetails {
     }
 }
 
+// Internal helper that builds inputs for `build_qris_payload`.
 fn build_qris_payload(deposit_id: &str, amount: f64) -> String {
     format!("qris://pay?id={}&amount={}", deposit_id, amount)
 }
 
+// Internal helper that builds inputs for `build_stripe_url`.
 fn build_stripe_url(deposit_id: &str) -> String {
     format!("https://checkout.stripe.com{}", deposit_id)
 }
@@ -32,10 +35,32 @@ pub struct DepositService {
 }
 
 impl DepositService {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self { db, config }
     }
 
+    /// Builds inputs required by `create_bank_transfer`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn create_bank_transfer(
         &self,
         user_address: &str,
@@ -66,6 +91,17 @@ impl DepositService {
         })
     }
 
+    /// Builds inputs required by `create_qris`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn create_qris(&self, user_address: &str, amount: f64) -> Result<DepositInfo> {
         if self.config.moonpay_api_key.is_none() {
             return Err(AppError::ExternalAPI(
@@ -91,6 +127,17 @@ impl DepositService {
         })
     }
 
+    /// Builds inputs required by `create_card_payment`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn create_card_payment(
         &self,
         user_address: &str,
@@ -121,6 +168,7 @@ impl DepositService {
         })
     }
 
+    // Internal helper that updates state for `save_deposit_with_decimal`.
     async fn save_deposit_with_decimal(
         &self,
         id: &str,
@@ -145,6 +193,17 @@ impl DepositService {
         Ok(())
     }
 
+    /// Fetches data for `get_status`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_status(&self, deposit_id: &str) -> Result<DepositInfo> {
         // Ganti query! menjadi query
         let row = sqlx::query(
@@ -191,6 +250,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that builds inputs for `build_bank_details_uses_reference`.
     fn build_bank_details_uses_reference() {
         // Memastikan reference mengikuti deposit_id
         let details = build_bank_details("DEP_TEST");
@@ -198,6 +258,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that builds inputs for `build_qris_payload_formats_string`.
     fn build_qris_payload_formats_string() {
         // Memastikan payload QRIS mengandung id dan amount
         let payload = build_qris_payload("DEP_QRIS_TEST", 10.5);
@@ -206,6 +267,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that builds inputs for `build_stripe_url_appends_id`.
     fn build_stripe_url_appends_id() {
         // Memastikan URL stripe berisi deposit_id
         let url = build_stripe_url("DEP_CARD_TEST");

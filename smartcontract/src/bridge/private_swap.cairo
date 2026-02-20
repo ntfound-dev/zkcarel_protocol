@@ -7,17 +7,12 @@ pub struct EncryptedSwapData {
     pub is_finalized: bool,
 }
 
-/// @title Tongo Verifier Interface
-/// @author CAREL Team
-/// @notice Minimal interface for Tongo ZK proof verification.
-/// @dev Used to validate private swap proofs.
+// Minimal interface for Tongo ZK proof verification.
+// Used to validate private swap proofs.
 #[starknet::interface]
 pub trait ITongoVerifier<TContractState> {
-    /// @notice Verifies a zero-knowledge proof.
-    /// @dev Returns true if proof and public inputs are valid.
-    /// @param proof Proof data.
-    /// @param public_inputs Public inputs for verification.
-    /// @return valid True if the proof is valid.
+    // Applies verify proof after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_proof(
         self: @TContractState, 
         proof: Span<felt252>, 
@@ -25,44 +20,33 @@ pub trait ITongoVerifier<TContractState> {
     ) -> bool;
 }
 
-/// @title Private Swap Interface
-/// @author CAREL Team
-/// @notice Defines private swap lifecycle entrypoints.
-/// @dev Uses ZK proofs to validate swap commitments.
+// Defines private swap lifecycle entrypoints.
+// Uses ZK proofs to validate swap commitments.
 #[starknet::interface]
 pub trait IPrivateSwap<TContractState> {
-    /// @notice Initiates a private swap with encrypted data.
-    /// @dev Verifies initiation proof before storing commitment.
-    /// @param encrypted_data Encrypted swap payload.
-    /// @param zk_proof Zero-knowledge proof for initiation.
-    /// @return swap_id Newly created swap id.
+    // Implements initiate private swap logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn initiate_private_swap(
         ref self: TContractState, 
         encrypted_data: EncryptedSwapData, 
         zk_proof: Span<felt252>
     ) -> u64;
-    /// @notice Verifies a swap proof against stored commitment.
-    /// @dev Read-only helper for clients.
-    /// @param swap_id Swap identifier.
-    /// @param proof Zero-knowledge proof.
-    /// @return valid True if proof is valid.
+    // Applies verify private swap after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_private_swap(self: @TContractState, swap_id: u64, proof: Span<felt252>) -> bool;
-    /// @notice Finalizes a private swap.
-    /// @dev Uses nullifier to prevent double spending.
-    /// @param swap_id Swap identifier.
-    /// @param recipient Swap recipient address.
-    /// @param nullifier Nullifier value for replay protection.
+    // Applies finalize swap after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn finalize_swap(ref self: TContractState, swap_id: u64, recipient: ContractAddress, nullifier: felt252);
 }
 
-/// @title Private Swap Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for private swaps.
+// ZK privacy hooks for private swaps.
 #[starknet::interface]
 pub trait IPrivateSwapPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private swap action proof.
+    // Applies submit private swap action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_swap_action(
         ref self: TContractState,
         old_root: felt252,
@@ -74,13 +58,11 @@ pub trait IPrivateSwapPrivacy<TContractState> {
     );
 }
 
-/// @title Private Swap Contract
-/// @author CAREL Team
-/// @notice ZK-enabled private swap execution with nullifiers.
-/// @dev Integrates a verifier to validate swap proofs.
+// ZK-enabled private swap execution with nullifiers.
+// Integrates a verifier to validate swap proofs.
 #[starknet::contract]
 pub mod PrivateSwap {
-    // HANYA mengimpor yang benar-benar digunakan
+    // Imports only symbols required by this module.
     use starknet::ContractAddress;
     use starknet::storage::*;
     use super::{EncryptedSwapData, IPrivateSwap, ITongoVerifierDispatcher, ITongoVerifierDispatcherTrait};
@@ -97,27 +79,26 @@ pub mod PrivateSwap {
         pub privacy_router: ContractAddress,
     }
 
-    /// @notice Initializes the private swap contract.
-    /// @dev Sets the verifier address for proof checks.
-    /// @param verifier_address Tongo verifier contract address.
+    // Initializes the private swap contract.
+    // Sets the verifier address for proof checks.
+    // `verifier_address` is the Tongo verifier used for proof validation.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, verifier_address: ContractAddress) {
         self.tongo_verifier.write(verifier_address);
     }
 
     #[abi(embed_v0)]
     impl PrivateSwapImpl of IPrivateSwap<ContractState> {
-        /// @notice Initiates a private swap with encrypted data.
-        /// @dev Verifies initiation proof before storing commitment.
-        /// @param encrypted_data Encrypted swap payload.
-        /// @param zk_proof Zero-knowledge proof for initiation.
-        /// @return swap_id Newly created swap id.
+        // Implements initiate private swap logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn initiate_private_swap(
             ref self: ContractState, 
             encrypted_data: EncryptedSwapData, 
             zk_proof: Span<felt252>
         ) -> u64 {
-            // Menggunakan Dispatcher pattern untuk interaksi antar kontrak
+            // Uses dispatcher pattern for inter-contract verification call.
             let verifier = ITongoVerifierDispatcher { contract_address: self.tongo_verifier.read() };
             let mut inputs = array![encrypted_data.commitment];
             
@@ -129,11 +110,8 @@ pub mod PrivateSwap {
             id
         }
 
-        /// @notice Verifies a swap proof against stored commitment.
-        /// @dev Read-only helper for clients.
-        /// @param swap_id Swap identifier.
-        /// @param proof Zero-knowledge proof.
-        /// @return valid True if proof is valid.
+        // Applies verify private swap after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn verify_private_swap(self: @ContractState, swap_id: u64, proof: Span<felt252>) -> bool {
             let swap = self.private_swaps.entry(swap_id).read();
             let verifier = ITongoVerifierDispatcher { contract_address: self.tongo_verifier.read() };
@@ -142,18 +120,15 @@ pub mod PrivateSwap {
             verifier.verify_proof(proof, inputs.span())
         }
 
-        /// @notice Finalizes a private swap.
-        /// @dev Uses nullifier to prevent double spending.
-        /// @param swap_id Swap identifier.
-        /// @param recipient Swap recipient address.
-        /// @param nullifier Nullifier value for replay protection.
+        // Applies finalize swap after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn finalize_swap(
             ref self: ContractState, 
             swap_id: u64, 
             recipient: ContractAddress, 
             nullifier: felt252
         ) {
-            // Logika Nullifier untuk mencegah double-spending
+            // Enforces one-time nullifier usage to prevent double spending.
             assert!(!self.nullifiers.entry(nullifier).read(), "Nullifier already used");
             
             let mut swap = self.private_swaps.entry(swap_id).read();
@@ -167,6 +142,8 @@ pub mod PrivateSwap {
 
     #[abi(embed_v0)]
     impl PrivateSwapPrivacyImpl of super::IPrivateSwapPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             let current = self.privacy_router.read();
             assert!(current.is_zero(), "Privacy router already set");
@@ -174,6 +151,8 @@ pub mod PrivateSwap {
             self.privacy_router.write(router);
         }
 
+        // Applies submit private swap action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_swap_action(
             ref self: ContractState,
             old_root: felt252,

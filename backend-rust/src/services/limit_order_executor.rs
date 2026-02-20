@@ -12,6 +12,7 @@ use starknet_core::types::{Call, Felt};
 use starknet_core::utils::get_selector_from_name;
 use std::sync::Arc;
 
+// Internal helper that checks conditions for `is_order_expired`.
 fn is_order_expired(
     now: chrono::DateTime<chrono::Utc>,
     expiry: chrono::DateTime<chrono::Utc>,
@@ -19,10 +20,12 @@ fn is_order_expired(
     now > expiry
 }
 
+// Internal helper that checks conditions for `should_execute_price`.
 fn should_execute_price(current_price: f64, target_price: f64) -> bool {
     current_price <= target_price * 1.005
 }
 
+// Internal helper that supports `to_u256_felts` operations.
 fn to_u256_felts(value: f64) -> (Felt, Felt) {
     if !value.is_finite() || value <= 0.0 {
         return (Felt::from(0_u128), Felt::from(0_u128));
@@ -31,6 +34,7 @@ fn to_u256_felts(value: f64) -> (Felt, Felt) {
     (Felt::from(scaled), Felt::from(0_u128))
 }
 
+// Internal helper that supports `fallback_price_for` operations.
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_ascii_uppercase().as_str() {
         "BTC" | "WBTC" => 65_000.0,
@@ -42,6 +46,7 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+// Internal helper that parses or transforms values for `normalize_usd_volume`.
 fn normalize_usd_volume(usd_in: f64, usd_out: f64) -> f64 {
     let in_valid = usd_in.is_finite() && usd_in > 0.0;
     let out_valid = usd_out.is_finite() && usd_out > 0.0;
@@ -59,6 +64,17 @@ pub struct LimitOrderExecutor {
 }
 
 impl LimitOrderExecutor {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         Self { db, config }
     }
@@ -133,6 +149,7 @@ impl LimitOrderExecutor {
         Ok(orders)
     }
 
+    // Internal helper that checks conditions for `should_execute_order`.
     async fn should_execute_order(&self, order: &LimitOrder) -> Result<bool> {
         let current_price = self
             .get_current_price(&order.from_token, &order.to_token)
@@ -144,10 +161,12 @@ impl LimitOrderExecutor {
         Ok(should_execute_price(current_price, target_price_f64))
     }
 
+    // Internal helper that fetches data for `get_current_price`.
     async fn get_current_price(&self, _from_token: &str, _to_token: &str) -> Result<f64> {
         Ok(65000.0)
     }
 
+    // Internal helper that supports `latest_price_usd` operations.
     async fn latest_price_usd(&self, token: &str) -> Result<f64> {
         let symbol = token.to_ascii_uppercase();
         let price: Option<f64> = sqlx::query_scalar(
@@ -215,10 +234,12 @@ impl LimitOrderExecutor {
         Ok(())
     }
 
+    // Internal helper that fetches data for `get_best_execution_route`.
     async fn get_best_execution_route(&self, _order: &LimitOrder) -> Result<String> {
         Ok(DEX_EKUBO.to_string())
     }
 
+    // Internal helper that runs side-effecting logic for `execute_swap_on_chain`.
     async fn execute_swap_on_chain(&self, order: &LimitOrder, _route: &str) -> Result<String> {
         let contract = self.config.limit_order_book_address.trim();
         if contract.is_empty() || contract.starts_with("0x0000") {
@@ -247,6 +268,7 @@ impl LimitOrderExecutor {
         Ok(tx_hash.to_string())
     }
 
+    // Internal helper that supports `expire_order` operations.
     async fn expire_order(&self, order_id: &str) -> Result<()> {
         sqlx::query(
             "UPDATE limit_orders
@@ -297,6 +319,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     #[test]
+    // Internal helper that checks conditions for `is_order_expired_detects_past`.
     fn is_order_expired_detects_past() {
         // Memastikan order dianggap expired jika sekarang lebih besar dari expiry
         let now = Utc.timestamp_opt(2_000, 0).unwrap();
@@ -305,6 +328,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that checks conditions for `should_execute_price_allows_small_slippage`.
     fn should_execute_price_allows_small_slippage() {
         // Memastikan toleransi 0.5% diterapkan
         assert!(should_execute_price(100.0, 100.0));

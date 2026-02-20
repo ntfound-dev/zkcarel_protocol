@@ -191,6 +191,7 @@ enum GameStatus {
 }
 
 impl GameStatus {
+    // Internal helper that supports `as_str` operations.
     fn as_str(self) -> &'static str {
         match self {
             Self::Waiting => "WAITING",
@@ -199,6 +200,7 @@ impl GameStatus {
         }
     }
 
+    // Internal helper that supports `from_u64` operations.
     fn from_u64(value: u64) -> Self {
         match value {
             STATUS_PLAYING => Self::Playing,
@@ -266,14 +268,17 @@ struct OnchainGameState {
 
 static BATTLESHIP_STORE: OnceLock<RwLock<BattleshipStore>> = OnceLock::new();
 
+// Internal helper that supports `battleship_store` operations.
 fn battleship_store() -> &'static RwLock<BattleshipStore> {
     BATTLESHIP_STORE.get_or_init(|| RwLock::new(BattleshipStore::default()))
 }
 
+// Internal helper that supports `now_unix` operations.
 fn now_unix() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+// Internal helper that parses or transforms values for `normalize_hex_items`.
 fn normalize_hex_items(items: &[String]) -> Vec<String> {
     items
         .iter()
@@ -283,6 +288,7 @@ fn normalize_hex_items(items: &[String]) -> Vec<String> {
         .collect()
 }
 
+// Internal helper that checks conditions for `is_dummy_payload`.
 fn is_dummy_payload(payload: &AutoPrivacyPayloadResponse) -> bool {
     payload.proof.len() == 1
         && payload.public_inputs.len() == 1
@@ -290,6 +296,7 @@ fn is_dummy_payload(payload: &AutoPrivacyPayloadResponse) -> bool {
         && payload.public_inputs[0].eq_ignore_ascii_case("0x1")
 }
 
+// Internal helper that parses or transforms values for `parse_game_id`.
 fn parse_game_id(raw: &str) -> Result<u64> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -307,10 +314,12 @@ fn parse_game_id(raw: &str) -> Result<u64> {
         .map_err(|_| AppError::BadRequest("Invalid game_id".to_string()))
 }
 
+// Internal helper that supports `game_id_string` operations.
 fn game_id_string(game_id: u64) -> String {
     game_id.to_string()
 }
 
+// Internal helper that supports `to_cells` operations.
 fn to_cells(points: &HashSet<(u8, u8)>) -> Vec<Cell> {
     let mut out = points
         .iter()
@@ -320,10 +329,12 @@ fn to_cells(points: &HashSet<(u8, u8)>) -> Vec<Cell> {
     out
 }
 
+// Internal helper that supports `cell_key` operations.
 fn cell_key(x: u8, y: u8) -> (u8, u8) {
     (x, y)
 }
 
+// Internal helper that supports `felt_to_u64` operations.
 fn felt_to_u64(value: &Felt, field: &str) -> Result<u64> {
     let raw = felt_to_u128(value).map_err(|_| {
         AppError::BadRequest(format!(
@@ -339,6 +350,7 @@ fn felt_to_u64(value: &Felt, field: &str) -> Result<u64> {
     })
 }
 
+// Internal helper that supports `felt_to_u8` operations.
 fn felt_to_u8(value: &Felt, field: &str) -> Result<u8> {
     let raw = felt_to_u128(value).map_err(|_| {
         AppError::BadRequest(format!(
@@ -354,19 +366,23 @@ fn felt_to_u8(value: &Felt, field: &str) -> Result<u8> {
     })
 }
 
+// Internal helper that supports `addr_eq` operations.
 fn addr_eq(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
+// Internal helper that supports `map_status_label` operations.
 fn map_status_label(status: GameStatus) -> String {
     status.as_str().to_string()
 }
 
+// Internal helper that supports `timeout_remaining` operations.
 fn timeout_remaining(last_action_at: i64) -> i64 {
     let elapsed = now_unix() - last_action_at;
     (TURN_TIMEOUT_SECS - elapsed).max(0)
 }
 
+// Internal helper that supports `prepared_action_response` operations.
 fn prepared_action_response(game_id: String, message: &str, calls: Vec<StarknetWalletCall>) -> GameActionResponse {
     GameActionResponse {
         game_id,
@@ -378,6 +394,7 @@ fn prepared_action_response(game_id: String, message: &str, calls: Vec<StarknetW
     }
 }
 
+// Internal helper that supports `prepared_fire_response` operations.
 fn prepared_fire_response(game_id: String, message: &str, calls: Vec<StarknetWalletCall>) -> FireShotResponse {
     FireShotResponse {
         game_id,
@@ -393,6 +410,7 @@ fn prepared_fire_response(game_id: String, message: &str, calls: Vec<StarknetWal
     }
 }
 
+// Internal helper that supports `verify_bounds` operations.
 fn verify_bounds(x: u8, y: u8) -> Result<()> {
     if (x as usize) >= BOARD_SIZE || (y as usize) >= BOARD_SIZE {
         return Err(AppError::BadRequest(format!(
@@ -403,6 +421,7 @@ fn verify_bounds(x: u8, y: u8) -> Result<()> {
     Ok(())
 }
 
+// Internal helper that supports `validate_cells_in_bounds` operations.
 fn validate_cells_in_bounds(cells: &[Cell]) -> Result<()> {
     for cell in cells {
         verify_bounds(cell.x, cell.y)?;
@@ -410,6 +429,7 @@ fn validate_cells_in_bounds(cells: &[Cell]) -> Result<()> {
     Ok(())
 }
 
+// Internal helper that supports `neighbors` operations.
 fn neighbors(x: u8, y: u8) -> [(u8, u8); 4] {
     [
         (x.saturating_sub(1), y),
@@ -419,6 +439,7 @@ fn neighbors(x: u8, y: u8) -> [(u8, u8); 4] {
     ]
 }
 
+// Internal helper that supports `validate_fleet` operations.
 fn validate_fleet(cells: &[Cell]) -> Result<HashSet<(u8, u8)>> {
     if cells.len() != TOTAL_SHIP_CELLS {
         return Err(AppError::BadRequest(format!(
@@ -504,11 +525,13 @@ fn validate_fleet(cells: &[Cell]) -> Result<HashSet<(u8, u8)>> {
     Ok(set)
 }
 
+// Internal helper that supports `short_string_to_felt` operations.
 fn short_string_to_felt(value: &str) -> Result<Felt> {
     let hex = hex::encode(value.as_bytes());
     parse_felt(&format!("0x{}", hex))
 }
 
+// Internal helper that supports `board_commitment_for_cells` operations.
 fn board_commitment_for_cells(user_address: &str, cells: &HashSet<(u8, u8)>) -> Result<Felt> {
     let mut encoded: Vec<Felt> = Vec::with_capacity(2 + BOARD_SIZE * BOARD_SIZE);
     encoded.push(short_string_to_felt("BOARD")?);
@@ -527,6 +550,7 @@ fn board_commitment_for_cells(user_address: &str, cells: &HashSet<(u8, u8)>) -> 
     Ok(poseidon_hash_many(&encoded))
 }
 
+// Internal helper that supports `response_binding` operations.
 fn response_binding(
     game_id: u64,
     shooter: &str,
@@ -547,6 +571,7 @@ fn response_binding(
     Ok(poseidon_hash_many(&values))
 }
 
+// Internal helper that parses or transforms values for `parse_or_generate_payload_from_request`.
 fn parse_or_generate_payload_from_request(
     payload: Option<&GaragaPayloadInput>,
     verifier: &str,
@@ -582,6 +607,7 @@ fn parse_or_generate_payload_from_request(
     })
 }
 
+// Internal helper that fetches data for `resolve_battleship_payload`.
 async fn resolve_battleship_payload(
     state: &AppState,
     user_address: &str,
@@ -646,6 +672,7 @@ async fn resolve_battleship_payload(
     Ok(payload)
 }
 
+// Internal helper that parses or transforms values for `parse_proof_and_public_inputs`.
 fn parse_proof_and_public_inputs(calldata: &[Felt], start_index: usize) -> Result<(Vec<Felt>, Vec<Felt>)> {
     if calldata.len() <= start_index {
         return Err(AppError::BadRequest(
@@ -680,6 +707,7 @@ fn parse_proof_and_public_inputs(calldata: &[Felt], start_index: usize) -> Resul
     ))
 }
 
+// Internal helper that builds inputs for `build_create_game_wallet_call`.
 fn build_create_game_wallet_call(
     contract: Felt,
     opponent: Felt,
@@ -712,6 +740,7 @@ fn build_create_game_wallet_call(
     })
 }
 
+// Internal helper that builds inputs for `build_join_game_wallet_call`.
 fn build_join_game_wallet_call(
     contract: Felt,
     game_id: u64,
@@ -744,6 +773,7 @@ fn build_join_game_wallet_call(
     })
 }
 
+// Internal helper that builds inputs for `build_fire_wallet_call`.
 fn build_fire_wallet_call(contract: Felt, game_id: u64, x: u8, y: u8) -> StarknetWalletCall {
     StarknetWalletCall {
         contract_address: contract.to_string(),
@@ -756,6 +786,7 @@ fn build_fire_wallet_call(contract: Felt, game_id: u64, x: u8, y: u8) -> Starkne
     }
 }
 
+// Internal helper that builds inputs for `build_respond_wallet_call`.
 fn build_respond_wallet_call(
     contract: Felt,
     game_id: u64,
@@ -788,6 +819,7 @@ fn build_respond_wallet_call(
     })
 }
 
+// Internal helper that builds inputs for `build_timeout_wallet_call`.
 fn build_timeout_wallet_call(contract: Felt, game_id: u64) -> StarknetWalletCall {
     StarknetWalletCall {
         contract_address: contract.to_string(),
@@ -796,6 +828,7 @@ fn build_timeout_wallet_call(contract: Felt, game_id: u64) -> StarknetWalletCall
     }
 }
 
+// Internal helper that supports `battleship_contract_address` operations.
 fn battleship_contract_address(state: &AppState) -> Result<Felt> {
     let Some(raw) = state
         .config
@@ -814,6 +847,7 @@ fn battleship_contract_address(state: &AppState) -> Result<Felt> {
     })
 }
 
+// Internal helper that supports `felt_to_usize` operations.
 fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     let raw = felt_to_u128(value).map_err(|_| {
         AppError::BadRequest(format!(
@@ -827,6 +861,7 @@ fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     })
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls_offset`.
 fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if calldata.is_empty() {
         return Err(AppError::BadRequest(
@@ -891,6 +926,7 @@ fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     Ok(calls)
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls_inline`.
 fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if calldata.is_empty() {
         return Err(AppError::BadRequest(
@@ -935,6 +971,7 @@ fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     Ok(calls)
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls`.
 fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if let Ok(calls) = parse_execute_calls_offset(calldata) {
         return Ok(calls);
@@ -942,6 +979,7 @@ fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     parse_execute_calls_inline(calldata)
 }
 
+// Internal helper that supports `extract_invoke_sender_and_calldata` operations.
 fn extract_invoke_sender_and_calldata(tx: &StarknetTransaction) -> Result<(Felt, &[Felt])> {
     let invoke = match tx {
         StarknetTransaction::Invoke(invoke) => invoke,
@@ -961,10 +999,12 @@ fn extract_invoke_sender_and_calldata(tx: &StarknetTransaction) -> Result<(Felt,
     }
 }
 
+// Internal helper that parses or transforms values for `parse_selector`.
 fn parse_selector(name: &str) -> Result<Felt> {
     get_selector_from_name(name).map_err(|e| AppError::Internal(format!("Selector error: {}", e)))
 }
 
+// Internal helper that fetches data for `find_battleship_call`.
 fn find_battleship_call<'a>(
     calls: &'a [ParsedExecuteCall],
     contract: Felt,
@@ -980,6 +1020,7 @@ fn find_battleship_call<'a>(
         })
 }
 
+// Internal helper that supports `verify_battleship_tx_call` operations.
 async fn verify_battleship_tx_call<F>(
     state: &AppState,
     tx_hash: &str,
@@ -1048,6 +1089,7 @@ where
     )))
 }
 
+// Internal helper that supports `extract_game_created_event` operations.
 fn extract_game_created_event(
     receipt: &TransactionReceiptWithBlockInfo,
     battleship_contract: Felt,
@@ -1072,6 +1114,7 @@ fn extract_game_created_event(
     ))
 }
 
+// Internal helper that supports `extract_shot_fired_event` operations.
 fn extract_shot_fired_event(
     receipt: &TransactionReceiptWithBlockInfo,
     battleship_contract: Felt,
@@ -1097,6 +1140,7 @@ fn extract_shot_fired_event(
     Ok(None)
 }
 
+// Internal helper that supports `extract_shot_result_event` operations.
 fn extract_shot_result_event(
     receipt: &TransactionReceiptWithBlockInfo,
     battleship_contract: Felt,
@@ -1122,6 +1166,7 @@ fn extract_shot_result_event(
     Ok(None)
 }
 
+// Internal helper that fetches data for `read_onchain_game_state`.
 async fn read_onchain_game_state(state: &AppState, game_id: u64) -> Result<OnchainGameState> {
     let reader = OnchainReader::from_config(&state.config)?;
     let contract = battleship_contract_address(state)?;
@@ -1192,6 +1237,7 @@ async fn read_onchain_game_state(state: &AppState, game_id: u64) -> Result<Oncha
     })
 }
 
+// Internal helper that runs side-effecting logic for `ensure_game_access`.
 fn ensure_game_access<'a>(game: &'a BattleshipGame, user: &str) -> Result<&'a str> {
     if addr_eq(&game.player_a, user) {
         return Ok("A");
@@ -1204,6 +1250,7 @@ fn ensure_game_access<'a>(game: &'a BattleshipGame, user: &str) -> Result<&'a st
     ))
 }
 
+// Internal helper that supports `upsert_game_from_chain` operations.
 fn upsert_game_from_chain(store: &mut BattleshipStore, game_id: u64, chain: &OnchainGameState) {
     let entry = store.games.entry(game_id).or_insert_with(|| BattleshipGame {
         game_id,
@@ -1234,6 +1281,7 @@ fn upsert_game_from_chain(store: &mut BattleshipStore, game_id: u64, chain: &Onc
     entry.pending_shot = chain.pending.clone();
 }
 
+// Internal helper that builds inputs for `build_state_response`.
 fn build_state_response(game: &BattleshipGame, user: &str) -> Result<BattleshipGameStateResponse> {
     let side = ensure_game_access(game, user)?;
     let (your_board, your_shots, opponent_shots, your_hits_taken, opponent_hits_taken, your_ready, opponent_ready) =
@@ -1302,6 +1350,7 @@ fn build_state_response(game: &BattleshipGame, user: &str) -> Result<BattleshipG
     })
 }
 
+// Internal helper that supports `points_tx_hash` operations.
 fn points_tx_hash(onchain_tx_hash: &str, user_address: &str, tx_type: &str) -> String {
     hash::hash_string(&format!(
         "battle:{}:{}:{}",
@@ -1309,6 +1358,7 @@ fn points_tx_hash(onchain_tx_hash: &str, user_address: &str, tx_type: &str) -> S
     ))
 }
 
+// Internal helper that updates state for `save_battle_transaction`.
 async fn save_battle_transaction(
     state: &AppState,
     user_address: &str,
@@ -1334,6 +1384,7 @@ async fn save_battle_transaction(
     state.db.save_transaction(&tx).await
 }
 
+// Internal helper that supports `game_from_store_mut` operations.
 fn game_from_store_mut<'a>(store: &'a mut BattleshipStore, game_id: u64) -> Result<&'a mut BattleshipGame> {
     store
         .games
@@ -1341,6 +1392,7 @@ fn game_from_store_mut<'a>(store: &'a mut BattleshipStore, game_id: u64) -> Resu
         .ok_or_else(|| AppError::BadRequest("Game not found in local cache. Open game state first and retry.".to_string()))
 }
 
+// Internal helper that fetches data for `resolve_pending_shot_for_user`.
 fn resolve_pending_shot_for_user(game: &BattleshipGame, user: &str) -> Result<PendingShot> {
     let Some(shot) = game.pending_shot.as_ref() else {
         return Err(AppError::BadRequest("No pending shot to respond".to_string()));
@@ -1353,6 +1405,7 @@ fn resolve_pending_shot_for_user(game: &BattleshipGame, user: &str) -> Result<Pe
     Ok(shot.clone())
 }
 
+// Internal helper that fetches data for `resolve_is_hit_for_response`.
 fn resolve_is_hit_for_response(
     game: &BattleshipGame,
     responder: &str,

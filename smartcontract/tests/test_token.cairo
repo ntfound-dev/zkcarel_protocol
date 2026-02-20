@@ -1,15 +1,16 @@
 use starknet::ContractAddress;
-// Import tool dari Starknet Foundry
+// Imports Starknet Foundry testing utilities.
 use snforge_std::{declare, DeclareResultTrait, ContractClassTrait, start_cheat_caller_address, stop_cheat_caller_address};
 
-// Import Dispatcher internal proyek
-// Ganti 'smartcontract' dengan nama package Anda jika berbeda
+// Imports internal project dispatcher types.
+// Update package path if Scarb package name differs.
 use smartcontract::core::token::{ICarelTokenDispatcher, ICarelTokenDispatcherTrait};
 
-// Import Dispatcher OpenZeppelin yang mendukung name() dan symbol()
+// Imports OpenZeppelin ERC20 ABI dispatcher for name/symbol access.
 use openzeppelin::token::erc20::interface::{ERC20ABIDispatcher, ERC20ABIDispatcherTrait};
 
-/// Fungsi pembantu untuk deployment
+// Deploys carel token fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_carel_token(admin: ContractAddress) -> ICarelTokenDispatcher {
     let contract = declare("CarelToken").unwrap().contract_class();
     
@@ -22,20 +23,24 @@ fn deploy_carel_token(admin: ContractAddress) -> ICarelTokenDispatcher {
 }
 
 #[test]
+// Test case: validates token initialization behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_token_initialization() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let dispatcher = deploy_carel_token(admin);
     
-    // Gunakan ERC20ABIDispatcher untuk mengakses Metadata (name, symbol)
+    // Use ERC20ABIDispatcher to access token metadata (name, symbol).
     let erc20_metadata = ERC20ABIDispatcher { contract_address: dispatcher.contract_address };
     
-    // ERC20ABIDispatcherTrait harus di-import agar method ini terbaca
+    // ERC20ABIDispatcherTrait must be imported for these methods to resolve.
     assert_eq!(erc20_metadata.name(), "Carel Protocol");
     assert_eq!(erc20_metadata.symbol(), "CAREL");
     assert_eq!(erc20_metadata.total_supply(), 0);
 }
 
 #[test]
+// Test case: validates permissioned minting behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_permissioned_minting() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let minter: ContractAddress = 0x2.try_into().unwrap();
@@ -44,24 +49,26 @@ fn test_permissioned_minting() {
     let dispatcher = deploy_carel_token(admin);
     let erc20 = ERC20ABIDispatcher { contract_address: dispatcher.contract_address };
 
-    // 1. Admin memberikan MINTER_ROLE
+    // 1. Admin grants MINTER_ROLE.
     start_cheat_caller_address(dispatcher.contract_address, admin);
     dispatcher.set_minter(minter);
     stop_cheat_caller_address(dispatcher.contract_address);
 
-    // 2. Minter melakukan minting token
+    // 2. Minter mints tokens.
     start_cheat_caller_address(dispatcher.contract_address, minter);
     let amount: u256 = 1000_u256;
     dispatcher.mint(recipient, amount);
     stop_cheat_caller_address(dispatcher.contract_address);
 
-    // 3. Verifikasi saldo
+    // 3. Verify resulting balance.
     assert_eq!(erc20.balance_of(recipient), amount);
 }
 
 #[test]
 // Use single quotes for felt252 matching to resolve "Incorrect panic data"
 #[should_panic(expected: 'Caller is missing role')]
+// Test case: validates unauthorized mint fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unauthorized_mint_fails() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let attacker: ContractAddress = 0x666.try_into().unwrap();
@@ -75,6 +82,8 @@ fn test_unauthorized_mint_fails() {
 }
 
 #[test]
+// Test case: validates burning tokens behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_burning_tokens() {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let burner: ContractAddress = 0x2.try_into().unwrap();

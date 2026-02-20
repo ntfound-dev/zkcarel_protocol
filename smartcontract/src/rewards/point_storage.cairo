@@ -1,56 +1,24 @@
 use starknet::ContractAddress;
 
-/// @title Point Storage Interface
-/// @author CAREL Team
-/// @notice Defines point tracking entrypoints by epoch.
-/// @dev Supports backend-submitted points and controlled consumption.
+// Point ledger API used by rewards, referrals, and discounts.
+// Values are tracked per epoch and can be locked after finalization.
 #[starknet::interface]
 pub trait IPointStorage<TContractState> {
-    /// @notice Submits points for a user in an epoch.
-    /// @dev Backend-only to prevent unauthorized updates.
-    /// @param epoch Epoch identifier.
-    /// @param user User address.
-    /// @param points Point amount to set.
+    // Sets the exact point balance for a user in an epoch.
     fn submit_points(ref self: TContractState, epoch: u64, user: ContractAddress, points: u256);
-    /// @notice Adds points to a user in an epoch.
-    /// @dev Authorized producers only.
-    /// @param epoch Epoch identifier.
-    /// @param user User address.
-    /// @param points Points to add.
+    // Adds points to an existing user balance for an epoch.
     fn add_points(ref self: TContractState, epoch: u64, user: ContractAddress, points: u256);
-    /// @notice Consumes points from a user in an epoch.
-    /// @dev Authorized consumers only.
-    /// @param epoch Epoch identifier.
-    /// @param user User address.
-    /// @param amount Points to consume.
+    // Deducts points from a user balance, reverting on insufficient points.
     fn consume_points(ref self: TContractState, epoch: u64, user: ContractAddress, amount: u256);
-    /// @notice Finalizes an epoch with total points.
-    /// @dev Prevents further edits after finalization.
-    /// @param epoch Epoch identifier.
-    /// @param total_points Total points in the epoch.
+    // Finalizes an epoch and stores the global points total for conversion.
     fn finalize_epoch(ref self: TContractState, epoch: u64, total_points: u256);
-    /// @notice Returns user points for an epoch.
-    /// @dev Read-only helper for UIs.
-    /// @param epoch Epoch identifier.
-    /// @param user User address.
-    /// @return points User points.
+    // Returns points assigned to `user` in `epoch`.
     fn get_user_points(self: @TContractState, epoch: u64, user: ContractAddress) -> u256;
-    /// @notice Returns global points for an epoch.
-    /// @dev Read-only helper for reward calculations.
-    /// @param epoch Epoch identifier.
-    /// @return points Global points.
+    // Returns the finalized global points total for `epoch`.
     fn get_global_points(self: @TContractState, epoch: u64) -> u256;
-    /// @notice Returns whether an epoch is finalized.
-    /// @dev Read-only helper for backend logic.
-    /// @param epoch Epoch identifier.
-    /// @return finalized True if finalized.
+    // Returns true when the epoch is locked against further mutations.
     fn is_epoch_finalized(self: @TContractState, epoch: u64) -> bool;
-    /// @notice Converts user points into CAREL distribution for an epoch.
-    /// @dev Uses total distribution and global epoch points.
-    /// @param epoch Epoch identifier.
-    /// @param user_points User points for the epoch.
-    /// @param total_distribution Total CAREL to distribute for the epoch.
-    /// @return carel_amount CAREL amount for the user.
+    // Converts points into a CAREL allocation using finalized epoch totals.
     fn convert_points_to_carel(
         self: @TContractState,
         epoch: u64,
@@ -59,14 +27,12 @@ pub trait IPointStorage<TContractState> {
     ) -> u256;
 }
 
-/// @title Point Storage Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy entrypoints for points actions.
+// Hide Mode hooks for points actions routed through the privacy layer.
 #[starknet::interface]
 pub trait IPointStoragePrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Sets the privacy router used to relay private points actions.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private points action proof.
+    // Forwards a nullifier/commitment-bound points proof to the privacy router.
     fn submit_private_points_action(
         ref self: TContractState,
         old_root: felt252,
@@ -78,26 +44,17 @@ pub trait IPointStoragePrivacy<TContractState> {
     );
 }
 
-/// @title Point Storage Admin Interface
-/// @author CAREL Team
-/// @notice Administrative controls for producers/consumers.
-/// @dev Backend-only to manage authorized actors.
+// Role management for services that can add or consume points.
 #[starknet::interface]
 pub trait IPointStorageAdmin<TContractState> {
-    /// @notice Authorizes a points consumer.
-    /// @dev Backend-only to keep consumption trusted.
-    /// @param consumer Consumer address.
+    // Grants permission to consume points.
     fn add_consumer(ref self: TContractState, consumer: ContractAddress);
-    /// @notice Authorizes a points producer.
-    /// @dev Backend-only to keep submissions trusted.
-    /// @param producer Producer address.
+    // Grants permission to add points.
     fn add_producer(ref self: TContractState, producer: ContractAddress);
 }
 
-/// @title Point Storage Contract
-/// @author CAREL Team
-/// @notice Stores user points by epoch for rewards and discounts.
-/// @dev Enforces backend authorization and epoch finalization.
+// On-chain point storage with backend/role-based write access.
+// Used as the source of truth for epoch rewards distribution.
 #[starknet::contract]
 pub mod PointStorage {
     use starknet::ContractAddress;
@@ -138,9 +95,7 @@ pub mod PointStorage {
         pub total_points: u256
     }
 
-    /// @notice Initializes the point storage.
-    /// @dev Sets backend signer as the initial authority.
-    /// @param signer Backend signer address.
+    // Initializes the contract and sets the initial backend signer authority.
     #[constructor]
     fn constructor(ref self: ContractState, signer: ContractAddress) {
         self.backend_signer.write(signer);
@@ -148,11 +103,8 @@ pub mod PointStorage {
 
     #[abi(embed_v0)]
     impl PointStorageImpl of super::IPointStorage<ContractState> {
-        /// @notice Submits points for a user in an epoch.
-        /// @dev Backend-only to prevent unauthorized updates.
-        /// @param epoch Epoch identifier.
-        /// @param user User address.
-        /// @param points Point amount to set.
+        // Writes an absolute point value for `(epoch, user)`.
+        // Only the backend signer can call this entrypoint.
         fn submit_points(ref self: ContractState, epoch: u64, user: ContractAddress, points: u256) {
             assert!(get_caller_address() == self.backend_signer.read(), "Caller is not authorized");
             assert!(!self.epoch_finalized.entry(epoch).read(), "Epoch already finalized");
@@ -161,11 +113,8 @@ pub mod PointStorage {
             self.emit(Event::PointsUpdated(PointsUpdated { epoch, user, points }));
         }
 
-        /// @notice Adds points to a user in an epoch.
-        /// @dev Authorized producers only.
-        /// @param epoch Epoch identifier.
-        /// @param user User address.
-        /// @param points Points to add.
+        // Increases points for `(epoch, user)`.
+        // Callable by backend signer or authorized producer contracts.
         fn add_points(ref self: ContractState, epoch: u64, user: ContractAddress, points: u256) {
             let caller = get_caller_address();
             let is_authorized = caller == self.backend_signer.read() || self.authorized_producers.entry(caller).read();
@@ -178,11 +127,8 @@ pub mod PointStorage {
             self.emit(Event::PointsUpdated(PointsUpdated { epoch, user, points: updated }));
         }
 
-        /// @notice Consumes points from a user in an epoch.
-        /// @dev Authorized consumers only.
-        /// @param epoch Epoch identifier.
-        /// @param user User address.
-        /// @param amount Points to consume.
+        // Decreases points for `(epoch, user)` after balance checks.
+        // Callable by backend signer or authorized consumer contracts.
         fn consume_points(ref self: ContractState, epoch: u64, user: ContractAddress, amount: u256) {
             let caller = get_caller_address();
             let is_authorized = caller == self.backend_signer.read() || self.authorized_consumers.entry(caller).read();
@@ -195,10 +141,7 @@ pub mod PointStorage {
             self.emit(Event::PointsUpdated(PointsUpdated { epoch, user, points: current - amount }));
         }
 
-        /// @notice Finalizes an epoch with total points.
-        /// @dev Prevents further edits after finalization.
-        /// @param epoch Epoch identifier.
-        /// @param total_points Total points in the epoch.
+        // Locks an epoch and stores `total_points` for proportional conversions.
         fn finalize_epoch(ref self: ContractState, epoch: u64, total_points: u256) {
             assert!(get_caller_address() == self.backend_signer.read(), "Caller is not authorized");
             assert!(!self.epoch_finalized.entry(epoch).read(), "Epoch already finalized");
@@ -208,37 +151,23 @@ pub mod PointStorage {
             self.emit(Event::EpochFinalized(EpochFinalized { epoch, total_points }));
         }
 
-        /// @notice Returns user points for an epoch.
-        /// @dev Read-only helper for UIs.
-        /// @param epoch Epoch identifier.
-        /// @param user User address.
-        /// @return points User points.
+        // Returns points currently recorded for `(epoch, user)`.
         fn get_user_points(self: @ContractState, epoch: u64, user: ContractAddress) -> u256 {
             self.points.entry(epoch).entry(user).read()
         }
 
-        /// @notice Returns global points for an epoch.
-        /// @dev Read-only helper for reward calculations.
-        /// @param epoch Epoch identifier.
-        /// @return points Global points.
+        // Returns the global points total recorded at finalization.
         fn get_global_points(self: @ContractState, epoch: u64) -> u256 {
             self.global_points.entry(epoch).read()
         }
 
-        /// @notice Returns whether an epoch is finalized.
-        /// @dev Read-only helper for backend logic.
-        /// @param epoch Epoch identifier.
-        /// @return finalized True if finalized.
+        // Returns true when the epoch is finalized and immutable.
         fn is_epoch_finalized(self: @ContractState, epoch: u64) -> bool {
             self.epoch_finalized.entry(epoch).read()
         }
 
-        /// @notice Converts user points into CAREL distribution for an epoch.
-        /// @dev Uses total distribution and global epoch points.
-        /// @param epoch Epoch identifier.
-        /// @param user_points User points for the epoch.
-        /// @param total_distribution Total CAREL to distribute for the epoch.
-        /// @return carel_amount CAREL amount for the user.
+        // Converts user points into CAREL allocation for a finalized epoch.
+        // Returns 0 when epoch is not finalized or has zero total points.
         fn convert_points_to_carel(
             self: @ContractState,
             epoch: u64,
@@ -258,17 +187,13 @@ pub mod PointStorage {
 
     #[abi(embed_v0)]
     impl PointStorageAdminImpl of super::IPointStorageAdmin<ContractState> {
-        /// @notice Authorizes a points consumer.
-        /// @dev Backend-only to keep consumption trusted.
-        /// @param consumer Consumer address.
+        // Adds a contract/address to the consumer allowlist.
         fn add_consumer(ref self: ContractState, consumer: ContractAddress) {
             assert!(get_caller_address() == self.backend_signer.read(), "Caller is not authorized");
             self.authorized_consumers.entry(consumer).write(true);
         }
 
-        /// @notice Authorizes a points producer.
-        /// @dev Backend-only to keep submissions trusted.
-        /// @param producer Producer address.
+        // Adds a contract/address to the producer allowlist.
         fn add_producer(ref self: ContractState, producer: ContractAddress) {
             assert!(get_caller_address() == self.backend_signer.read(), "Caller is not authorized");
             self.authorized_producers.entry(producer).write(true);
@@ -277,12 +202,15 @@ pub mod PointStorage {
 
     #[abi(embed_v0)]
     impl PointStoragePrivacyImpl of super::IPointStoragePrivacy<ContractState> {
+        // Configures the privacy router used for Hide Mode points actions.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.backend_signer.read(), "Caller is not authorized");
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
+        // Submits a private points action to the router.
+        // The proof payload is expected to bind `nullifiers` and `commitments`.
         fn submit_private_points_action(
             ref self: ContractState,
             old_root: felt252,

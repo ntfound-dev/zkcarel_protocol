@@ -16,7 +16,8 @@ use smartcontract::core::token::{
 // Import OpenZeppelin ERC20 Dispatcher to access balance_of
 use openzeppelin::token::erc20::interface::{ERC20ABIDispatcher, ERC20ABIDispatcherTrait};
 
-/// Setup function to deploy contracts and configure roles
+// Builds reusable fixture state and returns configured contracts for subsequent calls.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn setup() -> (IVestingManagerDispatcher, ICarelTokenDispatcher, ContractAddress) {
     let admin: ContractAddress = 0x1.try_into().unwrap();
     let start_time: u64 = 1000;
@@ -47,6 +48,8 @@ fn setup() -> (IVestingManagerDispatcher, ICarelTokenDispatcher, ContractAddress
 }
 
 #[test]
+// Test case: validates team vesting milestones behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_team_vesting_milestones() {
     let (vesting, token, admin) = setup();
     let team_member: ContractAddress = 0x2.try_into().unwrap();
@@ -85,6 +88,8 @@ fn test_team_vesting_milestones() {
 #[test]
 // Change 'Caller is missing role' to 'Caller is not the owner'
 #[should_panic(expected: 'Caller is not the owner')]
+// Test case: validates unauthorized vesting creation fails behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unauthorized_vesting_creation_fails() {
     let (vesting, _, _) = setup();
     let attacker: ContractAddress = 0x666.try_into().unwrap();

@@ -10,6 +10,7 @@ use tokio::time::{timeout, Duration};
 const DISCOUNT_READ_TIMEOUT_MS: u64 = 2_500;
 const DISCOUNT_CONSUME_TIMEOUT_MS: u64 = 5_000;
 
+// Internal helper that supports `discount_contract` operations.
 fn discount_contract(config: &Config) -> Option<&str> {
     config
         .discount_soulbound_address
@@ -17,6 +18,7 @@ fn discount_contract(config: &Config) -> Option<&str> {
         .filter(|addr| !addr.trim().is_empty() && !addr.starts_with("0x0000"))
 }
 
+// Internal helper that supports `active_discount_rate` operations.
 async fn active_discount_rate(config: &Config, user_address: &str) -> Result<f64> {
     let Some(contract) = discount_contract(config) else {
         return Ok(0.0);
@@ -49,6 +51,17 @@ async fn active_discount_rate(config: &Config, user_address: &str) -> Result<f64
     Ok(discount.max(0.0))
 }
 
+/// Handles `consume_nft_usage_if_active` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub async fn consume_nft_usage_if_active(
     config: &Config,
     user_address: &str,

@@ -1,26 +1,20 @@
 use starknet::ContractAddress;
 
-/// @title Verifier Registry Interface
-/// @author CAREL Team
-/// @notice Maps action types to verifier contracts.
+// Maps action types to verifier contracts.
 #[starknet::interface]
 pub trait IVerifierRegistry<TContractState> {
-    /// @notice Returns the verifier for an action type.
+    // Returns the verifier address configured for the provided action type.
     fn get_verifier(self: @TContractState, action_type: felt252) -> ContractAddress;
 }
 
-/// @title Verifier Registry Admin Interface
-/// @author CAREL Team
-/// @notice Owner-only updates to verifier mapping.
+// Owner-only updates to verifier mapping.
 #[starknet::interface]
 pub trait IVerifierRegistryAdmin<TContractState> {
-    /// @notice Sets verifier for an action type.
+    // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
     fn set_verifier(ref self: TContractState, action_type: felt252, verifier: ContractAddress);
 }
 
-/// @title Verifier Registry Contract
-/// @author CAREL Team
-/// @notice Stores verifier contracts for privacy actions.
+// Stores verifier contracts for privacy actions.
 #[starknet::contract]
 pub mod VerifierRegistry {
     use starknet::ContractAddress;
@@ -56,20 +50,23 @@ pub mod VerifierRegistry {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, owner: ContractAddress) {
         self.ownable.initializer(owner);
     }
 
     #[abi(embed_v0)]
     impl VerifierRegistryImpl of super::IVerifierRegistry<ContractState> {
-        fn get_verifier(self: @ContractState, action_type: felt252) -> ContractAddress {
+        // Returns the verifier address configured for the provided action type.
+            fn get_verifier(self: @ContractState, action_type: felt252) -> ContractAddress {
             self.verifiers.entry(action_type).read()
         }
     }
 
     #[abi(embed_v0)]
     impl VerifierRegistryAdminImpl of super::IVerifierRegistryAdmin<ContractState> {
-        fn set_verifier(ref self: ContractState, action_type: felt252, verifier: ContractAddress) {
+        // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
+            fn set_verifier(ref self: ContractState, action_type: felt252, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!verifier.is_zero(), "Verifier required");
             self.verifiers.entry(action_type).write(verifier);

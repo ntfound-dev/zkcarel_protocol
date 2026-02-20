@@ -40,6 +40,7 @@ use crate::{config::Config, db::Database};
 use sqlx::Row;
 use std::sync::Arc;
 
+// Internal helper that checks conditions for `is_env_flag_enabled`.
 fn is_env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
         .ok()

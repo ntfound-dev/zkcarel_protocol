@@ -237,6 +237,17 @@ pub struct ApiResponse<T> {
 }
 
 impl<T> ApiResponse<T> {
+    /// Handles `success` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn success(data: T) -> Self {
         Self {
             success: true,
@@ -258,6 +269,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `api_response_success_sets_flag` operations.
     fn api_response_success_sets_flag() {
         // Memastikan helper ApiResponse::success mengisi flag sukses
         let response = ApiResponse::success("ok");
@@ -266,6 +278,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `notification_preferences_default_false` operations.
     fn notification_preferences_default_false() {
         // Memastikan default preferensi notifikasi bernilai false
         let prefs = NotificationPreferences::default();

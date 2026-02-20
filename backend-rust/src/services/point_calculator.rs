@@ -39,6 +39,17 @@ const REFERRAL_REFERRER_BONUS_BPS: i64 = 1000; // 10%
 const REFERRAL_REFEREE_BONUS_BPS: i64 = 1000; // 10%
 
 impl PointCalculator {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         let onchain = OnchainInvoker::from_config(&config).ok().flatten();
         Self {
@@ -261,6 +272,7 @@ impl PointCalculator {
         Ok(())
     }
 
+    // Internal helper that supports `calculate_swap_points` operations.
     async fn calculate_swap_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
         let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
         let min_usd = if self.config.is_testnet() {
@@ -275,6 +287,7 @@ impl PointCalculator {
             .await
     }
 
+    // Internal helper that supports `calculate_limit_order_points` operations.
     async fn calculate_limit_order_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
         let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
         if usd_value < POINTS_MIN_USD_LIMIT_ORDER {
@@ -284,6 +297,7 @@ impl PointCalculator {
             .await
     }
 
+    // Internal helper that supports `calculate_bridge_points` operations.
     async fn calculate_bridge_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
         let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
         let is_btc_bridge = is_btc_bridge(tx);
@@ -299,6 +313,7 @@ impl PointCalculator {
             .await
     }
 
+    // Internal helper that supports `calculate_stake_points` operations.
     async fn calculate_stake_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
         let amount = tx.amount_in.and_then(|v| v.to_f64()).unwrap_or(0.0);
         let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
@@ -323,6 +338,7 @@ impl PointCalculator {
         .await
     }
 
+    // Internal helper that supports `calculate_battleship_points` operations.
     fn calculate_battleship_points(&self, tx: &crate::models::Transaction) -> f64 {
         match tx.tx_type.as_str() {
             "battle_hit" => POINTS_BATTLE_HIT,
@@ -334,6 +350,7 @@ impl PointCalculator {
         }
     }
 
+    // Internal helper that supports `apply_nft_discount_bonus` operations.
     async fn apply_nft_discount_bonus(&self, user_address: &str, base_points: f64) -> Result<f64> {
         if base_points <= 0.0 {
             return Ok(0.0);
@@ -343,6 +360,7 @@ impl PointCalculator {
         Ok(boosted)
     }
 
+    // Internal helper that supports `current_staked_carel_amount` operations.
     async fn current_staked_carel_amount(&self, user_address: &str) -> Result<f64> {
         let amount: Option<f64> = sqlx::query_scalar(
             r#"
@@ -365,6 +383,7 @@ impl PointCalculator {
         Ok(amount.unwrap_or(0.0).max(0.0))
     }
 
+    // Internal helper that supports `active_nft_discount_rate` operations.
     async fn active_nft_discount_rate(&self, user_address: &str) -> Result<f64> {
         let Some(contract) = self.config.discount_soulbound_address.as_deref() else {
             return Ok(0.0);
@@ -431,6 +450,7 @@ impl PointCalculator {
         Ok(discount.max(0.0))
     }
 
+    // Internal helper that checks conditions for `is_wash_trading`.
     async fn is_wash_trading(&self, user_address: &str, current_tx: &str) -> Result<bool> {
         let row = sqlx::query(
             "SELECT COUNT(*) as count FROM transactions
@@ -447,6 +467,7 @@ impl PointCalculator {
         Ok(row.get::<i64, _>("count") > 5)
     }
 
+    // Internal helper that supports `flag_wash_trading` operations.
     async fn flag_wash_trading(&self, user_address: &str) -> Result<()> {
         let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
@@ -462,6 +483,17 @@ impl PointCalculator {
         Ok(())
     }
 
+    /// Handles `apply_multipliers` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn apply_multipliers(&self, user_address: &str, epoch: i64) -> Result<()> {
         let stake_amount = self.current_staked_carel_amount(user_address).await?;
         let multiplier = staking_multiplier_for(stake_amount);
@@ -487,6 +519,7 @@ impl PointCalculator {
         Ok(())
     }
 
+    // Internal helper that supports `apply_referral_bonus` operations.
     async fn apply_referral_bonus(
         &self,
         referee_address: &str,
@@ -618,6 +651,7 @@ impl PointCalculator {
         Ok(())
     }
 
+    // Internal helper that supports `sync_referral_onchain` operations.
     async fn sync_referral_onchain(
         &self,
         epoch: i64,
@@ -655,6 +689,7 @@ impl PointCalculator {
         Ok(())
     }
 
+    // Internal helper that supports `sync_points_total_onchain` operations.
     async fn sync_points_total_onchain(
         &self,
         epoch: i64,
@@ -698,6 +733,7 @@ impl PointCalculator {
     }
 }
 
+// Internal helper that builds inputs for `build_referral_call`.
 fn build_referral_call(
     contract: &str,
     epoch: u64,
@@ -723,6 +759,7 @@ fn build_referral_call(
     })
 }
 
+// Internal helper that builds inputs for `build_point_storage_submit_points_call`.
 fn build_point_storage_submit_points_call(
     contract: &str,
     epoch: u64,
@@ -747,6 +784,7 @@ fn build_point_storage_submit_points_call(
     })
 }
 
+// Internal helper that checks conditions for `is_btc_bridge`.
 fn is_btc_bridge(tx: &crate::models::Transaction) -> bool {
     tx.token_in
         .as_deref()
@@ -757,14 +795,17 @@ fn is_btc_bridge(tx: &crate::models::Transaction) -> bool {
         .unwrap_or(false)
 }
 
+// Internal helper that supports `nft_factor_for_discount` operations.
 fn nft_factor_for_discount(discount_rate: f64) -> f64 {
     1.0 + (discount_rate.max(0.0) / 100.0)
 }
 
+// Internal helper that checks conditions for `is_lp_stake_symbol`.
 fn is_lp_stake_symbol(token: &str) -> bool {
     token.starts_with("LP")
 }
 
+// Internal helper that runs side-effecting logic for `stake_points_multiplier_for`.
 fn stake_points_multiplier_for(token: &str, amount: f64) -> f64 {
     match token {
         "CAREL" => {
@@ -810,6 +851,7 @@ fn stake_points_multiplier_for(token: &str, amount: f64) -> f64 {
     }
 }
 
+// Internal helper that supports `staking_multiplier_for` operations.
 fn staking_multiplier_for(stake_amount: f64) -> f64 {
     if stake_amount < POINTS_MIN_STAKE_CAREL {
         MULTIPLIER_TIER_1
@@ -827,6 +869,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `staking_multiplier_for_tier_boundaries` operations.
     fn staking_multiplier_for_tier_boundaries() {
         // Memastikan multiplier berubah sesuai batas tier
         assert_eq!(staking_multiplier_for(0.0), MULTIPLIER_TIER_1);
@@ -836,6 +879,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that runs side-effecting logic for `stake_points_multiplier_matches_product_rules`.
     fn stake_points_multiplier_matches_product_rules() {
         assert_eq!(stake_points_multiplier_for("CAREL", 99.0), 0.0);
         assert_eq!(
@@ -865,6 +909,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `nft_factor_for_discount_matches_percentage` operations.
     fn nft_factor_for_discount_matches_percentage() {
         assert_eq!(nft_factor_for_discount(0.0), 1.0);
         assert_eq!(nft_factor_for_discount(25.0), 1.25);

@@ -232,6 +232,12 @@ const STARKNET_DISCOUNT_SOULBOUND_ADDRESS =
   process.env.NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS ||
   ""
 
+/**
+ * Handles `TierProgressBar` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function TierProgressBar({
   currentPoints,
   currentTierId,
@@ -350,6 +356,12 @@ function TierProgressBar({
   )
 }
 
+/**
+ * Handles `NFTCard` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function NFTCard({ 
   nft, 
   isOwned, 
@@ -465,6 +477,12 @@ function NFTCard({
   )
 }
 
+/**
+ * Handles `RewardsHub` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function RewardsHub() {
   const wallet = useWallet()
   const notifications = useNotifications()
@@ -529,6 +547,12 @@ export function RewardsHub() {
 
   React.useEffect(() => {
     let active = true
+    /**
+     * Handles `loadRewardsPoints` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadRewardsPoints = async () => {
       try {
         const rewards = await getRewardsPoints()
@@ -572,6 +596,12 @@ export function RewardsHub() {
 
   React.useEffect(() => {
     let active = true
+    /**
+     * Handles `loadSocialTasks` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadSocialTasks = async () => {
       try {
         const remoteTasks = await getSocialTasks()
@@ -599,6 +629,12 @@ export function RewardsHub() {
 
   React.useEffect(() => {
     let active = true
+    /**
+     * Handles `loadOwnedNfts` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadOwnedNfts = async () => {
       try {
         const nfts = await getOwnedNfts()
@@ -627,6 +663,14 @@ export function RewardsHub() {
     }
   }, [wallet.address, wallet.starknetAddress, wallet.evmAddress, wallet.btcAddress])
 
+  /**
+   * Handles `handleMintNFT` logic.
+   *
+   * @param nft - Input used by `handleMintNFT` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleMintNFT = async (nft: typeof nftTiers[number]) => {
     if (nft.tierId === 0) return
     if (!wallet.isConnected) {
@@ -716,6 +760,12 @@ export function RewardsHub() {
     }
   }
 
+  /**
+   * Handles `handleConvert` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleConvert = async () => {
     notifications.addNotification({
       type: "info",
@@ -724,6 +774,12 @@ export function RewardsHub() {
     })
   }
 
+  /**
+   * Handles `handleClaim` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleClaim = async () => {
     notifications.addNotification({
       type: "info",
@@ -732,6 +788,14 @@ export function RewardsHub() {
     })
   }
 
+  /**
+   * Handles `handleVerifyTask` logic.
+   *
+   * @param taskId - Input used by `handleVerifyTask` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleVerifyTask = async (taskId: string) => {
     const proof = taskInputs[taskId]
     if (!proof) return

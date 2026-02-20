@@ -20,6 +20,12 @@ interface ThemeProviderProps {
   defaultTheme?: Theme
 }
 
+/**
+ * Handles `ThemeProvider` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function ThemeProvider({
   children,
   defaultTheme = 'dark',
@@ -51,6 +57,12 @@ export function ThemeProvider({
   )
 }
 
+/**
+ * Exposes `useTheme` as a reusable hook.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function useTheme() {
   const context = useContext(ThemeProviderContext)
   if (!context) {

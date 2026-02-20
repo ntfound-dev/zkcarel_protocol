@@ -50,10 +50,14 @@ struct CachedNftDiscount {
 static NFT_DISCOUNT_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedNftDiscount>>> =
     OnceLock::new();
 
+// Internal helper that supports `nft_discount_cache` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn nft_discount_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedNftDiscount>> {
     NFT_DISCOUNT_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
+// Internal helper that supports `nft_discount_cache_key` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn nft_discount_cache_key(contract: &str, user: &str) -> String {
     format!(
         "{}|{}",
@@ -62,6 +66,8 @@ fn nft_discount_cache_key(contract: &str, user: &str) -> String {
     )
 }
 
+// Internal helper that fetches data for `get_cached_nft_discount` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn get_cached_nft_discount(key: &str, max_age: Duration) -> Option<f64> {
     let cache = nft_discount_cache();
     let guard = cache.read().await;
@@ -72,6 +78,8 @@ async fn get_cached_nft_discount(key: &str, max_age: Duration) -> Option<f64> {
     None
 }
 
+// Internal helper that supports `cache_nft_discount` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn cache_nft_discount(key: &str, discount: f64) {
     let cache = nft_discount_cache();
     let mut guard = cache.write().await;
@@ -124,6 +132,8 @@ pub struct ExecuteSwapResponse {
     pub privacy_tx_hash: Option<String>,
 }
 
+// Internal helper that supports `env_flag` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn env_flag(name: &str, default: bool) -> bool {
     std::env::var(name)
         .ok()
@@ -136,6 +146,8 @@ fn env_flag(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+// Internal helper that supports `hide_balance_relayer_pool_enabled` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_balance_relayer_pool_enabled() -> bool {
     env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", true)
 }
@@ -146,6 +158,8 @@ enum HideExecutorKind {
     ShieldedPoolV2,
 }
 
+// Internal helper that supports `hide_executor_kind` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_executor_kind() -> HideExecutorKind {
     let raw = std::env::var("HIDE_BALANCE_EXECUTOR_KIND")
         .unwrap_or_default()
@@ -158,6 +172,8 @@ fn hide_executor_kind() -> HideExecutorKind {
     }
 }
 
+// Internal helper that fetches data for `resolve_private_action_executor_felt` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Result<Felt> {
     for raw in [
         std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
@@ -178,6 +194,8 @@ fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Resul
     ))
 }
 
+// Internal helper that parses or transforms values for `normalize_hex_items` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_hex_items(items: &[String]) -> Vec<String> {
     items
         .iter()
@@ -187,6 +205,8 @@ fn normalize_hex_items(items: &[String]) -> Vec<String> {
         .collect()
 }
 
+// Internal helper that supports `payload_from_request` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn payload_from_request(
     payload: Option<&PrivacyVerificationPayload>,
     verifier: &str,
@@ -224,6 +244,8 @@ fn payload_from_request(
     })
 }
 
+// Internal helper that builds inputs for `build_swap_executor_action_calldata` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_swap_executor_action_calldata(
     context: &OnchainSwapContext,
     mev_protected: bool,
@@ -243,6 +265,8 @@ fn build_swap_executor_action_calldata(
     ]
 }
 
+// Internal helper that builds inputs for `build_submit_private_intent_call` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_submit_private_intent_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
@@ -280,6 +304,8 @@ fn build_submit_private_intent_call(
     })
 }
 
+// Internal helper that builds inputs for `build_execute_private_swap_with_payout_call` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_execute_private_swap_with_payout_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
@@ -316,6 +342,8 @@ fn build_execute_private_swap_with_payout_call(
     })
 }
 
+// Internal helper that builds inputs for `build_shielded_set_asset_rule_call` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_shielded_set_asset_rule_call(
     executor: Felt,
     token: Felt,
@@ -331,6 +359,8 @@ fn build_shielded_set_asset_rule_call(
     })
 }
 
+// Internal helper that builds inputs for `build_shielded_deposit_fixed_call` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_shielded_deposit_fixed_call(
     executor: Felt,
     token: Felt,
@@ -345,6 +375,8 @@ fn build_shielded_deposit_fixed_call(
     })
 }
 
+// Internal helper that builds inputs for `build_erc20_approve_call` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_erc20_approve_call(
     token: Felt,
     spender: Felt,
@@ -360,6 +392,8 @@ fn build_erc20_approve_call(
     })
 }
 
+// Internal helper that supports `shielded_note_registered` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn shielded_note_registered(
     state: &AppState,
     executor: Felt,
@@ -379,6 +413,8 @@ async fn shielded_note_registered(
     Ok(flag != Felt::ZERO)
 }
 
+// Internal helper that supports `shielded_fixed_amount` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn shielded_fixed_amount(
     state: &AppState,
     executor: Felt,
@@ -402,6 +438,8 @@ async fn shielded_fixed_amount(
     Ok((out[0], out[1]))
 }
 
+// Internal helper that supports `compute_swap_payout_intent_hash_on_executor` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn compute_swap_payout_intent_hash_on_executor(
     state: &AppState,
     executor: Felt,
@@ -447,10 +485,14 @@ async fn compute_swap_payout_intent_hash_on_executor(
     Ok(intent_hash.to_string())
 }
 
+// Internal helper that checks conditions for `is_deadline_valid` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn is_deadline_valid(deadline: i64, now: i64) -> bool {
     deadline >= now
 }
 
+// Internal helper that supports `invalidate_cached_nft_discount` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn invalidate_cached_nft_discount(contract: &str, user: &str) {
     let key = nft_discount_cache_key(contract, user);
     let cache = nft_discount_cache();
@@ -458,6 +500,8 @@ async fn invalidate_cached_nft_discount(contract: &str, user: &str) {
     guard.remove(&key);
 }
 
+// Internal helper that checks conditions for `has_remaining_nft_usage` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn has_remaining_nft_usage(
     reader: &OnchainReader,
     contract_address: Felt,
@@ -487,10 +531,14 @@ async fn has_remaining_nft_usage(
     Ok(max_usage > 0 && used_in_period < max_usage)
 }
 
+// Internal helper that supports `base_fee` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn base_fee(amount_in: f64) -> f64 {
     amount_in * 0.003
 }
 
+// Internal helper that supports `mev_fee_for_mode` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn mev_fee_for_mode(mode: &str, amount_in: f64) -> f64 {
     if mode.eq_ignore_ascii_case("private") {
         amount_in * 0.01
@@ -499,12 +547,16 @@ fn mev_fee_for_mode(mode: &str, amount_in: f64) -> f64 {
     }
 }
 
+// Internal helper that supports `total_fee` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn total_fee(amount_in: f64, mode: &str, nft_discount_percent: f64) -> f64 {
     let undiscounted = base_fee(amount_in) + mev_fee_for_mode(mode, amount_in);
     let discount_factor = 1.0 - (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
     undiscounted * discount_factor
 }
 
+// Internal helper that supports `discount_contract_address` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn discount_contract_address(state: &AppState) -> Option<&str> {
     state
         .config
@@ -513,6 +565,8 @@ fn discount_contract_address(state: &AppState) -> Option<&str> {
         .filter(|addr| !addr.trim().is_empty() && !addr.starts_with("0x0000"))
 }
 
+// Internal helper that supports `active_nft_discount_percent` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f64 {
     let Some(contract) = discount_contract_address(state) else {
         return 0.0;
@@ -653,6 +707,8 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
     normalized
 }
 
+// Internal helper that parses or transforms values for `normalize_usd_volume` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_usd_volume(usd_in: f64, usd_out: f64) -> f64 {
     let in_valid = usd_in.is_finite() && usd_in > 0.0;
     let out_valid = usd_out.is_finite() && usd_out > 0.0;
@@ -664,10 +720,14 @@ fn normalize_usd_volume(usd_in: f64, usd_out: f64) -> f64 {
     }
 }
 
+// Internal helper that checks conditions for `should_run_privacy_verification` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn should_run_privacy_verification(hide_balance: bool) -> bool {
     hide_balance
 }
 
+// Internal helper that supports `fallback_price_for` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn fallback_price_for(token: &str) -> f64 {
     match token.to_ascii_uppercase().as_str() {
         "BTC" | "WBTC" => 65_000.0,
@@ -679,6 +739,8 @@ fn fallback_price_for(token: &str) -> f64 {
     }
 }
 
+// Internal helper that checks conditions for `is_supported_starknet_swap_token` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn is_supported_starknet_swap_token(token: &str) -> bool {
     matches!(
         token.to_ascii_uppercase().as_str(),
@@ -686,6 +748,8 @@ fn is_supported_starknet_swap_token(token: &str) -> bool {
     )
 }
 
+// Internal helper that runs side-effecting logic for `ensure_supported_starknet_swap_pair` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn ensure_supported_starknet_swap_pair(from_token: &str, to_token: &str) -> Result<()> {
     if !is_supported_starknet_swap_token(from_token) || !is_supported_starknet_swap_token(to_token)
     {
@@ -722,6 +786,17 @@ struct OnchainSwapContext {
     route: OnchainSwapRoute,
 }
 
+/// Handles `token_decimals` logic in the swap API flow.
+///
+/// # Arguments
+/// * Function parameters carry authenticated request context and execution inputs.
+///
+/// # Returns
+/// * `Ok(...)` when the swap operation is validated and processed successfully.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May interact with relayer/on-chain components and update runtime state.
 pub(crate) fn token_decimals(symbol: &str) -> u32 {
     match symbol.to_ascii_uppercase().as_str() {
         "BTC" | "WBTC" => 8,
@@ -730,6 +805,8 @@ pub(crate) fn token_decimals(symbol: &str) -> u32 {
     }
 }
 
+// Internal helper that supports `pow10_u128` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn pow10_u128(exp: u32) -> Result<u128> {
     let mut out = 1_u128;
     for _ in 0..exp {
@@ -740,6 +817,8 @@ fn pow10_u128(exp: u32) -> Result<u128> {
     Ok(out)
 }
 
+// Internal helper that parses or transforms values for `parse_decimal_to_scaled_u128` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn parse_decimal_to_scaled_u128(raw: &str, decimals: u32) -> Result<u128> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -797,11 +876,24 @@ fn parse_decimal_to_scaled_u128(raw: &str, decimals: u32) -> Result<u128> {
         .ok_or_else(|| AppError::BadRequest("Amount is too large".to_string()))
 }
 
+/// Parses or transforms values for `parse_decimal_to_u256_parts` in the swap API flow.
+///
+/// # Arguments
+/// * Function parameters carry authenticated request context and execution inputs.
+///
+/// # Returns
+/// * `Ok(...)` when the swap operation is validated and processed successfully.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May interact with relayer/on-chain components and update runtime state.
 pub(crate) fn parse_decimal_to_u256_parts(raw: &str, decimals: u32) -> Result<(Felt, Felt)> {
     let scaled = parse_decimal_to_scaled_u128(raw, decimals)?;
     Ok((Felt::from(scaled), Felt::ZERO))
 }
 
+// Internal helper that supports `onchain_u256_to_f64` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn onchain_u256_to_f64(low: Felt, high: Felt, decimals: u32) -> Result<f64> {
     let low_u = felt_to_u128(&low).map_err(|_| {
         AppError::BadRequest("Invalid on-chain amount: low limb is not numeric".to_string())
@@ -826,14 +918,20 @@ fn onchain_u256_to_f64(low: Felt, high: Felt, decimals: u32) -> Result<f64> {
     Ok(out)
 }
 
+// Internal helper that supports `felt_hex` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn felt_hex(value: Felt) -> String {
     value.to_string()
 }
 
+// Internal helper that supports `felt_debug` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn felt_debug(value: Felt) -> String {
     format!("{} ({:#x})", value, value)
 }
 
+// Internal helper that checks conditions for `is_transient_starknet_route_error` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn is_transient_starknet_route_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("error sending request")
@@ -845,6 +943,8 @@ fn is_transient_starknet_route_error(message: &str) -> bool {
         || lower.contains("temporarily unavailable")
 }
 
+// Internal helper that supports `call_swap_route_with_retry` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn call_swap_route_with_retry(
     reader: &OnchainReader,
     call: FunctionCall,
@@ -869,6 +969,8 @@ async fn call_swap_route_with_retry(
         .unwrap_or_else(|| AppError::BadRequest("Failed to call Starknet swap route".to_string())))
 }
 
+// Internal helper that supports `felt_to_usize` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     let raw = felt_to_u128(value).map_err(|_| {
         AppError::BadRequest(format!(
@@ -882,6 +984,8 @@ fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     })
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls_offset` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if calldata.is_empty() {
         return Err(AppError::BadRequest(
@@ -946,6 +1050,8 @@ fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     Ok(calls)
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls_inline` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if calldata.is_empty() {
         return Err(AppError::BadRequest(
@@ -990,6 +1096,8 @@ fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall
     Ok(calls)
 }
 
+// Internal helper that parses or transforms values for `parse_execute_calls` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     if let Ok(calls) = parse_execute_calls_offset(calldata) {
         return Ok(calls);
@@ -997,6 +1105,8 @@ fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
     parse_execute_calls_inline(calldata)
 }
 
+// Internal helper that supports `configured_swap_contract` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn configured_swap_contract(_state: &AppState) -> Result<Option<Felt>> {
     let mut candidates = vec![
         std::env::var("STARKNET_SWAP_CONTRACT_ADDRESS").ok(),
@@ -1013,6 +1123,8 @@ fn configured_swap_contract(_state: &AppState) -> Result<Option<Felt>> {
     Ok(None)
 }
 
+// Internal helper that supports `env_truthy` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn env_truthy(name: &str) -> bool {
     matches!(
         std::env::var(name)
@@ -1022,6 +1134,8 @@ fn env_truthy(name: &str) -> bool {
     )
 }
 
+// Internal helper that checks conditions for `is_event_only_swap_contract_configured` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn is_event_only_swap_contract_configured(state: &AppState) -> Result<bool> {
     if env_truthy("SWAP_CONTRACT_EVENT_ONLY") || env_truthy("NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY")
     {
@@ -1052,6 +1166,8 @@ fn is_event_only_swap_contract_configured(state: &AppState) -> Result<bool> {
     Ok(false)
 }
 
+// Internal helper that supports `env_value` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn env_value(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -1059,6 +1175,8 @@ fn env_value(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+// Internal helper that supports `push_token_candidate` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn push_token_candidate(raw: Option<String>, out: &mut Vec<Felt>) {
     let Some(candidate) = raw else {
         return;
@@ -1079,6 +1197,8 @@ fn push_token_candidate(raw: Option<String>, out: &mut Vec<Felt>) {
     }
 }
 
+// Internal helper that supports `configured_token_candidates` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn configured_token_candidates(state: &AppState, token: &str) -> Vec<Felt> {
     let token = token.to_ascii_uppercase();
     let mut candidates = Vec::new();
@@ -1129,6 +1249,8 @@ fn configured_token_candidates(state: &AppState, token: &str) -> Vec<Felt> {
     candidates
 }
 
+// Internal helper that checks conditions for `is_no_active_dex_found_error` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn is_no_active_dex_found_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("no active dex found")
@@ -1136,6 +1258,8 @@ fn is_no_active_dex_found_error(message: &str) -> bool {
         || message.contains("dex not active")
 }
 
+// Internal helper that parses or transforms values for `parse_onchain_route` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn parse_onchain_route(raw: &[Felt]) -> Result<OnchainSwapRoute> {
     if raw.len() < 5 {
         return Err(AppError::BadRequest(
@@ -1151,6 +1275,8 @@ fn parse_onchain_route(raw: &[Felt]) -> Result<OnchainSwapRoute> {
     })
 }
 
+// Internal helper that supports `u256_limbs_to_u128_parts` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn u256_limbs_to_u128_parts(low: Felt, high: Felt, label: &str) -> Result<(u128, u128)> {
     let low_u = felt_to_u128(&low).map_err(|_| {
         AppError::BadRequest(format!(
@@ -1167,6 +1293,8 @@ fn u256_limbs_to_u128_parts(low: Felt, high: Felt, label: &str) -> Result<(u128,
     Ok((low_u, high_u))
 }
 
+// Internal helper that supports `u256_is_greater` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn u256_is_greater(
     left_low: Felt,
     left_high: Felt,
@@ -1180,6 +1308,8 @@ fn u256_is_greater(
     Ok(left_high_u > right_high_u || (left_high_u == right_high_u && left_low_u > right_low_u))
 }
 
+// Internal helper that fetches data for `read_erc20_balance_parts` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn read_erc20_balance_parts(
     reader: &OnchainReader,
     token: Felt,
@@ -1206,12 +1336,16 @@ async fn read_erc20_balance_parts(
     ))
 }
 
+// Internal helper that checks conditions for `is_oracle_route` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn is_oracle_route(route: &OnchainSwapRoute) -> bool {
     parse_felt(ORACLE_ROUTE_DEX_ID_HEX)
         .map(|oracle_id| route.dex_id == oracle_id)
         .unwrap_or(false)
 }
 
+// Internal helper that runs side-effecting logic for `ensure_oracle_route_liquidity` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn ensure_oracle_route_liquidity(
     state: &AppState,
     context: &OnchainSwapContext,
@@ -1266,6 +1400,8 @@ async fn ensure_oracle_route_liquidity(
     )))
 }
 
+// Internal helper that fetches data for `fetch_onchain_swap_context` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn fetch_onchain_swap_context(
     state: &AppState,
     from_token: &str,
@@ -1386,6 +1522,8 @@ async fn fetch_onchain_swap_context(
     )))
 }
 
+// Internal helper that builds inputs for `build_onchain_swap_wallet_calls` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn build_onchain_swap_wallet_calls(
     context: &OnchainSwapContext,
     mev_protected: bool,
@@ -1420,12 +1558,16 @@ fn build_onchain_swap_wallet_calls(
     ]
 }
 
+// Internal helper that supports `first_index_of_any` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn first_index_of_any(calldata: &[Felt], candidates: &[Felt]) -> Option<usize> {
     calldata
         .iter()
         .position(|felt| candidates.iter().any(|candidate| candidate == felt))
 }
 
+// Internal helper that supports `first_index_of_any_from` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn first_index_of_any_from(calldata: &[Felt], candidates: &[Felt], start: usize) -> Option<usize> {
     calldata
         .iter()
@@ -1440,6 +1582,8 @@ fn first_index_of_any_from(calldata: &[Felt], candidates: &[Felt], start: usize)
         })
 }
 
+// Internal helper that fetches data for `resolve_allowed_swap_senders` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn resolve_allowed_swap_senders(
     state: &AppState,
     auth_subject: &str,
@@ -1475,6 +1619,8 @@ async fn resolve_allowed_swap_senders(
     Ok(out)
 }
 
+// Internal helper that supports `verify_swap_invoke_payload_fallback_raw` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn verify_swap_invoke_payload_fallback_raw(
     calldata: &[Felt],
     swap_selectors: &[Felt],
@@ -1509,6 +1655,8 @@ fn verify_swap_invoke_payload_fallback_raw(
     false
 }
 
+// Internal helper that supports `verify_swap_invoke_payload` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn verify_swap_invoke_payload(
     tx: &Transaction,
     allowed_senders: &[Felt],
@@ -1659,6 +1807,8 @@ fn verify_swap_invoke_payload(
     ))
 }
 
+// Internal helper that supports `extract_invoke_sender_and_calldata` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn extract_invoke_sender_and_calldata(tx: &Transaction) -> Result<(Felt, &[Felt])> {
     let invoke = match tx {
         Transaction::Invoke(invoke) => invoke,
@@ -1678,6 +1828,8 @@ fn extract_invoke_sender_and_calldata(tx: &Transaction) -> Result<(Felt, &[Felt]
     }
 }
 
+// Internal helper that supports `verify_onchain_swap_tx_hash` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn verify_onchain_swap_tx_hash(
     state: &AppState,
     tx_hash: &str,
@@ -1771,6 +1923,8 @@ async fn verify_onchain_swap_tx_hash(
     )))
 }
 
+// Internal helper that supports `latest_price_usd` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
     let symbol = token.to_ascii_uppercase();
     let price: Option<f64> = sqlx::query_scalar(
@@ -1784,6 +1938,8 @@ async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
         .unwrap_or_else(|| fallback_price_for(&symbol)))
 }
 
+// Internal helper that supports `estimated_time_for_dex` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn estimated_time_for_dex(dex: &str) -> &'static str {
     match dex {
         DEX_EKUBO => "~2 min",
@@ -1792,6 +1948,8 @@ fn estimated_time_for_dex(dex: &str) -> &'static str {
     }
 }
 
+// Internal helper that parses or transforms values for `normalize_onchain_tx_hash` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_onchain_tx_hash(tx_hash: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = tx_hash.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
@@ -2281,12 +2439,16 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that checks conditions for `is_deadline_valid_accepts_equal_time` in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn is_deadline_valid_accepts_equal_time() {
         // Memastikan deadline yang sama dengan waktu sekarang dianggap valid
         assert!(is_deadline_valid(100, 100));
     }
 
     #[test]
+    // Internal helper that supports `mev_fee_for_mode_only_private` operations in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn mev_fee_for_mode_only_private() {
         // Memastikan fee MEV hanya untuk mode private
         assert!((mev_fee_for_mode("private", 100.0) - 1.0).abs() < 1e-9);
@@ -2295,6 +2457,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `privacy_verification_depends_on_hide_balance_only` operations in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn privacy_verification_depends_on_hide_balance_only() {
         assert!(should_run_privacy_verification(true));
         assert!(!should_run_privacy_verification(false));
@@ -2302,12 +2466,16 @@ mod tests {
 
     #[test]
 
+    // Internal helper that supports `estimated_time_for_dex_defaults` operations in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn estimated_time_for_dex_defaults() {
         // Memastikan estimasi waktu untuk DEX yang tidak dikenal
         assert_eq!(estimated_time_for_dex("UNKNOWN"), "~2-3 min");
     }
 
     #[test]
+    // Internal helper that runs side-effecting logic for `ensure_supported_starknet_swap_pair_rejects_non_starknet_tokens` in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn ensure_supported_starknet_swap_pair_rejects_non_starknet_tokens() {
         assert!(ensure_supported_starknet_swap_pair("STRK", "USDT").is_ok());
         assert!(ensure_supported_starknet_swap_pair("WBTC", "CAREL").is_ok());
@@ -2316,6 +2484,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_execute_calls_parses_single_call` in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn parse_execute_calls_parses_single_call() {
         let to = Felt::from(10_u64);
         let selector = Felt::from(20_u64);
@@ -2341,6 +2511,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_execute_calls_parses_inline_single_call` in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn parse_execute_calls_parses_inline_single_call() {
         let to = Felt::from(10_u64);
         let selector = Felt::from(20_u64);
@@ -2371,6 +2543,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `verify_swap_invoke_payload_requires_sender_match` operations in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn verify_swap_invoke_payload_requires_sender_match() {
         let swap_contract = Felt::from(0x123_u64);
         let swap_selector = get_selector_from_name("swap").expect("selector");
@@ -2409,6 +2583,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `verify_swap_invoke_payload_accepts_execute_swap_selector` operations in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn verify_swap_invoke_payload_accepts_execute_swap_selector() {
         let swap_contract = Felt::from(0x123_u64);
         let execute_swap_selector = get_selector_from_name("execute_swap").expect("selector");
@@ -2453,6 +2629,8 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `verify_swap_invoke_payload_rejects_wrong_approve_spender` operations in the swap flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
     fn verify_swap_invoke_payload_rejects_wrong_approve_spender() {
         let swap_contract = Felt::from(0x123_u64);
         let execute_swap_selector = get_selector_from_name("execute_swap").expect("selector");

@@ -19,16 +19,19 @@ use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
 use std::sync::Arc;
 
+// Internal helper that supports `cooldown_hours_from_config` operations.
 fn cooldown_hours_from_config(config: &Config) -> i64 {
     config
         .faucet_cooldown_hours
         .unwrap_or(FAUCET_COOLDOWN_HOURS as u64) as i64
 }
 
+// Internal helper that checks conditions for `is_carel_token`.
 fn is_carel_token(token: &str) -> bool {
     token.trim().eq_ignore_ascii_case("CAREL")
 }
 
+// Internal helper that checks conditions for `is_faucet_carel_unlimited`.
 fn is_faucet_carel_unlimited() -> bool {
     std::env::var("FAUCET_CAREL_UNLIMITED")
         .ok()
@@ -41,6 +44,7 @@ fn is_faucet_carel_unlimited() -> bool {
         .unwrap_or(false)
 }
 
+// Internal helper that supports `amount_for_token` operations.
 fn amount_for_token(token: &str, config: &Config) -> Result<f64> {
     let amount = match token {
         "BTC" => config.faucet_btc_amount.unwrap_or(FAUCET_AMOUNT_BTC),
@@ -61,6 +65,17 @@ pub struct FaucetService {
 }
 
 impl FaucetService {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Result<Self> {
         let invoker = OnchainInvoker::from_config(&config)?
             .ok_or_else(|| AppError::Internal("Faucet signer not configured".into()))?;
@@ -79,6 +94,7 @@ impl FaucetService {
         })
     }
 
+    // Internal helper that fetches data for `resolve_token_address`.
     fn resolve_token_address(&self, token: &str) -> Result<String> {
         match token.to_ascii_uppercase().as_str() {
             "CAREL" => Ok(self.config.carel_token_address.clone()),
@@ -101,6 +117,7 @@ impl FaucetService {
         }
     }
 
+    // Internal helper that fetches data for `get_token_decimals`.
     async fn get_token_decimals(&self, token_address: &str) -> Result<u8> {
         let contract = parse_felt(token_address)?;
         let selector = get_selector_from_name("decimals")
@@ -124,6 +141,7 @@ impl FaucetService {
         Ok(18)
     }
 
+    // Internal helper that fetches data for `get_token_balance`.
     async fn get_token_balance(&self, token_address: &str) -> Result<u128> {
         let contract = parse_felt(token_address)?;
         let selector = get_selector_from_name("balanceOf")
@@ -143,6 +161,17 @@ impl FaucetService {
         u256_from_felts(low, high)
     }
 
+    /// Checks conditions for `can_claim`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn can_claim(&self, user_address: &str, token: &str) -> Result<bool> {
         if !self.config.is_testnet() {
             return Err(AppError::BadRequest("Faucet only on testnet".to_string()));
@@ -159,6 +188,17 @@ impl FaucetService {
             .await
     }
 
+    /// Fetches data for `get_next_claim_time`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_next_claim_time(
         &self,
         user_address: &str,
@@ -185,6 +225,17 @@ impl FaucetService {
         }
     }
 
+    /// Fetches data for `get_last_claim`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_last_claim(
         &self,
         user_address: &str,
@@ -213,6 +264,17 @@ impl FaucetService {
         }))
     }
 
+    /// Runs `claim_tokens` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn claim_tokens(&self, user_address: &str, token: &str) -> Result<String> {
         if !self.config.is_testnet() {
             return Err(AppError::BadRequest("Faucet only on testnet".into()));
@@ -263,6 +325,7 @@ impl FaucetService {
         Ok(tx_hash)
     }
 
+    // Internal helper that runs side-effecting logic for `send_tokens`.
     async fn send_tokens(&self, to: &str, token_address: &str, amount: u128) -> Result<String> {
         let to = parse_felt(to)?;
         let token = parse_felt(token_address)?;
@@ -280,6 +343,17 @@ impl FaucetService {
         Ok(tx_hash.to_string())
     }
 
+    /// Fetches data for `get_stats`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_stats(&self) -> Result<FaucetStats> {
         let row = sqlx::query(
             "SELECT 
@@ -316,6 +390,7 @@ pub struct FaucetStats {
 mod tests {
     use super::*;
 
+    // Internal helper that supports `sample_config` operations.
     fn sample_config() -> Config {
         Config {
             host: "0.0.0.0".to_string(),
@@ -406,6 +481,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `cooldown_hours_from_config_uses_override` operations.
     fn cooldown_hours_from_config_uses_override() {
         // Memastikan cooldown memakai nilai override config
         let cfg = sample_config();
@@ -413,6 +489,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `amount_for_token_uses_override` operations.
     fn amount_for_token_uses_override() {
         // Memastikan amount token menggunakan override config
         let cfg = sample_config();

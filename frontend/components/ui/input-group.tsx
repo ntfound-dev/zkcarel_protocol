@@ -7,6 +7,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 
+/**
+ * Handles `InputGroup` logic.
+ *
+ * @param className - Input used by `InputGroup` to compute state, payload, or request behavior.
+ * @param props - Input used by `InputGroup` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputGroup({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
@@ -56,6 +65,12 @@ const inputGroupAddonVariants = cva(
   },
 )
 
+/**
+ * Handles `InputGroupAddon` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputGroupAddon({
   className,
   align = 'inline-start',
@@ -96,6 +111,12 @@ const inputGroupButtonVariants = cva(
   },
 )
 
+/**
+ * Handles `InputGroupButton` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputGroupButton({
   className,
   type = 'button',
@@ -115,6 +136,15 @@ function InputGroupButton({
   )
 }
 
+/**
+ * Handles `InputGroupText` logic.
+ *
+ * @param className - Input used by `InputGroupText` to compute state, payload, or request behavior.
+ * @param props - Input used by `InputGroupText` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputGroupText({ className, ...props }: React.ComponentProps<'span'>) {
   return (
     <span
@@ -127,6 +157,12 @@ function InputGroupText({ className, ...props }: React.ComponentProps<'span'>) {
   )
 }
 
+/**
+ * Handles `InputGroupInput` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputGroupInput({
   className,
   ...props
@@ -143,6 +179,12 @@ function InputGroupInput({
   )
 }
 
+/**
+ * Handles `InputGroupTextarea` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function InputGroupTextarea({
   className,
   ...props

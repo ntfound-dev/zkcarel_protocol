@@ -11,20 +11,12 @@ pub struct QueuedTransaction {
     pub canceled: bool,
 }
 
-/// @title Timelock Interface
-/// @author CAREL Team
-/// @notice Defines queued execution flow for governance actions.
-/// @dev Enforces minimum delay before sensitive actions are executed.
+// Defines queued execution flow for governance actions.
+// Enforces minimum delay before sensitive actions are executed.
 #[starknet::interface]
 pub trait ITimelock<TContractState> {
-    /// @notice Queues a transaction for delayed execution.
-    /// @dev Requires proposer permissions and minimum delay.
-    /// @param target Target contract address.
-    /// @param selector Target function selector.
-    /// @param value Value parameter for compatibility.
-    /// @param calldata Call data to execute.
-    /// @param eta Earliest execution time.
-    /// @return tx_id Unique transaction id.
+    // Implements queue transaction logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn queue_transaction(
         ref self: TContractState, 
         target: ContractAddress, 
@@ -33,14 +25,8 @@ pub trait ITimelock<TContractState> {
         calldata: Span<felt252>, 
         eta: u64
     ) -> felt252;
-    /// @notice Executes a queued transaction after delay.
-    /// @dev Validates ETA and prevents double execution.
-    /// @param target Target contract address.
-    /// @param selector Target function selector.
-    /// @param value Value parameter for compatibility.
-    /// @param calldata Call data to execute.
-    /// @param eta Earliest execution time.
-    /// @return result Raw call result.
+    // Applies execute transaction after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn execute_transaction(
         ref self: TContractState, 
         target: ContractAddress, 
@@ -49,29 +35,25 @@ pub trait ITimelock<TContractState> {
         calldata: Span<felt252>, 
         eta: u64
     ) -> Span<felt252>;
-    /// @notice Cancels a queued transaction.
-    /// @dev Proposer-only to allow governance to abort actions.
-    /// @param tx_id Transaction id to cancel.
+    // Applies cancel transaction after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn cancel_transaction(ref self: TContractState, tx_id: felt252);
-    /// @notice Returns the minimum delay for queued transactions.
-    /// @dev Read-only helper for UI and audits.
-    /// @return delay Minimum delay in seconds.
+    // Returns get min delay from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_min_delay(self: @TContractState) -> u64;
-    /// @notice Returns stored data for a queued transaction.
-    /// @dev Read-only helper for audits.
-    /// @param tx_id Transaction id to fetch.
-    /// @return tx Stored queued transaction.
+    // Returns get transaction from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_transaction(self: @TContractState, tx_id: felt252) -> QueuedTransaction;
 }
 
-/// @title Timelock Privacy Interface
-/// @author CAREL Team
-/// @notice ZK privacy hooks for timelock actions.
+// ZK privacy hooks for timelock actions.
 #[starknet::interface]
 pub trait ITimelockPrivacy<TContractState> {
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    /// @notice Submits a private timelock action proof.
+    // Applies submit private timelock action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_timelock_action(
         ref self: TContractState,
         old_root: felt252,
@@ -83,10 +65,8 @@ pub trait ITimelockPrivacy<TContractState> {
     );
 }
 
-/// @title Timelock Contract
-/// @author CAREL Team
-/// @notice Enforces time-delayed execution for governance actions.
-/// @dev Uses poseidon hash to uniquely identify queued actions.
+// Enforces time-delayed execution for governance actions.
+// Uses poseidon hash to uniquely identify queued actions.
 #[starknet::contract]
 pub mod Timelock {
     use starknet::ContractAddress;
@@ -108,11 +88,12 @@ pub mod Timelock {
         pub privacy_router: ContractAddress,
     }
 
-    /// @notice Initializes the timelock.
-    /// @dev Sets admin and minimum delay.
-    /// @param admin Admin address with proposer powers.
-    /// @param min_delay Minimum delay in seconds.
+    // Initializes the timelock.
+    // Sets admin and minimum delay.
+    // `admin` is granted proposer authority and `min_delay` gates execution time.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, admin: ContractAddress, min_delay: u64) {
         self.admin.write(admin);
         self.min_delay.write(min_delay);
@@ -120,14 +101,8 @@ pub mod Timelock {
 
     #[abi(embed_v0)]
     pub impl TimelockImpl of super::ITimelock<ContractState> {
-        /// @notice Queues a transaction for delayed execution.
-        /// @dev Requires proposer permissions and minimum delay.
-        /// @param target Target contract address.
-        /// @param selector Target function selector.
-        /// @param value Value parameter for compatibility.
-        /// @param calldata Call data to execute.
-        /// @param eta Earliest execution time.
-        /// @return tx_id Unique transaction id.
+        // Implements queue transaction logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn queue_transaction(
             ref self: ContractState, 
             target: ContractAddress, 
@@ -160,14 +135,8 @@ pub mod Timelock {
             tx_id
         }
 
-        /// @notice Executes a queued transaction after delay.
-        /// @dev Validates ETA and prevents double execution.
-        /// @param target Target contract address.
-        /// @param selector Target function selector.
-        /// @param value Value parameter for compatibility.
-        /// @param calldata Call data to execute.
-        /// @param eta Earliest execution time.
-        /// @return result Raw call result.
+        // Applies execute transaction after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn execute_transaction(
             ref self: ContractState, 
             target: ContractAddress, 
@@ -193,9 +162,8 @@ pub mod Timelock {
             result
         }
 
-        /// @notice Cancels a queued transaction.
-        /// @dev Proposer-only to allow governance to abort actions.
-        /// @param tx_id Transaction id to cancel.
+        // Applies cancel transaction after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn cancel_transaction(ref self: ContractState, tx_id: felt252) {
             self.assert_only_proposer();
             let mut queued_tx = self.queued_txs.entry(tx_id).read();
@@ -207,17 +175,14 @@ pub mod Timelock {
             self.queued_txs.entry(tx_id).write(queued_tx);
         }
 
-        /// @notice Returns the minimum delay for queued transactions.
-        /// @dev Read-only helper for UI and audits.
-        /// @return delay Minimum delay in seconds.
+        // Returns get min delay from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_min_delay(self: @ContractState) -> u64 {
             self.min_delay.read()
         }
 
-        /// @notice Returns stored data for a queued transaction.
-        /// @dev Read-only helper for audits.
-        /// @param tx_id Transaction id to fetch.
-        /// @return tx Stored queued transaction.
+        // Returns get transaction from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_transaction(self: @ContractState, tx_id: felt252) -> QueuedTransaction {
             self.queued_txs.entry(tx_id).read()
         }
@@ -225,6 +190,8 @@ pub mod Timelock {
 
     #[abi(embed_v0)]
     impl TimelockPrivacyImpl of super::ITimelockPrivacy<ContractState> {
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             let caller = get_caller_address();
             assert!(caller == self.admin.read(), "Caller is not admin");
@@ -232,6 +199,8 @@ pub mod Timelock {
             self.privacy_router.write(router);
         }
 
+        // Applies submit private timelock action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_timelock_action(
             ref self: ContractState,
             old_root: felt252,
@@ -258,8 +227,8 @@ pub mod Timelock {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
-        /// @notice Ensures the caller has proposer permissions.
-        /// @dev Allows admin or explicitly authorized proposers.
+        // Implements assert only proposer logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn assert_only_proposer(self: @ContractState) {
             let caller = get_caller_address();
             assert!(
@@ -268,8 +237,8 @@ pub mod Timelock {
             );
         }
 
-        /// @notice Computes a unique hash for a queued transaction.
-        /// @dev Uses poseidon to bind target, selector, value, calldata, and ETA.
+        // Implements hash transaction logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn _hash_transaction(
             self: @ContractState, 
             target: ContractAddress, 

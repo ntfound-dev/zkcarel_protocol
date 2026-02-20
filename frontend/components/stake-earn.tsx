@@ -134,12 +134,26 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
   }
 }
 
+/**
+ * Handles `persistTradePrivacyPayload` logic.
+ *
+ * @param payload - Input used by `persistTradePrivacyPayload` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
   if (typeof window === "undefined") return
   window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(payload))
   window.dispatchEvent(new Event("trade-privacy-payload-updated"))
 }
 
+/**
+ * Handles `randomHexFelt` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const randomHexFelt = () => {
   const bytes = new Uint8Array(16)
   crypto.getRandomValues(bytes)
@@ -155,6 +169,14 @@ const createDevTradePrivacyPayload = (): PrivacyVerificationPayload => ({
   public_inputs: ["0x1"],
 })
 
+/**
+ * Builds inputs required by `buildHideBalancePrivacyCall`.
+ *
+ * @param payload - Input used by `buildHideBalancePrivacyCall` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const buildHideBalancePrivacyCall = (payload: PrivacyVerificationPayload) => {
   const router = STARKNET_ZK_PRIVACY_ROUTER_ADDRESS.trim()
   if (!router) {
@@ -178,6 +200,14 @@ const buildHideBalancePrivacyCall = (payload: PrivacyVerificationPayload) => {
   }
 }
 
+/**
+ * Parses or transforms values for `formatCompact`.
+ *
+ * @param value - Input used by `formatCompact` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatCompact = (value: number) => {
   try {
     return new Intl.NumberFormat("en-US", {
@@ -189,11 +219,28 @@ const formatCompact = (value: number) => {
   }
 }
 
+/**
+ * Handles `apyDisplayFor` logic.
+ *
+ * @param pool - Input used by `apyDisplayFor` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const apyDisplayFor = (pool: StakingPool) => {
   if (pool.symbol === "CAREL") return "8% - 15%"
   return `${pool.apy}%`
 }
 
+/**
+ * Handles `mapStakeUiErrorMessage` logic.
+ *
+ * @param error - Input used by `mapStakeUiErrorMessage` to compute state, payload, or request behavior.
+ * @param fallback - Input used by `mapStakeUiErrorMessage` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const mapStakeUiErrorMessage = (error: unknown, fallback: string) => {
   const message = error instanceof Error ? error.message : String(error ?? "")
   const normalized = message.toLowerCase()
@@ -246,6 +293,12 @@ interface StakingPosition {
   status: "active" | "pending" | "unlocking"
 }
 
+/**
+ * Runs `StakeEarn` and handles related side effects.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function StakeEarn() {
   const wallet = useWallet()
   const notifications = useNotifications()
@@ -285,6 +338,12 @@ export function StakeEarn() {
   }): Promise<PrivacyVerificationPayload | undefined> => {
     if (autoPrivacyPayloadPromiseRef.current) return autoPrivacyPayloadPromiseRef.current
 
+    /**
+     * Handles `task` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const task = (async () => {
       if (DEV_AUTO_GARAGA_PAYLOAD_ENABLED) {
         const generated = createDevTradePrivacyPayload()
@@ -374,6 +433,12 @@ export function StakeEarn() {
       return
     }
 
+    /**
+     * Handles `loadNftDiscount` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadNftDiscount = async (force = false) => {
       try {
         const nfts = await getOwnedNfts({ force })
@@ -512,6 +577,14 @@ export function StakeEarn() {
     }
   }, [pools, refreshPositions])
 
+  /**
+   * Handles `handleStake` logic.
+   *
+   * @param pool - Input used by `handleStake` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleStake = (pool: StakingPool) => {
     if (pool.symbol === "BTC") {
       notifications.addNotification({
@@ -527,6 +600,14 @@ export function StakeEarn() {
     setStakeDialogOpen(true)
   }
 
+  /**
+   * Handles `handleAmountPreset` logic.
+   *
+   * @param percent - Input used by `handleAmountPreset` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleAmountPreset = (percent: number) => {
     if (selectedPool) {
       const amount = selectedPool.userBalance * percent / 100
@@ -851,6 +932,12 @@ export function StakeEarn() {
     [notifications, starknetProviderHint]
   )
 
+  /**
+   * Handles `confirmStake` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const confirmStake = async () => {
     if (!selectedPool) return
     if (selectedPool.symbol === "BTC") {
@@ -956,6 +1043,14 @@ export function StakeEarn() {
     }
   }
 
+  /**
+   * Handles `handleUnstake` logic.
+   *
+   * @param positionId - Input used by `handleUnstake` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleUnstake = async (positionId: string) => {
     const target = positions.find((pos) => pos.id === positionId)
     if (!target) return
@@ -1057,6 +1152,14 @@ export function StakeEarn() {
     }
   }
 
+  /**
+   * Handles `handleClaim` logic.
+   *
+   * @param positionId - Input used by `handleClaim` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const handleClaim = async (positionId: string) => {
     const target = positions.find((pos) => pos.id === positionId)
     if (!target) return
@@ -1634,6 +1737,12 @@ export function StakeEarn() {
   )
 }
 
+/**
+ * Handles `StakingCard` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function StakingCard({
   pool,
   onStake,

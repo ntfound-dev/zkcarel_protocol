@@ -1,16 +1,10 @@
 use starknet::ContractAddress;
 
-/// @title Proof Verifier Interface
-/// @author CAREL Team
-/// @notice Minimal interface for ZK proof verification.
-/// @dev Used by privacy router to validate proofs.
+// Minimal interface for ZK proof verification.
+// Used by privacy router to validate proofs.
 #[starknet::interface]
 pub trait IProofVerifier<TContractState> {
-    /// @notice Verifies a zero-knowledge proof.
-    /// @dev Returns true if proof and public inputs are valid.
-    /// @param proof Proof data.
-    /// @param public_inputs Public inputs for verification.
-    /// @return valid True if the proof is valid.
+    // Verifies the supplied proof payload before allowing private state transitions.
     fn verify_proof(
         self: @TContractState,
         proof: Span<felt252>,
@@ -18,18 +12,11 @@ pub trait IProofVerifier<TContractState> {
     ) -> bool;
 }
 
-/// @title ZK Privacy Router Interface
-/// @author CAREL Team
-/// @notice Defines privacy action submission and verifier control.
-/// @dev Tracks nullifiers to prevent replay.
+// Defines privacy action submission and verifier control.
+// Tracks nullifiers to prevent replay.
 #[starknet::interface]
 pub trait IZkPrivacyRouter<TContractState> {
-    /// @notice Submits a private action with a proof.
-    /// @dev Validates proof and consumes nullifier.
-    /// @param nullifier Nullifier to prevent replay.
-    /// @param commitment Commitment for private action.
-    /// @param proof Zero-knowledge proof.
-    /// @param public_inputs Public inputs for verification.
+    // Submits a private action, validates proof bindings, and consumes the submitted nullifier.
     fn submit_private_action(
         ref self: TContractState,
         nullifier: felt252,
@@ -37,21 +24,14 @@ pub trait IZkPrivacyRouter<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>
     );
-    /// @notice Checks whether a nullifier has been used.
-    /// @dev Read-only helper for clients.
-    /// @param nullifier Nullifier to check.
-    /// @return used True if already used.
+    // Read-only check for whether a nullifier has been consumed (double-spend protection).
     fn is_nullifier_used(self: @TContractState, nullifier: felt252) -> bool;
-    /// @notice Updates the verifier contract address.
-    /// @dev Owner-only to keep verification trusted.
-    /// @param verifier New verifier address.
+    // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
 }
 
-/// @title ZK Privacy Router Contract
-/// @author CAREL Team
-/// @notice Routes privacy-preserving actions with ZK verification.
-/// @dev Consumes nullifiers to prevent replay attacks.
+// Routes privacy-preserving actions with ZK verification.
+// Consumes nullifiers to prevent replay attacks.
 #[starknet::contract]
 pub mod ZkPrivacyRouter {
     use starknet::{ContractAddress, get_caller_address};
@@ -95,11 +75,11 @@ pub mod ZkPrivacyRouter {
         pub verifier: ContractAddress,
     }
 
-    /// @notice Initializes the ZK privacy router.
-    /// @dev Sets admin and verifier address.
-    /// @param admin Owner/admin address.
-    /// @param verifier Verifier contract address.
+    // Initializes the ZK privacy router.
+    // Sets admin and verifier address.
+    // `admin` receives ownership and `verifier` is used for proof validation.
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, verifier: ContractAddress) {
         self.ownable.initializer(admin);
         self.verifier.write(verifier);
@@ -107,13 +87,8 @@ pub mod ZkPrivacyRouter {
 
     #[abi(embed_v0)]
     impl ZkPrivacyRouterImpl of super::IZkPrivacyRouter<ContractState> {
-        /// @notice Submits a private action with a proof.
-        /// @dev Validates proof and consumes nullifier.
-        /// @param nullifier Nullifier to prevent replay.
-        /// @param commitment Commitment for private action.
-        /// @param proof Zero-knowledge proof.
-        /// @param public_inputs Public inputs for verification.
-        fn submit_private_action(
+        // Submits a private action, validates proof bindings, and consumes the submitted nullifier.
+            fn submit_private_action(
             ref self: ContractState,
             nullifier: felt252,
             commitment: felt252,
@@ -144,18 +119,13 @@ pub mod ZkPrivacyRouter {
             }));
         }
 
-        /// @notice Checks whether a nullifier has been used.
-        /// @dev Read-only helper for clients.
-        /// @param nullifier Nullifier to check.
-        /// @return used True if already used.
-        fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
+        // Read-only check for whether a nullifier has been consumed (double-spend protection).
+            fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
             self.nullifiers.entry(nullifier).read()
         }
 
-        /// @notice Updates the verifier contract address.
-        /// @dev Owner-only to keep verification trusted.
-        /// @param verifier New verifier address.
-        fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
+        // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
+            fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             self.verifier.write(verifier);
             self.emit(Event::VerifierUpdated(VerifierUpdated { verifier }));

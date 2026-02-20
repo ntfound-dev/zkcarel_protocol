@@ -17,6 +17,14 @@ type WebSocketOptions = {
   onError?: (event: Event) => void
 }
 
+/**
+ * Exposes `useWebSocket` as a reusable hook.
+ *
+ * @param options - Input used by `useWebSocket` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function useWebSocket(options: WebSocketOptions) {
   const {
     url,
@@ -54,6 +62,12 @@ export function useWebSocket(options: WebSocketOptions) {
 
     closedRef.current = false
 
+    /**
+     * Runs `connect` and handles related side effects.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const connect = () => {
       if (closedRef.current || !url) return
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) return

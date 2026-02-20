@@ -1,7 +1,5 @@
-/// @title ZkCarel Router
-/// @author CAREL Team
-/// @notice High-level router for swaps and bridge actions.
-/// @dev Applies fees, points, and optional MEV/private modes.
+// Aggregation router for swaps and bridge actions.
+// Applies fee model, optional privacy/MEV flags, and route hashing.
 #[contract]
 mod ZkCarelRouter {
     use starknet::ContractAddress;
@@ -112,12 +110,8 @@ mod ZkCarelRouter {
         fee_type: felt252,
     }
 
-    /// @notice Initializes the router.
-    /// @dev Sets owner, treasury, points, and NFT contracts plus fee defaults.
-    /// @param weth_address Wrapped ETH address.
-    /// @param treasury_address Treasury contract address.
-    /// @param points_contract_address Points contract address.
-    /// @param nft_contract_address NFT contract address.
+    // Initializes router dependencies and default fee configuration.
+    // weth_address/treasury_address/points_contract_address/nft_contract_address: core dependencies.
     #[constructor]
     fn constructor(
         weth_address: ContractAddress,
@@ -140,8 +134,7 @@ mod ZkCarelRouter {
         storage.privacy_router.write(zero);
     }
 
-    /// @notice Sets privacy router address.
-    /// @dev Owner-only.
+    // Sets privacy router used for Hide Mode swap actions.
     #[external(v0)]
     fn set_privacy_router(router: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Unauthorized owner');
@@ -149,8 +142,8 @@ mod ZkCarelRouter {
         storage.privacy_router.write(router);
     }
 
-    /// @notice Submits a private swap action proof.
-    /// @dev Routes proof through PrivacyRouter and ShieldedVault.
+    // Relays private swap payload to privacy router.
+    // `nullifiers` prevent replay and `commitments` bind intended state transition.
     #[external(v0)]
     fn submit_private_swap_action(
         old_root: felt252,
@@ -174,39 +167,37 @@ mod ZkCarelRouter {
         );
     }
 
-    /// @notice Executes a swap with optional private/MEV modes.
-    /// @dev Charges fees, routes via DEX, and credits points.
-    /// @param params Swap parameters.
-    /// @return amount_out Final output amount after fees and discounts.
+    // Executes a swap using router fee model and selected route.
+    // `params` bundles tokens, amount limits, recipient, and private/MEV mode flags.
     #[external(v0)]
     fn swap(params: SwapParams) -> u256 {
-        // Cek deadline
+        // Ensure request is still valid.
         assert(params.deadline > get_block_timestamp(), 'Deadline expired');
         
         let user = get_caller_address();
         
-        // Cek approval
+        // Validate token allowance.
         let from_token = ICARELTokenDispatcher { contract_address: params.from_token };
         let allowance = from_token.allowance(user, get_contract_address());
         assert(allowance >= params.amount_in, 'Insufficient allowance');
         
-        // Hitung fee
+        // Calculate mode-dependent fee.
         let (fee_amount, fee_type) = _calculate_fee(params.amount_in, params.use_private_mode, params.use_mev_protection, false);
         let amount_after_fee = params.amount_in - fee_amount;
         
-        // Transfer token dari user ke router
+        // Pull input tokens into router custody.
         from_token.transfer_from(user, get_contract_address(), params.amount_in);
         
-        // Cari route terbaik
+        // Select route and expected output.
         let route = _find_best_route(params.from_token, params.to_token, amount_after_fee);
         
-        // Execute swap melalui DEX
+        // Execute swap on route target(s).
         let amount_out = _execute_swap(route, amount_after_fee, params.recipient);
         
-        // Cek minimum amount out
+        // Enforce slippage bound.
         assert(amount_out >= params.min_amount_out, 'Insufficient output amount');
         
-        // Transfer fee ke treasury
+        // Transfer fee to treasury sink.
         if fee_amount > 0 {
             from_token.transfer(storage.fee_recipient.read(), fee_amount);
             
@@ -217,26 +208,26 @@ mod ZkCarelRouter {
         
         // Points are calculated off-chain from events.
         
-        // Apply NFT discount jika ada
+        // Apply NFT discount when user has active discount entitlement.
         let nft_contract = IZkCarelNFTDispatcher { contract_address: storage.nft_contract.read() };
         let (has_active_nft, discount_percent) = nft_contract.has_active_discount(user);
         
         let mut final_amount_out = amount_out;
         if has_active_nft {
-            // Apply discount (extra tokens untuk user)
+            // Mint bonus output based on discount percentage.
             let discount_amount = (amount_out * discount_percent.into()) / 100;
             final_amount_out = amount_out + discount_amount;
             
             // Use NFT discount
             nft_contract.use_discount(user);
             
-            // Mint extra tokens dari treasury
+            // Materialize discount as additional output tokens.
             let to_token = ICARELTokenDispatcher { contract_address: params.to_token };
             let treasury_token = ICARELTokenDispatcher { contract_address: storage.treasury.read() };
             treasury_token.mint(params.recipient, discount_amount);
         }
         
-        // Log event
+        // Emit swap and fee events for indexers.
         let route_hash = _hash_route(route.path, route.dexes);
         
         let mut events = array![];
@@ -263,27 +254,25 @@ mod ZkCarelRouter {
         final_amount_out
     }
 
-    /// @notice Initiates a bridge transfer.
-    /// @dev Charges fees, executes bridge, and credits points.
-    /// @param params Bridge parameters.
-    /// @return bridge_id Bridge tracking id.
+    // Initiates a bridge transfer and emits bridge tracking metadata.
+    // `params` includes provider choice, token/amount, destination chain, and recipient details.
     #[external(v0)]
     fn bridge(params: BridgeParams) -> felt252 {
         let user = get_caller_address();
         
-        // Cek approval
+        // Validate token allowance.
         let token = ICARELTokenDispatcher { contract_address: params.token };
         let allowance = token.allowance(user, get_contract_address());
         assert(allowance >= params.amount, 'Insufficient allowance');
         
-        // Hitung fee
+        // Calculate bridge fee.
         let (fee_amount, fee_type) = _calculate_fee(params.amount, false, false, true);
         let amount_after_fee = params.amount - fee_amount;
         
-        // Transfer token dari user ke router
+        // Pull bridge amount to router.
         token.transfer_from(user, get_contract_address(), params.amount);
         
-        // Transfer fee ke treasury
+        // Transfer fee to treasury sink.
         if fee_amount > 0 {
             token.transfer(storage.fee_recipient.read(), fee_amount);
             
@@ -291,7 +280,7 @@ mod ZkCarelRouter {
             treasury.collect_fee(fee_amount, fee_type);
         }
         
-        // Execute bridge melalui provider
+        // Execute bridge call via configured provider.
         let bridge_id = _execute_bridge(params.bridge_provider, params.token, amount_after_fee, params.target_chain_id, params.recipient);
         
         // Points are calculated off-chain from events.
@@ -319,14 +308,8 @@ mod ZkCarelRouter {
         bridge_id
     }
 
-    /// @notice Returns a swap quote and route data.
-    /// @dev Applies fee calculation and route selection.
-    /// @param from_token Input token address.
-    /// @param to_token Output token address.
-    /// @param amount_in Input amount.
-    /// @param use_private_mode Whether private mode fee applies.
-    /// @param use_mev_protection Whether MEV fee applies.
-    /// @return quote Tuple of expected output, fee, path, and dexes.
+    // Returns quote tuple: expected output, fee amount, path, and dex list.
+    // Includes selected fee mode and route estimation.
     #[external(v0)]
     fn get_quote(
         from_token: ContractAddress,
@@ -335,40 +318,34 @@ mod ZkCarelRouter {
         use_private_mode: bool,
         use_mev_protection: bool
     ) -> (u256, u256, Array<ContractAddress>, Array<ContractAddress>) {
-        // Hitung fee
+        // Calculate fee for requested mode.
         let (fee_amount, _) = _calculate_fee(amount_in, use_private_mode, use_mev_protection, false);
         let amount_after_fee = amount_in - fee_amount;
         
-        // Cari route terbaik
+        // Build route estimate after fee deduction.
         let route = _find_best_route(from_token, to_token, amount_after_fee);
         
         (route.expected_amount_out, fee_amount, route.path, route.dexes)
     }
 
-    /// @notice Adds a DEX to the approved list.
-    /// @dev Owner-only to control routing targets.
-    /// @param dex_address DEX contract address.
+    // Adds a DEX contract to routing allowlist.
+    // `dex_address` is approved as a swap route target.
     #[external(v0)]
     fn add_dex(dex_address: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Ownable: caller is not owner');
         storage.approved_dexes.write(dex_address, true);
     }
 
-    /// @notice Adds a bridge to the approved list.
-    /// @dev Owner-only to control bridge targets.
-    /// @param bridge_address Bridge contract address.
+    // Adds bridge provider contract to allowlist.
+    // `bridge_address` is approved as an outbound bridge target.
     #[external(v0)]
     fn add_bridge(bridge_address: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Ownable: caller is not owner');
         storage.approved_bridges.write(bridge_address, true);
     }
 
-    /// @notice Updates router fee configuration.
-    /// @dev Owner-only to prevent unauthorized fee changes.
-    /// @param swap_fee Swap fee in bps.
-    /// @param bridge_fee Bridge fee in bps.
-    /// @param mev_fee MEV protection fee in bps.
-    /// @param private_fee Private mode fee in bps.
+    // Updates fee configuration used by swap and bridge paths.
+    // swap_fee/bridge_fee/mev_fee/private_fee: values in basis points.
     #[external(v0)]
     fn set_fees(
         swap_fee: u64,
@@ -383,20 +360,16 @@ mod ZkCarelRouter {
         storage.private_mode_fee_bps.write(private_fee);
     }
 
-    /// @notice Sets the price oracle address.
-    /// @dev Owner-only to keep oracle trust boundaries.
-    /// @param oracle Price oracle contract address.
+    // Sets price oracle contract used for quote estimation.
+    // `oracle` is used by quote helpers that depend on external pricing.
     #[external(v0)]
     fn set_price_oracle(oracle: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Ownable: caller is not owner');
         storage.price_oracle.write(oracle);
     }
 
-    /// @notice Sets oracle metadata for a token.
-    /// @dev Owner-only to map token to oracle asset id and decimals.
-    /// @param token Token address.
-    /// @param asset_id Oracle asset id.
-    /// @param decimals Token decimals.
+    // Maps token to oracle asset id and token decimals.
+    // token/asset_id/decimals: metadata used by `_oracle_quote`.
     #[external(v0)]
     fn set_token_oracle_config(token: ContractAddress, asset_id: felt252, decimals: u32) {
         assert(get_caller_address() == storage.owner.read(), 'Ownable: caller is not owner');
@@ -404,6 +377,7 @@ mod ZkCarelRouter {
         storage.oracle_decimals.write(token, decimals);
     }
 
+    // Computes fee amount and fee label from selected mode flags.
     fn _calculate_fee(
         amount: u256,
         private_mode: bool,
@@ -434,6 +408,7 @@ mod ZkCarelRouter {
         (fee_amount, fee_type)
     }
 
+    // Builds route candidate and estimates output using oracle quote.
     fn _find_best_route(
         from_token: ContractAddress,
         to_token: ContractAddress,
@@ -455,6 +430,7 @@ mod ZkCarelRouter {
         }
     }
 
+    // Converts input token amount to output token amount using oracle prices.
     fn _oracle_quote(
         from_token: ContractAddress,
         to_token: ContractAddress,
@@ -490,6 +466,7 @@ mod ZkCarelRouter {
         (value_usd * scale) / to_price
     }
 
+    // Returns 10^decimals as u256 scaling factor.
     fn _pow10(decimals: u32) -> u256 {
         let mut value: u256 = 1;
         let mut i: u32 = 0;
@@ -500,14 +477,14 @@ mod ZkCarelRouter {
         value
     }
 
+    // Internal swap execution hook.
+    // Currently returns input amount as placeholder simulation.
     fn _execute_swap(route: Route, amount: u256, recipient: ContractAddress) -> u256 {
-        // Implementasi swap execution
-        // Untuk sekarang, return amount as-is (simulasi)
-        
-        // Di production, panggil DEX contract
+        // In production this should call the selected DEX contracts.
         amount
     }
 
+    // Internal bridge execution hook that returns deterministic bridge id.
     fn _execute_bridge(
         provider: felt252,
         token: ContractAddress,
@@ -515,7 +492,7 @@ mod ZkCarelRouter {
         target_chain_id: u64,
         recipient: ContractAddress
     ) -> felt252 {
-        // Generate unique bridge ID
+        // Generate deterministic bridge id for tracking.
         let bridge_id = starknet::pedersen(array![
             get_caller_address().into(),
             token.into(),
@@ -527,10 +504,11 @@ mod ZkCarelRouter {
         bridge_id
     }
 
+    // Hashes route path and DEX list for event indexing and cache keys.
     fn _hash_route(path: Array<ContractAddress>, dexes: Array<ContractAddress>) -> felt252 {
         let mut data = array![];
         
-        // Hash path
+        // Hash path segment.
         let path_len = path.len();
         data.append(path_len.into());
         let mut i = 0;
@@ -542,7 +520,7 @@ mod ZkCarelRouter {
             i += 1;
         }
         
-        // Hash dexes
+        // Hash DEX segment.
         let dexes_len = dexes.len();
         data.append(dexes_len.into());
         let mut j = 0;

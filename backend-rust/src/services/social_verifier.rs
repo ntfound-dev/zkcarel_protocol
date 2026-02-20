@@ -4,6 +4,7 @@ use rust_decimal::prelude::ToPrimitive;
 use starknet_core::types::Call;
 use starknet_core::utils::get_selector_from_name;
 
+// Internal helper that supports `proof_is_valid` operations.
 fn proof_is_valid(proof: &str) -> bool {
     proof.len() > 10
 }
@@ -16,6 +17,17 @@ pub struct SocialVerifier {
 }
 
 impl SocialVerifier {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
         let onchain = OnchainInvoker::from_config(&config).ok().flatten();
         Self {
@@ -124,6 +136,7 @@ impl SocialVerifier {
         Ok(())
     }
 
+    // Internal helper that supports `sync_points_onchain` operations.
     async fn sync_points_onchain(
         &self,
         epoch: u64,
@@ -156,6 +169,7 @@ impl SocialVerifier {
     }
 }
 
+// Internal helper that builds inputs for `build_add_points_call`.
 fn build_add_points_call(contract: &str, epoch: u64, user: &str, points: u128) -> Result<Call> {
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("add_points")
@@ -182,6 +196,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `proof_is_valid_requires_length` operations.
     fn proof_is_valid_requires_length() {
         // Memastikan proof minimal 11 karakter
         assert!(!proof_is_valid("short"));

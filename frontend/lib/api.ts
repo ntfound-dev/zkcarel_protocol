@@ -588,6 +588,14 @@ export interface LinkedWalletsResponse {
   btc_address?: string | null
 }
 
+/**
+ * Runs `joinUrl` as part of the frontend API client workflow.
+ *
+ * @param path - Input used to compute or dispatch the `joinUrl` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function joinUrl(path: string) {
   if (path.startsWith("http")) return path
   return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`
@@ -623,31 +631,78 @@ let ownedNftsCache: TimedCacheEntry<NFTItem[]> | null = null
 const onchainBalancesInFlight = new Map<string, Promise<OnchainBalancesResponse>>()
 const onchainBalancesCache = new Map<string, TimedCacheEntry<OnchainBalancesResponse>>()
 
+/**
+ * Runs `getStoredAuthToken` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function getStoredAuthToken() {
   if (typeof window === "undefined") return null
   return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
 }
 
+/**
+ * Runs `setStoredAuthToken` as part of the frontend API client workflow.
+ *
+ * @param token - Input used to compute or dispatch the `setStoredAuthToken` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function setStoredAuthToken(token: string) {
   if (typeof window === "undefined") return
   window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
 }
 
+/**
+ * Runs `clearStoredAuthToken` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function clearStoredAuthToken() {
   if (typeof window === "undefined") return
   window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
 }
 
+/**
+ * Runs `tokenFromAuthorizationHeader` as part of the frontend API client workflow.
+ *
+ * @param headerValue - Input used to compute or dispatch the `tokenFromAuthorizationHeader` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function tokenFromAuthorizationHeader(headerValue: string | null) {
   if (!headerValue) return null
   const matched = headerValue.match(/^Bearer\s+(.+)$/i)
   return matched?.[1]?.trim() || null
 }
 
+/**
+ * Runs `isInvalidOrExpiredAuth` as part of the frontend API client workflow.
+ *
+ * @param status - Input used to compute or dispatch the `isInvalidOrExpiredAuth` operation.
+ * @param message - Input used to compute or dispatch the `isInvalidOrExpiredAuth` operation.
+ * @param hasAuthorizationHeader - Input used to compute or dispatch the `isInvalidOrExpiredAuth` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function isInvalidOrExpiredAuth(status: number, message: string, hasAuthorizationHeader: boolean) {
   return status === 401 && hasAuthorizationHeader && INVALID_TOKEN_MESSAGE_REGEX.test(message)
 }
 
+/**
+ * Runs `emitAuthExpired` as part of the frontend API client workflow.
+ *
+ * @param message - Input used to compute or dispatch the `emitAuthExpired` operation.
+ * @param path - Input used to compute or dispatch the `emitAuthExpired` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 function emitAuthExpired(message: string, path: string) {
   const now = Date.now()
   if (now - lastAuthExpiredEmitAt < AUTH_EXPIRED_EMIT_DEDUPE_MS) return
@@ -659,6 +714,14 @@ function emitAuthExpired(message: string, path: string) {
   })
 }
 
+/**
+ * Runs `requestTokenRefresh` as part of the frontend API client workflow.
+ *
+ * @param refreshToken - Input used to compute or dispatch the `requestTokenRefresh` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function requestTokenRefresh(refreshToken: string): Promise<string | null> {
   try {
     const response = await fetch(joinUrl("/api/v1/auth/refresh"), {
@@ -686,6 +749,14 @@ async function requestTokenRefresh(refreshToken: string): Promise<string | null>
   }
 }
 
+/**
+ * Runs `refreshTokenOnce` as part of the frontend API client workflow.
+ *
+ * @param refreshToken - Input used to compute or dispatch the `refreshTokenOnce` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 async function refreshTokenOnce(refreshToken: string): Promise<string | null> {
   if (refreshTokenInFlight) return refreshTokenInFlight
   refreshTokenInFlight = (async () => {
@@ -702,6 +773,14 @@ async function refreshTokenOnce(refreshToken: string): Promise<string | null> {
   }
 }
 
+/**
+ * Runs `apiFetch` as part of the frontend API client workflow.
+ *
+ * @param path - Relative backend route appended to the configured API base URL.
+ * @param init - Request options, timeout configuration, and auth retry behavior.
+ * @returns Parsed response payload for successful requests.
+ * @remarks Applies auth token headers, timeout handling, retry policy, and normalized API errors.
+ */
 async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T> {
   const {
     timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -822,10 +901,24 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
   }
 }
 
+/**
+ * Runs `getHealth` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getHealth() {
   return apiFetch<{ status: string; version: string; database: string; redis: string }>("/health")
 }
 
+/**
+ * Runs `connectWallet` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `connectWallet` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function connectWallet(payload: {
   address: string
   signature: string
@@ -841,12 +934,26 @@ export async function connectWallet(payload: {
   })
 }
 
+/**
+ * Runs `getNotifications` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getNotifications(page = 1, limit = 20) {
   return apiFetch<PaginatedResponse<BackendNotification>>(
     `/api/v1/notifications/list?page=${page}&limit=${limit}`
   )
 }
 
+/**
+ * Runs `markNotificationsRead` as part of the frontend API client workflow.
+ *
+ * @param ids - Input used to compute or dispatch the `markNotificationsRead` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function markNotificationsRead(ids: number[]) {
   return apiFetch<string>("/api/v1/notifications/mark-read", {
     method: "POST",
@@ -854,10 +961,22 @@ export async function markNotificationsRead(ids: number[]) {
   })
 }
 
+/**
+ * Runs `getNotificationsStats` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getNotificationsStats() {
   return apiFetch<{ unread_count: number; total_count: number }>("/api/v1/notifications/stats")
 }
 
+/**
+ * Runs `getPortfolioBalance` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getPortfolioBalance(options?: { force?: boolean }) {
   const force = options?.force === true
   const now = Date.now()
@@ -883,44 +1002,110 @@ export async function getPortfolioBalance(options?: { force?: boolean }) {
   return portfolioBalanceInFlight
 }
 
+/**
+ * Runs `getPortfolioAnalytics` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getPortfolioAnalytics() {
   return apiFetch<AnalyticsResponse>("/api/v1/portfolio/analytics")
 }
 
+/**
+ * Runs `getPortfolioHistory` as part of the frontend API client workflow.
+ *
+ * @param period - Input used to compute or dispatch the `getPortfolioHistory` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getPortfolioHistory(period: "1d" | "7d" | "30d" | "all") {
   return apiFetch<PortfolioHistoryResponse>(`/api/v1/portfolio/history?period=${period}`)
 }
 
+/**
+ * Runs `getPortfolioOHLCV` as part of the frontend API client workflow.
+ *
+ * @param params - Input used to compute or dispatch the `getPortfolioOHLCV` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getPortfolioOHLCV(params: { interval: string; limit?: number }) {
   const search = new URLSearchParams({ interval: params.interval })
   if (params.limit) search.set("limit", String(params.limit))
   return apiFetch<PortfolioOHLCVResponse>(`/api/v1/portfolio/ohlcv?${search.toString()}`)
 }
 
+/**
+ * Runs `getLeaderboard` as part of the frontend API client workflow.
+ *
+ * @param type - Input used to compute or dispatch the `getLeaderboard` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getLeaderboard(type: "points" | "volume" | "referrals") {
   return apiFetch<LeaderboardResponse>(`/api/v1/leaderboard/${type}`)
 }
 
+/**
+ * Runs `getLeaderboardGlobalMetrics` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getLeaderboardGlobalMetrics() {
   return apiFetch<{ points_total: number; volume_total: number; referral_total: number }>(
     "/api/v1/leaderboard/global"
   )
 }
 
+/**
+ * Runs `getLeaderboardGlobalMetricsEpoch` as part of the frontend API client workflow.
+ *
+ * @param epoch - Input used to compute or dispatch the `getLeaderboardGlobalMetricsEpoch` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getLeaderboardGlobalMetricsEpoch(epoch: number) {
   return apiFetch<{ points_total: number; volume_total: number; referral_total: number }>(
     `/api/v1/leaderboard/global/${epoch}`
   )
 }
 
+/**
+ * Runs `getLeaderboardUserRank` as part of the frontend API client workflow.
+ *
+ * @param address - Input used to compute or dispatch the `getLeaderboardUserRank` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getLeaderboardUserRank(address: string) {
   return apiFetch<LeaderboardUserRank>(`/api/v1/leaderboard/user/${address}`)
 }
 
+/**
+ * Runs `getLeaderboardUserCategories` as part of the frontend API client workflow.
+ *
+ * @param address - Input used to compute or dispatch the `getLeaderboardUserCategories` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getLeaderboardUserCategories(address: string) {
   return apiFetch<LeaderboardUserCategoriesResponse>(`/api/v1/leaderboard/user/${address}/categories`)
 }
 
+/**
+ * Runs `getRewardsPoints` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getRewardsPoints(options?: { force?: boolean }) {
   const force = options?.force === true
   const now = Date.now()
@@ -946,6 +1131,12 @@ export async function getRewardsPoints(options?: { force?: boolean }) {
   return rewardsPointsInFlight
 }
 
+/**
+ * Runs `syncRewardsPointsOnchain` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function syncRewardsPointsOnchain(payload?: { minimum_points?: number }) {
   return apiFetch<RewardsOnchainSyncResponse>("/api/v1/rewards/sync-onchain", {
     method: "POST",
@@ -956,20 +1147,44 @@ export async function syncRewardsPointsOnchain(payload?: { minimum_points?: numb
   })
 }
 
+/**
+ * Runs `getReferralCode` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getReferralCode() {
   return apiFetch<ReferralCodeResponse>("/api/v1/referral/code")
 }
 
+/**
+ * Runs `getReferralStats` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getReferralStats() {
   return apiFetch<ReferralStatsResponse>("/api/v1/referral/stats")
 }
 
+/**
+ * Runs `getReferralHistory` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getReferralHistory(page = 1, limit = 10) {
   return apiFetch<PaginatedResponse<ReferralHistoryItem>>(
     `/api/v1/referral/history?page=${page}&limit=${limit}`
   )
 }
 
+/**
+ * Runs `getTransactionsHistory` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getTransactionsHistory(params?: {
   tx_type?: string
   from_date?: string
@@ -987,6 +1202,14 @@ export async function getTransactionsHistory(params?: {
   return apiFetch<PaginatedResponse<Transaction>>(`/api/v1/transactions/history${query ? `?${query}` : ""}`)
 }
 
+/**
+ * Runs `getSwapQuote` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `getSwapQuote` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getSwapQuote(payload: {
   from_token: string
   to_token: string
@@ -1002,6 +1225,14 @@ export async function getSwapQuote(payload: {
   })
 }
 
+/**
+ * Runs `executeSwap` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `executeSwap` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function executeSwap(payload: {
   from_token: string
   to_token: string
@@ -1024,6 +1255,14 @@ export async function executeSwap(payload: {
   })
 }
 
+/**
+ * Runs `getBridgeQuote` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `getBridgeQuote` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getBridgeQuote(payload: {
   from_chain: string
   to_chain: string
@@ -1039,6 +1278,14 @@ export async function getBridgeQuote(payload: {
   })
 }
 
+/**
+ * Runs `executeBridge` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `executeBridge` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function executeBridge(payload: {
   from_chain: string
   to_chain: string
@@ -1064,12 +1311,26 @@ export async function executeBridge(payload: {
   })
 }
 
+/**
+ * Runs `getBridgeStatus` as part of the frontend API client workflow.
+ *
+ * @param bridgeId - Input used to compute or dispatch the `getBridgeStatus` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getBridgeStatus(bridgeId: string) {
   return apiFetch<BridgeStatusResponse>(`/api/v1/bridge/status/${encodeURIComponent(bridgeId)}`, {
     suppressErrorNotification: true,
   })
 }
 
+/**
+ * Runs `getGardenVolume` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenVolume(params?: {
   source_chain?: string
   destination_chain?: string
@@ -1087,6 +1348,12 @@ export async function getGardenVolume(params?: {
   return apiFetch<GardenStringMetricResponse>(`/api/v1/garden/volume${query ? `?${query}` : ""}`)
 }
 
+/**
+ * Runs `getGardenFees` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenFees(params?: {
   source_chain?: string
   destination_chain?: string
@@ -1104,6 +1371,12 @@ export async function getGardenFees(params?: {
   return apiFetch<GardenStringMetricResponse>(`/api/v1/garden/fees${query ? `?${query}` : ""}`)
 }
 
+/**
+ * Runs `getGardenSupportedChains` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenSupportedChains(params?: { from?: string }) {
   const search = new URLSearchParams()
   if (params?.from) search.set("from", params.from)
@@ -1111,6 +1384,12 @@ export async function getGardenSupportedChains(params?: { from?: string }) {
   return apiFetch<GardenListResponse>(`/api/v1/garden/chains${query ? `?${query}` : ""}`)
 }
 
+/**
+ * Runs `getGardenSupportedAssets` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenSupportedAssets(params?: { from?: string }) {
   const search = new URLSearchParams()
   if (params?.from) search.set("from", params.from)
@@ -1118,10 +1397,22 @@ export async function getGardenSupportedAssets(params?: { from?: string }) {
   return apiFetch<GardenListResponse>(`/api/v1/garden/assets${query ? `?${query}` : ""}`)
 }
 
+/**
+ * Runs `getGardenAvailableLiquidity` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenAvailableLiquidity() {
   return apiFetch<GardenLiquidityResponse>("/api/v1/garden/liquidity")
 }
 
+/**
+ * Runs `getGardenOrders` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenOrders(params?: {
   address?: string
   tx_hash?: string
@@ -1151,30 +1442,74 @@ export async function getGardenOrders(params?: {
   return apiFetch<GardenObjectResponse<GardenOrdersPage>>(`/api/v1/garden/orders${query ? `?${query}` : ""}`)
 }
 
+/**
+ * Runs `getGardenOrderById` as part of the frontend API client workflow.
+ *
+ * @param orderId - Input used to compute or dispatch the `getGardenOrderById` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenOrderById(orderId: string) {
   return apiFetch<GardenObjectResponse>(`/api/v1/garden/orders/${encodeURIComponent(orderId)}`)
 }
 
+/**
+ * Runs `getGardenOrderInstantRefundHash` as part of the frontend API client workflow.
+ *
+ * @param orderId - Input used to compute or dispatch the `getGardenOrderInstantRefundHash` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenOrderInstantRefundHash(orderId: string) {
   return apiFetch<GardenStringMetricResponse>(
     `/api/v1/garden/orders/${encodeURIComponent(orderId)}/instant-refund-hash`
   )
 }
 
+/**
+ * Runs `getGardenSchema` as part of the frontend API client workflow.
+ *
+ * @param name - Input used to compute or dispatch the `getGardenSchema` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenSchema(name: string) {
   return apiFetch<GardenObjectResponse>(`/api/v1/garden/schemas/${encodeURIComponent(name)}`)
 }
 
+/**
+ * Runs `getGardenAppEarnings` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getGardenAppEarnings() {
   return apiFetch<GardenListResponse>("/api/v1/garden/apps/earnings")
 }
 
+/**
+ * Runs `listLimitOrders` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function listLimitOrders(page = 1, limit = 10, status?: string) {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) })
   if (status) params.set("status", status)
   return apiFetch<PaginatedResponse<LimitOrderItem>>(`/api/v1/limit-order/list?${params.toString()}`)
 }
 
+/**
+ * Runs `createLimitOrder` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `createLimitOrder` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function createLimitOrder(payload: {
   from_token: string
   to_token: string
@@ -1196,6 +1531,12 @@ export async function createLimitOrder(payload: {
   })
 }
 
+/**
+ * Runs `cancelLimitOrder` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function cancelLimitOrder(
   orderId: string,
   payload?: {
@@ -1213,16 +1554,36 @@ export async function cancelLimitOrder(
   })
 }
 
+/**
+ * Runs `getStakePools` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getStakePools() {
   return apiFetch<StakingPool[]>("/api/v1/stake/pools")
 }
 
+/**
+ * Runs `getStakePositions` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getStakePositions() {
   return apiFetch<StakingPosition[]>("/api/v1/stake/positions", {
     suppressErrorNotification: true,
   })
 }
 
+/**
+ * Runs `stakeDeposit` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `stakeDeposit` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function stakeDeposit(payload: {
   pool_id: string
   amount: string
@@ -1242,6 +1603,14 @@ export async function stakeDeposit(payload: {
   )
 }
 
+/**
+ * Runs `stakeWithdraw` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `stakeWithdraw` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function stakeWithdraw(payload: {
   position_id: string
   amount: string
@@ -1261,6 +1630,14 @@ export async function stakeWithdraw(payload: {
   )
 }
 
+/**
+ * Runs `stakeClaim` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `stakeClaim` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function stakeClaim(payload: {
   position_id: string
   onchain_tx_hash?: string
@@ -1279,6 +1656,12 @@ export async function stakeClaim(payload: {
   )
 }
 
+/**
+ * Runs `getOwnedNfts` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getOwnedNfts(options?: { force?: boolean }) {
   const force = options?.force === true
   const now = Date.now()
@@ -1304,6 +1687,14 @@ export async function getOwnedNfts(options?: { force?: boolean }) {
   return ownedNftsInFlight
 }
 
+/**
+ * Runs `mintNft` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `mintNft` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function mintNft(payload: { tier: number; onchain_tx_hash?: string }) {
   return apiFetch<NFTItem>("/api/v1/nft/mint", {
     method: "POST",
@@ -1313,6 +1704,12 @@ export async function mintNft(payload: { tier: number; onchain_tx_hash?: string 
   })
 }
 
+/**
+ * Runs `claimRewards` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function claimRewards() {
   return apiFetch<{ tx_hash: string; amount_carel: number; points_converted: number }>(
     "/api/v1/rewards/claim",
@@ -1324,6 +1721,14 @@ export async function claimRewards() {
   )
 }
 
+/**
+ * Runs `convertRewards` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `convertRewards` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function convertRewards(payload: { points?: number; epoch?: number; total_distribution_carel?: number }) {
   return apiFetch<{ tx_hash: string; amount_carel: number; points_converted: number }>(
     "/api/v1/rewards/convert",
@@ -1336,6 +1741,14 @@ export async function convertRewards(payload: { points?: number; epoch?: number;
   )
 }
 
+/**
+ * Runs `getTokenOHLCV` as part of the frontend API client workflow.
+ *
+ * @param params - Input used to compute or dispatch the `getTokenOHLCV` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getTokenOHLCV(params: {
   token: string
   interval: string
@@ -1350,6 +1763,14 @@ export async function getTokenOHLCV(params: {
   )
 }
 
+/**
+ * Runs `getMarketDepth` as part of the frontend API client workflow.
+ *
+ * @param token - Input used to compute or dispatch the `getMarketDepth` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getMarketDepth(token: string, limit?: number) {
   const search = new URLSearchParams()
   if (limit) search.set("limit", String(limit))
@@ -1357,6 +1778,14 @@ export async function getMarketDepth(token: string, limit?: number) {
   return apiFetch<MarketDepthResponse>(`/api/v1/market/depth/${token}${query ? `?${query}` : ""}`)
 }
 
+/**
+ * Runs `verifySocialTask` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `verifySocialTask` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function verifySocialTask(payload: { task_type: string; proof: string }) {
   return apiFetch<SocialVerifyResponse>("/api/v1/social/verify", {
     method: "POST",
@@ -1366,18 +1795,38 @@ export async function verifySocialTask(payload: { task_type: string; proof: stri
   })
 }
 
+/**
+ * Runs `getSocialTasks` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getSocialTasks() {
   return apiFetch<SocialTaskItem[]>("/api/v1/social/tasks", {
     context: "Load social tasks",
   })
 }
 
+/**
+ * Runs `getProfile` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getProfile() {
   return apiFetch<ProfileResponse>("/api/v1/profile/me", {
     context: "Get profile",
   })
 }
 
+/**
+ * Runs `setDisplayName` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `setDisplayName` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function setDisplayName(payload: {
   display_name: string
   rename_onchain_tx_hash?: string
@@ -1390,6 +1839,14 @@ export async function setDisplayName(payload: {
   })
 }
 
+/**
+ * Runs `executeAiCommand` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `executeAiCommand` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function executeAiCommand(payload: { command: string; context?: string; level?: number; action_id?: number }) {
   return apiFetch<AIResponse>("/api/v1/ai/execute", {
     method: "POST",
@@ -1399,11 +1856,23 @@ export async function executeAiCommand(payload: { command: string; context?: str
   })
 }
 
+/**
+ * Runs `getAiPendingActions` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getAiPendingActions(offset = 0, limit = 10) {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
   return apiFetch<PendingActionsResponse>(`/api/v1/ai/pending?${params.toString()}`)
 }
 
+/**
+ * Runs `getAiRuntimeConfig` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getAiRuntimeConfig() {
   return apiFetch<AiRuntimeConfigResponse>("/api/v1/ai/config", {
     context: "AI runtime config",
@@ -1411,6 +1880,14 @@ export async function getAiRuntimeConfig() {
   })
 }
 
+/**
+ * Runs `prepareAiAction` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `prepareAiAction` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function prepareAiAction(payload: {
   level: number
   context?: string
@@ -1424,6 +1901,14 @@ export async function prepareAiAction(payload: {
   })
 }
 
+/**
+ * Runs `submitPrivacyAction` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `submitPrivacyAction` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function submitPrivacyAction(payload: PrivacyActionPayload) {
   return apiFetch<PrivacySubmitResponse>("/api/v1/privacy/submit", {
     method: "POST",
@@ -1433,6 +1918,12 @@ export async function submitPrivacyAction(payload: PrivacyActionPayload) {
   })
 }
 
+/**
+ * Runs `autoSubmitPrivacyAction` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function autoSubmitPrivacyAction(payload?: {
   verifier?: string
   submit_onchain?: boolean
@@ -1455,6 +1946,14 @@ export async function autoSubmitPrivacyAction(payload?: {
   })
 }
 
+/**
+ * Runs `preparePrivateExecution` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `preparePrivateExecution` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function preparePrivateExecution(payload: {
   verifier?: string
   flow: "swap" | "limit" | "stake"
@@ -1482,6 +1981,14 @@ export async function preparePrivateExecution(payload: {
   )
 }
 
+/**
+ * Runs `createBattleshipGame` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `createBattleshipGame` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function createBattleshipGame(payload: {
   opponent: string
   cells: BattleshipCell[]
@@ -1497,6 +2004,14 @@ export async function createBattleshipGame(payload: {
   })
 }
 
+/**
+ * Runs `joinBattleshipGame` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `joinBattleshipGame` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function joinBattleshipGame(payload: {
   game_id: string
   cells: BattleshipCell[]
@@ -1512,6 +2027,14 @@ export async function joinBattleshipGame(payload: {
   })
 }
 
+/**
+ * Runs `placeBattleshipShips` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `placeBattleshipShips` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function placeBattleshipShips(payload: {
   game_id: string
   cells: BattleshipCell[]
@@ -1527,6 +2050,14 @@ export async function placeBattleshipShips(payload: {
   })
 }
 
+/**
+ * Runs `fireBattleshipShot` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `fireBattleshipShot` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function fireBattleshipShot(payload: {
   game_id: string
   x: number
@@ -1542,6 +2073,14 @@ export async function fireBattleshipShot(payload: {
   })
 }
 
+/**
+ * Runs `respondBattleshipShot` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `respondBattleshipShot` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function respondBattleshipShot(payload: {
   game_id: string
   is_hit?: boolean
@@ -1557,6 +2096,14 @@ export async function respondBattleshipShot(payload: {
   })
 }
 
+/**
+ * Runs `claimBattleshipTimeout` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `claimBattleshipTimeout` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function claimBattleshipTimeout(payload: {
   game_id: string
   onchain_tx_hash?: string
@@ -1570,6 +2117,14 @@ export async function claimBattleshipTimeout(payload: {
   })
 }
 
+/**
+ * Runs `getBattleshipState` as part of the frontend API client workflow.
+ *
+ * @param gameId - Input used to compute or dispatch the `getBattleshipState` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getBattleshipState(gameId: string) {
   return apiFetch<BattleshipGameStateResponse>(
     `/api/v1/battleship/state/${encodeURIComponent(gameId)}`,
@@ -1580,10 +2135,24 @@ export async function getBattleshipState(gameId: string) {
   )
 }
 
+/**
+ * Runs `getFaucetStatus` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getFaucetStatus() {
   return apiFetch<FaucetStatusResponse>("/api/v1/faucet/status")
 }
 
+/**
+ * Runs `claimFaucet` as part of the frontend API client workflow.
+ *
+ * @param token - Input used to compute or dispatch the `claimFaucet` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function claimFaucet(token: string) {
   return apiFetch<FaucetClaimResponse>("/api/v1/faucet/claim", {
     method: "POST",
@@ -1593,6 +2162,14 @@ export async function claimFaucet(token: string) {
   })
 }
 
+/**
+ * Runs `getOnchainBalances` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `getOnchainBalances` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getOnchainBalances(payload: {
   starknet_address?: string | null
   evm_address?: string | null
@@ -1639,6 +2216,14 @@ export async function getOnchainBalances(payload: {
   return request
 }
 
+/**
+ * Runs `linkWalletAddress` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `linkWalletAddress` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function linkWalletAddress(payload: {
   chain: "starknet" | "evm" | "bitcoin"
   address: string
@@ -1652,6 +2237,12 @@ export async function linkWalletAddress(payload: {
   })
 }
 
+/**
+ * Runs `getLinkedWallets` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
 export async function getLinkedWallets() {
   return apiFetch<LinkedWalletsResponse>("/api/v1/wallet/linked", {
     context: "Get linked wallets",

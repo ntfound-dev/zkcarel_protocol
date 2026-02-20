@@ -1,9 +1,8 @@
-/// @title Private Swap Contract
-/// @author CAREL Team
-/// @notice Privacy-focused swap execution with ZK validation.
-/// @dev Enforces nullifiers, commitments, and daily limits.
+// Private swap entrypoint with proof-based validation.
+// Enforces nullifier replay protection and commitment binding.
 #[starknet::interface]
 trait IZkVerifier<TContractState> {
+    // Verifies a zero-knowledge proof via configured verifier.
     fn verify_proof(self: @TContractState, proof: Span<felt252>) -> bool;
 }
 
@@ -90,12 +89,8 @@ mod PrivateSwap {
         daily_limit: u256,
     }
 
-    /// @notice Initializes the private swap contract.
-    /// @dev Sets owner, treasury, router, and default fee/limits.
-    /// @param treasury_address Treasury contract address.
-    /// @param points_contract_address Points contract address.
-    /// @param nft_contract_address NFT contract address.
-    /// @param router_address Router contract address.
+    // Initializes private swap dependencies and default fee/limit configuration.
+    // treasury_address/points_contract_address/nft_contract_address/router_address: dependency contracts.
     #[constructor]
     fn constructor(
         treasury_address: ContractAddress,
@@ -119,8 +114,7 @@ mod PrivateSwap {
         storage.whitelisted_tokens.write(zero, true); // ETH
     }
 
-    /// @notice Sets privacy router address.
-    /// @dev Owner-only.
+    // Sets the privacy router used for Hide Mode private swap actions.
     #[external(v0)]
     fn set_privacy_router(router: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Unauthorized owner');
@@ -128,8 +122,8 @@ mod PrivateSwap {
         storage.privacy_router.write(router);
     }
 
-    /// @notice Submits a private swap action proof.
-    /// @dev Routes proof through PrivacyRouter and ShieldedVault.
+    // Relays a private swap payload to privacy router for verification and execution.
+    // `nullifiers` prevent replay and `commitments` bind the intended state transition.
     #[external(v0)]
     fn submit_private_swap_action(
         old_root: felt252,
@@ -153,10 +147,8 @@ mod PrivateSwap {
         );
     }
 
-    /// @notice Executes a private swap with ZK proof validation.
-    /// @dev Consumes nullifier, applies fees, and credits points.
-    /// @param params Private swap parameters.
-    /// @return amount_out Amount after fees.
+    // Executes a private swap after proof, nullifier, commitment, and daily-limit checks.
+    // `params` carries hidden swap payload, proof data, and execution constraints.
     #[external(v0)]
     fn execute_private_swap(params: PrivateSwapParams) -> u256 {
         let user = get_caller_address();
@@ -274,9 +266,8 @@ mod PrivateSwap {
         amount_after_fee
     }
 
-    /// @notice Adds a commitment for the caller.
-    /// @dev Used to bind future private swaps.
-    /// @param commitment Commitment hash.
+    // Stores a commitment for caller to be referenced by future private swaps.
+    // `commitment` binds future private swap intent to caller state.
     #[external(v0)]
     fn add_commitment(commitment: felt252) {
         let user = get_caller_address();
@@ -295,37 +286,31 @@ mod PrivateSwap {
         starknet::emit_event_syscall(events.span()).unwrap();
     }
 
-    /// @notice Verifies a ZK proof (read-only helper).
-    /// @dev Uses configured verifier in production.
-    /// @param proof Proof data.
-    /// @return valid True if proof is valid.
+    // Public helper to verify proof data against configured zk verifier.
+    // `proof` is forwarded to the configured zk verifier contract.
     #[external(v0)]
     fn verify_proof(proof: Array<felt252>) -> bool {
         _verify_zk_proof(proof)
     }
 
-    /// @notice Updates private swap fee.
-    /// @dev Owner-only to control fee settings.
-    /// @param fee_bps Fee in basis points.
+    // Updates private swap fee in basis points.
+    // `fee_bps` defines private-swap fee charged on input amount.
     #[external(v0)]
     fn set_private_fee(fee_bps: u64) {
         assert(get_caller_address() == storage.owner.read(), 'Unauthorized');
         storage.private_fee_bps.write(fee_bps);
     }
 
-    /// @notice Updates ZK verifier address.
-    /// @dev Owner-only to keep verification trusted.
-    /// @param verifier_address Verifier contract address.
+    // Updates zk verifier contract address used by `_verify_zk_proof`.
+    // `verifier_address` must implement `IZkVerifier`.
     #[external(v0)]
     fn set_zk_verifier(verifier_address: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Unauthorized');
         storage.zk_verifier.write(verifier_address);
     }
 
-    /// @notice Updates private swap limits.
-    /// @dev Owner-only to manage abuse prevention.
-    /// @param max_amount Maximum per-swap amount.
-    /// @param daily_limit Maximum daily amount.
+    // Updates max private amount and emits current limit configuration.
+    // max_amount/daily_limit: admin-configured anti-abuse thresholds.
     #[external(v0)]
     fn set_private_limits(max_amount: u256, daily_limit: u256) {
         assert(get_caller_address() == storage.owner.read(), 'Unauthorized');
@@ -339,34 +324,30 @@ mod PrivateSwap {
         starknet::emit_event_syscall(events.span()).unwrap();
     }
 
-    /// @notice Whitelists or removes a token for private swaps.
-    /// @dev Owner-only to control supported tokens.
-    /// @param token Token address.
-    /// @param is_whitelisted Whitelist flag.
+    // Adds or removes token from private swap allowlist.
+    // token/is_whitelisted: token address and desired allowlist state.
     #[external(v0)]
     fn whitelist_token(token: ContractAddress, is_whitelisted: bool) {
         assert(get_caller_address() == storage.owner.read(), 'Unauthorized');
         storage.whitelisted_tokens.write(token, is_whitelisted);
     }
 
-    /// @notice Returns daily private usage for a user.
-    /// @dev Read-only helper for UI.
-    /// @param user User address.
-    /// @return usage Tuple of amount and reset time.
+    // Returns current daily private usage and reset timestamp for a user.
+    // `user` is the account whose private usage window is queried.
     #[external(v0)]
     fn get_daily_private_usage(user: ContractAddress) -> (u256, u64) {
         storage.daily_private_limit.read(user)
     }
 
-    /// @notice Resets daily limit for a user.
-    /// @dev Owner-only admin action.
-    /// @param user User address.
+    // Resets daily private usage accumulator for a user.
+    // `user` is the account whose daily limit state is reset by admin.
     #[external(v0)]
     fn reset_daily_limit(user: ContractAddress) {
         assert(get_caller_address() == storage.owner.read(), 'Unauthorized');
         storage.daily_private_limit.write(user, (0, get_block_timestamp()));
     }
 
+    // Internal helper that dispatches proof verification to zk verifier contract.
     fn _verify_zk_proof(proof: Array<felt252>) -> bool {
         let verifier = storage.zk_verifier.read();
         let zero: ContractAddress = 0.try_into().unwrap();

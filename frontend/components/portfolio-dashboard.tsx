@@ -60,17 +60,41 @@ const resolveAssetChain = (symbol: string): AssetChain => {
   return "other"
 }
 
+/**
+ * Parses or transforms values for `sanitizeUsdValue`.
+ *
+ * @param value - Input used by `sanitizeUsdValue` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const sanitizeUsdValue = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return 0
   return Math.min(value, MAX_ASSET_VALUE_USD)
 }
 
+/**
+ * Parses or transforms values for `sanitizePercent`.
+ *
+ * @param value - Input used by `sanitizePercent` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const sanitizePercent = (value: number) => {
   if (!Number.isFinite(value)) return 0
   const capped = Math.max(-9999, Math.min(9999, value))
   return Number(capped.toFixed(2))
 }
 
+/**
+ * Parses or transforms values for `formatUsd`.
+ *
+ * @param value - Input used by `formatUsd` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatUsd = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return "$0.00"
   return `$${value.toLocaleString(undefined, {
@@ -79,6 +103,14 @@ const formatUsd = (value: number) => {
   })}`
 }
 
+/**
+ * Parses or transforms values for `formatUsdCompact`.
+ *
+ * @param value - Input used by `formatUsdCompact` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatUsdCompact = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return "$0"
   return new Intl.NumberFormat("en-US", {
@@ -89,8 +121,24 @@ const formatUsdCompact = (value: number) => {
   }).format(value)
 }
 
+/**
+ * Parses or transforms values for `formatPercent`.
+ *
+ * @param value - Input used by `formatPercent` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatPercent = (value: number) => `${sanitizePercent(value)}%`
 
+/**
+ * Parses or transforms values for `formatTokenAmount`.
+ *
+ * @param value - Input used by `formatTokenAmount` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 const formatTokenAmount = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return "0"
   if (value >= 1000) {
@@ -105,6 +153,14 @@ const formatTokenAmount = (value: number) => {
 
 type ChartPoint = { label: string; value: number }
 
+/**
+ * Handles `MiniChart` logic.
+ *
+ * @param data - Input used by `MiniChart` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MiniChart({ data }: { data: ChartPoint[] }) {
   const safeData = data.length > 1 ? data : data.length === 1 ? [data[0], data[0]] : []
   if (safeData.length === 0) {
@@ -196,6 +252,14 @@ function MiniChart({ data }: { data: ChartPoint[] }) {
   )
 }
 
+/**
+ * Handles `AssetRow` logic.
+ *
+ * @param asset - Input used by `AssetRow` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function AssetRow({ asset }: { asset: PortfolioAsset }) {
   const isPositive = asset.change >= 0
   
@@ -251,6 +315,12 @@ type UiTransaction = {
   usdValue: number
 }
 
+/**
+ * Handles `PortfolioDashboard` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function PortfolioDashboard() {
   const wallet = useWallet()
   const [detailsOpen, setDetailsOpen] = React.useState(false)
@@ -262,6 +332,12 @@ export function PortfolioDashboard() {
 
   React.useEffect(() => {
     let active = true
+    /**
+     * Handles `loadPortfolio` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadPortfolio = async () => {
       try {
         const [analyticsRes, balanceRes] = await Promise.all([
@@ -325,6 +401,14 @@ export function PortfolioDashboard() {
     let active = true
     let pollingTimer: number | undefined
 
+    /**
+     * Parses or transforms values for `formatRelativeTime`.
+     *
+     * @param iso - Input used by `formatRelativeTime` to compute state, payload, or request behavior.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const formatRelativeTime = (iso: string) => {
       const date = new Date(iso)
       const timeMs = date.getTime()
@@ -339,12 +423,24 @@ export function PortfolioDashboard() {
       return `${days} day${days === 1 ? "" : "s"} ago`
     }
 
+    /**
+     * Parses or transforms values for `parseNumber`.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const parseNumber = (value?: string | number | null) => {
       if (value === null || value === undefined) return 0
       const parsed = Number(value)
       return Number.isFinite(parsed) ? parsed : 0
     }
 
+    /**
+     * Handles `loadTransactions` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const loadTransactions = async () => {
       try {
         const response = await getTransactionsHistory({ page: 1, limit: 20 })
@@ -401,6 +497,15 @@ export function PortfolioDashboard() {
     }
   }, [detailsOpen])
 
+  /**
+   * Handles `safeNumber` logic.
+   *
+   * @param value - Input used by `safeNumber` to compute state, payload, or request behavior.
+   * @param fallback - Input used by `safeNumber` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const safeNumber = (value: string | number | undefined, fallback: number) => {
     if (value === undefined) return fallback
     const parsed = Number(value)

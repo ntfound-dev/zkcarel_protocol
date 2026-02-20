@@ -43,6 +43,7 @@ struct BridgeWatcherConfig {
 }
 
 impl BridgeWatcherConfig {
+    // Internal helper that supports `from_env` operations.
     fn from_env() -> anyhow::Result<Self> {
         let btc_vault_address =
             env::var("BTC_VAULT_ADDRESS").unwrap_or_else(|_| BTC_VAULT_ADDRESS.to_string());
@@ -105,6 +106,7 @@ struct StarknetPointMinter {
 }
 
 impl StarknetPointMinter {
+    // Internal helper that supports `from_config` operations.
     fn from_config(config: &BridgeWatcherConfig) -> anyhow::Result<Self> {
         let rpc_url = Url::parse(&config.starknet_rpc_url)
             .map_err(|e| anyhow::anyhow!("Invalid STARKNET_RPC_URL: {e}"))?;
@@ -133,6 +135,7 @@ impl StarknetPointMinter {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `mint_points`.
     async fn mint_points(&self, recipient: &str, amount_low: u128) -> anyhow::Result<Felt> {
         let selector = get_selector_from_name("mint_points")
             .map_err(|e| anyhow::anyhow!("Unable to resolve mint_points selector: {e}"))?;
@@ -247,6 +250,7 @@ pub async fn start_bridge_watcher() {
     }
 }
 
+// Internal helper that supports `process_once` operations.
 async fn process_once(
     client: &Client,
     config: &BridgeWatcherConfig,
@@ -321,6 +325,7 @@ async fn process_once(
     Ok(())
 }
 
+// Internal helper that fetches data for `fetch_btc_price_usd`.
 async fn fetch_btc_price_usd(client: &Client, api_url: &str) -> anyhow::Result<f64> {
     let response = client
         .get(api_url)
@@ -338,6 +343,7 @@ async fn fetch_btc_price_usd(client: &Client, api_url: &str) -> anyhow::Result<f
     Ok(payload.bitcoin.usd)
 }
 
+// Internal helper that fetches data for `fetch_vault_txs`.
 async fn fetch_vault_txs(client: &Client, vault_address: &str) -> anyhow::Result<Vec<MempoolTx>> {
     let url = format!("{}/{}/txs", MEMPOOL_TESTNET_API_BASE, vault_address);
     let response = client
@@ -356,6 +362,7 @@ async fn fetch_vault_txs(client: &Client, vault_address: &str) -> anyhow::Result
     Ok(txs)
 }
 
+// Internal helper that supports `received_sats_for_vault` operations.
 fn received_sats_for_vault(tx: &MempoolTx, vault_address: &str) -> u64 {
     tx.vout
         .iter()
@@ -370,6 +377,7 @@ fn received_sats_for_vault(tx: &MempoolTx, vault_address: &str) -> u64 {
         .sum()
 }
 
+// Internal helper that fetches data for `resolve_starknet_recipient`.
 fn resolve_starknet_recipient(
     tx: &MempoolTx,
     btc_to_starknet_map: &HashMap<String, String>,
@@ -394,6 +402,7 @@ fn resolve_starknet_recipient(
         .filter(|v| !v.trim().is_empty())
 }
 
+// Internal helper that parses or transforms values for `parse_btc_to_starknet_map`.
 fn parse_btc_to_starknet_map(raw: &str) -> HashMap<String, String> {
     if raw.trim().is_empty() {
         return HashMap::new();
@@ -419,6 +428,7 @@ fn parse_btc_to_starknet_map(raw: &str) -> HashMap<String, String> {
     }
 }
 
+// Internal helper that supports `points_to_wei` operations.
 fn points_to_wei(point_amount: f64) -> Option<u128> {
     if !point_amount.is_finite() || point_amount <= 0.0 {
         return None;
@@ -432,6 +442,7 @@ fn points_to_wei(point_amount: f64) -> Option<u128> {
     Some(raw.round() as u128)
 }
 
+// Internal helper that parses or transforms values for `parse_chain_id`.
 fn parse_chain_id(raw: &str) -> anyhow::Result<Felt> {
     if raw.starts_with("0x") || raw.chars().all(|c| c.is_ascii_digit()) {
         return parse_felt(raw);
@@ -441,6 +452,7 @@ fn parse_chain_id(raw: &str) -> anyhow::Result<Felt> {
     parse_felt(&as_hex)
 }
 
+// Internal helper that parses or transforms values for `parse_felt`.
 fn parse_felt(raw: &str) -> anyhow::Result<Felt> {
     let value = raw.trim();
     if value.is_empty() {

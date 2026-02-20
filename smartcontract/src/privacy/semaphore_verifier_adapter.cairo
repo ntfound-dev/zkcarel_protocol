@@ -1,7 +1,5 @@
-/// @title Semaphore Verifier Adapter
-/// @author CAREL Team
-/// @notice Adapter for Semaphore proof verification.
-/// @dev Forwards proof verification to Semaphore verifier contract.
+// Adapter for Semaphore proof verification.
+// Forwards proof verification to Semaphore verifier contract.
 #[starknet::contract]
 pub mod SemaphoreVerifierAdapter {
     use starknet::ContractAddress;
@@ -10,7 +8,8 @@ pub mod SemaphoreVerifierAdapter {
 
     #[starknet::interface]
     pub trait ISemaphoreVerifier<TContractState> {
-        fn verify_proof(
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(
             self: @TContractState,
             root: felt252,
             nullifier_hash: felt252,
@@ -46,6 +45,7 @@ pub mod SemaphoreVerifierAdapter {
     }
 
     #[constructor]
+    // Initializes owner/admin roles plus verifier/router dependencies required by privacy flows.
     fn constructor(ref self: ContractState, admin: ContractAddress, verifier: ContractAddress) {
         self.ownable.initializer(admin);
         self.verifier.write(verifier);
@@ -53,7 +53,8 @@ pub mod SemaphoreVerifierAdapter {
 
     #[abi(embed_v0)]
     impl VerifierImpl of super::super::zk_privacy_router::IProofVerifier<ContractState> {
-        fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
+        // Verifies the supplied proof payload before allowing private state transitions.
+            fn verify_proof(self: @ContractState, proof: Span<felt252>, public_inputs: Span<felt252>) -> bool {
             // public_inputs layout: [root, nullifier_hash, signal]
             assert!(public_inputs.len() == 3, "Invalid public inputs");
             let root = *public_inputs.at(0);
@@ -66,7 +67,8 @@ pub mod SemaphoreVerifierAdapter {
 
     #[abi(embed_v0)]
     impl AdminImpl of super::super::privacy_adapter::IPrivacyVerifierAdmin<ContractState> {
-        fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
+        // Owner/admin-only setter for rotating the verifier contract used by privacy flows.
+            fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             self.verifier.write(verifier);
             self.emit(Event::VerifierUpdated(VerifierUpdated { verifier }));

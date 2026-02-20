@@ -6,12 +6,24 @@ import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `DropdownMenu` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenu({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
 }
 
+/**
+ * Handles `DropdownMenuPortal` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuPortal({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
@@ -20,6 +32,12 @@ function DropdownMenuPortal({
   )
 }
 
+/**
+ * Handles `DropdownMenuTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuTrigger({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
@@ -31,6 +49,12 @@ function DropdownMenuTrigger({
   )
 }
 
+/**
+ * Handles `DropdownMenuContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuContent({
   className,
   sideOffset = 4,
@@ -51,6 +75,12 @@ function DropdownMenuContent({
   )
 }
 
+/**
+ * Handles `DropdownMenuGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuGroup({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) {
@@ -59,6 +89,12 @@ function DropdownMenuGroup({
   )
 }
 
+/**
+ * Handles `DropdownMenuItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuItem({
   className,
   inset,
@@ -82,6 +118,12 @@ function DropdownMenuItem({
   )
 }
 
+/**
+ * Handles `DropdownMenuCheckboxItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuCheckboxItem({
   className,
   children,
@@ -108,6 +150,12 @@ function DropdownMenuCheckboxItem({
   )
 }
 
+/**
+ * Handles `DropdownMenuRadioGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuRadioGroup({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) {
@@ -119,6 +167,12 @@ function DropdownMenuRadioGroup({
   )
 }
 
+/**
+ * Handles `DropdownMenuRadioItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuRadioItem({
   className,
   children,
@@ -143,6 +197,12 @@ function DropdownMenuRadioItem({
   )
 }
 
+/**
+ * Handles `DropdownMenuLabel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuLabel({
   className,
   inset,
@@ -163,6 +223,12 @@ function DropdownMenuLabel({
   )
 }
 
+/**
+ * Handles `DropdownMenuSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuSeparator({
   className,
   ...props
@@ -176,6 +242,12 @@ function DropdownMenuSeparator({
   )
 }
 
+/**
+ * Handles `DropdownMenuShortcut` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuShortcut({
   className,
   ...props
@@ -192,12 +264,24 @@ function DropdownMenuShortcut({
   )
 }
 
+/**
+ * Handles `DropdownMenuSub` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuSub({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>) {
   return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} />
 }
 
+/**
+ * Handles `DropdownMenuSubTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuSubTrigger({
   className,
   inset,
@@ -222,6 +306,12 @@ function DropdownMenuSubTrigger({
   )
 }
 
+/**
+ * Handles `DropdownMenuSubContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function DropdownMenuSubContent({
   className,
   ...props

@@ -131,6 +131,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_dates_returns_none_for_invalid`.
     fn parse_dates_returns_none_for_invalid() {
         // Memastikan tanggal invalid menghasilkan None
         let query = HistoryQuery {
@@ -146,6 +147,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_dates_parses_valid_rfc3339`.
     fn parse_dates_parses_valid_rfc3339() {
         // Memastikan tanggal valid ter-parse
         let query = HistoryQuery {

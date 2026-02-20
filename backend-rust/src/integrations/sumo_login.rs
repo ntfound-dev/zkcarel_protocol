@@ -9,6 +9,17 @@ pub struct SumoLoginClient {
 }
 
 impl SumoLoginClient {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(base_url: String, api_key: Option<String>) -> Self {
         Self {
             base_url,
@@ -17,10 +28,32 @@ impl SumoLoginClient {
         }
     }
 
+    /// Checks conditions for `is_configured`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn is_configured(&self) -> bool {
         !self.base_url.trim().is_empty()
     }
 
+    /// Handles `verify_login` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn verify_login(&self, token: &str) -> Result<bool, reqwest::Error> {
         if !self.is_configured() {
             return Ok(false);

@@ -5,6 +5,12 @@ import * as ScrollAreaPrimitive from '@radix-ui/react-scroll-area'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `ScrollArea` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ScrollArea({
   className,
   children,
@@ -28,6 +34,12 @@ function ScrollArea({
   )
 }
 
+/**
+ * Handles `ScrollBar` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function ScrollBar({
   className,
   orientation = 'vertical',

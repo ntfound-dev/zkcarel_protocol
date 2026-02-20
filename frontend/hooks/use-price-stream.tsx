@@ -16,6 +16,15 @@ type UsePriceStreamOptions = {
   enabled?: boolean
 }
 
+/**
+ * Exposes `usePriceStream` as a reusable hook.
+ *
+ * @param tokens - Input used by `usePriceStream` to compute state, payload, or request behavior.
+ * @param options - Input used by `usePriceStream` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function usePriceStream(tokens: string[], options: UsePriceStreamOptions = {}) {
   const [prices, setPrices] = React.useState<Record<string, number>>({})
   const [changes, setChanges] = React.useState<Record<string, number>>({})

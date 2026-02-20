@@ -7,7 +7,8 @@ use snforge_std::{
 // Import dispatcher and types from the project namespace
 use smartcontract::utils::multisig::{IMultisigDispatcher, IMultisigDispatcherTrait, Transaction};
 
-/// Helper to deploy the Multisig contract
+// Deploys multisig fixture and returns handles used by dependent test flows.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_multisig(owners: Span<ContractAddress>, required: u256) -> IMultisigDispatcher {
     let contract = declare("Multisig").expect('Declaration failed');
     
@@ -20,6 +21,8 @@ fn deploy_multisig(owners: Span<ContractAddress>, required: u256) -> IMultisigDi
 }
 
 #[test]
+// Test case: validates multisig initialization behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_multisig_initialization() {
     let owner1: ContractAddress = 0x1.try_into().unwrap();
     let owner2: ContractAddress = 0x2.try_into().unwrap();
@@ -35,6 +38,8 @@ fn test_multisig_initialization() {
 }
 
 #[test]
+// Test case: validates submit and confirm flow behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_submit_and_confirm_flow() {
     let owner1: ContractAddress = 0x1.try_into().unwrap();
     let owner2: ContractAddress = 0x2.try_into().unwrap();
@@ -66,6 +71,8 @@ fn test_submit_and_confirm_flow() {
 
 #[test]
 #[should_panic(expected: "Not enough confirmations")]
+// Test case: validates execute fails below threshold behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_execute_fails_below_threshold() {
     let owner1: ContractAddress = 0x1.try_into().unwrap();
     let owner2: ContractAddress = 0x2.try_into().unwrap();
@@ -84,6 +91,8 @@ fn test_execute_fails_below_threshold() {
 }
 
 #[test]
+// Test case: validates revoke confirmation behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_revoke_confirmation() {
     let owner1: ContractAddress = 0x1.try_into().unwrap();
     let dispatcher = deploy_multisig(array![owner1].span(), 1);
@@ -101,6 +110,8 @@ fn test_revoke_confirmation() {
 }
 
 #[test]
+// Test case: validates governance add owner via multisig behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_governance_add_owner_via_multisig() {
     let owner1: ContractAddress = 0x1.try_into().unwrap();
     let new_owner: ContractAddress = 0x3.try_into().unwrap();

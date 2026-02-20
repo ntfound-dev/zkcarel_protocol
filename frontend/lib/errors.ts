@@ -24,6 +24,14 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Handles `toApiError` logic.
+ *
+ * @param error - Input used by `toApiError` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function toApiError(error: unknown, fallback = "Request failed"): ApiError {
   if (error instanceof ApiError) return error
   if (error instanceof Error) {
@@ -35,6 +43,14 @@ export function toApiError(error: unknown, fallback = "Request failed"): ApiErro
   return new ApiError(fallback)
 }
 
+/**
+ * Fetches data for `getErrorMessage`.
+ *
+ * @param error - Input used by `getErrorMessage` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function getErrorMessage(error: unknown, fallback = "Request failed") {
   if (!error) return fallback
   if (typeof error === "string") return error
@@ -42,6 +58,14 @@ export function getErrorMessage(error: unknown, fallback = "Request failed") {
   return fallback
 }
 
+/**
+ * Checks conditions for `isNetworkError`.
+ *
+ * @param error - Input used by `isNetworkError` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function isNetworkError(error: unknown) {
   if (!error) return false
   if (error instanceof ApiError) {

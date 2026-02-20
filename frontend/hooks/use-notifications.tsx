@@ -47,6 +47,12 @@ interface NotificationsContextType {
 
 const NotificationsContext = createContext<NotificationsContextType | undefined>(undefined)
 
+/**
+ * Handles `mapNotifType` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function mapNotifType(kind?: string | null): Notification["type"] {
   if (!kind) return "info"
   if (kind.includes("failed") || kind.includes("error")) return "error"
@@ -55,6 +61,14 @@ function mapNotifType(kind?: string | null): Notification["type"] {
   return "info"
 }
 
+/**
+ * Parses or transforms values for `normalizeTxNetwork`.
+ *
+ * @param raw - Input used by `normalizeTxNetwork` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function normalizeTxNetwork(raw: unknown): TxNetwork | undefined {
   if (typeof raw !== "string") return undefined
   const normalized = raw.trim().toLowerCase()
@@ -64,6 +78,12 @@ function normalizeTxNetwork(raw: unknown): TxNetwork | undefined {
   return undefined
 }
 
+/**
+ * Builds inputs required by `buildTxExplorerUrls`.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function buildTxExplorerUrls(txHash?: string, txNetwork?: TxNetwork): TxExplorerLink[] | undefined {
   if (!txHash) return undefined
   if (txNetwork === "starknet") {
@@ -103,6 +123,14 @@ function buildTxExplorerUrls(txHash?: string, txNetwork?: TxNetwork): TxExplorer
   ]
 }
 
+/**
+ * Handles `mapBackendNotification` logic.
+ *
+ * @param notification - Input used by `mapBackendNotification` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function mapBackendNotification(notification: BackendNotification): Notification {
   const txHash = typeof notification.data?.tx_hash === "string" ? notification.data?.tx_hash : undefined
   const txNetwork = normalizeTxNetwork(notification.data?.tx_network ?? notification.data?.tx_chain)
@@ -119,6 +147,14 @@ function mapBackendNotification(notification: BackendNotification): Notification
   }
 }
 
+/**
+ * Handles `NotificationsProvider` logic.
+ *
+ * @param children - Input used by `NotificationsProvider` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   const wallet = useWallet()
   const [notifications, setNotifications] = useState<Notification[]>([])
@@ -256,6 +292,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   )
 }
 
+/**
+ * Exposes `useNotifications` as a reusable hook.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function useNotifications() {
   const context = useContext(NotificationsContext)
   if (context === undefined) {

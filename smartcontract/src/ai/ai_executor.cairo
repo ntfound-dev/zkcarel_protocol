@@ -29,77 +29,55 @@ pub struct UserState {
     pub lifetime_total: u128,
 }
 
-/// @title AI Executor Interface
-/// @author CAREL Team
-/// @notice Defines AI action submission and execution entrypoints.
-/// @dev Designed for backend-signed execution with user rate limits.
+// Defines AI action submission and execution entrypoints.
+// Designed for backend-signed execution with user rate limits.
 #[starknet::interface]
 pub trait IAIExecutor<TContractState> {
-    /// @notice Submits an AI action request.
-    /// @dev Applies rate limits and optional fee collection.
-    /// @param action_type Type of action to execute.
-    /// @param params Encoded action parameters.
-    /// @param user_signature User signature for authorization.
-    /// @return action_id Newly created action id.
+    // Applies submit action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_action(
         ref self: TContractState, 
         action_type: ActionType, 
         params: ByteArray, 
         user_signature: Span<felt252>
     ) -> u64;
-    /// @notice Executes a pending AI action.
-    /// @dev Backend signer only to ensure trusted execution.
-    /// @param action_id Action id to execute.
-    /// @param backend_signature Backend signature for verification.
+    // Applies execute action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn execute_action(ref self: TContractState, action_id: u64, backend_signature: Span<felt252>);
-    /// @notice Executes multiple pending AI actions in a batch.
-    /// @dev Backend signer only; capped to avoid large loops.
-    /// @param action_ids Action ids to execute.
-    /// @param backend_signature Backend signature for verification.
+    // Implements batch execute actions logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn batch_execute_actions(
         ref self: TContractState,
         action_ids: Span<u64>,
         backend_signature: Span<felt252>
     );
-    /// @notice Submits multiple AI actions in a batch.
-    /// @dev Requires signature verification and fees disabled to save gas.
-    /// @param action_type Type of action to execute.
-    /// @param params Encoded action parameters (shared for the batch).
-    /// @param count Number of actions to submit.
-    /// @return start_id First action id in the batch.
+    // Implements batch submit actions logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn batch_submit_actions(
         ref self: TContractState,
         action_type: ActionType,
         params: ByteArray,
         count: u64
     ) -> u64;
-    /// @notice Cancels a pending AI action.
-    /// @dev Only the action owner can cancel.
-    /// @param action_id Action id to cancel.
+    // Applies cancel action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn cancel_action(ref self: TContractState, action_id: u64);
-    /// @notice Returns pending action ids for a user.
-    /// @dev Read-only helper for UI.
-    /// @param user User address.
-    /// @return actions Array of pending action ids.
+    // Returns get pending actions from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_pending_actions(self: @TContractState, user: ContractAddress) -> Array<u64>;
-    /// @notice Returns pending action ids for a user with pagination.
-    /// @dev Scans a bounded range to avoid unbounded loops.
-    /// @param user User address.
-    /// @param start_offset Starting offset within the user's pending queue.
-    /// @param limit Max number of ids to return.
-    /// @return actions Array of pending action ids.
+    // Returns get pending actions page from state without mutating storage.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn get_pending_actions_page(
         self: @TContractState,
         user: ContractAddress,
         start_offset: u64,
         limit: u64
     ) -> Array<u64>;
-    /// @notice Checks if a user is within rate limit.
-    /// @dev Read-only helper for off-chain gating.
-    /// @param user User address.
-    /// @return allowed True if the user can submit.
+    // Implements check rate limit logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn check_rate_limit(self: @TContractState, user: ContractAddress) -> bool;
-    /// @notice Submits a private AI action proof.
+    // Applies submit private ai action after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn submit_private_ai_action(
         ref self: TContractState,
         old_root: felt252,
@@ -111,74 +89,60 @@ pub trait IAIExecutor<TContractState> {
     );
 }
 
-/// @title AI Executor Admin Interface
-/// @author CAREL Team
-/// @notice Administrative controls for AI executor fees and limits.
-/// @dev Owner-only configuration for pricing and rate limits.
+// Administrative controls for AI executor fees and limits.
+// Owner-only configuration for pricing and rate limits.
 #[starknet::interface]
 pub trait IAIExecutorAdmin<TContractState> {
-    /// @notice Updates fee configuration for AI levels.
-    /// @dev Admin-only to prevent unauthorized pricing changes.
-    /// @param level_2_price Fee for level 2 actions.
-    /// @param level_3_price Fee for level 3 actions.
-    /// @param fee_enabled Global fee toggle.
+    // Updates fee config configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_fee_config(ref self: TContractState, level_2_price: u256, level_3_price: u256, fee_enabled: bool);
-    /// @notice Updates the fee recipient address.
-    /// @dev Admin-only to secure fee routing.
-    /// @param recipient New fee recipient address.
+    // Updates fee recipient configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_fee_recipient(ref self: TContractState, recipient: ContractAddress);
-    /// @notice Updates per-user rate limit.
-    /// @dev Admin-only to manage throughput.
-    /// @param limit New rate limit value.
+    // Updates rate limit configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_rate_limit(ref self: TContractState, limit: u256);
-    /// @notice Enables or disables signature verification.
-    /// @dev Admin-only to configure verifier integration.
-    /// @param verifier Signature verifier contract address.
-    /// @param enabled Enable flag.
+    // Updates signature verification configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_signature_verification(ref self: TContractState, verifier: ContractAddress, enabled: bool);
-    /// @notice Sets max action ids scanned in pending queries.
-    /// @dev Admin-only to cap read loops.
-    /// @param max_scan Maximum ids to scan per call.
+    // Updates max pending scan configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_max_pending_scan(ref self: TContractState, max_scan: u64);
-    /// @notice Sets max pending actions allowed per user.
-    /// @dev Admin-only to prevent unbounded growth.
-    /// @param max_actions Maximum pending actions per user.
+    // Updates max actions per user configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_max_actions_per_user(ref self: TContractState, max_actions: u64);
-    /// @notice Sets max batch size for batch execution.
-    /// @dev Admin-only to cap loop cost.
-    /// @param max_batch Maximum batch size.
+    // Updates max batch execute configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_max_batch_execute(ref self: TContractState, max_batch: u64);
-    /// @notice Sets privacy router address.
+    // Updates privacy router configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
 }
 
-/// @title ERC20 Minimal Interface
-/// @author CAREL Team
-/// @notice Minimal ERC20 interface for fee collection.
-/// @dev Used for CAREL token transfers.
+// Minimal ERC20 interface for fee collection.
+// Used for CAREL token transfers.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
-    /// @notice Transfers tokens from a sender to a recipient.
-    /// @dev Used to collect AI fees from users.
-    /// @param sender Token holder address.
-    /// @param recipient Fee recipient address.
-    /// @param amount Amount to transfer.
-    /// @return success True if transfer succeeded.
+    // Applies transfer from after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn transfer_from(ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool;
-    /// @notice Burns tokens held by the caller.
-    /// @dev Requires the caller to have burn privileges.
-    /// @param amount Amount to burn.
+    // Implements burn logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn burn(ref self: TContractState, amount: u256);
 }
 
 #[starknet::interface]
 pub trait ISignatureVerifier<TContractState> {
+    // Applies verify signature after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_signature(
         self: @TContractState,
         signer: ContractAddress,
         message_hash: felt252,
         signature: Span<felt252>
     ) -> bool;
+    // Applies verify and consume after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_and_consume(
         ref self: TContractState,
         signer: ContractAddress,
@@ -186,10 +150,8 @@ pub trait ISignatureVerifier<TContractState> {
         signature: Span<felt252>
     ) -> bool;
 }
-/// @title AI Executor Contract
-/// @author CAREL Team
-/// @notice Manages AI action requests and backend execution.
-/// @dev Stores action metadata and enforces rate limits.
+// Manages AI action requests and backend execution.
+// Stores action metadata and enforces rate limits.
 #[starknet::contract]
 pub mod AIExecutor {
     use starknet::ContractAddress;
@@ -231,11 +193,12 @@ pub mod AIExecutor {
         pub privacy_router: ContractAddress,
     }
 
-    /// @notice Initializes the AI executor.
-    /// @dev Sets token, backend signer, and default fee/rate settings.
-    /// @param carel_token CAREL token address for fee collection.
-    /// @param backend_signer Backend signer address.
+    // Initializes the AI executor.
+    // Sets token, backend signer, and default fee/rate settings.
+    // `carel_token` is used for fee settlement and `backend_signer` authorizes AI actions.
     #[constructor]
+    // Initializes storage and role configuration during deployment.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(
         ref self: ContractState, 
         carel_token: ContractAddress, 
@@ -257,6 +220,8 @@ pub mod AIExecutor {
         self.fee_enabled.write(true);
     }
 
+    // Implements action type to felt logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn action_type_to_felt(action_type: ActionType) -> felt252 {
         match action_type {
             ActionType::Swap => 0,
@@ -269,6 +234,8 @@ pub mod AIExecutor {
         }
     }
 
+    // Implements compute action hash logic while keeping state transitions deterministic.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn compute_action_hash(
         user: ContractAddress,
         action_type: ActionType,
@@ -283,6 +250,8 @@ pub mod AIExecutor {
         poseidon_hash_span(data.span())
     }
 
+    // Applies verify sig and consume after input validation and commits the resulting state.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_sig_and_consume(
         verifier_addr: ContractAddress,
         signer: ContractAddress,
@@ -295,12 +264,8 @@ pub mod AIExecutor {
 
     #[abi(embed_v0)]
     impl AIExecutorImpl of IAIExecutor<ContractState> {
-        /// @notice Submits an AI action request.
-        /// @dev Applies rate limits and optional fee collection.
-        /// @param action_type Type of action to execute.
-        /// @param params Encoded action parameters.
-        /// @param user_signature User signature for authorization.
-        /// @return action_id Newly created action id.
+        // Applies submit action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_action(
             ref self: ContractState, 
             action_type: ActionType, 
@@ -357,6 +322,8 @@ pub mod AIExecutor {
             action_id
         }
 
+        // Implements batch submit actions logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn batch_submit_actions(
             ref self: ContractState,
             action_type: ActionType,
@@ -401,10 +368,8 @@ pub mod AIExecutor {
             start_id
         }
 
-        /// @notice Executes a pending AI action.
-        /// @dev Backend signer only to ensure trusted execution.
-        /// @param action_id Action id to execute.
-        /// @param backend_signature Backend signature for verification.
+        // Applies execute action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn execute_action(ref self: ContractState, action_id: u64, backend_signature: Span<felt252>) {
             let caller = get_caller_address();
             assert!(caller == self.ai_backend_signer.read(), "Unauthorized backend signer");
@@ -433,6 +398,8 @@ pub mod AIExecutor {
             }
         }
 
+        // Implements batch execute actions logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn batch_execute_actions(
             ref self: ContractState,
             action_ids: Span<u64>,
@@ -453,9 +420,8 @@ pub mod AIExecutor {
             };
         }
 
-        /// @notice Cancels a pending AI action.
-        /// @dev Only the action owner can cancel.
-        /// @param action_id Action id to cancel.
+        // Applies cancel action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn cancel_action(ref self: ContractState, action_id: u64) {
             let user = self.action_user.entry(action_id).read();
             assert!(!user.is_zero(), "Action not found");
@@ -474,10 +440,8 @@ pub mod AIExecutor {
             }
         }
 
-        /// @notice Returns pending action ids for a user.
-        /// @dev Read-only helper for UI.
-        /// @param user User address.
-        /// @return actions Array of pending action ids.
+        // Returns get pending actions from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_pending_actions(self: @ContractState, user: ContractAddress) -> Array<u64> {
             let mut result = array![];
             let max_scan = self.max_pending_scan.read();
@@ -501,6 +465,8 @@ pub mod AIExecutor {
             result
         }
 
+        // Returns get pending actions page from state without mutating storage.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn get_pending_actions_page(
             self: @ContractState,
             user: ContractAddress,
@@ -532,10 +498,8 @@ pub mod AIExecutor {
             result
         }
 
-        /// @notice Checks if a user is within rate limit.
-        /// @dev Read-only helper for off-chain gating.
-        /// @param user User address.
-        /// @return allowed True if the user can submit.
+        // Implements check rate limit logic while keeping state transitions deterministic.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn check_rate_limit(self: @ContractState, user: ContractAddress) -> bool {
             let day = get_block_timestamp() / 86400;
             let state: UserState = self.user_states.entry(user).read();
@@ -543,6 +507,8 @@ pub mod AIExecutor {
             current.into() < self.rate_limit.read()
         }
 
+        // Applies submit private ai action after input validation and commits the resulting state.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn submit_private_ai_action(
             ref self: ContractState,
             old_root: felt252,
@@ -569,11 +535,8 @@ pub mod AIExecutor {
 
     #[abi(embed_v0)]
     impl AIExecutorAdminImpl of super::IAIExecutorAdmin<ContractState> {
-        /// @notice Updates fee configuration for AI levels.
-        /// @dev Admin-only to prevent unauthorized pricing changes.
-        /// @param level_2_price Fee for level 2 actions.
-        /// @param level_3_price Fee for level 3 actions.
-        /// @param fee_enabled Global fee toggle.
+        // Updates fee config configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_fee_config(ref self: ContractState, level_2_price: u256, level_3_price: u256, fee_enabled: bool) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             self.level_2_price.write(level_2_price);
@@ -581,23 +544,23 @@ pub mod AIExecutor {
             self.fee_enabled.write(fee_enabled);
         }
 
-        /// @notice Updates the fee recipient address.
-        /// @dev Admin-only to secure fee routing.
-        /// @param recipient New fee recipient address.
+        // Updates fee recipient configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_fee_recipient(ref self: ContractState, recipient: ContractAddress) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             assert!(!recipient.is_zero(), "Recipient required");
             self.fee_recipient.write(recipient);
         }
 
-        /// @notice Updates per-user rate limit.
-        /// @dev Admin-only to manage throughput.
-        /// @param limit New rate limit value.
+        // Updates rate limit configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_rate_limit(ref self: ContractState, limit: u256) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             self.rate_limit.write(limit);
         }
 
+        // Updates signature verification configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_signature_verification(ref self: ContractState, verifier: ContractAddress, enabled: bool) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             if enabled {
@@ -607,24 +570,32 @@ pub mod AIExecutor {
             self.signature_verification_enabled.write(enabled);
         }
 
+        // Updates max pending scan configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_max_pending_scan(ref self: ContractState, max_scan: u64) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             assert!(max_scan > 0, "Max scan required");
             self.max_pending_scan.write(max_scan);
         }
 
+        // Updates max actions per user configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_max_actions_per_user(ref self: ContractState, max_actions: u64) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             assert!(max_actions > 0, "Max actions required");
             self.max_actions_per_user.write(max_actions);
         }
 
+        // Updates max batch execute configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_max_batch_execute(ref self: ContractState, max_batch: u64) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             assert!(max_batch > 0, "Max batch required");
             self.max_batch_execute.write(max_batch);
         }
 
+        // Updates privacy router configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             assert!(!router.is_zero(), "Privacy router required");

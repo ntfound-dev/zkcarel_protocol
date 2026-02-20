@@ -86,6 +86,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Internal helper that supports `deserialize_bank_transfer_request` operations.
     fn deserialize_bank_transfer_request() {
         // Memastikan payload bank transfer ter-parse dengan benar
         let payload = r#"{"amount": 150.5, "currency": "IDR"}"#;
@@ -95,6 +96,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `deserialize_qris_request` operations.
     fn deserialize_qris_request() {
         // Memastikan payload QRIS ter-parse dengan benar
         let payload = r#"{"amount": 75.0}"#;
@@ -103,6 +105,7 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `deserialize_card_payment_request` operations.
     fn deserialize_card_payment_request() {
         // Memastikan payload kartu ter-parse dengan benar
         let payload = r#"{"amount": 99.9, "currency": "USD"}"#;

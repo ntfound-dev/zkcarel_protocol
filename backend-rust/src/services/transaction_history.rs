@@ -6,10 +6,12 @@ use crate::{
 use chrono::{DateTime, Utc};
 use sqlx::Row; // PENTING: Import ini untuk memperbaiki error try_get
 
+// Internal helper that supports `csv_header` operations.
 fn csv_header() -> &'static str {
     "Date,Type,Token In,Token Out,Amount In,Amount Out,USD Value,Fee,Points\n"
 }
 
+// Internal helper that parses or transforms values for `format_csv_row`.
 fn format_csv_row(tx: &Transaction) -> String {
     format!(
         "{},{},{},{},{},{},{},{},{}\n",
@@ -25,6 +27,7 @@ fn format_csv_row(tx: &Transaction) -> String {
     )
 }
 
+// Internal helper that parses or transforms values for `normalize_scope_addresses`.
 fn normalize_scope_addresses(user_addresses: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for address in user_addresses {
@@ -46,6 +49,17 @@ pub struct TransactionHistoryService {
 }
 
 impl TransactionHistoryService {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database) -> Self {
         Self { db }
     }
@@ -145,6 +159,7 @@ impl TransactionHistoryService {
         })
     }
 
+    // Internal helper that fetches data for `get_total_count`.
     async fn get_total_count(
         &self,
         user_addresses: &[String],
@@ -190,6 +205,17 @@ impl TransactionHistoryService {
         Ok(result.try_get("count")?)
     }
 
+    /// Fetches data for `get_transaction_details`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_transaction_details(&self, tx_hash: &str) -> Result<Transaction> {
         self.db
             .get_transaction(tx_hash)
@@ -197,6 +223,17 @@ impl TransactionHistoryService {
             .ok_or_else(|| AppError::NotFound("Transaction not found".to_string()))
     }
 
+    /// Fetches data for `get_recent_transactions`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_recent_transactions(
         &self,
         user_addresses: &[String],
@@ -237,6 +274,17 @@ impl TransactionHistoryService {
         Ok(transactions)
     }
 
+    /// Fetches data for `get_user_stats`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_user_stats(&self, user_addresses: &[String]) -> Result<TransactionStats> {
         let normalized_addresses = normalize_scope_addresses(user_addresses);
         if normalized_addresses.is_empty() {
@@ -283,6 +331,17 @@ impl TransactionHistoryService {
         })
     }
 
+    /// Handles `export_to_csv` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn export_to_csv(
         &self,
         user_addresses: &[String],
@@ -320,12 +379,14 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     #[test]
+    // Internal helper that supports `csv_header_starts_with_date` operations.
     fn csv_header_starts_with_date() {
         // Memastikan header CSV konsisten
         assert!(csv_header().starts_with("Date,Type"));
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `format_csv_row_contains_type`.
     fn format_csv_row_contains_type() {
         // Memastikan baris CSV memuat tipe transaksi
         let tx = Transaction {

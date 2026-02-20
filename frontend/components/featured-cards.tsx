@@ -28,6 +28,14 @@ function useAnimatedValue(end: number, duration: number = 1500) {
           setHasAnimated(true)
           let startTime: number | null = null
           
+          /**
+           * Handles `animate` logic.
+           *
+           * @param timestamp - Input used by `animate` to compute state, payload, or request behavior.
+           *
+           * @returns Result consumed by caller flow, UI state updates, or async chaining.
+           * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+           */
           const animate = (timestamp: number) => {
             if (!startTime) startTime = timestamp
             const progress = Math.min((timestamp - startTime) / duration, 1)
@@ -67,6 +75,14 @@ interface FeaturedCardsProps {
   activeFeatureId?: SelectableFeatureId | null
 }
 
+/**
+ * Handles `FeaturedCards` logic.
+ *
+ * @param onSelectFeature - Input used by `FeaturedCards` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: FeaturedCardsProps = {}) {
   const wallet = useWallet()
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
@@ -78,6 +94,12 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
   const [stakeStats, setStakeStats] = React.useState<{ tvl?: number; maxApy?: number }>({})
   const [referralStats, setReferralStats] = React.useState<{ totalReferrals?: number; referralPoints?: number }>({})
 
+  /**
+   * Handles `checkScroll` logic.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const checkScroll = () => {
     if (scrollContainerRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = scrollContainerRef.current
@@ -95,6 +117,12 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
   React.useEffect(() => {
     let active = true
 
+    /**
+     * Fetches data for `fetchStats`.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const fetchStats = async () => {
       if (!active) return
       if (!wallet.isConnected) {
@@ -202,6 +230,14 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
     }
   }, [wallet.address, wallet.isConnected, wallet.token])
 
+  /**
+   * Handles `scroll` logic.
+   *
+   * @param direction - Input used by `scroll` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const scroll = (direction: 'left' | 'right') => {
     if (scrollContainerRef.current) {
       const scrollAmount = 400
@@ -367,6 +403,12 @@ interface Feature {
   cta?: string
 }
 
+/**
+ * Handles `FeatureCard` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function FeatureCard({ 
   feature, 
   onReferralClick,
@@ -385,6 +427,15 @@ function FeatureCard({
     stat2.ref.current = node
   }, [stat1.ref, stat2.ref])
   
+  /**
+   * Parses or transforms values for `formatValue`.
+   *
+   * @param stat - Input used by `formatValue` to compute state, payload, or request behavior.
+   * @param animatedValue - Input used by `formatValue` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const formatValue = (stat: Feature['stats'][0], animatedValue: number) => {
     if (stat.numericValue === undefined || stat.numericValue === null) return stat.value
     

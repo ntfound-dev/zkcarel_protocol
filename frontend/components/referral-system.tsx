@@ -15,6 +15,12 @@ const referralTiers = [
   { tier: 4, refs: "51+", commission: "25%", bonus: "1000 CAREL" },
 ]
 
+/**
+ * Handles `ReferralSystem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function ReferralSystem() {
   const wallet = useWallet()
   const notifications = useNotifications()
@@ -77,6 +83,15 @@ export function ReferralSystem() {
     }
   }, [wallet.address])
 
+  /**
+   * Handles `copyToClipboard` logic.
+   *
+   * @param text - Input used by `copyToClipboard` to compute state, payload, or request behavior.
+   * @param type - Input used by `copyToClipboard` to compute state, payload, or request behavior.
+   *
+   * @returns Result consumed by caller flow, UI state updates, or async chaining.
+   * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+   */
   const copyToClipboard = (text: string, type: "code" | "link") => {
     navigator.clipboard.writeText(text)
     if (type === "code") {

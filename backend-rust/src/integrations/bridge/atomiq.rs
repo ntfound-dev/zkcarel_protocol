@@ -8,10 +8,32 @@ pub struct AtomiqClient {
 }
 
 impl AtomiqClient {
+    /// Constructs a new instance via `new`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(api_key: String, api_url: String) -> Self {
         Self { api_key, api_url }
     }
 
+    /// Fetches data for `get_quote`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_quote(
         &self,
         from_chain: &str,
@@ -66,6 +88,17 @@ impl AtomiqClient {
         })
     }
 
+    /// Runs `execute_bridge` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn execute_bridge(&self, quote: &AtomiqQuote, recipient: &str) -> Result<String> {
         if self.api_url.trim().is_empty() {
             return Err(crate::error::AppError::ExternalAPI(
@@ -157,6 +190,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    // Internal helper that fetches data for `get_quote_without_api_url_returns_error`.
     async fn get_quote_without_api_url_returns_error() {
         let client = AtomiqClient::new("api_key".to_string(), "".to_string());
         let err = client

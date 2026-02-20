@@ -17,6 +17,8 @@ use smartcontract::privacy::garaga_verifier_adapter::GaragaVerifierAdapter::{
 };
 
 #[test]
+// Test case: validates garaga adapter forwards verification behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_garaga_adapter_forwards_verification() {
     let admin: ContractAddress = 0x111.try_into().unwrap();
 
@@ -48,6 +50,8 @@ fn test_garaga_adapter_forwards_verification() {
 
 #[test]
 #[should_panic(expected: "Unsupported mode")]
+// Test case: validates garaga adapter rejects unsupported mode behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_garaga_adapter_rejects_unsupported_mode() {
     let admin: ContractAddress = 0x111.try_into().unwrap();
 
@@ -69,6 +73,8 @@ fn test_garaga_adapter_rejects_unsupported_mode() {
 }
 
 #[test]
+// Test case: validates tongo adapter forwards verification behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_tongo_adapter_forwards_verification() {
     let admin: ContractAddress = 0x111.try_into().unwrap();
 
@@ -96,6 +102,8 @@ fn test_tongo_adapter_forwards_verification() {
 }
 
 #[test]
+// Test case: validates semaphore adapter forwards verification behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_semaphore_adapter_forwards_verification() {
     let admin: ContractAddress = 0x111.try_into().unwrap();
 

@@ -6,6 +6,12 @@ import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
+/**
+ * Handles `Menubar` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Menubar({
   className,
   ...props
@@ -22,24 +28,48 @@ function Menubar({
   )
 }
 
+/**
+ * Handles `MenubarMenu` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarMenu({
   ...props
 }: React.ComponentProps<typeof MenubarPrimitive.Menu>) {
   return <MenubarPrimitive.Menu data-slot="menubar-menu" {...props} />
 }
 
+/**
+ * Handles `MenubarGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarGroup({
   ...props
 }: React.ComponentProps<typeof MenubarPrimitive.Group>) {
   return <MenubarPrimitive.Group data-slot="menubar-group" {...props} />
 }
 
+/**
+ * Handles `MenubarPortal` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarPortal({
   ...props
 }: React.ComponentProps<typeof MenubarPrimitive.Portal>) {
   return <MenubarPrimitive.Portal data-slot="menubar-portal" {...props} />
 }
 
+/**
+ * Handles `MenubarRadioGroup` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarRadioGroup({
   ...props
 }: React.ComponentProps<typeof MenubarPrimitive.RadioGroup>) {
@@ -48,6 +78,12 @@ function MenubarRadioGroup({
   )
 }
 
+/**
+ * Handles `MenubarTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarTrigger({
   className,
   ...props
@@ -64,6 +100,12 @@ function MenubarTrigger({
   )
 }
 
+/**
+ * Handles `MenubarContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarContent({
   className,
   align = 'start',
@@ -88,6 +130,12 @@ function MenubarContent({
   )
 }
 
+/**
+ * Handles `MenubarItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarItem({
   className,
   inset,
@@ -111,6 +159,12 @@ function MenubarItem({
   )
 }
 
+/**
+ * Handles `MenubarCheckboxItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarCheckboxItem({
   className,
   children,
@@ -137,6 +191,12 @@ function MenubarCheckboxItem({
   )
 }
 
+/**
+ * Handles `MenubarRadioItem` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarRadioItem({
   className,
   children,
@@ -161,6 +221,12 @@ function MenubarRadioItem({
   )
 }
 
+/**
+ * Handles `MenubarLabel` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarLabel({
   className,
   inset,
@@ -181,6 +247,12 @@ function MenubarLabel({
   )
 }
 
+/**
+ * Handles `MenubarSeparator` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarSeparator({
   className,
   ...props
@@ -194,6 +266,12 @@ function MenubarSeparator({
   )
 }
 
+/**
+ * Handles `MenubarShortcut` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarShortcut({
   className,
   ...props
@@ -210,12 +288,24 @@ function MenubarShortcut({
   )
 }
 
+/**
+ * Handles `MenubarSub` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarSub({
   ...props
 }: React.ComponentProps<typeof MenubarPrimitive.Sub>) {
   return <MenubarPrimitive.Sub data-slot="menubar-sub" {...props} />
 }
 
+/**
+ * Handles `MenubarSubTrigger` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarSubTrigger({
   className,
   inset,
@@ -240,6 +330,12 @@ function MenubarSubTrigger({
   )
 }
 
+/**
+ * Handles `MenubarSubContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function MenubarSubContent({
   className,
   ...props

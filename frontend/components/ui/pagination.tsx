@@ -8,6 +8,15 @@ import {
 import { cn } from '@/lib/utils'
 import { Button, buttonVariants } from '@/components/ui/button'
 
+/**
+ * Handles `Pagination` logic.
+ *
+ * @param className - Input used by `Pagination` to compute state, payload, or request behavior.
+ * @param props - Input used by `Pagination` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function Pagination({ className, ...props }: React.ComponentProps<'nav'>) {
   return (
     <nav
@@ -20,6 +29,12 @@ function Pagination({ className, ...props }: React.ComponentProps<'nav'>) {
   )
 }
 
+/**
+ * Handles `PaginationContent` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function PaginationContent({
   className,
   ...props
@@ -33,6 +48,14 @@ function PaginationContent({
   )
 }
 
+/**
+ * Handles `PaginationItem` logic.
+ *
+ * @param props - Input used by `PaginationItem` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function PaginationItem({ ...props }: React.ComponentProps<'li'>) {
   return <li data-slot="pagination-item" {...props} />
 }
@@ -42,6 +65,12 @@ type PaginationLinkProps = {
 } & Pick<React.ComponentProps<typeof Button>, 'size'> &
   React.ComponentProps<'a'>
 
+/**
+ * Handles `PaginationLink` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function PaginationLink({
   className,
   isActive,
@@ -65,6 +94,12 @@ function PaginationLink({
   )
 }
 
+/**
+ * Handles `PaginationPrevious` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function PaginationPrevious({
   className,
   ...props
@@ -82,6 +117,12 @@ function PaginationPrevious({
   )
 }
 
+/**
+ * Handles `PaginationNext` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function PaginationNext({
   className,
   ...props
@@ -99,6 +140,12 @@ function PaginationNext({
   )
 }
 
+/**
+ * Handles `PaginationEllipsis` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function PaginationEllipsis({
   className,
   ...props

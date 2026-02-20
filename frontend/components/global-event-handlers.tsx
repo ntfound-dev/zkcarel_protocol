@@ -7,6 +7,15 @@ import { getErrorMessage, ApiError } from "@/lib/errors"
 
 const DEDUPE_WINDOW_MS = 20000
 
+/**
+ * Checks conditions for `shouldNotify`.
+ *
+ * @param key - Input used by `shouldNotify` to compute state, payload, or request behavior.
+ * @param lastSeen - Input used by `shouldNotify` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 function shouldNotify(key: string, lastSeen: Map<string, number>) {
   const now = Date.now()
   const last = lastSeen.get(key) || 0
@@ -15,6 +24,12 @@ function shouldNotify(key: string, lastSeen: Map<string, number>) {
   return true
 }
 
+/**
+ * Handles `GlobalEventHandlers` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
 export function GlobalEventHandlers() {
   const notifications = useNotifications()
   const lastSeenRef = React.useRef(new Map<string, number>())
@@ -56,6 +71,14 @@ export function GlobalEventHandlers() {
   React.useEffect(() => {
     if (typeof window === "undefined") return
 
+    /**
+     * Handles `onUnhandledRejection` logic.
+     *
+     * @param event - Input used by `onUnhandledRejection` to compute state, payload, or request behavior.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
       const message = getErrorMessage(event.reason, "Unhandled promise rejection")
       const key = `unhandledrejection:${message}`
@@ -67,6 +90,14 @@ export function GlobalEventHandlers() {
       })
     }
 
+    /**
+     * Handles `onError` logic.
+     *
+     * @param event - Input used by `onError` to compute state, payload, or request behavior.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const onError = (event: ErrorEvent) => {
       const message = event.message || "Unexpected error"
       const key = `windowerror:${message}`
@@ -78,6 +109,12 @@ export function GlobalEventHandlers() {
       })
     }
 
+    /**
+     * Handles `onOffline` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const onOffline = () => {
       const key = "offline"
       if (!shouldNotify(key, lastSeenRef.current)) return
@@ -88,6 +125,12 @@ export function GlobalEventHandlers() {
       })
     }
 
+    /**
+     * Handles `onOnline` logic.
+     *
+     * @returns Result consumed by caller flow, UI state updates, or async chaining.
+     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+     */
     const onOnline = () => {
       const key = "online"
       if (!shouldNotify(key, lastSeenRef.current)) return
