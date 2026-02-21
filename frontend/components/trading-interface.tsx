@@ -3346,6 +3346,22 @@ export function TradingInterface() {
           txHash: finalTxHash,
           txNetwork: "starknet",
         })
+        const swapEstimatedPoints = Number(response.estimated_points_earned || 0)
+        const swapDiscountPercent = Number(response.nft_discount_percent || 0)
+        const swapDiscountSaved = Number(response.fee_discount_saved || 0)
+        const pointsLabel =
+          Number.isFinite(swapEstimatedPoints) && swapEstimatedPoints > 0
+            ? `Points +${swapEstimatedPoints.toFixed(2)} (estimasi)`
+            : "Points +0 (estimasi)"
+        const discountLabel =
+          Number.isFinite(swapDiscountPercent) && swapDiscountPercent > 0
+            ? `NFT discount ${swapDiscountPercent.toFixed(2)}% aktif (hemat fee ${swapDiscountSaved.toFixed(8)} ${fromToken.symbol}).`
+            : "NFT discount tidak aktif di swap ini."
+        notifications.addNotification({
+          type: "info",
+          title: "Points & Discount",
+          message: `${pointsLabel}. ${discountLabel}`,
+        })
         if (response.privacy_tx_hash) {
           notifications.addNotification({
             type: "info",

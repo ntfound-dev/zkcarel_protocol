@@ -6,7 +6,11 @@ import { X, Minus, ChevronUp, ArrowUpRight, Zap, CheckCircle2 } from "lucide-rea
 import { Button } from "@/components/ui/button"
 import { DM_Sans, Space_Mono } from "next/font/google"
 import {
+  autoSubmitPrivacyAction,
+  createLimitOrder,
   executeAiCommand,
+  executeBridge,
+  executeSwap,
   getAiPendingActions,
   prepareAiAction,
   getAiRuntimeConfig,
@@ -14,6 +18,7 @@ import {
   getAiLevel,
   upgradeAiLevel,
   getBridgeQuote,
+  getOwnedNfts,
   getPortfolioAnalytics,
   getPortfolioBalance,
   getRewardsPoints,
@@ -22,6 +27,9 @@ import {
   getSwapQuote,
   getTokenOHLCV,
   listLimitOrders,
+  stakeClaim,
+  stakeDeposit,
+  type PrivacyVerificationPayload,
 } from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
@@ -57,27 +65,47 @@ const aiTiers = [
     name: "Level 2",
     cost: 5,
     costLabel: "5 CAREL",
-    description: "Auto swap/bridge/stake/limit execution",
+    description: "Swap/bridge/stake/claim/limit execution",
   },
   {
     id: 3,
     name: "Level 3",
     cost: 10,
     costLabel: "10 CAREL",
-    description: "Advanced execution, portfolio, alerts",
+    description: "All L2 actions in Garaga mode + unstake/portfolio/alerts",
   },
 ]
 
 const tierGreetingMessage: Record<number, string> = {
-  1: "Hai! Level 1 untuk chat + query read-only. Mau cek saldo, poin, atau harga token?",
-  2: "Hai! Level 2 aktif untuk eksekusi real swap/bridge/stake/limit setelah setup on-chain.",
-  3: "Hai! Level 3 aktif penuh untuk eksekusi real + unstake/claim/portfolio/alerts.",
+  1: "Hi! Level 1 is for chat and read-only queries. Try balance, points, or token prices.",
+  2: "Hi! Level 2 is active for real swap/bridge/stake/claim/limit execution. Each execution asks wallet signature and burns 1 CAREL.",
+  3: "Hi! Level 3 is active with Garaga/private mode and advanced analysis. Each execution asks wallet signature and burns 2 CAREL. Bridge is currently available on Level 2.",
 }
 
 const quickPromptsByTier: Record<number, string[]> = {
-  1: ["check balance", "STRK price", "my points"],
-  2: ["swap STRK → WBTC", "stake USDT", "limit order"],
-  3: ["rebalance portfolio", "claim rewards", "price alert"],
+  1: ["check balance", "my points", "STRK price", "market info", "what can you do?"],
+  2: [
+    "swap STRK → WBTC",
+    "bridge ETH → WBTC",
+    "stake USDT",
+    "claim rewards USDT",
+    "limit order STRK/USDC",
+    "cancel order",
+  ],
+  3: [
+    "hide swap STRK → WBTC",
+    "hide stake WBTC",
+    "hide claim rewards",
+    "switch to L2 for bridge",
+    "rebalance portfolio",
+    "price alert WBTC",
+  ],
+}
+
+const featureListByTier: Record<number, string> = {
+  1: "Features: chat, balance, points, token price, market info.",
+  2: "Features: swap, bridge, stake, claim rewards, limit order, cancel order.",
+  3: "Features: L2 features in Garaga mode (except bridge for now) + unstake, portfolio rebalance, price alerts, deep analysis.",
 }
 
 const levelBadgeClasses: Record<number, string> = {
@@ -97,11 +125,22 @@ const STATIC_CAREL_TOKEN_ADDRESS =
 const AI_SETUP_SKIP_APPROVE =
   process.env.NEXT_PUBLIC_AI_SETUP_SKIP_APPROVE === "true" ||
   process.env.NEXT_PUBLIC_AI_DEMO_MODE === "true"
+const HIDE_BALANCE_RELAYER_POOL_ENABLED =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true"
+const HIDE_BALANCE_EXECUTOR_KIND = (
+  process.env.NEXT_PUBLIC_HIDE_BALANCE_EXECUTOR_KIND || ""
+)
+  .trim()
+  .toLowerCase()
+const HIDE_BALANCE_SHIELDED_POOL_V2 =
+  HIDE_BALANCE_EXECUTOR_KIND === "shielded_pool_v2" ||
+  HIDE_BALANCE_EXECUTOR_KIND === "shielded-v2" ||
+  HIDE_BALANCE_EXECUTOR_KIND === "v2"
 
 const AI_ACTION_TYPE_SWAP = 0
 const AI_ACTION_TYPE_MULTI_STEP = 5
 const TIER2_ONCHAIN_COMMAND_REGEX =
-  /\b(swap|bridge|stake|limit(?:\s|-)?order|cancel\s+order)\b/i
+  /\b(swap|bridge|stake|claim|limit(?:\s|-)?order|cancel\s+order)\b/i
 const TIER3_ONCHAIN_COMMAND_REGEX =
   /\b(swap|bridge|stake|unstake|claim|limit(?:\s|-)?order|cancel\s+order|portfolio|rebalance|alert|price alert)\b/i
 const LIVE_DATA_PRIORITY_ACTIONS = new Set([
@@ -111,6 +150,68 @@ const LIVE_DATA_PRIORITY_ACTIONS = new Set([
   "show_points_breakdown",
   "show_chart",
 ])
+const STARKNET_ZK_PRIVACY_ROUTER_ADDRESS =
+  process.env.NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS ||
+  process.env.NEXT_PUBLIC_PRIVACY_ROUTER_ADDRESS ||
+  ""
+const STARKNET_STAKING_CAREL_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS ||
+  process.env.NEXT_PUBLIC_STAKING_CAREL_ADDRESS ||
+  ""
+const STARKNET_STAKING_STABLECOIN_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS ||
+  process.env.NEXT_PUBLIC_STAKING_STABLECOIN_ADDRESS ||
+  ""
+const STARKNET_STAKING_BTC_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS ||
+  process.env.NEXT_PUBLIC_STAKING_BTC_ADDRESS ||
+  ""
+const STARKNET_LIMIT_ORDER_BOOK_ADDRESS =
+  process.env.NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS ||
+  process.env.NEXT_PUBLIC_LIMIT_ORDER_BOOK_ADDRESS ||
+  ""
+const AI_TOKEN_ADDRESS_MAP: Record<string, string> = {
+  CAREL:
+    process.env.NEXT_PUBLIC_TOKEN_CAREL_ADDRESS ||
+    process.env.NEXT_PUBLIC_CAREL_TOKEN_ADDRESS ||
+    "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545",
+  STRK:
+    process.env.NEXT_PUBLIC_TOKEN_STRK_ADDRESS ||
+    "0x04718f5a0Fc34cC1AF16A1cdee98fFB20C31f5cD61D6Ab07201858f4287c938D",
+  USDT:
+    process.env.NEXT_PUBLIC_TOKEN_USDT_ADDRESS ||
+    "0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5",
+  USDC:
+    process.env.NEXT_PUBLIC_TOKEN_USDC_ADDRESS ||
+    "0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8",
+  WBTC:
+    process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
+    process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
+    "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5",
+  BTC:
+    process.env.NEXT_PUBLIC_TOKEN_BTC_ADDRESS ||
+    process.env.NEXT_PUBLIC_TOKEN_WBTC_ADDRESS ||
+    "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5",
+}
+const AI_TOKEN_DECIMALS: Record<string, number> = {
+  CAREL: 18,
+  STRK: 18,
+  USDT: 6,
+  USDC: 6,
+  WBTC: 8,
+  BTC: 8,
+}
+const SUPPORTED_SWAP_TOKENS = new Set(["USDT", "USDC", "STRK", "WBTC", "CAREL"])
+const SUPPORTED_LIMIT_ORDER_TOKENS = new Set(["USDT", "USDC", "STRK", "CAREL"])
+const SUPPORTED_STAKE_TOKENS = new Set(["CAREL", "USDC", "USDT", "STRK", "WBTC"])
+const L3_GARAGA_BRIDGE_ENABLED =
+  (process.env.NEXT_PUBLIC_L3_GARAGA_BRIDGE_ENABLED || "false").toLowerCase() === "true"
+const AI_SETUP_SUBMIT_COOLDOWN_MS = 20_000
+const AI_SETUP_PENDING_POLL_ATTEMPTS = 10
+const AI_SETUP_PENDING_POLL_INTERVAL_MS = 1_200
+const AI_REQUIRE_FRESH_SETUP_PER_EXECUTION =
+  (process.env.NEXT_PUBLIC_AI_REQUIRE_FRESH_SETUP_PER_EXECUTION || "true").toLowerCase() !==
+  "false"
 
 /**
  * Parses or transforms values for `encodeShortByteArray`.
@@ -144,9 +245,9 @@ function actionTypeForTier(tier: number): number {
 
 // Internal helper that supports `setupApprovalAmountCarel` operations.
 function setupApprovalAmountCarel(tier: number): number {
-  // Keep allowance limited to expected setup fee budget per tier.
-  if (tier >= 3) return 10
-  return 5
+  // Per execution, keep allowance equal to expected burn amount.
+  if (tier >= 3) return 2
+  return 1
 }
 
 /**
@@ -190,7 +291,7 @@ function isInvalidUserSignatureError(error: unknown): boolean {
 function formatBackendConnectivityMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? "")
   if (/failed to fetch|network error|request timeout|backend unavailable/i.test(message)) {
-    return "Backend belum terhubung. Jalankan `cd backend-rust && cargo run` dan pastikan `NEXT_PUBLIC_BACKEND_URL` mengarah ke backend (default: http://localhost:8080)."
+    return "Backend is not connected. Run `cd backend-rust && cargo run` and ensure `NEXT_PUBLIC_BACKEND_URL` points to backend (default: http://localhost:8080)."
   }
   return message || "Failed to contact backend."
 }
@@ -219,10 +320,13 @@ function resolveStarknetProviderHint(provider: string | null): "starknet" | "arg
  */
 function findNewPendingAction(after: number[], before: number[]): number | null {
   const beforeSet = new Set(before)
+  let latest: number | null = null
   for (const id of after) {
-    if (!beforeSet.has(id)) return id
+    if (!beforeSet.has(id)) {
+      latest = latest === null ? id : Math.max(latest, id)
+    }
   }
-  return after.length > 0 ? after[after.length - 1] : null
+  return latest
 }
 
 /**
@@ -238,10 +342,228 @@ function pickLatestPendingAction(pending: number[]): number | null {
   return Math.max(...pending)
 }
 
+// Internal helper that supports `pickLatestPendingAbove` operations.
+function pickLatestPendingAbove(pending: number[], threshold: number): number | null {
+  let latest: number | null = null
+  for (const id of pending) {
+    if (id > threshold) {
+      latest = latest === null ? id : Math.max(latest, id)
+    }
+  }
+  return latest
+}
+
+// Internal helper that supports `executionBurnAmountCarel` operations.
+function executionBurnAmountCarel(tier: number): number {
+  return tier >= 3 ? 2 : 1
+}
+
+// Internal helper that supports `formatSwapMinAmountOut` operations.
+function formatSwapMinAmountOut(quotedOutRaw: string, slippagePercent: number): string {
+  const quotedOut = Number.parseFloat(String(quotedOutRaw || "0"))
+  if (!Number.isFinite(quotedOut) || quotedOut <= 0) return "0"
+  const safeSlippage = Number.isFinite(slippagePercent) ? Math.max(0, slippagePercent) : 0
+  const minOut = quotedOut * Math.max(0, 1 - safeSlippage / 100)
+  const precision = quotedOut < 1 ? 12 : 8
+  const normalized = minOut.toFixed(precision).replace(/\.?0+$/, "")
+  return normalized || "0"
+}
+
+// Internal helper that parses or transforms values for `normalizeHexArray`.
+function normalizeHexArray(values?: string[] | null): string[] {
+  if (!Array.isArray(values)) return []
+  return values
+    .map((item) => (typeof item === "string" ? item.trim() : String(item ?? "").trim()))
+    .filter((item) => item.length > 0)
+}
+
+// Internal helper that supports `resolveStakeTokenSymbol` operations.
+function resolveStakeTokenSymbol(value: string): string {
+  return value.trim().toUpperCase()
+}
+
+// Internal helper that checks conditions for `isSupportedBridgePair`.
+function isSupportedBridgePair(fromChain: string, toChain: string, fromToken: string, toToken: string): boolean {
+  const from = fromToken.trim().toUpperCase()
+  const to = toToken.trim().toUpperCase()
+  return (
+    (fromChain === "ethereum" && toChain === "bitcoin" && from === "ETH" && to === "BTC") ||
+    (fromChain === "bitcoin" && toChain === "ethereum" && from === "BTC" && to === "ETH") ||
+    (fromChain === "bitcoin" && toChain === "starknet" && from === "BTC" && to === "WBTC") ||
+    (fromChain === "starknet" && toChain === "bitcoin" && from === "WBTC" && to === "BTC") ||
+    (fromChain === "ethereum" && toChain === "starknet" && from === "ETH" && to === "WBTC") ||
+    (fromChain === "starknet" && toChain === "ethereum" && from === "WBTC" && to === "ETH")
+  )
+}
+
+// Internal helper that parses or transforms values for `buildHideBalancePrivacyCall`.
+function buildHideBalancePrivacyCall(payload: PrivacyVerificationPayload) {
+  const router = STARKNET_ZK_PRIVACY_ROUTER_ADDRESS.trim()
+  if (!router) {
+    throw new Error(
+      "NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS is not configured. Hide mode requires privacy router address."
+    )
+  }
+  const nullifier = payload.nullifier?.trim() || ""
+  const commitment = payload.commitment?.trim() || ""
+  const proof = normalizeHexArray(payload.proof)
+  const publicInputs = normalizeHexArray(payload.public_inputs)
+  if (!nullifier || !commitment || !proof.length || !publicInputs.length) {
+    throw new Error("Garaga payload is incomplete (nullifier/commitment/proof/public_inputs).")
+  }
+  return {
+    contractAddress: router,
+    entrypoint: "submit_private_action",
+    calldata: [nullifier, commitment, String(proof.length), ...proof, String(publicInputs.length), ...publicInputs],
+  }
+}
+
+// Internal helper that supports `buildStakeWalletCalls` operations.
+function buildStakeWalletCalls(tokenSymbol: string, amount: string) {
+  const symbol = resolveStakeTokenSymbol(tokenSymbol)
+  const decimals = AI_TOKEN_DECIMALS[symbol]
+  if (!Number.isFinite(decimals)) {
+    throw new Error(`Pool ${symbol} is not supported for staking.`)
+  }
+  const [amountLow, amountHigh] = decimalToU256Parts(amount, decimals)
+  if (symbol === "CAREL") {
+    if (!STARKNET_STAKING_CAREL_ADDRESS.trim()) {
+      throw new Error("NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS is not configured.")
+    }
+    return [
+      {
+        contractAddress: AI_TOKEN_ADDRESS_MAP.CAREL,
+        entrypoint: "approve",
+        calldata: [STARKNET_STAKING_CAREL_ADDRESS.trim(), amountLow, amountHigh],
+      },
+      {
+        contractAddress: STARKNET_STAKING_CAREL_ADDRESS.trim(),
+        entrypoint: "stake",
+        calldata: [amountLow, amountHigh],
+      },
+    ]
+  }
+  if (symbol === "WBTC") {
+    if (!STARKNET_STAKING_BTC_ADDRESS.trim()) {
+      throw new Error("NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS is not configured.")
+    }
+    const wbtc = AI_TOKEN_ADDRESS_MAP.WBTC.trim()
+    if (!wbtc) {
+      throw new Error("NEXT_PUBLIC_TOKEN_WBTC_ADDRESS is not configured.")
+    }
+    return [
+      {
+        contractAddress: wbtc,
+        entrypoint: "approve",
+        calldata: [STARKNET_STAKING_BTC_ADDRESS.trim(), amountLow, amountHigh],
+      },
+      {
+        contractAddress: STARKNET_STAKING_BTC_ADDRESS.trim(),
+        entrypoint: "stake",
+        calldata: [wbtc, amountLow, amountHigh],
+      },
+    ]
+  }
+  if (symbol === "USDC" || symbol === "USDT" || symbol === "STRK") {
+    if (!STARKNET_STAKING_STABLECOIN_ADDRESS.trim()) {
+      throw new Error("NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS is not configured.")
+    }
+    const tokenAddress = AI_TOKEN_ADDRESS_MAP[symbol]?.trim() || ""
+    if (!tokenAddress) {
+      throw new Error(`Token address for ${symbol} is not configured.`)
+    }
+    return [
+      {
+        contractAddress: tokenAddress,
+        entrypoint: "approve",
+        calldata: [STARKNET_STAKING_STABLECOIN_ADDRESS.trim(), amountLow, amountHigh],
+      },
+      {
+        contractAddress: STARKNET_STAKING_STABLECOIN_ADDRESS.trim(),
+        entrypoint: "stake",
+        calldata: [tokenAddress, amountLow, amountHigh],
+      },
+    ]
+  }
+  throw new Error(`Pool ${symbol} is not supported for staking.`)
+}
+
+// Internal helper that supports `buildClaimWalletCalls` operations.
+function buildClaimWalletCalls(tokenSymbol: string) {
+  const symbol = resolveStakeTokenSymbol(tokenSymbol)
+  if (symbol === "CAREL") {
+    if (!STARKNET_STAKING_CAREL_ADDRESS.trim()) {
+      throw new Error("NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS is not configured.")
+    }
+    return [
+      {
+        contractAddress: STARKNET_STAKING_CAREL_ADDRESS.trim(),
+        entrypoint: "claim_rewards",
+        calldata: [],
+      },
+    ]
+  }
+  if (symbol === "WBTC") {
+    if (!STARKNET_STAKING_BTC_ADDRESS.trim()) {
+      throw new Error("NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS is not configured.")
+    }
+    const wbtc = AI_TOKEN_ADDRESS_MAP.WBTC.trim()
+    if (!wbtc) {
+      throw new Error("NEXT_PUBLIC_TOKEN_WBTC_ADDRESS is not configured.")
+    }
+    return [
+      {
+        contractAddress: STARKNET_STAKING_BTC_ADDRESS.trim(),
+        entrypoint: "claim_rewards",
+        calldata: [wbtc],
+      },
+    ]
+  }
+  if (symbol === "USDC" || symbol === "USDT" || symbol === "STRK") {
+    if (!STARKNET_STAKING_STABLECOIN_ADDRESS.trim()) {
+      throw new Error("NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS is not configured.")
+    }
+    const tokenAddress = AI_TOKEN_ADDRESS_MAP[symbol]?.trim() || ""
+    if (!tokenAddress) {
+      throw new Error(`Token address for ${symbol} is not configured.`)
+    }
+    return [
+      {
+        contractAddress: STARKNET_STAKING_STABLECOIN_ADDRESS.trim(),
+        entrypoint: "claim_rewards",
+        calldata: [tokenAddress],
+      },
+    ]
+  }
+  throw new Error(`Pool ${symbol} is not supported for claim rewards.`)
+}
+
+// Internal helper that supports `expiryToSeconds` operations.
+function expiryToSeconds(expiry: string): number {
+  const normalized = expiry.trim().toLowerCase()
+  if (normalized === "1d") return 24 * 60 * 60
+  if (normalized === "30d") return 30 * 24 * 60 * 60
+  return 7 * 24 * 60 * 60
+}
+
+// Internal helper that supports `generateClientOrderId` operations.
+function generateClientOrderId(): string {
+  const bytes = new Uint8Array(31)
+  crypto.getRandomValues(bytes)
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")
+  return `0x${hex}`
+}
+
 interface Message {
   role: "user" | "assistant"
   content: string
   timestamp: string
+}
+
+interface PendingExecutionConfirmation {
+  tier: number
+  command: string
+  createdAt: number
 }
 
 type AIData = Record<string, unknown> | null | undefined
@@ -258,6 +580,18 @@ function readNumber(data: AIData, key: string): number {
   if (typeof raw === "number") return raw
   if (typeof raw === "string") {
     const parsed = Number(raw)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
+// Internal helper that supports `parseNumberish` operations.
+function parseNumberish(value: unknown): number {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : 0
   }
   return 0
@@ -285,6 +619,16 @@ function normalizeMessageText(value: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim()
+}
+
+// Internal helper that supports `isAffirmativeConfirmation` operations.
+function isAffirmativeConfirmation(value: string): boolean {
+  return /^(yes|y|ya|iya|yup|ok|oke|lanjut|proceed|confirm)$/i.test(value.trim())
+}
+
+// Internal helper that supports `isNegativeConfirmation` operations.
+function isNegativeConfirmation(value: string): boolean {
+  return /^(no|n|tidak|ga|gak|batal|cancel|stop)$/i.test(value.trim())
 }
 
 // Internal helper that supports `defaultMessagesByTier` operations.
@@ -331,6 +675,8 @@ export function FloatingAIAssistant() {
   const [isLoadingTier, setIsLoadingTier] = React.useState(false)
   const [isUpgradingTier, setIsUpgradingTier] = React.useState(false)
   const [isSending, setIsSending] = React.useState(false)
+  const [pendingExecutionConfirmation, setPendingExecutionConfirmation] =
+    React.useState<PendingExecutionConfirmation | null>(null)
   const [actionId, setActionId] = React.useState("")
   const [pendingActions, setPendingActions] = React.useState<number[]>([])
   const [isCreatingAction, setIsCreatingAction] = React.useState(false)
@@ -338,11 +684,13 @@ export function FloatingAIAssistant() {
   const [runtimeExecutorAddress, setRuntimeExecutorAddress] = React.useState("")
   const [isResolvingExecutor, setIsResolvingExecutor] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
+  const setupSubmitCooldownUntilRef = React.useRef(0)
   const parsedActionId = Number(actionId)
   const hasValidActionId = Number.isFinite(parsedActionId) && parsedActionId > 0
   const commandNeedsAction = requiresOnchainActionForCommand(selectedTier, input)
   const messages = messagesByTier[selectedTier] || []
   const quickPrompts = quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
+  const featureList = featureListByTier[selectedTier] ?? featureListByTier[1]
   const staticCarelTokenAddress = React.useMemo(
     () => STATIC_CAREL_TOKEN_ADDRESS.trim(),
     []
@@ -410,22 +758,33 @@ export function FloatingAIAssistant() {
   }, [isOpen, refreshAiLevel])
 
   const ensureExecutorAddress = React.useCallback(async (): Promise<string> => {
-    if (effectiveExecutorAddress) return effectiveExecutorAddress
+    if (runtimeExecutorAddress.trim()) return runtimeExecutorAddress.trim()
     setIsResolvingExecutor(true)
     try {
       const runtimeConfig = await getAiRuntimeConfig()
       const resolved = (runtimeConfig.executor_address || "").trim()
       if (!runtimeConfig.executor_configured || !resolved) {
+        if (staticExecutorAddress) {
+          return staticExecutorAddress
+        }
         throw new Error(
           "AI executor is not configured yet. Set AI_EXECUTOR_ADDRESS in backend env, or NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS in frontend env, then restart services."
         )
+      }
+      if (staticExecutorAddress && staticExecutorAddress.toLowerCase() !== resolved.toLowerCase()) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Executor address mismatch",
+          message:
+            "Frontend executor env differs from backend runtime executor. Using backend runtime address to avoid setup mismatch.",
+        })
       }
       setRuntimeExecutorAddress(resolved)
       return resolved
     } finally {
       setIsResolvingExecutor(false)
     }
-  }, [effectiveExecutorAddress])
+  }, [notifications, runtimeExecutorAddress, staticExecutorAddress])
 
   React.useEffect(() => {
     if (!isOpen || selectedTier < 2 || effectiveExecutorAddress || isResolvingExecutor) return
@@ -466,9 +825,34 @@ export function FloatingAIAssistant() {
     return pending
   }
 
-  const resolveActionId = async (requiredForCommand: boolean): Promise<number> => {
+  const resolveActionId = async (
+    requiredForCommand: boolean,
+    options?: { forceRefresh?: boolean; requireFresh?: boolean }
+  ): Promise<number> => {
     if (!requiredForCommand) return 0
-    if (hasValidActionId) return Math.floor(parsedActionId)
+    const forceRefresh = options?.forceRefresh === true
+    const requireFresh = options?.requireFresh === true
+
+    if (requireFresh) {
+      const created = await createOnchainActionId({ requireFresh: true })
+      if (created && created > 0) return created
+      throw new Error(
+        "A fresh on-chain signature is required for this execution. Please confirm the wallet popup, then retry."
+      )
+    }
+
+    if (!forceRefresh && hasValidActionId) {
+      const existing = Math.floor(parsedActionId)
+      try {
+        const pending = await loadPendingActions(true)
+        if (pending.includes(existing)) {
+          return existing
+        }
+      } catch {
+        // Continue with create/refresh path when pending check fails.
+      }
+      setActionId("")
+    }
 
     setIsAutoPreparingAction(true)
     try {
@@ -484,14 +868,12 @@ export function FloatingAIAssistant() {
         return latest
       }
 
-      const created = await createOnchainActionId()
+      const created = await createOnchainActionId({ requireFresh: false })
       if (created && created > 0) {
         return created
       }
 
-      throw new Error(
-        "No valid on-chain setup found. Click 'Auto Setup On-Chain', sign once in wallet, then retry."
-      )
+      throw new Error("No valid on-chain setup found. Click Auto Setup On-Chain and confirm in wallet.")
     } finally {
       setIsAutoPreparingAction(false)
     }
@@ -720,9 +1102,10 @@ export function FloatingAIAssistant() {
    * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
    */
   const handleSend = async () => {
-    const command = normalizeMessageText(input)
+    let command = normalizeMessageText(input)
     if (!command || isSending || isUpgradingTier || isLoadingTier) return
     const activeTier = selectedTier
+    let confirmedPendingExecution = false
     if (activeTier > unlockedTier) {
       const missing = incrementalTierUpgradeCost(unlockedTier, activeTier)
       appendMessagesForTier(activeTier, [
@@ -738,11 +1121,128 @@ export function FloatingAIAssistant() {
       return
     }
 
+    const pendingForTier =
+      pendingExecutionConfirmation && pendingExecutionConfirmation.tier === activeTier
+        ? pendingExecutionConfirmation
+        : null
+    const hasPendingConfirmation = !!pendingForTier
+    const userMessageTimestamp = nowTimestampLabel()
+
+    if (hasPendingConfirmation) {
+      appendMessagesForTier(activeTier, [
+        {
+          role: "user",
+          content: command,
+          timestamp: userMessageTimestamp,
+        },
+      ])
+      setInput("")
+
+      if (isNegativeConfirmation(command)) {
+        setPendingExecutionConfirmation(null)
+        appendMessagesForTier(activeTier, [
+          {
+            role: "assistant",
+            content: "Execution cancelled. No transaction was sent.",
+            timestamp: nowTimestampLabel(),
+          },
+        ])
+        return
+      }
+
+      if (!isAffirmativeConfirmation(command)) {
+        appendMessagesForTier(activeTier, [
+          {
+            role: "assistant",
+            content:
+              "I still need confirmation for the pending on-chain command. Reply `yes` to execute or `no` to cancel.",
+            timestamp: nowTimestampLabel(),
+          },
+        ])
+        return
+      }
+
+      command = pendingForTier.command
+      setPendingExecutionConfirmation(null)
+      confirmedPendingExecution = true
+    }
+
+    const isBridgeCommand = /\b(bridge|jembatan)\b/i.test(command)
+    if (activeTier >= 3 && isBridgeCommand && !L3_GARAGA_BRIDGE_ENABLED) {
+      if (!hasPendingConfirmation) {
+        appendMessagesForTier(activeTier, [
+          {
+            role: "user",
+            content: command,
+            timestamp: userMessageTimestamp,
+          },
+        ])
+        setInput("")
+      }
+      setPendingExecutionConfirmation(null)
+      appendMessagesForTier(activeTier, [
+        {
+          role: "assistant",
+          content:
+            "Bridge is currently disabled on Level 3 because Garaga bridge flow is not implemented for public Garden API yet. Use Level 2 for bridge, or enable custom provider with `NEXT_PUBLIC_L3_GARAGA_BRIDGE_ENABLED=true`.",
+          timestamp: nowTimestampLabel(),
+        },
+      ])
+      return
+    }
+
     let actionIdValue: number | undefined
     const commandNeedsOnchainAction = requiresOnchainActionForCommand(activeTier, command)
+    const isSetupOutOfSyncError = (value: string): boolean => {
+      const lower = value.toLowerCase()
+      return (
+        lower.includes("please click auto setup on-chain first") ||
+        lower.includes("no valid on-chain setup found") ||
+        lower.includes("ai action is no longer pending") ||
+        lower.includes("on-chain setup required")
+      )
+    }
+
+    if (!hasPendingConfirmation && commandNeedsOnchainAction) {
+      appendMessagesForTier(activeTier, [
+        {
+          role: "user",
+          content: command,
+          timestamp: userMessageTimestamp,
+        },
+      ])
+      setInput("")
+      setPendingExecutionConfirmation({
+        tier: activeTier,
+        command,
+        createdAt: Date.now(),
+      })
+      appendMessagesForTier(activeTier, [
+        {
+          role: "assistant",
+          content:
+            `You're about to execute this REAL on-chain command:\n${command}\n\nReply \`yes\` to continue or \`no\` to cancel.\nThis will request wallet signature and burn ${executionBurnAmountCarel(activeTier)} CAREL on-chain for this execution. If you have an active discount NFT, fee discount will be applied automatically.`,
+          timestamp: nowTimestampLabel(),
+        },
+      ])
+      return
+    }
+
+    if (confirmedPendingExecution) {
+      appendMessagesForTier(activeTier, [
+        {
+          role: "assistant",
+          content: `Confirmed. Executing: ${command}`,
+          timestamp: nowTimestampLabel(),
+        },
+      ])
+    }
+
     if (commandNeedsOnchainAction) {
       try {
-        actionIdValue = await resolveActionId(true)
+        actionIdValue = await resolveActionId(true, {
+          requireFresh: AI_REQUIRE_FRESH_SETUP_PER_EXECUTION,
+        })
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to resolve on-chain action."
         notifications.addNotification({
@@ -762,23 +1262,674 @@ export function FloatingAIAssistant() {
       }
     }
 
-    appendMessagesForTier(activeTier, [
-      {
-        role: "user",
-        content: command,
-        timestamp: nowTimestampLabel(),
-      },
-    ])
-    setInput("")
+    if (!hasPendingConfirmation) {
+      appendMessagesForTier(activeTier, [
+        {
+          role: "user",
+          content: command,
+          timestamp: nowTimestampLabel(),
+        },
+      ])
+      setInput("")
+    }
     setIsSending(true)
 
     try {
-      const response = await executeAiCommand({
-        command,
-        context: `tier:${activeTier}`,
-        level: activeTier,
-        action_id: commandNeedsOnchainAction ? actionIdValue : undefined,
-      })
+      let response: Awaited<ReturnType<typeof executeAiCommand>>
+      try {
+        response = await executeAiCommand({
+          command,
+          context: `tier:${activeTier}`,
+          level: activeTier,
+          action_id: commandNeedsOnchainAction ? actionIdValue : undefined,
+        })
+      } catch (initialError) {
+        const initialMessage =
+          initialError instanceof Error ? initialError.message : String(initialError ?? "")
+        if (commandNeedsOnchainAction && isSetupOutOfSyncError(initialMessage)) {
+          setActionId("")
+          setPendingActions([])
+          notifications.addNotification({
+            type: "info",
+            title: "Refreshing on-chain setup",
+            message: "Detected stale setup action. Refreshing setup and retrying command once.",
+          })
+          const refreshedActionId = await resolveActionId(true, { forceRefresh: true })
+          actionIdValue = refreshedActionId
+          response = await executeAiCommand({
+            command,
+            context: `tier:${activeTier}`,
+            level: activeTier,
+            action_id: refreshedActionId,
+          })
+        } else {
+          throw initialError
+        }
+      }
+      let directExecutionMessage = ""
+      const providerHint = resolveStarknetProviderHint(wallet.provider)
+      const tierUsesGaraga = activeTier >= 3
+      const requestGaragaPayload = async (
+        flow: string,
+        fromToken?: string,
+        toToken?: string,
+        amountText?: string
+      ): Promise<PrivacyVerificationPayload> => {
+        const prepared = await autoSubmitPrivacyAction({
+          verifier: "garaga",
+          submit_onchain: false,
+          tx_context: {
+            flow,
+            from_token: fromToken,
+            to_token: toToken,
+            amount: amountText,
+            recipient: wallet.starknetAddress || wallet.address || undefined,
+            from_network: "starknet",
+            to_network: "starknet",
+          },
+        })
+        return {
+          verifier: (prepared.payload?.verifier || "garaga").trim() || "garaga",
+          nullifier: prepared.payload?.nullifier?.trim(),
+          commitment: prepared.payload?.commitment?.trim(),
+          proof: normalizeHexArray(prepared.payload?.proof),
+          public_inputs: normalizeHexArray(prepared.payload?.public_inputs),
+        }
+      }
+
+      const canAutoExecuteSwap =
+        activeTier >= 2 &&
+        /\b(swap|tukar)\b/i.test(command) &&
+        (response.actions || []).includes("get_swap_quote")
+      if (canAutoExecuteSwap) {
+        const fromToken = readString(response.data, "from_token").toUpperCase()
+        const toToken = readString(response.data, "to_token").toUpperCase()
+        const amount = readNumber(response.data, "amount")
+        const amountText = Number.isFinite(amount) && amount > 0 ? String(amount) : ""
+        if (fromToken && toToken && fromToken !== toToken && amountText) {
+          if (!SUPPORTED_SWAP_TOKENS.has(fromToken) || !SUPPORTED_SWAP_TOKENS.has(toToken)) {
+            directExecutionMessage = `Swap pair ${fromToken}/${toToken} is not listed in CAREL swap. Supported: USDT, USDC, STRK, WBTC, CAREL.`
+          } else {
+          const mode = tierUsesGaraga || /private|hide/i.test(command) ? "private" : "transparent"
+          const slippage = 1
+          notifications.addNotification({
+            type: "info",
+            title: "Preparing swap",
+            message: `Preparing ${amountText} ${fromToken} -> ${toToken} on-chain call.`,
+          })
+          const quote = await getSwapQuote({
+            from_token: fromToken,
+            to_token: toToken,
+            amount: amountText,
+            slippage,
+            mode,
+          })
+          const minAmountOut = formatSwapMinAmountOut(String(quote.to_amount || "0"), slippage)
+          const onchainCalls = Array.isArray(quote.onchain_calls)
+            ? quote.onchain_calls
+                .filter(
+                  (call) =>
+                    call &&
+                    typeof call.contract_address === "string" &&
+                    typeof call.entrypoint === "string" &&
+                    Array.isArray(call.calldata)
+                )
+                .map((call) => ({
+                  contractAddress: call.contract_address.trim(),
+                  entrypoint: call.entrypoint.trim(),
+                  calldata: call.calldata.map((item) => String(item)),
+                }))
+                .filter(
+                  (call) =>
+                    !!call.contractAddress &&
+                    !!call.entrypoint &&
+                    call.calldata.every(
+                      (item) => typeof item === "string" && item.trim().length > 0
+                    )
+                )
+            : []
+          let privacyPayload: PrivacyVerificationPayload | undefined
+          let swapResult: Awaited<ReturnType<typeof executeSwap>>
+          let finalTxHash = ""
+
+          if (tierUsesGaraga) {
+            if (HIDE_BALANCE_SHIELDED_POOL_V2 && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
+              throw new Error(
+                "Hide relayer pool is not enabled. Set NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true and restart frontend/backend."
+              )
+            }
+
+            privacyPayload = await requestGaragaPayload("swap", fromToken, toToken, amountText)
+            try {
+              notifications.addNotification({
+                type: "info",
+                title: "Submitting private swap",
+                message: "Submitting hide-mode swap through Starknet relayer pool.",
+              })
+              swapResult = await executeSwap({
+                from_token: fromToken,
+                to_token: toToken,
+                amount: amountText,
+                min_amount_out: minAmountOut,
+                slippage,
+                deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+                mode,
+                hide_balance: true,
+                privacy: privacyPayload,
+              })
+              finalTxHash = swapResult.tx_hash || ""
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error ?? "")
+              const requiresOnchainTx = /requires onchain_tx_hash/i.test(message)
+              const relayerUnavailable =
+                /(relayer|privateactionexecutor|not configured|executor|submit_private|hide relayer)/i.test(
+                  message
+                )
+              if (HIDE_BALANCE_SHIELDED_POOL_V2 && (requiresOnchainTx || relayerUnavailable)) {
+                throw new Error(
+                  `Hide relayer unavailable. Wallet fallback is blocked in shielded_pool_v2 so swap details do not leak in explorer. Detail: ${message}`
+                )
+              }
+              if (!requiresOnchainTx && !relayerUnavailable) {
+                throw error
+              }
+              if (!onchainCalls.length) {
+                throw new Error(
+                  "Swap quote does not include on-chain calldata for wallet fallback."
+                )
+              }
+              const txCalls = [buildHideBalancePrivacyCall(privacyPayload), ...onchainCalls]
+              notifications.addNotification({
+                type: "warning",
+                title: "Relayer unavailable",
+                message:
+                  "Hide relayer is unavailable. Falling back to wallet-signed hide transaction.",
+              })
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm Garaga private swap ${amountText} ${fromToken} -> ${toToken} in your wallet.`,
+              })
+              const onchainTxHash = await invokeStarknetCallsFromWallet(txCalls, providerHint)
+              swapResult = await executeSwap({
+                from_token: fromToken,
+                to_token: toToken,
+                amount: amountText,
+                min_amount_out: minAmountOut,
+                slippage,
+                deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+                onchain_tx_hash: onchainTxHash,
+                mode,
+                hide_balance: true,
+                privacy: privacyPayload,
+              })
+              finalTxHash = swapResult.tx_hash || onchainTxHash
+            }
+          } else {
+            if (!onchainCalls.length) {
+              throw new Error(
+                "Swap quote does not include on-chain calldata. Ensure swap aggregator is active."
+              )
+            }
+            notifications.addNotification({
+              type: "info",
+              title: "Wallet signature required",
+              message: `Confirm swap ${amountText} ${fromToken} -> ${toToken} in your wallet.`,
+            })
+            const onchainTxHash = await invokeStarknetCallsFromWallet(onchainCalls, providerHint)
+            swapResult = await executeSwap({
+              from_token: fromToken,
+              to_token: toToken,
+              amount: amountText,
+              min_amount_out: minAmountOut,
+              slippage,
+              deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+              onchain_tx_hash: onchainTxHash,
+              mode,
+              hide_balance: false,
+            })
+            finalTxHash = swapResult.tx_hash || onchainTxHash
+          }
+
+          notifications.addNotification({
+            type: "success",
+            title: "Swap completed",
+            message: `${amountText} ${fromToken} -> ${swapResult.to_amount} ${toToken}`,
+            txHash: finalTxHash || undefined,
+            txNetwork: "starknet",
+          })
+          const estimatedPoints = parseNumberish(swapResult.estimated_points_earned)
+          const appliedDiscountPercent = parseNumberish(swapResult.nft_discount_percent)
+          const feeDiscountSaved = parseNumberish(swapResult.fee_discount_saved)
+          const [pointsSnapshot, ownedNftsSnapshot] = await Promise.allSettled([
+            getRewardsPoints({ force: true }),
+            getOwnedNfts({ force: true }),
+          ])
+
+          let pointsLine = estimatedPoints > 0
+            ? `Points +${estimatedPoints.toFixed(2)} (estimated).`
+            : "Points reward: 0 (minimum notional for points was not reached)."
+          if (pointsSnapshot.status === "fulfilled") {
+            pointsLine =
+              estimatedPoints > 0
+                ? `Points +${estimatedPoints.toFixed(2)} (estimated), total now ${pointsSnapshot.value.total_points.toFixed(2)}.`
+                : `Total points now ${pointsSnapshot.value.total_points.toFixed(2)}.`
+          }
+
+          let discountLine = "Discount: not active on this swap."
+          if (appliedDiscountPercent > 0) {
+            discountLine = `Discount NFT applied ${appliedDiscountPercent.toFixed(2)}% (fee saved ${feeDiscountSaved.toFixed(8)} ${fromToken}).`
+          } else if (ownedNftsSnapshot.status === "fulfilled") {
+            const activeNft = ownedNftsSnapshot.value
+              .filter((item) => !item.used && (item.remaining_usage ?? 1) > 0)
+              .sort((a, b) => (b.discount || 0) - (a.discount || 0))[0]
+            if (activeNft && Number.isFinite(activeNft.discount) && activeNft.discount > 0) {
+              discountLine = `Discount NFT available: ${activeNft.discount.toFixed(2)}% for the next transaction.`
+            }
+          }
+
+          const pendingLine = swapResult.points_pending
+            ? "Points on-chain/off-chain are syncing; full update usually appears within a few seconds."
+            : ""
+          directExecutionMessage = normalizeMessageText(
+            `✅ Swap executed: ${amountText} ${fromToken} -> ${swapResult.to_amount} ${toToken}. Tx: ${(finalTxHash || "").slice(0, 14)}...\n${pointsLine}\n${discountLine}${pendingLine ? `\n${pendingLine}` : ""}`
+          )
+          }
+        }
+      }
+
+      const canAutoExecuteBridge =
+        !directExecutionMessage &&
+        activeTier >= 2 &&
+        !(tierUsesGaraga && !L3_GARAGA_BRIDGE_ENABLED) &&
+        /\b(bridge|jembatan)\b/i.test(command) &&
+        (response.actions || []).includes("get_bridge_quote")
+      if (canAutoExecuteBridge) {
+        const fromToken = readString(response.data, "from_token").toUpperCase()
+        const toToken = readString(response.data, "to_token").toUpperCase()
+        const amount = readNumber(response.data, "amount")
+        const amountText = Number.isFinite(amount) && amount > 0 ? String(amount) : ""
+        if (fromToken && toToken && amountText) {
+          const fromChain = bridgeTargetChainForToken(fromToken)
+          const toChain = bridgeTargetChainForToken(toToken)
+          if (!isSupportedBridgePair(fromChain, toChain, fromToken, toToken)) {
+            directExecutionMessage =
+              `Bridge pair ${fromToken} (${fromChain}) -> ${toToken} (${toChain}) is not supported. Supported: ETH↔BTC, BTC↔WBTC, ETH↔WBTC.`
+          } else {
+            const recipient =
+              toChain === "bitcoin"
+                ? wallet.btcAddress || ""
+                : toChain === "ethereum"
+                ? wallet.evmAddress || ""
+                : wallet.starknetAddress || wallet.address || ""
+            const sourceOwner =
+              fromChain === "bitcoin"
+                ? wallet.btcAddress || ""
+                : fromChain === "ethereum"
+                ? wallet.evmAddress || ""
+                : wallet.starknetAddress || wallet.address || ""
+            if (!recipient || !sourceOwner) {
+              throw new Error(
+                `Missing wallet address. Source(${fromChain}) and destination(${toChain}) addresses are required.`
+              )
+            }
+            const bridgeBasePayload = {
+              from_chain: fromChain,
+              to_chain: toChain,
+              token: fromToken,
+              to_token: toToken,
+              amount: amountText,
+              recipient,
+              source_owner: sourceOwner,
+              mode: tierUsesGaraga && fromChain === "starknet" ? "private" : "transparent",
+              hide_balance: tierUsesGaraga && fromChain === "starknet",
+            } as const
+
+            let bridgeResult = await executeBridge(bridgeBasePayload)
+            if (bridgeResult.starknet_approval_transaction || bridgeResult.starknet_initiate_transaction) {
+              const bridgeCalls: Array<{ contractAddress: string; entrypoint: string; calldata: string[] }> = []
+              if (bridgeResult.starknet_approval_transaction) {
+                bridgeCalls.push({
+                  contractAddress: bridgeResult.starknet_approval_transaction.to,
+                  entrypoint: bridgeResult.starknet_approval_transaction.selector,
+                  calldata: bridgeResult.starknet_approval_transaction.calldata || [],
+                })
+              }
+              if (bridgeResult.starknet_initiate_transaction) {
+                bridgeCalls.push({
+                  contractAddress: bridgeResult.starknet_initiate_transaction.to,
+                  entrypoint: bridgeResult.starknet_initiate_transaction.selector,
+                  calldata: bridgeResult.starknet_initiate_transaction.calldata || [],
+                })
+              }
+              if (!bridgeCalls.length) {
+                throw new Error("Bridge source transactions are missing.")
+              }
+              const callsToSign = [...bridgeCalls]
+              let bridgePrivacyPayload: PrivacyVerificationPayload | undefined
+              if (tierUsesGaraga) {
+                bridgePrivacyPayload = await requestGaragaPayload(
+                  "bridge",
+                  fromToken,
+                  toToken,
+                  amountText
+                )
+                callsToSign.unshift(buildHideBalancePrivacyCall(bridgePrivacyPayload))
+              }
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: tierUsesGaraga
+                  ? `Confirm Garaga private bridge ${amountText} ${fromToken} -> ${toToken}.`
+                  : `Confirm bridge ${amountText} ${fromToken} -> ${toToken}.`,
+              })
+              const onchainTxHash = await invokeStarknetCallsFromWallet(callsToSign, providerHint)
+              bridgeResult = await executeBridge({
+                ...bridgeBasePayload,
+                existing_bridge_id: bridgeResult.bridge_id,
+                onchain_tx_hash: onchainTxHash,
+                privacy: tierUsesGaraga ? bridgePrivacyPayload : undefined,
+              })
+            }
+            if (bridgeResult.deposit_address) {
+              directExecutionMessage = `✅ Bridge order created: ${bridgeResult.bridge_id}. Send deposit to ${bridgeResult.deposit_address} to continue settlement.\nIf you have an active discount NFT, fee discount is applied automatically.`
+            } else {
+              directExecutionMessage = `✅ Bridge submitted: ${amountText} ${fromToken} -> ${toToken}. Order: ${bridgeResult.bridge_id}.\nIf you have an active discount NFT, fee discount is applied automatically.`
+            }
+          }
+        }
+      }
+
+      const canAutoExecuteStake =
+        !directExecutionMessage &&
+        activeTier >= 2 &&
+        /\bstake\b/i.test(command) &&
+        (response.actions || []).includes("show_staking_pools")
+      if (canAutoExecuteStake) {
+        const token = resolveStakeTokenSymbol(readString(response.data, "token") || "")
+        const amount = readNumber(response.data, "amount")
+        const amountText = Number.isFinite(amount) && amount > 0 ? String(amount) : ""
+        if (token && amountText) {
+          if (!SUPPORTED_STAKE_TOKENS.has(token)) {
+            directExecutionMessage = `Stake token ${token} is not available. Supported staking pools: CAREL, STRK, USDT, USDC, WBTC.`
+          } else {
+          let stakeResult: Awaited<ReturnType<typeof stakeDeposit>>
+          let txHash = ""
+          if (tierUsesGaraga) {
+            try {
+              stakeResult = await stakeDeposit({
+                pool_id: token,
+                amount: amountText,
+                hide_balance: true,
+              })
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error ?? "")
+              if (!/requires onchain_tx_hash/i.test(message)) {
+                throw error
+              }
+              if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+                throw new Error(
+                  `Hide relayer unavailable. Wallet fallback is blocked in shielded_pool_v2 so stake details do not leak in explorer. Detail: ${message}`
+                )
+              }
+              const privacyPayload = await requestGaragaPayload("stake", token, token, amountText)
+              const calls = [buildHideBalancePrivacyCall(privacyPayload), ...buildStakeWalletCalls(token, amountText)]
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm Garaga private stake ${amountText} ${token} in your wallet.`,
+              })
+              txHash = await invokeStarknetCallsFromWallet(calls, providerHint)
+              stakeResult = await stakeDeposit({
+                pool_id: token,
+                amount: amountText,
+                onchain_tx_hash: txHash,
+                hide_balance: true,
+                privacy: privacyPayload,
+              })
+            }
+          } else {
+            const calls = buildStakeWalletCalls(token, amountText)
+            notifications.addNotification({
+              type: "info",
+              title: "Wallet signature required",
+              message: `Confirm stake ${amountText} ${token} in your wallet.`,
+            })
+            txHash = await invokeStarknetCallsFromWallet(calls, providerHint)
+            stakeResult = await stakeDeposit({
+              pool_id: token,
+              amount: amountText,
+              onchain_tx_hash: txHash,
+              hide_balance: false,
+            })
+          }
+          const finalStakeTx = stakeResult.tx_hash || txHash
+          notifications.addNotification({
+            type: "success",
+            title: "Stake completed",
+            message: `Staked ${amountText} ${token}.`,
+            txHash: finalStakeTx || undefined,
+            txNetwork: finalStakeTx ? "starknet" : undefined,
+          })
+          directExecutionMessage = normalizeMessageText(
+            `✅ Stake executed: ${amountText} ${token}. Tx: ${(finalStakeTx || "").slice(0, 14)}...`
+          )
+          }
+        }
+      }
+
+      const canAutoExecuteClaim =
+        !directExecutionMessage &&
+        activeTier >= 2 &&
+        /\bclaim\b/i.test(command) &&
+        (response.actions || []).includes("prepare_stake_claim")
+      if (canAutoExecuteClaim) {
+        const tokenHint = resolveStakeTokenSymbol(readString(response.data, "token") || "")
+        if (tokenHint && !SUPPORTED_STAKE_TOKENS.has(tokenHint)) {
+          directExecutionMessage = `Claim token ${tokenHint} is not available. Supported pools: CAREL, STRK, USDT, USDC, WBTC.`
+        } else {
+        const positions = await getStakePositions()
+        const candidate = tokenHint
+          ? positions.find((item) => resolveStakeTokenSymbol(item.token) === tokenHint)
+          : positions[0]
+        if (!candidate) {
+          directExecutionMessage = "No staking position found yet for claim rewards."
+        } else {
+          let claimResult: Awaited<ReturnType<typeof stakeClaim>>
+          let txHash = ""
+          if (tierUsesGaraga) {
+            try {
+              claimResult = await stakeClaim({
+                position_id: candidate.position_id,
+                hide_balance: true,
+              })
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error ?? "")
+              if (!/requires onchain_tx_hash/i.test(message)) {
+                throw error
+              }
+              if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+                throw new Error(
+                  `Hide relayer unavailable. Wallet fallback is blocked in shielded_pool_v2 so claim details do not leak in explorer. Detail: ${message}`
+                )
+              }
+              const claimToken = resolveStakeTokenSymbol(candidate.token)
+              const privacyPayload = await requestGaragaPayload(
+                "stake_claim",
+                claimToken,
+                claimToken
+              )
+              const calls = [buildHideBalancePrivacyCall(privacyPayload), ...buildClaimWalletCalls(claimToken)]
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm Garaga private claim for ${claimToken} in your wallet.`,
+              })
+              txHash = await invokeStarknetCallsFromWallet(calls, providerHint)
+              claimResult = await stakeClaim({
+                position_id: candidate.position_id,
+                onchain_tx_hash: txHash,
+                hide_balance: true,
+                privacy: privacyPayload,
+              })
+            }
+          } else {
+            const claimToken = resolveStakeTokenSymbol(candidate.token)
+            const calls = buildClaimWalletCalls(claimToken)
+            notifications.addNotification({
+              type: "info",
+              title: "Wallet signature required",
+              message: `Confirm claim rewards ${claimToken} in your wallet.`,
+            })
+            txHash = await invokeStarknetCallsFromWallet(calls, providerHint)
+            claimResult = await stakeClaim({
+              position_id: candidate.position_id,
+              onchain_tx_hash: txHash,
+              hide_balance: false,
+            })
+          }
+          const finalClaimTx = claimResult.tx_hash || txHash
+          notifications.addNotification({
+            type: "success",
+            title: "Claim completed",
+            message: `Claim rewards submitted for ${candidate.token}.`,
+            txHash: finalClaimTx || undefined,
+            txNetwork: finalClaimTx ? "starknet" : undefined,
+          })
+          directExecutionMessage = normalizeMessageText(
+            `✅ Claim submitted for ${candidate.token}. Tx: ${(finalClaimTx || "").slice(0, 14)}...`
+          )
+        }
+        }
+      }
+
+      const canAutoExecuteLimitOrder =
+        !directExecutionMessage &&
+        activeTier >= 2 &&
+        /\blimit(?:\s|-)?order\b/i.test(command) &&
+        (response.actions || []).includes("prepare_limit_order")
+      if (canAutoExecuteLimitOrder) {
+        const fromToken = readString(response.data, "from_token").toUpperCase()
+        const toToken = readString(response.data, "to_token").toUpperCase()
+        const amount = readNumber(response.data, "amount")
+        const price = readNumber(response.data, "price")
+        const expiry = (readString(response.data, "expiry") || "7d").toLowerCase()
+        const amountText = Number.isFinite(amount) && amount > 0 ? String(amount) : ""
+        const priceText = Number.isFinite(price) && price > 0 ? String(price) : ""
+        if (fromToken && toToken && amountText && priceText) {
+          if (!SUPPORTED_LIMIT_ORDER_TOKENS.has(fromToken) || !SUPPORTED_LIMIT_ORDER_TOKENS.has(toToken)) {
+            directExecutionMessage = `Limit order token ${fromToken}/${toToken} is not listed. Supported: USDT, USDC, STRK, CAREL.`
+          } else {
+          const fromAddress = AI_TOKEN_ADDRESS_MAP[fromToken]?.trim() || ""
+          const toAddress = AI_TOKEN_ADDRESS_MAP[toToken]?.trim() || ""
+          if (!fromAddress || !toAddress) {
+            throw new Error(`Limit order pair ${fromToken}/${toToken} is not configured on frontend.`)
+          }
+          if (!STARKNET_LIMIT_ORDER_BOOK_ADDRESS.trim()) {
+            throw new Error("NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS is not configured.")
+          }
+          const clientOrderId = generateClientOrderId()
+          const [amountLow, amountHigh] = decimalToU256Parts(
+            amountText,
+            AI_TOKEN_DECIMALS[fromToken] ?? 18
+          )
+          const [priceLow, priceHigh] = decimalToU256Parts(priceText, 18)
+          const expiryTs = Math.floor(Date.now() / 1000) + expiryToSeconds(expiry)
+          const createOrderCall = {
+            contractAddress: STARKNET_LIMIT_ORDER_BOOK_ADDRESS.trim(),
+            entrypoint: "create_limit_order",
+            calldata: [
+              clientOrderId,
+              fromAddress,
+              toAddress,
+              amountLow,
+              amountHigh,
+              priceLow,
+              priceHigh,
+              toHexFelt(expiryTs),
+            ],
+          }
+
+          let limitResult: Awaited<ReturnType<typeof createLimitOrder>>
+          let txHash = ""
+          if (tierUsesGaraga) {
+            try {
+              limitResult = await createLimitOrder({
+                from_token: fromToken,
+                to_token: toToken,
+                amount: amountText,
+                price: priceText,
+                expiry,
+                recipient: null,
+                client_order_id: clientOrderId,
+                hide_balance: true,
+              })
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error ?? "")
+              if (!/requires onchain_tx_hash/i.test(message)) {
+                throw error
+              }
+              if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+                throw new Error(
+                  `Hide relayer unavailable. Wallet fallback is blocked in shielded_pool_v2 so limit-order details do not leak in explorer. Detail: ${message}`
+                )
+              }
+              const privacyPayload = await requestGaragaPayload(
+                "limit_order",
+                fromToken,
+                toToken,
+                amountText
+              )
+              const calls = [buildHideBalancePrivacyCall(privacyPayload), createOrderCall]
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm Garaga private limit order ${amountText} ${fromToken} -> ${toToken}.`,
+              })
+              txHash = await invokeStarknetCallsFromWallet(calls, providerHint)
+              limitResult = await createLimitOrder({
+                from_token: fromToken,
+                to_token: toToken,
+                amount: amountText,
+                price: priceText,
+                expiry,
+                recipient: null,
+                client_order_id: clientOrderId,
+                onchain_tx_hash: txHash,
+                hide_balance: true,
+                privacy: privacyPayload,
+              })
+            }
+          } else {
+            notifications.addNotification({
+              type: "info",
+              title: "Wallet signature required",
+              message: `Confirm limit order ${amountText} ${fromToken} -> ${toToken} in your wallet.`,
+            })
+            txHash = await invokeStarknetCallsFromWallet([createOrderCall], providerHint)
+            limitResult = await createLimitOrder({
+              from_token: fromToken,
+              to_token: toToken,
+              amount: amountText,
+              price: priceText,
+              expiry,
+              recipient: null,
+              client_order_id: clientOrderId,
+              onchain_tx_hash: txHash,
+              hide_balance: false,
+            })
+          }
+          notifications.addNotification({
+            type: "success",
+            title: "Limit order created",
+            message: `Order ${limitResult.order_id} submitted.`,
+          })
+          directExecutionMessage = normalizeMessageText(
+            `✅ Limit order created: ${amountText} ${fromToken} -> ${toToken} at ${priceText} (${expiry}). Order: ${limitResult.order_id}.`
+          )
+          }
+        }
+      }
       const followUps = await buildActionFollowUps(response.actions || [], response.data)
       const cleanFollowUps = followUps
         .map((item) => normalizeMessageText(item.content))
@@ -792,7 +1943,9 @@ export function FloatingAIAssistant() {
       const prioritizeLive = (response.actions || []).some((action) =>
         LIVE_DATA_PRIORITY_ACTIONS.has(action)
       )
-      const assistantContent = firstFollowUp
+      const assistantContent = directExecutionMessage
+        ? directExecutionMessage
+        : firstFollowUp
         ? prioritizeLive
           ? firstFollowUp
           : normalizeMessageText(`${baseAssistant || fallbackAssistant}\n\n${firstFollowUp}`)
@@ -805,7 +1958,7 @@ export function FloatingAIAssistant() {
           timestamp: nowTimestampLabel(),
         },
       ])
-      if (commandNeedsOnchainAction && /\b(swap|bridge|tukar|jembatan)\b/i.test(command)) {
+      if (commandNeedsOnchainAction) {
         if (typeof actionIdValue === "number" && actionIdValue > 0) {
           setPendingActions((prev) => prev.filter((id) => id !== actionIdValue))
         }
@@ -813,6 +1966,10 @@ export function FloatingAIAssistant() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI request failed."
+      if (isSetupOutOfSyncError(message)) {
+        setActionId("")
+        setPendingActions([])
+      }
       appendMessagesForTier(activeTier, [
         {
           role: "assistant",
@@ -830,7 +1987,8 @@ export function FloatingAIAssistant() {
     }
   }
 
-  const createOnchainActionId = async (): Promise<number | null> => {
+  const createOnchainActionId = async (options?: { requireFresh?: boolean }): Promise<number | null> => {
+    const requireFresh = options?.requireFresh === true
     if (selectedTier < 2) return null
     if (isCreatingAction) return null
     if (!staticCarelTokenAddress) {
@@ -859,14 +2017,37 @@ export function FloatingAIAssistant() {
 
     setIsCreatingAction(true)
     let pendingBefore: number[] = []
+    let pendingBeforeMax = 0
     try {
       const before = await getAiPendingActions(0, 50)
       pendingBefore = before.pending || []
+      pendingBeforeMax = pickLatestPendingAction(pendingBefore) || 0
     } catch {
       pendingBefore = []
+      pendingBeforeMax = 0
     }
 
     try {
+      if (!requireFresh && Date.now() < setupSubmitCooldownUntilRef.current) {
+        const latest = pickLatestPendingAction(pendingBefore)
+        if (latest && latest > 0) {
+          setPendingActions(pendingBefore)
+          setActionId(String(latest))
+          notifications.addNotification({
+            type: "success",
+            title: "On-chain setup ready",
+            message: "Using latest pending setup from your account.",
+          })
+          return latest
+        }
+        notifications.addNotification({
+          type: "info",
+          title: "Setup cooldown active",
+          message: "A setup transaction was submitted recently. Please wait a few seconds before retrying.",
+        })
+        return null
+      }
+
       const preflight = await ensureAiExecutorReady()
       if (preflight.tx_hash) {
         notifications.addNotification({
@@ -934,36 +2115,51 @@ export function FloatingAIAssistant() {
             ]
         return invokeStarknetCallsFromWallet(calls, providerHint)
       }
+      const isWalletNonceError = (error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : typeof error === "string" ? error : ""
+        return /invalid transaction nonce|invalid nonce|nonce too low/i.test(message.toLowerCase())
+      }
 
       notifications.addNotification({
         type: "info",
         title: "Wallet signature required",
         message: AI_SETUP_SKIP_APPROVE
-          ? "Confirm submit_action transaction in your Starknet wallet."
-          : `Confirm limited CAREL approval (${approveAmountCarel}) + submit_action transaction in your Starknet wallet.`,
+          ? `Confirm submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).`
+          : `Confirm CAREL approval (${approveAmountCarel}) + submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).`,
       })
       let onchainTxHash: string
       try {
         onchainTxHash = await submitOnchainAction()
       } catch (firstError) {
-        if (!isInvalidUserSignatureError(firstError)) {
+        if (isInvalidUserSignatureError(firstError)) {
+          // Retry once by refreshing the validity window.
+          const retryPrepared = await prepareAiAction({
+            level: selectedTier,
+            context: payload,
+            window_seconds: 90,
+          })
+          notifications.addNotification({
+            type: "info",
+            title: "Retrying with refreshed window",
+            message: "Signature window refreshed. Confirm the transaction one more time.",
+            txHash: retryPrepared.tx_hash,
+            txNetwork: "starknet",
+          })
+          await new Promise((resolve) => setTimeout(resolve, 2000))
+          onchainTxHash = await submitOnchainAction()
+        } else if (isWalletNonceError(firstError)) {
+          notifications.addNotification({
+            type: "info",
+            title: "Nonce pending on wallet",
+            message:
+              "Previous wallet nonce is still pending. Waiting briefly, then retrying setup once.",
+          })
+          await new Promise((resolve) => setTimeout(resolve, 3000))
+          onchainTxHash = await submitOnchainAction()
+        } else {
           throw firstError
         }
-        // Retry once by refreshing the validity window.
-        const retryPrepared = await prepareAiAction({
-          level: selectedTier,
-          context: payload,
-          window_seconds: 90,
-        })
-        notifications.addNotification({
-          type: "info",
-          title: "Retrying with refreshed window",
-          message: "Signature window refreshed. Confirm the transaction one more time.",
-          txHash: retryPrepared.tx_hash,
-          txNetwork: "starknet",
-        })
-        await new Promise((resolve) => setTimeout(resolve, 2000))
-        onchainTxHash = await submitOnchainAction()
       }
 
       notifications.addNotification({
@@ -973,14 +2169,19 @@ export function FloatingAIAssistant() {
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
+      setupSubmitCooldownUntilRef.current = Date.now() + AI_SETUP_SUBMIT_COOLDOWN_MS
 
       let latestPending: number[] = pendingBefore
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2000))
+      for (let attempt = 0; attempt < AI_SETUP_PENDING_POLL_ATTEMPTS; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, AI_SETUP_PENDING_POLL_INTERVAL_MS))
         try {
-          const after = await getAiPendingActions(0, 50)
+          const after = requireFresh
+            ? await getAiPendingActions(pendingBeforeMax, 50)
+            : await getAiPendingActions(0, 50)
           latestPending = after.pending || []
-          const discovered = findNewPendingAction(latestPending, pendingBefore)
+          const discovered = requireFresh
+            ? pickLatestPendingAbove(latestPending, pendingBeforeMax)
+            : findNewPendingAction(latestPending, pendingBefore)
           if (discovered) {
             setPendingActions(latestPending)
             setActionId(String(discovered))
@@ -1001,6 +2202,48 @@ export function FloatingAIAssistant() {
       setPendingActions(latestPending)
       const latest = pickLatestPendingAction(latestPending)
       if (latest && latest > 0) {
+        if (requireFresh) {
+          const fresh = pickLatestPendingAbove(latestPending, pendingBeforeMax)
+          if (!fresh || fresh <= 0) {
+            try {
+              const fullTail = await getAiPendingActions(0, 50)
+              const fullTailPending = fullTail.pending || []
+              setPendingActions(fullTailPending)
+              const freshFromFullTail = pickLatestPendingAbove(fullTailPending, pendingBeforeMax)
+              if (freshFromFullTail && freshFromFullTail > 0) {
+                setActionId(String(freshFromFullTail))
+                notifications.addNotification({
+                  type: "success",
+                  title: "On-chain setup ready",
+                  message: `Fresh execution setup is ready for Tier ${selectedTier}.`,
+                  txHash: onchainTxHash,
+                  txNetwork: "starknet",
+                })
+                return freshFromFullTail
+              }
+            } catch {
+              // Keep the original error below when fallback lookup fails.
+            }
+            notifications.addNotification({
+              type: "error",
+              title: "Fresh setup not detected",
+              message:
+                "No new on-chain setup action was found for this execution. Please sign again in wallet.",
+              txHash: onchainTxHash,
+              txNetwork: "starknet",
+            })
+            return null
+          }
+          setActionId(String(fresh))
+          notifications.addNotification({
+            type: "success",
+            title: "On-chain setup ready",
+            message: `Fresh execution setup is ready for Tier ${selectedTier}.`,
+            txHash: onchainTxHash,
+            txNetwork: "starknet",
+          })
+          return fresh
+        }
         setActionId(String(latest))
         notifications.addNotification({
           type: "success",
@@ -1021,10 +2264,42 @@ export function FloatingAIAssistant() {
       return null
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : "submit_action transaction failed"
+      const lowerRaw = rawMessage.toLowerCase()
+      if (!requireFresh && /rate limit exceeded/i.test(rawMessage)) {
+        try {
+          const pendingAfter = await getAiPendingActions(0, 50)
+          const latest = pickLatestPendingAction(pendingAfter.pending || [])
+          if (latest && latest > 0) {
+            setPendingActions(pendingAfter.pending || [])
+            setActionId(String(latest))
+            notifications.addNotification({
+              type: "success",
+              title: "On-chain setup ready",
+              message: "Rate limit reached for new setup requests, using your latest pending setup.",
+            })
+            return latest
+          }
+        } catch {
+          // Ignore and surface the original rate-limit message below.
+        }
+      }
       const message = /caller is missing role/i.test(rawMessage)
-        ? "CAREL token belum grant BURNER_ROLE ke AI executor. Jalankan Auto Setup lagi setelah backend preflight selesai."
+        ? "CAREL token has not granted BURNER_ROLE to AI executor yet. Run Auto Setup again after backend preflight completes."
+        : /invalid transaction nonce|invalid nonce|nonce too low/i.test(lowerRaw)
+          ? "Nonce is still pending on Starknet (previous setup tx not finalized yet). Wait 10-20 seconds, then retry Auto Setup On-Chain once."
+        : /rate_limit getter is unavailable|rate_limit entrypoint not found|set_rate_limit entrypoint not found|cannot read ai executor on-chain rate limit|ai executor preflight blocked/i.test(
+              lowerRaw
+            )
+          ? "AI executor preflight could not verify/adjust on-chain rate limit. Ensure backend signer has AI executor admin role, then retry Auto Setup."
+        : /(entrypointnotfound|entrypoint not found|entrypoint_not_found)/i.test(rawMessage) &&
+            /submit_action/.test(lowerRaw)
+          ? "AI executor address/class mismatch (`submit_action` entrypoint not found). Ensure AI_EXECUTOR_ADDRESS and NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS point to the correct AIExecutor contract."
+        : /(entrypointnotfound|entrypoint not found|entrypoint_not_found)/i.test(rawMessage)
+          ? `Configured contract at ${executorAddress || "AI_EXECUTOR_ADDRESS"} does not expose the required setup entrypoint. Recheck deployed class and restart frontend/backend.`
+        : /rate limit exceeded/i.test(rawMessage)
+          ? "AI executor daily on-chain rate limit reached. Ask admin to increase `set_rate_limit` (for example 1000), or wait until UTC day reset."
         : /insufficient allowance/i.test(rawMessage)
-          ? "Setup demo tanpa approve aktif, tapi contract masih minta allowance. Nonaktifkan fee setup AI (fee_enabled=false) atau matikan NEXT_PUBLIC_AI_SETUP_SKIP_APPROVE."
+          ? "Demo setup is skipping approve, but contract still requires allowance. Disable AI setup fee (fee_enabled=false) or disable NEXT_PUBLIC_AI_SETUP_SKIP_APPROVE."
         : rawMessage
       notifications.addNotification({
         type: "error",
@@ -1039,11 +2314,17 @@ export function FloatingAIAssistant() {
 
   const isSetupProcessing = isCreatingAction || isAutoPreparingAction || isResolvingExecutor
   const isWidgetBusy = isSetupProcessing || isUpgradingTier || isLoadingTier
-  const hasSetupReady = hasValidActionId || pendingActions.length > 0
+  const hasSetupReady = AI_REQUIRE_FRESH_SETUP_PER_EXECUTION
+    ? false
+    : hasValidActionId || pendingActions.length > 0
 
   const handleAutoSetup = async () => {
     setIsAutoPreparingAction(true)
     try {
+      if (AI_REQUIRE_FRESH_SETUP_PER_EXECUTION) {
+        await createOnchainActionId({ requireFresh: true })
+        return
+      }
       const pending = await loadPendingActions(true)
       const latest = pickLatestPendingAction(pending)
       if (latest && latest > 0) {
@@ -1056,13 +2337,7 @@ export function FloatingAIAssistant() {
         return
       }
       const created = await createOnchainActionId()
-      if (!created) {
-        notifications.addNotification({
-          type: "info",
-          title: "Setup pending",
-          message: "No pending action found yet. Please sign one on-chain action first.",
-        })
-      }
+      if (!created) return
     } catch (error) {
       notifications.addNotification({
         type: "error",
@@ -1290,7 +2565,11 @@ export function FloatingAIAssistant() {
                   <div className="rounded-xl border border-[#334155] bg-[#0d1b2e] p-2.5">
                     <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-[#e2e8f0]">
                       <Zap className="h-3.5 w-3.5 text-[#06b6d4]" />
-                      <span>One-time on-chain setup needed</span>
+                      <span>
+                        {AI_REQUIRE_FRESH_SETUP_PER_EXECUTION
+                          ? "On-chain signature required for execution"
+                          : "One-time on-chain setup needed"}
+                      </span>
                     </div>
                     <button
                       onClick={handleAutoSetup}
@@ -1308,7 +2587,9 @@ export function FloatingAIAssistant() {
                           Preparing...
                         </>
                       ) : (
-                        "Auto Setup On-Chain"
+                        AI_REQUIRE_FRESH_SETUP_PER_EXECUTION
+                          ? "Sign Execution Setup"
+                          : "Auto Setup On-Chain"
                       )}
                     </button>
                   </div>
@@ -1334,7 +2615,7 @@ export function FloatingAIAssistant() {
                       <div className="max-w-[82%]">
                         <div
                           className={cn(
-                            "rounded-xl border px-3 py-2 text-[13px] leading-relaxed",
+                            "rounded-xl border px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words",
                             isUser
                               ? "border-[#06b6d4aa] bg-[#06b6d415] text-[#dff9ff]"
                               : "border-l-2 border-l-[#7c3aed] border-r border-y border-[#243247] bg-[#0d1b2e] text-[#e2e8f0]"
@@ -1372,8 +2653,11 @@ export function FloatingAIAssistant() {
             </div>
 
             <div className="border-t border-[#1e293b] px-3 pb-3 pt-2">
+              <p className={cn(spaceMono.className, "mb-2 text-[10px] text-[#64748b]")}>
+                {featureList}
+              </p>
               <div className="mb-2 flex flex-wrap gap-1.5">
-                {quickPrompts.slice(0, 3).map((prompt) => (
+                {quickPrompts.slice(0, 6).map((prompt) => (
                   <button
                     key={prompt}
                     type="button"
@@ -1423,7 +2707,8 @@ export function FloatingAIAssistant() {
                 </p>
               ) : selectedTier >= 2 && commandNeedsAction && !hasSetupReady ? (
                 <p className={cn(spaceMono.className, "mt-1 text-[10px] text-[#475569]")}>
-                  🔒 This action needs Auto Setup On-Chain first.
+                  🔒 This action requires wallet signature and burns{" "}
+                  {executionBurnAmountCarel(selectedTier)} CAREL.
                 </p>
               ) : null}
             </div>

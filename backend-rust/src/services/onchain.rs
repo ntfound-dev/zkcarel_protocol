@@ -9,7 +9,8 @@ use starknet_signers::{LocalWallet, SigningKey};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::time::sleep;
 use url::Url;
 
 pub struct OnchainInvoker {
@@ -24,6 +25,8 @@ const STARKNET_RPC_MAX_INFLIGHT_DEFAULT: usize = 6;
 const STARKNET_RPC_BREAKER_THRESHOLD: u32 = 3;
 const STARKNET_RPC_BREAKER_BASE_SECS: u64 = 2;
 const STARKNET_RPC_BREAKER_MAX_SECS: u64 = 180;
+const STARKNET_NONCE_RETRY_ATTEMPTS: usize = 2;
+const STARKNET_NONCE_RETRY_DELAY_MS: u64 = 650;
 
 #[derive(Default)]
 struct RpcCircuitBreaker {
@@ -33,6 +36,7 @@ struct RpcCircuitBreaker {
 
 static STARKNET_RPC_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 static STARKNET_RPC_BREAKER: OnceLock<tokio::sync::RwLock<RpcCircuitBreaker>> = OnceLock::new();
+static STARKNET_TX_SUBMIT_MUTEX: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
 
 // Internal helper that supports `env_non_empty` operations.
 fn env_non_empty(name: &str) -> Option<String> {
@@ -66,6 +70,11 @@ fn rpc_breaker() -> &'static tokio::sync::RwLock<RpcCircuitBreaker> {
     STARKNET_RPC_BREAKER.get_or_init(|| tokio::sync::RwLock::new(RpcCircuitBreaker::default()))
 }
 
+// Internal helper that supports `tx_submit_mutex` operations.
+fn tx_submit_mutex() -> &'static Arc<Mutex<()>> {
+    STARKNET_TX_SUBMIT_MUTEX.get_or_init(|| Arc::new(Mutex::new(())))
+}
+
 // Internal helper that supports `looks_like_transient_rpc_error` operations.
 fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
@@ -82,6 +91,15 @@ fn looks_like_transient_rpc_error(message: &str) -> bool {
         || lower.contains("jsonrpcresponse")
         || lower.contains("error decoding response body")
         || lower.contains("unknown field `code`")
+}
+
+// Internal helper that checks conditions for `is_invalid_nonce_error`.
+fn is_invalid_nonce_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("invalid transaction nonce")
+        || lower.contains("invalid nonce")
+        || lower.contains("nonce too low")
+        || lower.contains("nonce has already been used")
 }
 
 // Internal helper that supports `breaker_backoff_duration` operations.
@@ -206,21 +224,42 @@ impl OnchainInvoker {
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn invoke(&self, call: Call) -> Result<Felt> {
         let _permit = rpc_preflight("starknet_invoke").await?;
-        let response = self
-            .account
-            .execute_v3(vec![call])
-            .send()
-            .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-        match &response {
-            Ok(_) => rpc_record_success().await,
-            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                rpc_record_failure("starknet_invoke", err_text).await;
+        let _submit_guard = tx_submit_mutex().lock().await;
+        for attempt in 0..=STARKNET_NONCE_RETRY_ATTEMPTS {
+            let response = self
+                .account
+                .execute_v3(vec![call.clone()])
+                .send()
+                .await
+                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+            match response {
+                Ok(result) => {
+                    rpc_record_success().await;
+                    return Ok(result.transaction_hash);
+                }
+                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                    if attempt < STARKNET_NONCE_RETRY_ATTEMPTS && is_invalid_nonce_error(&err_text)
+                    {
+                        tracing::warn!(
+                            "starknet_invoke invalid nonce (attempt {}), retrying in {}ms: {}",
+                            attempt + 1,
+                            STARKNET_NONCE_RETRY_DELAY_MS,
+                            err_text
+                        );
+                        sleep(Duration::from_millis(STARKNET_NONCE_RETRY_DELAY_MS)).await;
+                        continue;
+                    }
+                    rpc_record_failure("starknet_invoke", &err_text).await;
+                    return Err(crate::error::AppError::BlockchainRPC(err_text));
+                }
+                Err(err) => {
+                    return Err(err);
+                }
             }
-            Err(_) => {}
         }
-        let result = response?;
-        Ok(result.transaction_hash)
+        Err(crate::error::AppError::BlockchainRPC(
+            "Failed to submit Starknet invoke after nonce retries".to_string(),
+        ))
     }
 
     /// Runs `invoke_many` and handles related side effects.
@@ -241,21 +280,42 @@ impl OnchainInvoker {
             ));
         }
         let _permit = rpc_preflight("starknet_invoke_many").await?;
-        let response = self
-            .account
-            .execute_v3(calls)
-            .send()
-            .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-        match &response {
-            Ok(_) => rpc_record_success().await,
-            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                rpc_record_failure("starknet_invoke_many", err_text).await;
+        let _submit_guard = tx_submit_mutex().lock().await;
+        for attempt in 0..=STARKNET_NONCE_RETRY_ATTEMPTS {
+            let response = self
+                .account
+                .execute_v3(calls.clone())
+                .send()
+                .await
+                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+            match response {
+                Ok(result) => {
+                    rpc_record_success().await;
+                    return Ok(result.transaction_hash);
+                }
+                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                    if attempt < STARKNET_NONCE_RETRY_ATTEMPTS && is_invalid_nonce_error(&err_text)
+                    {
+                        tracing::warn!(
+                            "starknet_invoke_many invalid nonce (attempt {}), retrying in {}ms: {}",
+                            attempt + 1,
+                            STARKNET_NONCE_RETRY_DELAY_MS,
+                            err_text
+                        );
+                        sleep(Duration::from_millis(STARKNET_NONCE_RETRY_DELAY_MS)).await;
+                        continue;
+                    }
+                    rpc_record_failure("starknet_invoke_many", &err_text).await;
+                    return Err(crate::error::AppError::BlockchainRPC(err_text));
+                }
+                Err(err) => {
+                    return Err(err);
+                }
             }
-            Err(_) => {}
         }
-        let result = response?;
-        Ok(result.transaction_hash)
+        Err(crate::error::AppError::BlockchainRPC(
+            "Failed to submit Starknet multicall after nonce retries".to_string(),
+        ))
     }
 }
 

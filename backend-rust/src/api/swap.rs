@@ -13,14 +13,18 @@ use crate::services::onchain::{
     felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
 };
 use crate::{
-    constants::{token_address_for, DEX_EKUBO, DEX_HAIKO},
+    constants::{
+        token_address_for, DEX_EKUBO, DEX_HAIKO, POINTS_MIN_USD_SWAP, POINTS_MIN_USD_SWAP_TESTNET,
+        POINTS_PER_USD_SWAP,
+    },
     error::{AppError, Result},
     models::{ApiResponse, StarknetWalletCall, SwapQuoteRequest, SwapQuoteResponse},
     services::gas_optimizer::GasOptimizer,
     services::nft_discount::consume_nft_usage_if_active,
     services::notification_service::NotificationType,
     services::price_guard::{
-        fallback_price_for, first_sane_price, sanitize_usd_notional, symbol_candidates_for,
+        fallback_price_for, first_sane_price, sanitize_points_usd_base, sanitize_usd_notional,
+        symbol_candidates_for,
     },
     services::privacy_verifier::parse_privacy_verifier_kind,
     services::LiquidityAggregator,
@@ -132,6 +136,11 @@ pub struct ExecuteSwapResponse {
     pub to_amount: String,
     pub actual_rate: String,
     pub fee_paid: String,
+    pub fee_before_discount: String,
+    pub fee_discount_saved: String,
+    pub nft_discount_percent: String,
+    pub estimated_points_earned: String,
+    pub points_pending: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy_tx_hash: Option<String>,
 }
@@ -716,6 +725,26 @@ fn total_fee(amount_in: f64, mode: &str, nft_discount_percent: f64) -> f64 {
     let undiscounted = base_fee(amount_in) + mev_fee_for_mode(mode, amount_in);
     let discount_factor = 1.0 - (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
     undiscounted * discount_factor
+}
+
+// Internal helper that supports `estimate_swap_points_for_response` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn estimate_swap_points_for_response(
+    volume_usd: f64,
+    is_testnet: bool,
+    nft_discount_percent: f64,
+) -> f64 {
+    let sanitized = sanitize_points_usd_base(volume_usd);
+    let min_threshold = if is_testnet {
+        POINTS_MIN_USD_SWAP_TESTNET
+    } else {
+        POINTS_MIN_USD_SWAP
+    };
+    if sanitized < min_threshold {
+        return 0.0;
+    }
+    let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
+    (sanitized * POINTS_PER_USD_SWAP * nft_factor).max(0.0)
 }
 
 // Internal helper that supports `discount_contract_address` operations in the swap flow.
@@ -2602,13 +2631,17 @@ pub async fn execute_swap(
         .unwrap_or_default();
 
     let nft_discount_percent = active_nft_discount_percent(&state, &user_address).await;
+    let fee_before_discount = base_fee(amount_in) + mev_fee_for_mode(&req.mode, amount_in);
     let total_fee = total_fee(amount_in, &req.mode, nft_discount_percent);
+    let fee_discount_saved = (fee_before_discount - total_fee).max(0.0);
     let from_price = latest_price_usd(&state, &req.from_token).await?;
     let to_price = latest_price_usd(&state, &req.to_token).await?;
     let volume_usd = sanitize_usd_notional(normalize_usd_volume(
         amount_in * from_price,
         expected_out * to_price,
     ));
+    let estimated_points_earned =
+        estimate_swap_points_for_response(volume_usd, state.config.is_testnet(), nft_discount_percent);
 
     // Simpan ke database
     let tx = crate::models::Transaction {
@@ -2698,6 +2731,11 @@ pub async fn execute_swap(
         to_amount: expected_out.to_string(),
         actual_rate: (expected_out / amount_in).to_string(),
         fee_paid: total_fee.to_string(),
+        fee_before_discount: fee_before_discount.to_string(),
+        fee_discount_saved: fee_discount_saved.to_string(),
+        nft_discount_percent: nft_discount_percent.to_string(),
+        estimated_points_earned: estimated_points_earned.to_string(),
+        points_pending: true,
         privacy_tx_hash: privacy_verification_tx,
     })))
 }

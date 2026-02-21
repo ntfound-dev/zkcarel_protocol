@@ -1,6 +1,8 @@
 use super::{require_starknet_user, require_user, AppState};
 use crate::indexer::starknet_client::StarknetClient;
-use crate::services::onchain::{felt_to_u128, parse_felt, OnchainInvoker, OnchainReader};
+use crate::services::onchain::{
+    felt_to_u128, parse_felt, resolve_backend_account, OnchainInvoker, OnchainReader,
+};
 use crate::{
     error::{AppError, Result},
     models::{ApiResponse, Transaction},
@@ -18,7 +20,7 @@ use starknet_core::types::{
     Call, ExecutionResult, Felt as CoreFelt, FunctionCall, InvokeTransaction,
     Transaction as StarknetTransaction, TransactionFinalityStatus,
 };
-use starknet_core::utils::get_selector_from_name;
+use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
 use starknet_crypto::{poseidon_hash_many, Felt as CryptoFelt};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{sleep, Duration};
@@ -35,6 +37,7 @@ const AI_EXECUTOR_READY_POLL_ATTEMPTS: usize = 12;
 const AI_EXECUTOR_READY_POLL_DELAY_MS: u64 = 1_500;
 const AI_PREPARE_READY_POLL_ATTEMPTS: usize = 16;
 const AI_PREPARE_READY_POLL_DELAY_MS: u64 = 900;
+const DEFAULT_AI_EXECUTOR_TARGET_RATE_LIMIT: u128 = 1_000;
 
 #[derive(Debug, Deserialize)]
 pub struct AICommandRequest {
@@ -77,6 +80,12 @@ pub struct AIExecutorReadyResponse {
     pub updated_onchain: bool,
     pub tx_hash: Option<String>,
     pub message: String,
+}
+
+#[derive(Debug, Clone)]
+struct RateLimitEnsureResult {
+    ready: bool,
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,6 +215,16 @@ fn normalize_onchain_tx_hash(raw: &str) -> Result<String> {
 // Internal helper that runs side-effecting logic for `ensure_ai_level_scope`.
 fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
     let scope = classify_command_scope(command);
+    if level >= 3
+        && matches!(scope, AIGuardScope::SwapBridge)
+        && is_bridge_command(command)
+        && !ai_level3_bridge_enabled()
+    {
+        return Err(AppError::BadRequest(
+            "Level 3 bridge is currently disabled because Garaga bridge flow is not implemented for public Garden API yet. Use Level 2 for bridge commands, or enable AI_LEVEL3_BRIDGE_ENABLED=true for custom provider."
+                .to_string(),
+        ));
+    }
     match level {
         1 => {
             if matches!(
@@ -213,7 +232,7 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
                 AIGuardScope::SwapBridge | AIGuardScope::PortfolioAlert
             ) {
                 return Err(AppError::BadRequest(
-                    "You need Level 2 (5 CAREL) for swap/bridge/stake/limit execution, or Level 3 (10 CAREL) for portfolio/alerts."
+                    "You need Level 2 (5 CAREL) for swap/bridge/stake/claim/limit execution, or Level 3 (10 CAREL) for unstake/portfolio/alerts."
                         .to_string(),
                 ));
             }
@@ -224,7 +243,7 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
                 AIGuardScope::ReadOnly | AIGuardScope::SwapBridge | AIGuardScope::Unknown
             ) {
                 return Err(AppError::BadRequest(
-                    "You need Level 3 (10 CAREL) for unstake/claim/portfolio/alert management commands."
+                    "You need Level 3 (10 CAREL) for unstake/portfolio/alert management commands."
                         .to_string(),
                 ));
             }
@@ -248,6 +267,25 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// Internal helper that supports `ai_level3_bridge_enabled` operations.
+fn ai_level3_bridge_enabled() -> bool {
+    std::env::var("AI_LEVEL3_BRIDGE_ENABLED")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+// Internal helper that supports `is_bridge_command` operations.
+fn is_bridge_command(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    lower.contains("bridge") || lower.contains("jembatan")
 }
 
 // Internal helper that supports `resolve_effective_ai_level` operations.
@@ -283,17 +321,14 @@ fn requires_onchain_action_id(level: u8, command: &str) -> bool {
 
 // Internal helper that supports `should_consume_onchain_action` operations.
 fn should_consume_onchain_action(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    lower.contains("swap")
-        || lower.contains("bridge")
-        || lower.contains("tukar")
-        || lower.contains("jembatan")
+    requires_onchain_action_id(2, command) || requires_onchain_action_id(3, command)
 }
 
 // Internal helper that supports `ai_action_consumed_key` operations.
-fn ai_action_consumed_key(user_address: &str, action_id: u64) -> String {
+fn ai_action_consumed_key(executor_address: &str, user_address: &str, action_id: u64) -> String {
     format!(
-        "ai:action:consumed:{}:{}",
+        "ai:action:consumed:{}:{}:{}",
+        executor_address.trim().to_ascii_lowercase(),
         user_address.trim().to_ascii_lowercase(),
         action_id
     )
@@ -302,7 +337,7 @@ fn ai_action_consumed_key(user_address: &str, action_id: u64) -> String {
 // Internal helper that supports `is_ai_action_consumed` operations.
 async fn is_ai_action_consumed(state: &AppState, user_address: &str, action_id: u64) -> bool {
     let mut conn = state.redis.clone();
-    let key = ai_action_consumed_key(user_address, action_id);
+    let key = ai_action_consumed_key(&state.config.ai_executor_address, user_address, action_id);
     match conn.exists::<_, bool>(&key).await {
         Ok(value) => value,
         Err(err) => {
@@ -320,7 +355,7 @@ async fn is_ai_action_consumed(state: &AppState, user_address: &str, action_id: 
 // Internal helper that runs side-effecting logic for `mark_ai_action_consumed`.
 async fn mark_ai_action_consumed(state: &AppState, user_address: &str, action_id: u64) {
     let mut conn = state.redis.clone();
-    let key = ai_action_consumed_key(user_address, action_id);
+    let key = ai_action_consumed_key(&state.config.ai_executor_address, user_address, action_id);
     let result: std::result::Result<(), redis::RedisError> = conn.set(&key, 1_i32).await;
     if let Err(err) = result {
         tracing::warn!(
@@ -330,6 +365,150 @@ async fn mark_ai_action_consumed(state: &AppState, user_address: &str, action_id
             err
         );
     }
+}
+
+// Internal helper that runs side-effecting logic for `consume_onchain_action_via_backend`.
+async fn consume_onchain_action_via_backend(state: &AppState, action_id: u64) -> Result<CoreFelt> {
+    if action_id == 0 {
+        return Err(AppError::BadRequest(
+            "Invalid on-chain AI action_id".to_string(),
+        ));
+    }
+    let contract = state.config.ai_executor_address.trim();
+    if contract.is_empty() || contract.starts_with("0x0000") {
+        return Err(AppError::BadRequest(
+            "AI executor not configured".to_string(),
+        ));
+    }
+    let onchain = OnchainInvoker::from_config(&state.config)?.ok_or_else(|| {
+        AppError::BadRequest(
+            "Backend on-chain signer is not configured. Set BACKEND_ACCOUNT_ADDRESS and BACKEND_PRIVATE_KEY."
+                .to_string(),
+        )
+    })?;
+    let to = parse_felt(contract)?;
+    let selector = get_selector_from_name("execute_action")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let execute_call = Call {
+        to,
+        selector,
+        // execute_action(action_id: u64, backend_signature: Span<felt252>)
+        calldata: vec![CoreFelt::from(action_id), CoreFelt::from(0_u8)],
+    };
+    match onchain.invoke(execute_call.clone()).await {
+        Ok(tx_hash) => return Ok(tx_hash),
+        Err(err) => {
+            let lower = err.to_string().to_ascii_lowercase();
+            if lower.contains("invalid backend signature")
+                && ai_executor_auto_disable_signature_verification()
+            {
+                let disable_tx =
+                    backend_disable_ai_executor_signature_verification(state).await?;
+                tracing::warn!(
+                    "AI executor signature verification disabled on-chain: tx={:#x}",
+                    disable_tx
+                );
+                return onchain.invoke(execute_call).await.map_err(|retry_err| {
+                    let retry_text = retry_err.to_string();
+                    if retry_text
+                        .to_ascii_lowercase()
+                        .contains("invalid backend signature")
+                    {
+                        return AppError::BadRequest(
+                            "AI setup signature window is stale/mismatched. Click Auto Setup On-Chain once, then retry the command."
+                                .to_string(),
+                        );
+                    }
+                    AppError::BlockchainRPC(format!(
+                        "Failed to consume AI action on-chain after disabling signature verification: {}",
+                        retry_err
+                    ))
+                });
+            }
+            let msg = err.to_string();
+            let lower = msg.to_ascii_lowercase();
+            if lower.contains("unauthorized backend signer") || lower.contains("missing role") {
+                return Err(AppError::BadRequest(
+                    "Backend signer is not authorized on AI executor. Set AI backend signer correctly on contract deployment."
+                        .to_string(),
+                ));
+            }
+            if lower.contains("action not pending") || lower.contains("action not found") {
+                return Err(AppError::BadRequest(
+                    "AI action is no longer pending. Please click Auto Setup On-Chain and retry."
+                        .to_string(),
+                ));
+            }
+            if lower.contains("invalid backend signature") {
+                return Err(AppError::BadRequest(
+                    "AI executor still requires backend signature. Disable signature verification on AI executor or enable AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION=true."
+                        .to_string(),
+                ));
+            }
+            return Err(AppError::BlockchainRPC(format!(
+                "Failed to consume AI action on-chain: {}",
+                msg
+            )));
+        }
+    }
+}
+
+// Internal helper that supports `ai_executor_auto_disable_signature_verification` operations.
+fn ai_executor_auto_disable_signature_verification() -> bool {
+    std::env::var("AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(true)
+}
+
+// Internal helper that runs side-effecting logic for `backend_disable_ai_executor_signature_verification`.
+async fn backend_disable_ai_executor_signature_verification(state: &AppState) -> Result<CoreFelt> {
+    let contract = state.config.ai_executor_address.trim();
+    if contract.is_empty() || contract.starts_with("0x0000") {
+        return Err(AppError::BadRequest(
+            "AI executor not configured".to_string(),
+        ));
+    }
+    let onchain = OnchainInvoker::from_config(&state.config)?.ok_or_else(|| {
+        AppError::BadRequest(
+            "Backend on-chain signer is not configured. Set BACKEND_ACCOUNT_ADDRESS and BACKEND_PRIVATE_KEY."
+                .to_string(),
+        )
+    })?;
+    let to = parse_felt(contract)?;
+    let selector = get_selector_from_name("set_signature_verification")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    onchain
+        .invoke(Call {
+            to,
+            selector,
+            // set_signature_verification(verifier, enabled=false)
+            calldata: vec![CoreFelt::from(0_u8), CoreFelt::from(0_u8)],
+        })
+        .await
+        .map_err(|err| {
+            let msg = err.to_string();
+            let lower = msg.to_ascii_lowercase();
+            if lower.contains("unauthorized admin")
+                || lower.contains("unauthorized backend signer")
+                || lower.contains("missing role")
+            {
+                AppError::BadRequest(
+                    "Backend signer is not AI executor admin, cannot disable signature verification automatically."
+                        .to_string(),
+                )
+            } else {
+                AppError::BlockchainRPC(format!(
+                    "Failed to disable AI executor signature verification on-chain: {}",
+                    msg
+                ))
+            }
+        })
 }
 
 // Internal helper that supports `ai_level_limit` operations.
@@ -437,13 +616,26 @@ pub async fn execute_command(
     let mut onchain_action_user: Option<String> = None;
     if needs_onchain_action {
         let starknet_user = require_starknet_user(&headers, &state).await?;
-        let Some(action_id) = req.action_id else {
-            return Err(crate::error::AppError::BadRequest(
-                "Please click Auto Setup On-Chain first, then retry your command.".into(),
-            ));
+        let resolved = if let Some(requested_action_id) = req.action_id {
+            ensure_onchain_action(&state, &starknet_user, requested_action_id).await?
+        } else {
+            let contract = state.config.ai_executor_address.trim();
+            if contract.is_empty() || contract.starts_with("0x0000") {
+                return Err(crate::error::AppError::BadRequest(
+                    "AI executor not configured".into(),
+                ));
+            }
+            let client = StarknetClient::new(state.config.starknet_rpc_url.clone());
+            latest_unconsumed_pending_action(&state, &starknet_user, contract, &client)
+                .await?
+                .ok_or_else(|| {
+                    crate::error::AppError::BadRequest(
+                        "Please click Auto Setup On-Chain first, then retry your command."
+                            .into(),
+                    )
+                })?
         };
-        ensure_onchain_action(&state, &starknet_user, action_id).await?;
-        resolved_action_id = Some(action_id);
+        resolved_action_id = Some(resolved);
         onchain_action_user = Some(starknet_user);
     }
     enforce_ai_rate_limit(&state, &auth_subject, level, needs_onchain_action).await?;
@@ -474,6 +666,13 @@ pub async fn execute_command(
     if needs_onchain_action && should_consume_onchain_action(&command) {
         if let Some(action_id) = resolved_action_id {
             if let Some(action_user) = onchain_action_user.as_deref() {
+                let consumed_tx = consume_onchain_action_via_backend(&state, action_id).await?;
+                tracing::info!(
+                    "AI action consumed on-chain: user={} action_id={} tx={:#x}",
+                    auth_subject,
+                    action_id,
+                    consumed_tx
+                );
                 mark_ai_action_consumed(&state, action_user, action_id).await;
             }
         }
@@ -670,6 +869,11 @@ pub async fn prepare_action_signature(
     let onchain = OnchainInvoker::from_config(&state.config)?.ok_or_else(|| {
         crate::error::AppError::BadRequest("Backend on-chain signer is not configured".to_string())
     })?;
+    let backend_signer = resolve_backend_account(&state.config).ok_or_else(|| {
+        crate::error::AppError::BadRequest(
+            "Backend signer address is not configured. Set BACKEND_ACCOUNT_ADDRESS.".to_string(),
+        )
+    })?;
 
     let window_seconds = req
         .window_seconds
@@ -684,7 +888,7 @@ pub async fn prepare_action_signature(
         let hash = compute_action_hash(&user_address, action_type, &params, ts)?;
         calls.push(build_set_valid_hash_call(
             verifier_address,
-            &user_address,
+            backend_signer,
             &hash,
         )?);
     }
@@ -717,8 +921,16 @@ pub async fn get_pending_actions(
         ));
     }
 
-    let offset = query.offset.unwrap_or(0);
+    let mut offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(10).min(50);
+    if offset == 0 {
+        if let Some(action_count) = fetch_ai_executor_action_count(&state, contract).await {
+            // `get_pending_actions_page` scans only `max_pending_scan` entries from `start_offset`.
+            // To keep newest setup actions discoverable, default to the latest page window.
+            // This guarantees the newest action IDs are inside the scanned range.
+            offset = action_count.saturating_sub(limit.max(1));
+        }
+    }
     let client = StarknetClient::new(state.config.starknet_rpc_url.clone());
     let result = client
         .call_contract(
@@ -752,7 +964,6 @@ pub async fn get_pending_actions(
         }
         pending = filtered;
     }
-
     Ok(Json(ApiResponse::success(PendingActionsResponse {
         pending,
     })))
@@ -788,6 +999,209 @@ fn resolve_ai_executor_and_carel_addresses(
         ));
     }
     Ok((executor.to_string(), carel.to_string()))
+}
+
+// Internal helper that checks conditions for `is_entrypoint_not_found_error`.
+fn is_entrypoint_not_found_error(err: &AppError) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("entrypointnotfound")
+        || msg.contains("entrypoint not found")
+        || msg.contains("entrypoint_not_found")
+}
+
+// Internal helper that parses or transforms values for `desired_ai_executor_rate_limit`.
+fn desired_ai_executor_rate_limit() -> u128 {
+    std::env::var("AI_EXECUTOR_TARGET_RATE_LIMIT")
+        .ok()
+        .or_else(|| std::env::var("AI_EXECUTOR_RATE_LIMIT").ok())
+        .and_then(|raw| raw.trim().parse::<u128>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_AI_EXECUTOR_TARGET_RATE_LIMIT)
+}
+
+// Internal helper that fetches data for `read_ai_executor_rate_limit`.
+async fn read_ai_executor_rate_limit(state: &AppState, executor_address: &str) -> Result<u128> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let contract_address = parse_felt(executor_address)?;
+    let selector = get_selector_from_name("rate_limit")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let result = reader
+        .call(FunctionCall {
+            contract_address,
+            entry_point_selector: selector,
+            calldata: vec![],
+        })
+        .await?;
+    let Some(raw) = result.first() else {
+        return Err(AppError::BlockchainRPC(
+            "rate_limit returned empty payload".to_string(),
+        ));
+    };
+    felt_to_u128(raw).map_err(|_| {
+        AppError::BlockchainRPC("rate_limit response is not a valid u128".to_string())
+    })
+}
+
+// Internal helper that runs side-effecting logic for `backend_set_ai_executor_rate_limit`.
+async fn backend_set_ai_executor_rate_limit(
+    state: &AppState,
+    executor_address: &str,
+    limit: u128,
+) -> Result<CoreFelt> {
+    let onchain = OnchainInvoker::from_config(&state.config)?.ok_or_else(|| {
+        AppError::BadRequest(
+            "Backend on-chain signer is not configured. Set BACKEND_ACCOUNT_ADDRESS and BACKEND_PRIVATE_KEY."
+                .to_string(),
+        )
+    })?;
+    let to = parse_felt(executor_address)?;
+    let selector = get_selector_from_name("set_rate_limit")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    onchain
+        .invoke(Call {
+            to,
+            selector,
+            calldata: vec![CoreFelt::from(limit), CoreFelt::from(0_u8)],
+        })
+        .await
+        .map_err(|err| {
+            let lower = err.to_string().to_ascii_lowercase();
+            if lower.contains("unauthorized admin") || lower.contains("missing role") {
+                AppError::BadRequest(
+                    "Backend signer is not AI executor admin. Cannot auto-adjust AI executor rate limit."
+                        .to_string(),
+                )
+            } else {
+                err
+            }
+        })
+}
+
+// Internal helper that runs side-effecting logic for `ensure_ai_executor_rate_limit`.
+async fn ensure_ai_executor_rate_limit(
+    state: &AppState,
+    executor_address: &str,
+) -> RateLimitEnsureResult {
+    let target_limit = desired_ai_executor_rate_limit();
+    let apply_target_limit = async || {
+        match backend_set_ai_executor_rate_limit(state, executor_address, target_limit).await {
+            Ok(tx_hash) => RateLimitEnsureResult {
+                ready: true,
+                message: format!(
+                    "AI executor rate limit raised to {}. Tx: {:#x}",
+                    target_limit, tx_hash
+                ),
+            },
+            Err(err) if is_entrypoint_not_found_error(&err) => {
+                tracing::warn!(
+                    "AI executor rate-limit auto-tune skipped: set_rate_limit entrypoint not found (executor={})",
+                    executor_address
+                );
+                RateLimitEnsureResult {
+                    ready: false,
+                    message:
+                        "AI executor class mismatch: set_rate_limit entrypoint not found.".to_string(),
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "AI executor rate-limit auto-tune skipped: failed setting target limit (executor={} err={})",
+                    executor_address,
+                    err
+                );
+                let reason = err.to_string().to_ascii_lowercase();
+                let message =
+                    if reason.contains("unauthorized admin") || reason.contains("missing role") {
+                        "Backend signer is not AI executor admin, cannot raise on-chain rate limit."
+                            .to_string()
+                    } else {
+                        format!("Failed to raise AI executor rate limit: {}", err)
+                    };
+                RateLimitEnsureResult {
+                    ready: false,
+                    message,
+                }
+            }
+        }
+    };
+
+    let current_limit = match read_ai_executor_rate_limit(state, executor_address).await {
+        Ok(value) => value,
+        Err(err) if is_entrypoint_not_found_error(&err) => {
+            tracing::warn!(
+                "AI executor rate-limit getter not found (executor={}), falling back to set_rate_limit without readback",
+                executor_address
+            );
+            let mut result = apply_target_limit().await;
+            if result.ready {
+                result.message = format!(
+                    "AI executor rate_limit getter is unavailable; applied target {} via set_rate_limit.",
+                    target_limit
+                );
+            }
+            return result;
+        }
+        Err(err) => {
+            tracing::warn!(
+                "AI executor rate-limit auto-tune skipped: failed reading current limit (executor={} err={})",
+                executor_address,
+                err
+            );
+            return RateLimitEnsureResult {
+                ready: false,
+                message:
+                    "Cannot read AI executor on-chain rate limit. Check RPC endpoint and executor address."
+                        .to_string(),
+            };
+        }
+    };
+    if current_limit >= target_limit {
+        return RateLimitEnsureResult {
+            ready: true,
+            message: format!(
+                "AI executor rate limit is {} (target {}).",
+                current_limit, target_limit
+            ),
+        };
+    }
+    match backend_set_ai_executor_rate_limit(state, executor_address, target_limit).await {
+        Ok(tx_hash) => RateLimitEnsureResult {
+            ready: true,
+            message: format!(
+                "AI executor rate limit raised to {}. Tx: {:#x}",
+                target_limit, tx_hash
+            ),
+        },
+        Err(err) if is_entrypoint_not_found_error(&err) => {
+            tracing::warn!(
+                "AI executor rate-limit auto-tune skipped: set_rate_limit entrypoint not found (executor={})",
+                executor_address
+            );
+            RateLimitEnsureResult {
+                ready: false,
+                message: "AI executor class mismatch: set_rate_limit entrypoint not found.".to_string(),
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                "AI executor rate-limit auto-tune skipped: failed setting target limit (executor={} err={})",
+                executor_address,
+                err
+            );
+            let reason = err.to_string().to_ascii_lowercase();
+            let message = if reason.contains("unauthorized admin") || reason.contains("missing role")
+            {
+                "Backend signer is not AI executor admin, cannot raise on-chain rate limit."
+                    .to_string()
+            } else {
+                format!("Failed to raise AI executor rate limit: {}", err)
+            };
+            RateLimitEnsureResult {
+                ready: false,
+                message,
+            }
+        }
+    }
 }
 
 // Internal helper that supports `has_executor_burner_role` operations.
@@ -865,16 +1279,33 @@ pub async fn ensure_executor_ready(
     let _ = require_user(&headers, &state).await?;
     let (executor_address, carel_token_address) =
         resolve_ai_executor_and_carel_addresses(&state.config)?;
+    let mut status_notes: Vec<String> = Vec::new();
 
     let burner_role_granted =
         has_executor_burner_role(&state, &carel_token_address, &executor_address).await?;
     if burner_role_granted {
+        let rate_limit_check = ensure_ai_executor_rate_limit(&state, &executor_address).await;
+        status_notes.push(rate_limit_check.message.clone());
+        if !rate_limit_check.ready {
+            return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
+                ready: false,
+                burner_role_granted: true,
+                updated_onchain: false,
+                tx_hash: None,
+                message: format!("AI executor preflight blocked. {}", status_notes.join(" ")),
+            })));
+        }
+        let message = if status_notes.is_empty() {
+            "AI executor is ready.".to_string()
+        } else {
+            format!("AI executor is ready. {}", status_notes.join(" "))
+        };
         return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
             ready: true,
             burner_role_granted: true,
             updated_onchain: false,
             tx_hash: None,
-            message: "AI executor is ready.".to_string(),
+            message,
         })));
     }
 
@@ -888,12 +1319,28 @@ pub async fn ensure_executor_ready(
             .await
             .unwrap_or(false)
         {
+            let rate_limit_check = ensure_ai_executor_rate_limit(&state, &executor_address).await;
+            status_notes.push(rate_limit_check.message.clone());
+            if !rate_limit_check.ready {
+                return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
+                    ready: false,
+                    burner_role_granted: true,
+                    updated_onchain: true,
+                    tx_hash: Some(tx_hash_hex.clone()),
+                    message: format!("AI executor preflight blocked. {}", status_notes.join(" ")),
+                })));
+            }
+            let message = if status_notes.is_empty() {
+                "AI executor burner role granted.".to_string()
+            } else {
+                format!("AI executor burner role granted. {}", status_notes.join(" "))
+            };
             return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
                 ready: true,
                 burner_role_granted: true,
                 updated_onchain: true,
                 tx_hash: Some(tx_hash_hex),
-                message: "AI executor burner role granted.".to_string(),
+                message,
             })));
         }
     }
@@ -1366,34 +1813,22 @@ async fn verify_ai_upgrade_payment_tx_hash(
 }
 
 // Internal helper that runs side-effecting logic for `ensure_onchain_action`.
-async fn ensure_onchain_action(state: &AppState, user_address: &str, action_id: u64) -> Result<()> {
-    if action_id == 0 {
-        return Err(crate::error::AppError::BadRequest(
-            "Invalid on-chain AI action_id".into(),
-        ));
-    }
-
-    if is_ai_action_consumed(state, user_address, action_id).await {
-        return Err(crate::error::AppError::BadRequest(
-            "Please click Auto Setup On-Chain first, then retry your command.".into(),
-        ));
-    }
-
-    let config = &state.config;
-    let contract = config.ai_executor_address.trim();
-    if contract.is_empty() || contract.starts_with("0x0000") {
-        return Err(crate::error::AppError::BadRequest(
-            "AI executor not configured".into(),
-        ));
-    }
-
-    let client = StarknetClient::new(config.starknet_rpc_url.clone());
-    let start_offset = action_id.saturating_sub(1).to_string();
+async fn fetch_pending_actions_page(
+    client: &StarknetClient,
+    contract: &str,
+    user_address: &str,
+    start_offset: u64,
+    limit: u64,
+) -> Result<Vec<u64>> {
     let result = client
         .call_contract(
             contract,
             "get_pending_actions_page",
-            vec![user_address.to_string(), start_offset, "1".to_string()],
+            vec![
+                user_address.to_string(),
+                start_offset.to_string(),
+                limit.to_string(),
+            ],
         )
         .await?;
 
@@ -1408,13 +1843,111 @@ async fn ensure_onchain_action(state: &AppState, user_address: &str, action_id: 
             }
         }
     }
+    Ok(pending)
+}
 
-    if !pending.contains(&action_id) {
+// Internal helper that fetches data for `latest_unconsumed_pending_action`.
+async fn latest_unconsumed_pending_action(
+    state: &AppState,
+    user_address: &str,
+    contract: &str,
+    client: &StarknetClient,
+) -> Result<Option<u64>> {
+    if let Some(action_count) = fetch_ai_executor_action_count(state, contract).await {
+        let probe_window: u64 = 32;
+        let lower_bound = action_count.saturating_sub(probe_window.saturating_sub(1));
+        let mut current = action_count;
+        while current >= lower_bound && current > 0 {
+            let pending = fetch_pending_actions_page(
+                client,
+                contract,
+                user_address,
+                current.saturating_sub(1),
+                1,
+            )
+            .await?;
+            if let Some(found) = pending.first().copied() {
+                if !is_ai_action_consumed(state, user_address, found).await {
+                    return Ok(Some(found));
+                }
+            }
+            if current == 1 {
+                break;
+            }
+            current -= 1;
+        }
+    }
+
+    let limit: u64 = 50;
+    let mut offset = 0_u64;
+    if let Some(action_count) = fetch_ai_executor_action_count(state, contract).await {
+        offset = action_count.saturating_sub(limit.max(1));
+    }
+    let pending = fetch_pending_actions_page(client, contract, user_address, offset, limit).await?;
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let mut latest: Option<u64> = None;
+    for id in pending {
+        if is_ai_action_consumed(state, user_address, id).await {
+            continue;
+        }
+        latest = Some(latest.map_or(id, |current| current.max(id)));
+    }
+    Ok(latest)
+}
+
+async fn ensure_onchain_action(
+    state: &AppState,
+    user_address: &str,
+    action_id: u64,
+) -> Result<u64> {
+    if action_id == 0 {
         return Err(crate::error::AppError::BadRequest(
-            "Please click Auto Setup On-Chain first, then retry your command.".into(),
+            "Invalid on-chain AI action_id".into(),
         ));
     }
-    Ok(())
+
+    let config = &state.config;
+    let contract = config.ai_executor_address.trim();
+    if contract.is_empty() || contract.starts_with("0x0000") {
+        return Err(crate::error::AppError::BadRequest(
+            "AI executor not configured".into(),
+        ));
+    }
+
+    let client = StarknetClient::new(config.starknet_rpc_url.clone());
+
+    let action_consumed = is_ai_action_consumed(state, user_address, action_id).await;
+    if !action_consumed {
+        let around = fetch_pending_actions_page(
+            &client,
+            contract,
+            user_address,
+            action_id.saturating_sub(1),
+            1,
+        )
+        .await?;
+        if around.contains(&action_id) {
+            return Ok(action_id);
+        }
+    }
+
+    if let Some(latest_pending) =
+        latest_unconsumed_pending_action(state, user_address, contract, &client).await?
+    {
+        tracing::warn!(
+            "AI execute: requested action_id={} is stale/consumed for user={}, falling back to latest pending action_id={}",
+            action_id,
+            user_address,
+            latest_pending
+        );
+        return Ok(latest_pending);
+    }
+
+    Err(crate::error::AppError::BadRequest(
+        "Please click Auto Setup On-Chain first, then retry your command.".into(),
+    ))
 }
 
 // Internal helper that parses or transforms values for `parse_felt_u64`.
@@ -1424,6 +1957,21 @@ fn parse_felt_u64(value: &str) -> Option<u64> {
     } else {
         value.parse::<u64>().ok()
     }
+}
+
+// Internal helper that fetches data for `fetch_ai_executor_action_count`.
+async fn fetch_ai_executor_action_count(
+    state: &AppState,
+    contract: &str,
+) -> Option<u64> {
+    let client = StarknetClient::new(state.config.starknet_rpc_url.clone());
+    let storage_key = get_storage_var_address("action_count", &[]).ok()?;
+    let storage_key_hex = format!("{:#x}", storage_key);
+    let raw_value = client
+        .get_storage_at(contract, &storage_key_hex)
+        .await
+        .ok()?;
+    parse_felt_u64(&raw_value)
 }
 
 #[cfg(test)]
@@ -1535,13 +2083,14 @@ mod tests {
     }
 
     #[test]
-    // Internal helper that supports `should_consume_onchain_action_only_for_swap_bridge_commands` operations.
-    fn should_consume_onchain_action_only_for_swap_bridge_commands() {
+    // Internal helper that supports `should_consume_onchain_action_for_execution_scopes` operations.
+    fn should_consume_onchain_action_for_execution_scopes() {
         assert!(should_consume_onchain_action("swap 25 STRK to WBTC"));
         assert!(should_consume_onchain_action("bridge 0.1 ETH to BTC"));
         assert!(should_consume_onchain_action("tukar 10 usdt ke carel"));
-        assert!(!should_consume_onchain_action("stake 100 USDT"));
-        assert!(!should_consume_onchain_action("cancel order 10"));
+        assert!(should_consume_onchain_action("stake 100 USDT"));
+        assert!(should_consume_onchain_action("cancel order 10"));
+        assert!(!should_consume_onchain_action("check my balance"));
     }
 
     #[test]

@@ -88,22 +88,22 @@ fn test_mint_nft_and_verify_storage() {
 }
 
 #[test]
-// Test case: validates usage cycle and autoburn behavior with expected assertions and revert boundaries.
+// Test case: validates usage cycle and inactive behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_usage_cycle_and_autoburn() {
     let (dispatcher, _) = setup();
     let user: ContractAddress = 0x456.try_into().unwrap();
 
     start_cheat_caller_address(dispatcher.contract_address, user);
-    dispatcher.mint_nft(1); // Default max usage = 30
+    dispatcher.mint_nft(1); // Default tier-1 max usage = 5
 
-    // Use up default tier-1 limit (30)
-    dispatcher.use_discount_batch(user, 30);
+    // Use up tier-1 limit (5), NFT should become inactive (discount 0).
+    dispatcher.use_discount_batch(user, 5);
     assert!(dispatcher.get_user_discount(user) == 0, "Usage exhausted should disable discount");
 
-    // Recharge and use again
-    dispatcher.recharge_nft();
-    assert!(dispatcher.get_user_discount(user) == 5, "Recharge should restore discount");
+    // Minting again is allowed and should reactivate discount for the latest NFT.
+    dispatcher.mint_nft(1);
+    assert!(dispatcher.get_user_discount(user) == 5, "Remint should restore discount");
     dispatcher.use_discount(user);
 
     stop_cheat_caller_address(dispatcher.contract_address);
@@ -127,8 +127,7 @@ fn test_soulbound_restriction() {
 }
 
 #[test]
-#[should_panic(expected: "User sudah memiliki NFT")]
-// Test case: validates duplicate mint prevention behavior with expected assertions and revert boundaries.
+// Test case: validates duplicate mint is now allowed and latest NFT becomes active.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_duplicate_mint_prevention() {
     let (dispatcher, _) = setup();
@@ -136,5 +135,9 @@ fn test_duplicate_mint_prevention() {
 
     start_cheat_caller_address(dispatcher.contract_address, user);
     dispatcher.mint_nft(1);
-    dispatcher.mint_nft(2); // Must fail.
+    dispatcher.mint_nft(2);
+
+    // Latest minted NFT should be active and selected for user discount.
+    let discount = dispatcher.get_user_discount(user);
+    assert!(discount == 10, "Latest tier discount should be active");
 }

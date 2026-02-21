@@ -118,6 +118,11 @@ export interface ExecuteSwapResponse {
   to_amount: string
   actual_rate: string
   fee_paid: string
+  fee_before_discount: string
+  fee_discount_saved: string
+  nft_discount_percent: string
+  estimated_points_earned: string
+  points_pending: boolean
   privacy_tx_hash?: string
 }
 

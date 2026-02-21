@@ -47,6 +47,9 @@ pub trait IMockToken<TContractState> {
         recipient: ContractAddress,
         amount: u256
     ) -> bool;
+    // Applies approve after input validation and commits the resulting state.
+    // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+    fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
     // Implements balance of logic while keeping state transitions deterministic.
     // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
@@ -56,8 +59,9 @@ pub trait IMockToken<TContractState> {
 }
 
 #[starknet::contract]
-pub mod MockERC20 {
+pub mod ScenarioMockERC20 {
     use starknet::ContractAddress;
+    use starknet::get_caller_address;
     use starknet::storage::*;
 
     #[storage]
@@ -76,8 +80,12 @@ pub mod MockERC20 {
         // Applies transfer after input validation and commits the resulting state.
         // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
         fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool {
-            let _ = recipient;
-            let _ = amount;
+            let sender = get_caller_address();
+            let sender_balance = self.balances.entry(sender).read();
+            assert!(sender_balance >= amount, "Insufficient balance");
+            self.balances.entry(sender).write(sender_balance - amount);
+            let recipient_balance = self.balances.entry(recipient).read();
+            self.balances.entry(recipient).write(recipient_balance + amount);
             true
         }
 
@@ -89,8 +97,18 @@ pub mod MockERC20 {
             recipient: ContractAddress,
             amount: u256
         ) -> bool {
-            let _ = sender;
-            let _ = recipient;
+            let sender_balance = self.balances.entry(sender).read();
+            assert!(sender_balance >= amount, "Insufficient balance");
+            self.balances.entry(sender).write(sender_balance - amount);
+            let recipient_balance = self.balances.entry(recipient).read();
+            self.balances.entry(recipient).write(recipient_balance + amount);
+            true
+        }
+
+        // Applies approve after input validation and commits the resulting state.
+        // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+        fn approve(ref self: ContractState, spender: ContractAddress, amount: u256) -> bool {
+            let _ = spender;
             let _ = amount;
             true
         }
@@ -237,7 +255,7 @@ fn deploy_point_storage(signer: ContractAddress) -> IPointStorageDispatcher {
 // Deploys mock erc20 fixture and returns handles used by dependent test flows.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn deploy_mock_erc20() -> ContractAddress {
-    let contract = declare("MockERC20").unwrap().contract_class();
+    let contract = declare("ScenarioMockERC20").unwrap().contract_class();
     let (contract_address, _) = contract.deploy(@array![]).unwrap();
     contract_address
 }
@@ -410,10 +428,12 @@ fn test_user_bridge_flow() {
 fn test_user_swap_flow() {
     let owner: ContractAddress = 0x333.try_into().unwrap();
     let user: ContractAddress = 0x444.try_into().unwrap();
-    let token_a: ContractAddress = 0xaaa.try_into().unwrap();
-    let token_b: ContractAddress = 0xbbb.try_into().unwrap();
+    let token_a = deploy_mock_erc20();
+    // Keep same token in/out so test focuses on MEV fee path without DEX settlement complexity.
+    let token_b = token_a;
     let dispatcher = deploy_swap_aggregator(owner);
     let amount_in: u256 = 1_000;
+    let token_dispatcher = IMockTokenDispatcher { contract_address: token_a };
 
     let dex_class = declare("MockDEX").unwrap().contract_class();
     let (dex_low, _) = dex_class.deploy(@array![]).unwrap();
@@ -429,6 +449,8 @@ fn test_user_swap_flow() {
 
     let route = dispatcher.get_best_swap_route(token_a, token_b, amount_in);
     assert(route.dex_id == 'DEXHIGH', 'Should select best DEX');
+
+    token_dispatcher.set_balance(user, amount_in);
 
     start_cheat_caller_address(dispatcher.contract_address, user);
     dispatcher.execute_swap(route, token_a, token_b, amount_in, false);
@@ -572,6 +594,9 @@ fn test_user_staking_flow() {
     let token = deploy_mock_erc20();
     let staking = deploy_staking_carel(token, token);
     let amount: u256 = 100_000_000_000_000_000_000;
+    let token_dispatcher = IMockTokenDispatcher { contract_address: token };
+
+    token_dispatcher.set_balance(user, amount);
 
     start_cheat_caller_address(staking.contract_address, user);
     staking.stake(amount);

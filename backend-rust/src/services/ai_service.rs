@@ -155,23 +155,14 @@ fn detect_locale_from_command(command_lower: &str) -> &'static str {
     if contains_any_keyword(
         command_lower,
         &[
-            "bahasa",
-            "indonesia",
-            "indo",
-            "cek",
-            "saldo",
-            "harga",
-            "berapa",
-            "poin",
-            "tukar",
-            "jembatan",
-            "klaim",
-            "batalkan",
-            "alokasi",
-            "notifikasi",
-            "pemula",
+            "bahasa indonesia",
+            "pakai bahasa indonesia",
+            "gunakan bahasa indonesia",
+            "reply in indonesian",
+            "speak indonesian",
+            "use indonesian",
         ],
-    ) || contains_any_exact_word(command_lower, &["halo", "hai"])
+    ) || contains_any_exact_word(command_lower, &["indonesian"])
     {
         "id"
     } else {
@@ -209,7 +200,7 @@ fn build_real_execution_system_prompt(level: u8, locale: &str) -> String {
     let language_rule = if is_indonesian_locale(locale) {
         "Reply in Indonesian."
     } else {
-        "Reply in English unless user writes Indonesian."
+        "Reply in English."
     };
 
     format!(
@@ -217,8 +208,8 @@ fn build_real_execution_system_prompt(level: u8, locale: &str) -> String {
          You do NOT simulate. For on-chain operations, treat execution as REAL after user wallet confirmation.\n\
          ACCESS LEVELS:\n\
          - Level 1: chat + read-only (price, balance, points, market)\n\
-         - Level 2: real swap, bridge, stake, limit order after one Auto Setup On-Chain\n\
-         - Level 3: Level 2 + unstake, claim rewards, portfolio rebalance, alerts\n\
+         - Level 2: real swap, bridge, stake, claim rewards, limit order after one Auto Setup On-Chain\n\
+         - Level 3: same commands in Garaga/private mode + unstake, portfolio rebalance, alerts, and complex analysis\n\
          CURRENT USER LEVEL: {level}\n\
          ON-CHAIN RULES:\n\
          - Never execute without wallet confirmation.\n\
@@ -476,6 +467,21 @@ fn parse_intent_from_command(command: &str) -> Intent {
             action: "set_language_indonesian".to_string(),
             parameters: with_locale(serde_json::json!({}), "id"),
         }
+    } else if contains_any_keyword(
+        &command_lower,
+        &[
+            "english",
+            "speak english",
+            "use english",
+            "bahasa inggris",
+            "pakai inggris",
+            "inggris saja",
+        ],
+    ) {
+        Intent {
+            action: "set_language_english".to_string(),
+            parameters: with_locale(serde_json::json!({}), "en"),
+        }
     } else if contains_any_keyword(&command_lower, &["price", "harga"]) {
         Intent {
             action: "check_price".to_string(),
@@ -528,11 +534,40 @@ fn parse_intent_from_command(command: &str) -> Intent {
         }
     } else if contains_any_keyword(
         &command_lower,
-        &["tutorial", "guide", "how to use", "help", "pemula"],
+        &["tutorial", "guide", "how to use", "pemula", "panduan"],
     ) {
         Intent {
             action: "tutorial".to_string(),
             parameters: with_locale(serde_json::json!({}), locale),
+        }
+    } else if contains_any_keyword(
+        &command_lower,
+        &[
+            "who are you",
+            "kamu siapa",
+            "siapa kamu",
+            "can you help",
+            "bisa bantu",
+            "help me",
+            "tolong",
+            "thanks",
+            "thank you",
+            "makasih",
+            "terima kasih",
+            "oke",
+            "ok",
+            "ngobrol",
+            "chat",
+        ],
+    ) {
+        Intent {
+            action: "chat_general".to_string(),
+            parameters: with_locale(
+                serde_json::json!({
+                    "query": command_lower,
+                }),
+                locale,
+            ),
         }
     } else if contains_any_exact_word(&command_lower, &["hello", "hi", "hey", "halo", "hai"]) {
         Intent {
@@ -670,11 +705,18 @@ pub fn classify_command_scope(command: &str) -> AIGuardScope {
         | "market_analysis"
         | "tutorial"
         | "chat_greeting"
-        | "set_language_indonesian" => AIGuardScope::ReadOnly,
-        "swap" | "bridge" | "stake" | "limit_order_create" | "limit_order_cancel" => {
+        | "chat_general"
+        | "set_language_indonesian"
+        | "set_language_english" => AIGuardScope::ReadOnly,
+        "swap"
+        | "bridge"
+        | "stake"
+        | "claim_staking_rewards"
+        | "limit_order_create"
+        | "limit_order_cancel" => {
             AIGuardScope::SwapBridge
         }
-        "unstake" | "claim_staking_rewards" | "portfolio_management" | "alerts" => {
+        "unstake" | "portfolio_management" | "alerts" => {
             AIGuardScope::PortfolioAlert
         }
         _ => AIGuardScope::Unknown,
@@ -737,7 +779,9 @@ impl AIService {
             "alerts" => self.execute_alerts_command(locale).await?,
             "tutorial" => self.execute_tutorial_command(level, locale).await?,
             "chat_greeting" => self.execute_greeting_command(level, &intent).await?,
+            "chat_general" => self.execute_general_chat_command(level, &intent).await?,
             "set_language_indonesian" => self.execute_set_language_indonesian_command().await?,
+            "set_language_english" => self.execute_set_language_english_command().await?,
             _ => self.execute_unknown_command(level, locale),
         };
 
@@ -1641,19 +1685,21 @@ impl AIService {
         let is_id = is_indonesian_locale(locale);
         let level_hint = match level {
             1 => "You are on Level 1 (read-only).",
-            2 => "You are on Level 2 (read-only + swap/bridge/stake/limit).",
-            3 => "You are on Level 3 (full execution including unstake/claim/portfolio/alerts).",
+            2 => "You are on Level 2 (swap/bridge/stake/claim/limit).",
+            3 => {
+                "You are on Level 3 (Garaga/private execution + unstake/portfolio/alerts/complex analysis)."
+            }
             _ => "Unknown level.",
         };
         Ok(AIResponse {
             message: if is_id {
                 format!(
-                    "Kamu ada di Level {}. Panduan singkat: 1) Hubungkan wallet. 2) Untuk command on-chain klik Auto Setup On-Chain sekali. 3) Coba 'cek saldo saya'. 4) Lanjut swap/bridge/stake/limit. 5) Konfirmasi hanya di popup wallet.",
+                    "Kamu ada di Level {}. Panduan singkat: 1) Hubungkan wallet. 2) Untuk command on-chain klik Auto Setup On-Chain sekali. 3) Coba 'cek saldo saya'. 4) Lanjut swap/bridge/stake/claim/limit. 5) Konfirmasi hanya di popup wallet.",
                     level
                 )
             } else {
                 format!(
-                    "{level_hint} Beginner steps: 1) Connect wallet. 2) For on-chain commands click Auto Setup On-Chain once. 3) Try: 'check my balance'. 4) Then try swap/bridge/stake/limit commands. 5) Confirm only in wallet popup."
+                    "{level_hint} Beginner steps: 1) Connect wallet. 2) For on-chain commands click Auto Setup On-Chain once. 3) Try: 'check my balance'. 4) Then try swap/bridge/stake/claim/limit commands. 5) Confirm only in wallet popup."
                 )
             },
             actions: vec!["show_tutorial".to_string()],
@@ -1662,7 +1708,7 @@ impl AIService {
                     "Connect wallet",
                     "Run Auto Setup On-Chain once (Level 2/3)",
                     "Run read-only command",
-                    "Run swap/bridge/stake/limit command",
+                    "Run swap/bridge/stake/claim/limit command",
                     "Confirm transaction in wallet"
                 ],
                 "locale": locale,
@@ -1684,10 +1730,10 @@ impl AIService {
             "Hey! Of course. On Level 1 I can help with price, balance, points, and market data."
                 .to_string()
         } else if level == 2 {
-            "Hey! Of course. On Level 2 I can run real swap/bridge/stake/limit after setup confirmation."
+            "Hey! Of course. On Level 2 I can run real swap/bridge/stake/claim/limit after setup confirmation."
                 .to_string()
         } else {
-            "Hey! Of course. On Level 3 I can run full execution plus unstake/claim/portfolio/alerts."
+            "Hey! Of course. On Level 3 I run Garaga/private mode for execution, plus unstake/portfolio/alerts."
                 .to_string()
         };
 
@@ -1695,6 +1741,72 @@ impl AIService {
             message,
             actions: vec![],
             data: None,
+        })
+    }
+
+    // Internal helper that runs side-effecting logic for `execute_general_chat_command`.
+    async fn execute_general_chat_command(&self, level: u8, intent: &Intent) -> Result<AIResponse> {
+        let locale = intent
+            .parameters
+            .get("locale")
+            .and_then(|v| v.as_str())
+            .unwrap_or("en");
+        let is_id = is_indonesian_locale(locale);
+        let query = intent
+            .parameters
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        let is_thanks = contains_any_keyword(
+            &query,
+            &["thanks", "thank you", "makasih", "terima kasih"],
+        );
+        let asks_identity = contains_any_keyword(
+            &query,
+            &["who are you", "kamu siapa", "siapa kamu", "what can you do", "bisa bantu"],
+        );
+
+        let message = if is_thanks {
+            if is_id {
+                "Sama-sama. Lanjut apa sekarang? Bisa cek harga, saldo, poin, atau langsung eksekusi command."
+                    .to_string()
+            } else {
+                "You're welcome. What do you want to do next? I can check price, balance, points, or run execution commands."
+                    .to_string()
+            }
+        } else if asks_identity {
+            if is_id {
+                match level {
+                    1 => "Saya CAREL Agent. Di Level 1 saya bisa ngobrol dan bantu data real-time: harga, saldo, poin, dan market.".to_string(),
+                    2 => "Saya CAREL Agent. Di Level 2 saya bisa chat + eksekusi real swap/bridge/stake/claim/limit setelah setup on-chain.".to_string(),
+                    _ => "Saya CAREL Agent. Di Level 3 saya jalankan mode Garaga/private + unstake/portfolio/alerts dan analisis lanjutan.".to_string(),
+                }
+            } else {
+                match level {
+                    1 => "I'm CAREL Agent. On Level 1 I handle chat plus real-time read-only data: price, balance, points, and market."
+                        .to_string(),
+                    2 => "I'm CAREL Agent. On Level 2 I handle chat plus real on-chain swap/bridge/stake/claim/limit after setup."
+                        .to_string(),
+                    _ => "I'm CAREL Agent. On Level 3 I run Garaga/private mode plus unstake/portfolio/alerts and deeper analysis."
+                        .to_string(),
+                }
+            }
+        } else if is_id {
+            "Bisa. Ceritakan tujuanmu singkat, nanti saya bantu langkah paling cepat."
+                .to_string()
+        } else {
+            "Sure. Tell me your goal in one short sentence and I'll guide the fastest path."
+                .to_string()
+        };
+
+        Ok(AIResponse {
+            message,
+            actions: vec![],
+            data: Some(serde_json::json!({
+                "locale": locale,
+            })),
         })
     }
 
@@ -1709,31 +1821,30 @@ impl AIService {
         })
     }
 
+    // Internal helper that runs side-effecting logic for `execute_set_language_english_command`.
+    async fn execute_set_language_english_command(&self) -> Result<AIResponse> {
+        Ok(AIResponse {
+            message:
+                "Sure, I'll use English. Try: 'check my balance', 'my points', 'show STRK price', or 'swap 25 STRK to WBTC'."
+                    .to_string(),
+            actions: vec![],
+            data: None,
+        })
+    }
+
     // Internal helper that supports `execute_unknown_command` operations.
     fn execute_unknown_command(&self, level: u8, locale: &str) -> AIResponse {
-        let is_id = is_indonesian_locale(locale);
         let message = if has_llm_provider_configured(&self.config) {
-            if is_id {
-                if level <= 1 {
-                    "Siap. Di Level 1 saya fokus chat + data real-time (saldo, poin, harga, market). Tulis tujuanmu satu kalimat.".to_string()
-                } else {
-                    "Siap. Di level ini saya bisa bantu eksekusi real setelah setup on-chain + konfirmasi wallet. Tulis tujuanmu satu kalimat.".to_string()
-                }
+            if level <= 1 {
+                "CAREL Agent is being further developed by the team for this feature. Right now I can help with available commands: price, balance, points, and market data."
+                    .to_string()
             } else {
-                if level <= 1 {
-                    "Sure. On Level 1 I handle chat + real-time read-only data (balance, points, prices, market). Tell me your goal in one sentence.".to_string()
-                } else {
-                    "Sure. On this level I can help with real execution after on-chain setup + wallet confirmation. Tell me your goal in one sentence.".to_string()
-                }
+                "CAREL Agent is being further developed by the team for this feature. Right now I can help with available commands: swap, bridge (Level 2), stake, claim, and limit order."
+                    .to_string()
             }
         } else {
-            if is_id {
-                "Chat bebas belum aktif karena provider AI belum dikonfigurasi di backend. Set GEMINI/OPENAI/CAIRO_CODER key lalu restart backend."
-                    .to_string()
-            } else {
-                "Free-form chat is not active because no AI provider is configured on backend. Set GEMINI/OPENAI/CAIRO_CODER key and restart backend."
-                    .to_string()
-            }
+            "CAREL Agent is being further developed by the team for this feature. Free-form AI provider is not configured on backend yet."
+                .to_string()
         };
 
         AIResponse {
@@ -1956,6 +2067,28 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that parses or transforms values for `parse_intent_handles_english_language_request`.
+    fn parse_intent_handles_english_language_request() {
+        let intent = parse_intent_from_command("please use english");
+        assert_eq!(intent.action, "set_language_english");
+    }
+
+    #[test]
+    // Internal helper that parses or transforms values for `parse_intent_handles_general_chat_request`.
+    fn parse_intent_handles_general_chat_request() {
+        let intent = parse_intent_from_command("kamu siapa dan bisa bantu apa?");
+        assert_eq!(intent.action, "chat_general");
+    }
+
+    #[test]
+    // Internal helper that parses or transforms values for `detect_locale_defaults_to_english_without_explicit_switch`.
+    fn detect_locale_defaults_to_english_without_explicit_switch() {
+        assert_eq!(detect_locale_from_command("kamu siapa"), "en");
+        assert_eq!(detect_locale_from_command("how many points do I have"), "en");
+        assert_eq!(detect_locale_from_command("pakai bahasa indonesia"), "id");
+    }
+
+    #[test]
     // Internal helper that parses or transforms values for `parse_intent_handles_greeting`.
     fn parse_intent_handles_greeting() {
         let intent = parse_intent_from_command("hello there");
@@ -1966,6 +2099,13 @@ mod tests {
     // Internal helper that supports `classify_command_scope_greeting_is_read_only` operations.
     fn classify_command_scope_greeting_is_read_only() {
         let scope = classify_command_scope("hello");
+        assert_eq!(scope, AIGuardScope::ReadOnly);
+    }
+
+    #[test]
+    // Internal helper that supports `classify_command_scope_general_chat_is_read_only` operations.
+    fn classify_command_scope_general_chat_is_read_only() {
+        let scope = classify_command_scope("can you help me choose strategy?");
         assert_eq!(scope, AIGuardScope::ReadOnly);
     }
 
