@@ -141,6 +141,7 @@ require_env BACKEND_SIGNER
 require_env BRIDGE_AGGREGATOR_ADDRESS
 require_env ZK_PRIVACY_ROUTER_ADDRESS
 require_env AI_EXECUTOR_ADDRESS
+require_env CAREL_TOKEN_ADDRESS
 
 ATOMIQ_ENDPOINT=${ATOMIQ_ENDPOINT:-""}
 GARDEN_ENDPOINT=${GARDEN_ENDPOINT:-""}
@@ -192,6 +193,10 @@ deploy_contract SEMAPHORE_ADAPTER_ADDRESS SemaphoreVerifierAdapter "$OWNER_ADDRE
 # Configure AI executor verifier
 echo "Configuring AI executor verifier..."
 run_sncast sncast invoke --network "$NET" --contract-address "$AI_EXECUTOR_ADDRESS" --function set_signature_verification --calldata "$AI_SIGNATURE_VERIFIER_ADDRESS" 1 >/dev/null
+
+# Grant CAREL burn permission for AI execution fees
+echo "Granting AI executor CAREL burner role..."
+run_sncast sncast invoke --network "$NET" --contract-address "$CAREL_TOKEN_ADDRESS" --function set_burner --calldata "$AI_EXECUTOR_ADDRESS" >/dev/null
 
 # Configure bridge adapters
 echo "Configuring bridge adapters..."

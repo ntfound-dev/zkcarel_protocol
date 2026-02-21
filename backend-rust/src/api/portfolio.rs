@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 use crate::{
     error::Result,
     models::{ApiResponse, PriceTick},
+    services::price_guard::{
+        fallback_price_for, first_sane_price, sanitize_price_usd, symbol_candidates_for,
+    },
 };
 
 use super::{
@@ -507,14 +510,6 @@ fn period_to_interval(period: &str) -> (&'static str, i64) {
     }
 }
 
-// Internal helper that supports `fallback_price_for` operations.
-fn fallback_price_for(token: &str) -> f64 {
-    match token.to_uppercase().as_str() {
-        "USDT" | "USDC" | "CAREL" => 1.0,
-        _ => 0.0,
-    }
-}
-
 // Internal helper that supports `decimal_to_f64` operations.
 fn decimal_to_f64(value: rust_decimal::Decimal) -> f64 {
     value.to_f64().unwrap_or(0.0)
@@ -563,66 +558,60 @@ fn align_timestamp(timestamp: i64, interval: i64) -> i64 {
 
 // Internal helper that supports `tick_prices` operations.
 fn tick_prices(tick: &PriceTick) -> (f64, f64, f64, f64, f64) {
-    (
-        decimal_to_f64(tick.open),
-        decimal_to_f64(tick.high),
-        decimal_to_f64(tick.low),
-        decimal_to_f64(tick.close),
-        decimal_to_f64(tick.volume),
-    )
+    let symbol = tick.token.as_str();
+    let fallback = fallback_price_for(symbol);
+    let close = sanitize_price_usd(symbol, decimal_to_f64(tick.close)).unwrap_or(fallback);
+    let open = sanitize_price_usd(symbol, decimal_to_f64(tick.open)).unwrap_or(close);
+    let high = sanitize_price_usd(symbol, decimal_to_f64(tick.high)).unwrap_or(open.max(close));
+    let low = sanitize_price_usd(symbol, decimal_to_f64(tick.low)).unwrap_or(open.min(close));
+    (open, high, low, close, decimal_to_f64(tick.volume))
 }
 
 // Internal helper that supports `latest_price` operations.
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     let token_upper = token.to_ascii_uppercase();
-    let mut price: Option<f64> = sqlx::query_scalar(
-        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
-    )
-    .bind(&token_upper)
-    .fetch_optional(state.db.pool())
-    .await?;
-    if price.is_none() && token_upper == "WBTC" {
-        price = sqlx::query_scalar(
-            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+    for candidate in symbol_candidates_for(&token_upper) {
+        let rows: Vec<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
         )
-        .bind("BTC")
-        .fetch_optional(state.db.pool())
+        .bind(&candidate)
+        .fetch_all(state.db.pool())
         .await?;
+        if let Some(price) = first_sane_price(&candidate, &rows) {
+            return Ok(price);
+        }
     }
 
-    Ok(price
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or_else(|| fallback_price_for(&token_upper)))
+    Ok(fallback_price_for(&token_upper))
 }
 
 // Internal helper that supports `latest_price_with_change` operations.
 async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64, f64)> {
     let token_upper = token.to_ascii_uppercase();
-    let mut rows: Vec<f64> = sqlx::query_scalar(
-        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 2",
-    )
-    .bind(&token_upper)
-    .fetch_all(state.db.pool())
-    .await?;
-    if rows.is_empty() && token_upper == "WBTC" {
-        rows = sqlx::query_scalar(
-            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 2",
+    let mut sane_rows: Vec<f64> = Vec::new();
+
+    for candidate in symbol_candidates_for(&token_upper) {
+        let rows: Vec<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
         )
-        .bind("BTC")
+        .bind(&candidate)
         .fetch_all(state.db.pool())
         .await?;
+        sane_rows = rows
+            .into_iter()
+            .filter_map(|value| sanitize_price_usd(&candidate, value))
+            .take(2)
+            .collect();
+        if !sane_rows.is_empty() {
+            break;
+        }
     }
 
-    let latest = rows
-        .get(0)
+    let latest = sane_rows
+        .first()
         .copied()
-        .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or_else(|| fallback_price_for(&token_upper));
-    let prev = rows
-        .get(1)
-        .copied()
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or(latest);
+    let prev = sane_rows.get(1).copied().unwrap_or(latest);
     let change = if prev > 0.0 {
         ((latest - prev) / prev) * 100.0
     } else {

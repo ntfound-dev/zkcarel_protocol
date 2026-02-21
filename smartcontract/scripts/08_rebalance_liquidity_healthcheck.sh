@@ -38,7 +38,7 @@ SNCAST_ACCOUNT="${SNCAST_ACCOUNT:-sepolia}"
 ACTION_MODE="${ACTION_MODE:-full}" # full | rebalance | health
 DRY_RUN="${DRY_RUN:-false}" # true/false
 ALLOW_MINT="${ALLOW_MINT:-true}" # true/false
-MINTABLE_SYMBOLS="${MINTABLE_SYMBOLS:-USDC,USDT,WBTC}"
+MINTABLE_SYMBOLS="${MINTABLE_SYMBOLS:-USDC,USDT}"
 
 SNCAST_MAX_RETRIES="${SNCAST_MAX_RETRIES:-8}"
 SNCAST_BASE_SLEEP_SECS="${SNCAST_BASE_SLEEP_SECS:-6}"
@@ -263,7 +263,7 @@ default_min_for() {
     CAREL) echo "100000000000000000000" ;;         # 100 CAREL
     USDC) echo "200000000" ;;                       # 200 USDC
     USDT) echo "200000000" ;;                       # 200 USDT
-    WBTC) echo "50000000" ;;                        # 0.5 WBTC
+    WBTC) echo "100000" ;;                          # 0.001 WBTC
     *) echo "0" ;;
   esac
 }
@@ -275,7 +275,7 @@ default_target_for() {
     CAREL) echo "500000000000000000000" ;;         # 500 CAREL
     USDC) echo "1000000000" ;;                      # 1000 USDC
     USDT) echo "1000000000" ;;                      # 1000 USDT
-    WBTC) echo "200000000" ;;                       # 2 WBTC
+    WBTC) echo "500000" ;;                          # 0.005 WBTC
     *) echo "0" ;;
   esac
 }
@@ -287,7 +287,7 @@ default_probe_for() {
     CAREL) echo "1000000000000000000" ;;           # 1 CAREL
     USDC) echo "100000000" ;;                       # 100 USDC
     USDT) echo "100000000" ;;                       # 100 USDT
-    WBTC) echo "10000000" ;;                        # 0.1 WBTC
+    WBTC) echo "50000" ;;                           # 0.0005 WBTC
     *) echo "0" ;;
   esac
 }

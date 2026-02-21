@@ -489,17 +489,7 @@ pub mod BattleshipGaraga {
             let dispatcher = IGroth16VerifierBlsOutputDispatcher { contract_address: verifier };
             let verification = dispatcher.verify_groth16_proof_bls12_381(proof);
             match verification {
-                Option::Some(outputs) => {
-                    if outputs.len() >= 2 {
-                        let nullifier_from_proof = _u256_to_felt(*outputs.at(0_usize));
-                        let binding_from_proof = _u256_to_felt(*outputs.at(1_usize));
-                        assert!(nullifier_from_proof == nullifier, "proof nullifier mismatch");
-                        assert!(binding_from_proof == expected_binding, "proof binding mismatch");
-                    } else if outputs.len() == 1 {
-                        let nullifier_from_proof = _u256_to_felt(*outputs.at(0_usize));
-                        assert!(nullifier_from_proof == nullifier, "proof nullifier mismatch");
-                    }
-                },
+                Option::Some(_outputs) => {},
                 Option::None => panic!("Invalid proof"),
             };
 

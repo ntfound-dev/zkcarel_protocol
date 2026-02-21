@@ -24,6 +24,14 @@ pub trait IShieldedPoolV2<TContractState> {
     // Implements deposit fixed logic while keeping state transitions deterministic.
     // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn deposit_fixed(ref self: TContractState, token: ContractAddress, note_commitment: felt252);
+    // Implements relayer/admin-assisted deposit fixed logic while keeping state transitions deterministic.
+    // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
+    fn deposit_fixed_for(
+        ref self: TContractState,
+        depositor: ContractAddress,
+        token: ContractAddress,
+        note_commitment: felt252,
+    );
     // Implements withdraw fixed logic while keeping state transitions deterministic.
     // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn withdraw_fixed(
@@ -345,26 +353,21 @@ pub mod ShieldedPoolV2 {
         // Implements deposit fixed logic while keeping state transitions deterministic.
         // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn deposit_fixed(ref self: ContractState, token: ContractAddress, note_commitment: felt252) {
-            assert!(!token.is_zero(), "Token required");
-            assert!(note_commitment != 0, "note_commitment required");
-            assert!(!self.note_registered.read(note_commitment), "Note already exists");
-
-            let amount = self.fixed_amount_by_token.read(token);
-            assert!(!_is_zero_u256(amount), "Asset rule not set");
-
             let sender = get_caller_address();
-            let token_dispatcher = IERC20Dispatcher { contract_address: token };
-            let self_address = starknet::get_contract_address();
-            let transferred = token_dispatcher.transfer_from(sender, self_address, amount);
-            assert!(transferred, "Deposit transfer_from failed");
+            self._deposit_fixed_from(sender, token, note_commitment);
+        }
 
-            self.note_registered.write(note_commitment, true);
-            self
-                .emit(
-                    Event::DepositRegistered(
-                        DepositRegistered { sender, token, amount, note_commitment },
-                    ),
-                );
+        // Implements relayer/admin-assisted deposit fixed logic while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
+        fn deposit_fixed_for(
+            ref self: ContractState,
+            depositor: ContractAddress,
+            token: ContractAddress,
+            note_commitment: felt252,
+        ) {
+            self._assert_relayer_or_admin();
+            assert!(!depositor.is_zero(), "Depositor required");
+            self._deposit_fixed_from(depositor, token, note_commitment);
         }
 
         // Implements withdraw fixed logic while keeping state transitions deterministic.
@@ -950,6 +953,36 @@ pub mod ShieldedPoolV2 {
                 let approved = approval_dispatcher.approve(target, max_u256);
                 assert!(approved, "Approval failed");
             }
+        }
+
+        // Implements fixed-note deposit transfer + registration while keeping state transitions deterministic.
+        // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
+        fn _deposit_fixed_from(
+            ref self: ContractState,
+            sender: ContractAddress,
+            token: ContractAddress,
+            note_commitment: felt252,
+        ) {
+            assert!(!sender.is_zero(), "Sender required");
+            assert!(!token.is_zero(), "Token required");
+            assert!(note_commitment != 0, "note_commitment required");
+            assert!(!self.note_registered.read(note_commitment), "Note already exists");
+
+            let amount = self.fixed_amount_by_token.read(token);
+            assert!(!_is_zero_u256(amount), "Asset rule not set");
+
+            let token_dispatcher = IERC20Dispatcher { contract_address: token };
+            let self_address = starknet::get_contract_address();
+            let transferred = token_dispatcher.transfer_from(sender, self_address, amount);
+            assert!(transferred, "Deposit transfer_from failed");
+
+            self.note_registered.write(note_commitment, true);
+            self
+                .emit(
+                    Event::DepositRegistered(
+                        DepositRegistered { sender, token, amount, note_commitment },
+                    ),
+                );
         }
 
         // Implements verify bound public inputs or panic logic while keeping state transitions deterministic.

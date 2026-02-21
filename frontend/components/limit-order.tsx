@@ -55,7 +55,6 @@ import { useLivePrices } from "@/hooks/use-live-prices"
 import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 
 const tokenCatalog = [
-  { symbol: "BTC", name: "Bitcoin", icon: "₿", price: 0, change: 0 },
   { symbol: "STRK", name: "StarkNet", icon: "◈", price: 0, change: 0 },
   { symbol: "CAREL", name: "Carel Protocol", icon: "◐", price: 0, change: 0 },
   { symbol: "USDT", name: "Tether", icon: "₮", price: 0, change: 0 },
@@ -88,6 +87,7 @@ type UiOrder = {
   id: string
   type: "buy" | "sell"
   token: string
+  fromToken: string
   amount: string
   price: string
   expiry: string
@@ -151,7 +151,12 @@ const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED || "false").toLowerCase() ===
     "true" && PRIVATE_ACTION_EXECUTOR_ADDRESS.length > 0
 const HIDE_BALANCE_RELAYER_POOL_ENABLED =
-  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "true").toLowerCase() === "true"
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true" &&
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED || "false").toLowerCase() === "true"
+const HIDE_BALANCE_RELAYER_APPROVE_MAX =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_APPROVE_MAX || "false").toLowerCase() === "true"
+const U256_MAX_LOW_HEX = "0xffffffffffffffffffffffffffffffff"
+const U256_MAX_HIGH_HEX = "0xffffffffffffffffffffffffffffffff"
 
 const normalizeHexArray = (values?: string[] | null): string[] => {
   if (!Array.isArray(values)) return []
@@ -358,6 +363,57 @@ export function LimitOrder() {
     }
     return "starknet"
   }, [wallet.provider])
+
+  const approveRelayerFundingToken = React.useCallback(
+    async (tokenSymbol: string, amountValue: string) => {
+      const tokenKey = tokenSymbol.trim().toUpperCase()
+      const tokenAddress = (STARKNET_TOKEN_ADDRESS_MAP[tokenKey] || "").trim()
+      if (!tokenAddress) {
+        throw new Error(`Token address for ${tokenKey} is not configured for hide-mode relayer funding.`)
+      }
+      const executorAddress =
+        (PRIVATE_ACTION_EXECUTOR_ADDRESS || STARKNET_ZK_PRIVACY_ROUTER_ADDRESS || "").trim()
+      if (!executorAddress) {
+        throw new Error(
+          "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS is not configured for shielded relayer mode."
+        )
+      }
+      const [amountLow, amountHigh] = decimalToU256Parts(
+        amountValue || "1",
+        TOKEN_DECIMALS[tokenKey] || 18
+      )
+      const [approvalLow, approvalHigh] = HIDE_BALANCE_RELAYER_APPROVE_MAX
+        ? [U256_MAX_LOW_HEX, U256_MAX_HIGH_HEX]
+        : [amountLow, amountHigh]
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: HIDE_BALANCE_RELAYER_APPROVE_MAX
+          ? `Approve one-time ${tokenKey} spending limit for private relayer funding.`
+          : `Approve ${amountValue} ${tokenKey} for private relayer note funding.`,
+      })
+      const txHash = await invokeStarknetCallsFromWallet(
+        [
+          {
+            contractAddress: tokenAddress,
+            entrypoint: "approve",
+            calldata: [executorAddress, approvalLow, approvalHigh],
+          },
+        ],
+        starknetProviderHint
+      )
+      notifications.addNotification({
+        type: "success",
+        title: "Allowance approved",
+        message: HIDE_BALANCE_RELAYER_APPROVE_MAX
+          ? `Relayer allowance for ${tokenKey} is now active (one-time setup).`
+          : `Relayer can now fund private note from your ${tokenKey} balance.`,
+        txHash,
+        txNetwork: "starknet",
+      })
+    },
+    [notifications, starknetProviderHint]
+  )
 
   const refreshTradePrivacyPayload = React.useCallback(() => {
     setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
@@ -706,10 +762,16 @@ export function LimitOrder() {
             id: order.order_id,
             type: isBuy ? "buy" : "sell",
             token: isBuy ? order.to_token : order.from_token,
+            fromToken: order.from_token,
             amount: order.amount,
             price: order.price,
             expiry: order.expiry,
-            status: order.status === 2 ? "filled" : order.status === 3 ? "cancelled" : "active",
+            status:
+              order.status === 2
+                ? "filled"
+                : order.status === 3 || order.status === 4
+                ? "cancelled"
+                : "active",
             createdAt: formatDateTime(order.created_at),
           } as UiOrder
         })
@@ -882,6 +944,7 @@ export function LimitOrder() {
       }
       let payloadForBackend = resolvedPrivacyPayload
       let preparedCalls = [createOrderCall]
+      const useRelayerPoolHide = effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED
       if (effectiveHideBalance && resolvedPrivacyPayload) {
         let usedPrivateExecutor = false
         if (HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED) {
@@ -931,7 +994,7 @@ export function LimitOrder() {
         }
       }
       let onchainTxHash: string | undefined
-      if (!(effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED)) {
+      if (!useRelayerPoolHide) {
         notifications.addNotification({
           type: "info",
           title: "Wallet signature required",
@@ -955,18 +1018,45 @@ export function LimitOrder() {
           message: "Submitting hide-mode limit order via Starknet relayer pool.",
         })
       }
-      const response = await createLimitOrder({
-        from_token: fromToken,
-        to_token: toToken,
-        amount,
-        price,
-        expiry,
-        recipient: null,
-        client_order_id: clientOrderId,
-        onchain_tx_hash: onchainTxHash,
-        hide_balance: effectiveHideBalance,
-        privacy: effectiveHideBalance ? payloadForBackend : undefined,
-      })
+      let response: Awaited<ReturnType<typeof createLimitOrder>>
+      try {
+        response = await createLimitOrder({
+          from_token: fromToken,
+          to_token: toToken,
+          amount,
+          price,
+          expiry,
+          recipient: null,
+          client_order_id: clientOrderId,
+          onchain_tx_hash: onchainTxHash,
+          hide_balance: effectiveHideBalance,
+          privacy: effectiveHideBalance ? payloadForBackend : undefined,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || "")
+        if (
+          useRelayerPoolHide &&
+          /(insufficient allowance|shielded note funding failed|deposit_fixed_for|allowance)/i.test(
+            message
+          )
+        ) {
+          await approveRelayerFundingToken(fromToken, amount)
+          response = await createLimitOrder({
+            from_token: fromToken,
+            to_token: toToken,
+            amount,
+            price,
+            expiry,
+            recipient: null,
+            client_order_id: clientOrderId,
+            onchain_tx_hash: onchainTxHash,
+            hide_balance: effectiveHideBalance,
+            privacy: effectiveHideBalance ? payloadForBackend : undefined,
+          })
+        } else {
+          throw error
+        }
+      }
       if (response.privacy_tx_hash) {
         notifications.addNotification({
           type: "info",
@@ -981,6 +1071,7 @@ export function LimitOrder() {
         id: response.order_id,
         type: orderType,
         token: selectedToken.symbol,
+        fromToken,
         amount,
         price,
         expiry,
@@ -1025,6 +1116,8 @@ export function LimitOrder() {
   const cancelOrder = async (orderId: string) => {
     try {
       const effectiveHideBalance = balanceHidden
+      const useRelayerPoolHide = effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED
+      const targetOrder = orders.find((order) => order.id === orderId)
       if (!STARKNET_LIMIT_ORDER_BOOK_ADDRESS) {
         throw new Error(
           "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS is not set. Configure the limit order contract address in frontend/.env.local."
@@ -1089,7 +1182,7 @@ export function LimitOrder() {
         }
       }
       let onchainTxHash: string | undefined
-      if (!(effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED)) {
+      if (!useRelayerPoolHide) {
         notifications.addNotification({
           type: "info",
           title: "Wallet signature required",
@@ -1106,11 +1199,30 @@ export function LimitOrder() {
           message: "Submitting hide-mode cancel via Starknet relayer pool.",
         })
       }
-      await cancelLimitOrder(orderId, {
-        onchain_tx_hash: onchainTxHash,
-        hide_balance: effectiveHideBalance,
-        privacy: effectiveHideBalance ? payloadForBackend : undefined,
-      })
+      try {
+        await cancelLimitOrder(orderId, {
+          onchain_tx_hash: onchainTxHash,
+          hide_balance: effectiveHideBalance,
+          privacy: effectiveHideBalance ? payloadForBackend : undefined,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || "")
+        if (
+          useRelayerPoolHide &&
+          /(insufficient allowance|shielded note funding failed|deposit_fixed_for|allowance)/i.test(
+            message
+          )
+        ) {
+          await approveRelayerFundingToken(targetOrder?.fromToken || targetOrder?.token || "USDT", targetOrder?.amount || "1")
+          await cancelLimitOrder(orderId, {
+            onchain_tx_hash: onchainTxHash,
+            hide_balance: effectiveHideBalance,
+            privacy: effectiveHideBalance ? payloadForBackend : undefined,
+          })
+        } else {
+          throw error
+        }
+      }
       setOrders((prev) => prev.filter((order) => order.id !== orderId))
       notifications.addNotification({
         type: "success",

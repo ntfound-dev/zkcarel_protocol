@@ -4,7 +4,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{error::Result, models::ApiResponse};
+use crate::{
+    error::Result,
+    models::ApiResponse,
+    services::price_guard::{fallback_price_for, first_sane_price, symbol_candidates_for},
+};
 
 use super::AppState;
 
@@ -59,14 +63,20 @@ fn build_levels(mid_price: f64, levels: i32) -> (Vec<OrderBookLevel>, Vec<OrderB
 
 // Internal helper that supports `latest_price` operations.
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
-    let price: Option<f64> = sqlx::query_scalar(
-        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
-    )
-    .bind(token)
-    .fetch_optional(state.db.pool())
-    .await?;
+    let symbol = token.to_ascii_uppercase();
+    for candidate in symbol_candidates_for(&symbol) {
+        let rows: Vec<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
+        )
+        .bind(&candidate)
+        .fetch_all(state.db.pool())
+        .await?;
+        if let Some(price) = first_sane_price(&candidate, &rows) {
+            return Ok(price);
+        }
+    }
 
-    Ok(price.unwrap_or(1.0))
+    Ok(fallback_price_for(&symbol))
 }
 
 /// GET /api/v1/market/depth/:token

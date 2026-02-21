@@ -19,6 +19,9 @@ use crate::{
     services::gas_optimizer::GasOptimizer,
     services::nft_discount::consume_nft_usage_if_active,
     services::notification_service::NotificationType,
+    services::price_guard::{
+        fallback_price_for, first_sane_price, sanitize_usd_notional, symbol_candidates_for,
+    },
     services::privacy_verifier::parse_privacy_verifier_kind,
     services::LiquidityAggregator,
     services::NotificationService,
@@ -30,7 +33,8 @@ use starknet_core::types::{
     TransactionFinalityStatus,
 };
 use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::sync::OnceLock;
 use std::time::Instant;
 use tokio::time::{sleep, timeout, Duration};
@@ -149,7 +153,7 @@ fn env_flag(name: &str, default: bool) -> bool {
 // Internal helper that supports `hide_balance_relayer_pool_enabled` operations in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_balance_relayer_pool_enabled() -> bool {
-    env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", true)
+    env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", false)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,24 +178,199 @@ fn hide_executor_kind() -> HideExecutorKind {
 
 // Internal helper that fetches data for `resolve_private_action_executor_felt` in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Result<Felt> {
-    for raw in [
-        std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
-        std::env::var("NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
-        config.privacy_router_address.clone(),
-    ]
-    .into_iter()
-    .flatten()
-    {
+fn read_env_value_from_paths(paths: &[&str], key: &str) -> Option<String> {
+    for path in paths {
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((raw_key, raw_value)) = line.split_once('=') else {
+                continue;
+            };
+            if raw_key.trim() != key {
+                continue;
+            }
+            let mut value = raw_value.trim().to_string();
+            if (value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\''))
+            {
+                value = value[1..value.len().saturating_sub(1)].to_string();
+            }
+            if !value.trim().is_empty() {
+                return Some(value.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+// Internal helper that fetches data for `resolve_private_action_executor_felt` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn resolve_private_action_executor_candidates(config: &crate::config::Config) -> Result<Vec<Felt>> {
+    let mut raw_candidates: Vec<String> = Vec::new();
+    raw_candidates.extend(
+        [
+            std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
+            std::env::var("NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
+            read_env_value_from_paths(
+                &[".env", "backend-rust/.env"],
+                "PRIVATE_ACTION_EXECUTOR_ADDRESS",
+            ),
+            read_env_value_from_paths(
+                &[
+                    ".env",
+                    "backend-rust/.env",
+                    "frontend/.env.local",
+                    "frontend/.env",
+                    "../frontend/.env.local",
+                    "../frontend/.env",
+                ],
+                "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS",
+            ),
+            config.privacy_router_address.clone(),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+
+    let mut out: Vec<Felt> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for raw in raw_candidates {
         let trimmed = raw.trim();
         if trimmed.is_empty() || trimmed.starts_with("0x0000") {
             continue;
         }
-        return parse_felt(trimmed);
+        match parse_felt(trimmed) {
+            Ok(parsed) => {
+                let key = parsed.to_string().to_ascii_lowercase();
+                if seen.insert(key) {
+                    out.push(parsed);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Ignoring invalid PrivateActionExecutor candidate '{}': {}",
+                    trimmed,
+                    err
+                );
+            }
+        }
     }
+
+    if !out.is_empty() {
+        return Ok(out);
+    }
+
     Err(AppError::BadRequest(
         "PrivateActionExecutor is not configured. Set PRIVATE_ACTION_EXECUTOR_ADDRESS.".to_string(),
     ))
+}
+
+// Internal helper that supports `is_missing_entrypoint_error` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn is_missing_entrypoint_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("entry_point_not_found") {
+        return true;
+    }
+    let mentions_entrypoint =
+        lower.contains("entrypoint") || lower.contains("entry point") || lower.contains("selector");
+    let mentions_missing = lower.contains("does not exist")
+        || lower.contains("not found")
+        || lower.contains("missing");
+    mentions_entrypoint && mentions_missing
+}
+
+// Internal helper that checks conditions for `is_transient_probe_error` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn is_transient_probe_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("gateway")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("invalid peer certificate")
+        || lower.contains("unknownissuer")
+        || lower.contains("connection reset")
+        || lower.contains("network")
+}
+
+// Internal helper that supports `shielded_executor_supports_deposit_fixed_for` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn shielded_executor_supports_deposit_fixed_for(
+    state: &AppState,
+    executor: Felt,
+) -> Result<bool> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let selector = get_selector_from_name("deposit_fixed_for")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let probe = reader
+        .call(FunctionCall {
+            contract_address: executor,
+            entry_point_selector: selector,
+            calldata: vec![Felt::ONE, Felt::ONE, Felt::ONE],
+        })
+        .await;
+    match probe {
+        Ok(_) => Ok(true),
+        Err(AppError::BlockchainRPC(message)) => {
+            if is_missing_entrypoint_error(&message) {
+                Ok(false)
+            } else if is_transient_probe_error(&message) {
+                Err(AppError::BlockchainRPC(format!(
+                    "Failed to probe ShieldedPoolV2 executor {}: {}",
+                    executor, message
+                )))
+            } else {
+                // Any non-missing-entrypoint revert still proves the selector exists.
+                tracing::info!(
+                    "ShieldedPoolV2 probe for executor {} returned non-entrypoint error (treated as supported): {}",
+                    executor,
+                    message
+                );
+                Ok(true)
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+// Internal helper that fetches data for `resolve_private_action_executor_felt_for_swap_hide` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn resolve_private_action_executor_felt_for_swap_hide(state: &AppState) -> Result<Felt> {
+    let candidates = resolve_private_action_executor_candidates(&state.config)?;
+    if hide_executor_kind() != HideExecutorKind::ShieldedPoolV2 {
+        let selected = candidates[0];
+        tracing::info!("Using private executor {} for swap hide mode", selected);
+        return Ok(selected);
+    }
+
+    let mut unsupported: Vec<String> = Vec::new();
+    for candidate in candidates {
+        if shielded_executor_supports_deposit_fixed_for(state, candidate).await? {
+            tracing::info!(
+                "Using ShieldedPoolV2 executor {} for swap hide mode",
+                candidate
+            );
+            return Ok(candidate);
+        }
+        tracing::warn!(
+            "Skipping outdated ShieldedPoolV2 executor candidate {} (missing deposit_fixed_for)",
+            candidate
+        );
+        unsupported.push(candidate.to_string());
+    }
+
+    Err(AppError::BadRequest(format!(
+        "Configured ShieldedPoolV2 executor is outdated (missing deposit_fixed_for): {}. Redeploy latest ShieldedPoolV2 and set PRIVATE_ACTION_EXECUTOR_ADDRESS.",
+        unsupported.join(", ")
+    )))
 }
 
 // Internal helper that parses or transforms values for `normalize_hex_items` in the swap flow.
@@ -359,36 +538,20 @@ fn build_shielded_set_asset_rule_call(
     })
 }
 
-// Internal helper that builds inputs for `build_shielded_deposit_fixed_call` in the swap flow.
+// Internal helper that builds inputs for `build_shielded_deposit_fixed_for_call` in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-fn build_shielded_deposit_fixed_call(
+fn build_shielded_deposit_fixed_for_call(
     executor: Felt,
+    depositor: Felt,
     token: Felt,
     note_commitment: Felt,
 ) -> Result<Call> {
-    let selector = get_selector_from_name("deposit_fixed")
+    let selector = get_selector_from_name("deposit_fixed_for")
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
     Ok(Call {
         to: executor,
         selector,
-        calldata: vec![token, note_commitment],
-    })
-}
-
-// Internal helper that builds inputs for `build_erc20_approve_call` in the swap flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-fn build_erc20_approve_call(
-    token: Felt,
-    spender: Felt,
-    amount_low: Felt,
-    amount_high: Felt,
-) -> Result<Call> {
-    let selector = get_selector_from_name("approve")
-        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
-    Ok(Call {
-        to: token,
-        selector,
-        calldata: vec![spender, amount_low, amount_high],
+        calldata: vec![depositor, token, note_commitment],
     })
 }
 
@@ -726,35 +889,28 @@ fn should_run_privacy_verification(hide_balance: bool) -> bool {
     hide_balance
 }
 
-// Internal helper that supports `fallback_price_for` operations in the swap flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-fn fallback_price_for(token: &str) -> f64 {
-    match token.to_ascii_uppercase().as_str() {
-        "BTC" | "WBTC" => 65_000.0,
-        "ETH" => 1_900.0,
-        "STRK" => 0.05,
-        "USDT" | "USDC" => 1.0,
-        "CAREL" => 1.0,
-        _ => 0.0,
-    }
-}
-
 // Internal helper that checks conditions for `is_supported_starknet_swap_token` in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn is_supported_starknet_swap_token(token: &str) -> bool {
     matches!(
-        token.to_ascii_uppercase().as_str(),
-        "STRK" | "WBTC" | "USDT" | "USDC" | "CAREL"
+        token.trim().to_ascii_uppercase().as_str(),
+        "USDT" | "USDC" | "STRK" | "WBTC" | "CAREL"
     )
 }
 
 // Internal helper that runs side-effecting logic for `ensure_supported_starknet_swap_pair` in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn ensure_supported_starknet_swap_pair(from_token: &str, to_token: &str) -> Result<()> {
+    if from_token.trim().eq_ignore_ascii_case(to_token.trim()) {
+        return Err(AppError::BadRequest(
+            "Swap pair must use two different tokens".to_string(),
+        ));
+    }
     if !is_supported_starknet_swap_token(from_token) || !is_supported_starknet_swap_token(to_token)
     {
         return Err(AppError::BadRequest(
-            "On-chain swap currently supports STRK/WBTC/USDT/USDC/CAREL only".to_string(),
+            "On-chain swap token is not listed. Supported symbols: USDT, USDC, STRK, WBTC, CAREL."
+                .to_string(),
         ));
     }
     Ok(())
@@ -941,6 +1097,28 @@ fn is_transient_starknet_route_error(message: &str) -> bool {
         || lower.contains("429")
         || lower.contains("gateway")
         || lower.contains("temporarily unavailable")
+}
+
+// Internal helper that parses or transforms values for `map_hide_relayer_invoke_error` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn map_hide_relayer_invoke_error(err: AppError) -> AppError {
+    match err {
+        AppError::BlockchainRPC(message) => {
+            let lower = message.to_ascii_lowercase();
+            let is_verifier_entrypoint_missing = lower.contains("entrypoint_not_found")
+                && (lower
+                    .contains("0xf7a2c0e06dd94ce04c20d2bd7dcabb38ce8302ca6eeae240f28e9c8c481533")
+                    || lower.contains("verify_groth16_proof_bls12_381"));
+            if is_verifier_entrypoint_missing {
+                return AppError::BadRequest(
+                    "ShieldedPoolV2 verifier is misconfigured on-chain. Set ShieldedPoolV2 verifier to a Garaga Groth16 BLS contract that exposes verify_groth16_proof_bls12_381."
+                        .to_string(),
+                );
+            }
+            AppError::BlockchainRPC(message)
+        }
+        other => other,
+    }
 }
 
 // Internal helper that supports `call_swap_route_with_retry` operations in the swap flow.
@@ -1333,6 +1511,35 @@ async fn read_erc20_balance_parts(
     }
     Err(AppError::BadRequest(
         "Failed to read on-chain token liquidity (balance_of)".to_string(),
+    ))
+}
+
+// Internal helper that fetches data for `read_erc20_allowance_parts` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn read_erc20_allowance_parts(
+    reader: &OnchainReader,
+    token: Felt,
+    owner: Felt,
+    spender: Felt,
+) -> Result<(Felt, Felt)> {
+    for selector_name in ["allowance"] {
+        let selector = get_selector_from_name(selector_name)
+            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+        let response = reader
+            .call(FunctionCall {
+                contract_address: token,
+                entry_point_selector: selector,
+                calldata: vec![owner, spender],
+            })
+            .await;
+        if let Ok(values) = response {
+            if values.len() >= 2 {
+                return Ok((values[0], values[1]));
+            }
+        }
+    }
+    Err(AppError::BadRequest(
+        "Failed to read on-chain token allowance".to_string(),
     ))
 }
 
@@ -1927,15 +2134,18 @@ async fn verify_onchain_swap_tx_hash(
 // Keeps validation, normalization, and intent-binding logic centralized.
 async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
     let symbol = token.to_ascii_uppercase();
-    let price: Option<f64> = sqlx::query_scalar(
-        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
-    )
-    .bind(&symbol)
-    .fetch_optional(state.db.pool())
-    .await?;
-    Ok(price
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or_else(|| fallback_price_for(&symbol)))
+    for candidate in symbol_candidates_for(&symbol) {
+        let prices: Vec<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
+        )
+        .bind(&candidate)
+        .fetch_all(state.db.pool())
+        .await?;
+        if let Some(sane) = first_sane_price(&candidate, &prices) {
+            return Ok(sane);
+        }
+    }
+    Ok(fallback_price_for(&symbol))
 }
 
 // Internal helper that supports `estimated_time_for_dex` operations in the swap flow.
@@ -2147,11 +2357,14 @@ pub async fn execute_swap(
     }
 
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
-    let use_relayer_pool_hide = should_hide && hide_balance_relayer_pool_enabled();
+    let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    // Keep relayer path for Hide mode, but allow explicit wallet-signed fallback when tx hash is provided.
+    let use_relayer_pool_hide =
+        should_hide && hide_balance_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
 
     let (tx_hash, onchain_block_number, is_user_signed_onchain, privacy_verification_tx) =
         if use_relayer_pool_hide {
-            let executor = resolve_private_action_executor_felt(&state.config)?;
+            let executor = resolve_private_action_executor_felt_for_swap_hide(&state).await?;
             let verifier_kind = parse_privacy_verifier_kind(
                 req.privacy
                     .as_ref()
@@ -2223,6 +2436,7 @@ pub async fn execute_swap(
             let mut relayer_calls: Vec<Call> = Vec::new();
             if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
                 let commitment_felt = parse_felt(payload.commitment.trim())?;
+                let user_felt = parse_felt(&user_address)?;
                 let note_registered =
                     shielded_note_registered(&state, executor, commitment_felt).await?;
                 if !note_registered {
@@ -2238,14 +2452,63 @@ pub async fn execute_swap(
                             onchain_context.amount_high,
                         )?);
                     }
-                    relayer_calls.push(build_erc20_approve_call(
-                        onchain_context.from_token,
-                        executor,
+                    let reader = OnchainReader::from_config(&state.config)?;
+                    let (balance_low, balance_high) =
+                        read_erc20_balance_parts(&reader, onchain_context.from_token, user_felt)
+                            .await?;
+                    if u256_is_greater(
                         onchain_context.amount_low,
                         onchain_context.amount_high,
-                    )?);
-                    relayer_calls.push(build_shielded_deposit_fixed_call(
+                        balance_low,
+                        balance_high,
+                        "requested hide deposit",
+                        "user balance",
+                    )? {
+                        let available = onchain_u256_to_f64(
+                            balance_low,
+                            balance_high,
+                            token_decimals(&req.from_token),
+                        )
+                        .unwrap_or(0.0);
+                        return Err(AppError::BadRequest(format!(
+                            "Shielded note funding failed: insufficient {} balance. Needed {}, available {:.8}.",
+                            req.from_token.to_ascii_uppercase(),
+                            req.amount,
+                            available
+                        )));
+                    }
+                    let (allowance_low, allowance_high) = read_erc20_allowance_parts(
+                        &reader,
+                        onchain_context.from_token,
+                        user_felt,
                         executor,
+                    )
+                    .await?;
+                    if u256_is_greater(
+                        onchain_context.amount_low,
+                        onchain_context.amount_high,
+                        allowance_low,
+                        allowance_high,
+                        "requested hide deposit",
+                        "token allowance",
+                    )? {
+                        let approved = onchain_u256_to_f64(
+                            allowance_low,
+                            allowance_high,
+                            token_decimals(&req.from_token),
+                        )
+                        .unwrap_or(0.0);
+                        return Err(AppError::BadRequest(format!(
+                            "Shielded note funding failed: insufficient allowance. Approve {} {} to executor {} first (current allowance {:.8}).",
+                            req.amount,
+                            req.from_token.to_ascii_uppercase(),
+                            felt_hex(executor),
+                            approved
+                        )));
+                    }
+                    relayer_calls.push(build_shielded_deposit_fixed_for_call(
+                        executor,
+                        user_felt,
                         onchain_context.from_token,
                         commitment_felt,
                     )?);
@@ -2266,7 +2529,10 @@ pub async fn execute_swap(
             )?;
             relayer_calls.push(submit_call);
             relayer_calls.push(execute_call);
-            let tx_hash_felt = invoker.invoke_many(relayer_calls).await?;
+            let tx_hash_felt = invoker
+                .invoke_many(relayer_calls)
+                .await
+                .map_err(map_hide_relayer_invoke_error)?;
             let tx_hash = format!("{:#x}", tx_hash_felt);
             tracing::info!(
                 "Submitted hide swap via relayer pool user={} tx_hash={} executor={}",
@@ -2276,8 +2542,7 @@ pub async fn execute_swap(
             );
             (tx_hash.clone(), 0_i64, false, Some(tx_hash))
         } else {
-            let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-            let onchain_tx_hash = onchain_tx_hash.ok_or_else(|| {
+            let onchain_tx_hash = normalized_onchain_tx_hash.clone().ok_or_else(|| {
                 AppError::BadRequest(
                     "Swap requires onchain_tx_hash. Frontend must submit user-signed Starknet tx."
                         .to_string(),
@@ -2340,7 +2605,10 @@ pub async fn execute_swap(
     let total_fee = total_fee(amount_in, &req.mode, nft_discount_percent);
     let from_price = latest_price_usd(&state, &req.from_token).await?;
     let to_price = latest_price_usd(&state, &req.to_token).await?;
-    let volume_usd = normalize_usd_volume(amount_in * from_price, expected_out * to_price);
+    let volume_usd = sanitize_usd_notional(normalize_usd_volume(
+        amount_in * from_price,
+        expected_out * to_price,
+    ));
 
     // Simpan ke database
     let tx = crate::models::Transaction {
@@ -2474,13 +2742,16 @@ mod tests {
     }
 
     #[test]
-    // Internal helper that runs side-effecting logic for `ensure_supported_starknet_swap_pair_rejects_non_starknet_tokens` in the swap flow.
+    // Internal helper that runs side-effecting logic for `ensure_supported_starknet_swap_pair_accepts_listed_tokens` in the swap flow.
     // Keeps validation, normalization, and intent-binding logic centralized.
-    fn ensure_supported_starknet_swap_pair_rejects_non_starknet_tokens() {
+    fn ensure_supported_starknet_swap_pair_accepts_listed_tokens() {
         assert!(ensure_supported_starknet_swap_pair("STRK", "USDT").is_ok());
         assert!(ensure_supported_starknet_swap_pair("WBTC", "CAREL").is_ok());
+        assert!(ensure_supported_starknet_swap_pair("USDC", "CAREL").is_ok());
         assert!(ensure_supported_starknet_swap_pair("ETH", "USDT").is_err());
         assert!(ensure_supported_starknet_swap_pair("BTC", "STRK").is_err());
+        assert!(ensure_supported_starknet_swap_pair("STRK", "STRK").is_err());
+        assert!(ensure_supported_starknet_swap_pair("DOGE", "STRK").is_err());
     }
 
     #[test]

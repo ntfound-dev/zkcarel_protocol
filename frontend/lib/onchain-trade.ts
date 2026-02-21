@@ -85,6 +85,7 @@ export async function invokeStarknetCallsFromWallet(
     entrypoint: call.entrypoint,
     calldata: call.calldata.map((item) => toHexFelt(item)),
   }))
+  const attemptErrors: string[] = []
   const requiresStrictWalletInvoke =
     normalizedCalls.length > 2 ||
     normalizedCalls.some((call) => call.entrypoint === "submit_private_action")
@@ -117,8 +118,12 @@ export async function invokeStarknetCallsFromWallet(
         const result = await account.execute(payload)
         const txHash = extractTxHash(result)
         if (txHash) return txHash
-      } catch {
-        // fallback to next payload shape
+        attemptErrors.push("account.execute returned without tx hash")
+      } catch (error) {
+        if (isWalletUserRejectedError(error)) {
+          throw new Error("Wallet signature was rejected.")
+        }
+        attemptErrors.push(`account.execute failed: ${walletErrorMessage(error)}`)
       }
     }
   }
@@ -165,11 +170,19 @@ export async function invokeStarknetCallsFromWallet(
       const result = await requestStarknet(injected, payload)
       const txHash = extractTxHash(result)
       if (txHash) return txHash
-    } catch {
-      // continue
+      attemptErrors.push(`wallet request returned without tx hash (${payload.type})`)
+    } catch (error) {
+      if (isWalletUserRejectedError(error)) {
+        throw new Error("Wallet signature was rejected.")
+      }
+      attemptErrors.push(`${payload.type} failed: ${walletErrorMessage(error)}`)
     }
   }
 
+  const detail = attemptErrors.length > 0 ? attemptErrors[attemptErrors.length - 1] : null
+  if (detail) {
+    throw new Error(`Failed to submit Starknet transaction from wallet. ${detail}`)
+  }
   throw new Error("Failed to submit Starknet transaction from wallet.")
 }
 
@@ -1085,6 +1098,56 @@ function parseChainId(value: unknown): string | null {
     )
   }
   return null
+}
+
+/**
+ * Checks conditions for `isWalletUserRejectedError`.
+ *
+ * @param error - Input used by `isWalletUserRejectedError` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
+function isWalletUserRejectedError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code
+  if (code === 4001 || code === "4001") return true
+  const message = walletErrorMessage(error).toLowerCase()
+  return (
+    message.includes("user rejected") ||
+    message.includes("rejected by user") ||
+    message.includes("user denied") ||
+    message.includes("request rejected") ||
+    message.includes("cancelled") ||
+    message.includes("canceled")
+  )
+}
+
+/**
+ * Handles `walletErrorMessage` logic.
+ *
+ * @param error - Input used by `walletErrorMessage` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
+function walletErrorMessage(error: unknown): string {
+  if (!error) return "Unknown Starknet wallet error."
+  if (typeof error === "string") return error
+  if (error instanceof Error) return error.message || "Unknown Starknet wallet error."
+  if (typeof error === "object") {
+    const anyError = error as {
+      message?: unknown
+      data?: { message?: unknown }
+      error?: { message?: unknown }
+    }
+    const direct = anyError.message
+    if (typeof direct === "string" && direct.trim()) return direct
+    const nested = anyError.data?.message
+    if (typeof nested === "string" && nested.trim()) return nested
+    const nestedError = anyError.error?.message
+    if (typeof nestedError === "string" && nestedError.trim()) return nestedError
+  }
+  return String(error)
 }
 
 /**

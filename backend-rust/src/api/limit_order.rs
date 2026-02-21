@@ -11,7 +11,7 @@ use super::privacy::{
 };
 use super::swap::{parse_decimal_to_u256_parts, token_decimals};
 use crate::services::notification_service::{NotificationService, NotificationType};
-use crate::services::onchain::{parse_felt, OnchainInvoker, OnchainReader};
+use crate::services::onchain::{felt_to_u128, parse_felt, OnchainInvoker, OnchainReader};
 use crate::services::privacy_verifier::parse_privacy_verifier_kind;
 use crate::{
     // 1. Import modul hash agar terpakai
@@ -87,6 +87,32 @@ fn build_order_id(
     hash::hash_string(&order_data)
 }
 
+// Internal helper that checks conditions for `is_supported_limit_order_token` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn is_supported_limit_order_token(token: &str) -> bool {
+    matches!(
+        token.trim().to_ascii_uppercase().as_str(),
+        "USDT" | "USDC" | "STRK" | "CAREL"
+    )
+}
+
+// Internal helper that runs side-effecting logic for `ensure_supported_limit_order_pair` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn ensure_supported_limit_order_pair(from_token: &str, to_token: &str) -> Result<()> {
+    if from_token.trim().eq_ignore_ascii_case(to_token.trim()) {
+        return Err(crate::error::AppError::BadRequest(
+            "Source and destination tokens cannot be the same.".to_string(),
+        ));
+    }
+    if !is_supported_limit_order_token(from_token) || !is_supported_limit_order_token(to_token) {
+        return Err(crate::error::AppError::BadRequest(
+            "Limit order token is not listed. Supported symbols: USDT, USDC, STRK, CAREL."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 // Internal helper that supports `map_privacy_payload` operations in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn map_privacy_payload(
@@ -144,7 +170,14 @@ fn env_flag(name: &str, default: bool) -> bool {
 // Internal helper that supports `hide_balance_relayer_pool_enabled` operations in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_balance_relayer_pool_enabled() -> bool {
-    env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", true)
+    env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", false)
+}
+
+// Internal helper that supports `hide_balance_limit_order_relayer_pool_enabled` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn hide_balance_limit_order_relayer_pool_enabled() -> bool {
+    hide_balance_relayer_pool_enabled()
+        && env_flag("HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED", false)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -379,36 +412,20 @@ fn build_shielded_set_asset_rule_call(
     })
 }
 
-// Internal helper that builds inputs for `build_shielded_deposit_fixed_call` in the limit-order flow.
+// Internal helper that builds inputs for `build_shielded_deposit_fixed_for_call` in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-fn build_shielded_deposit_fixed_call(
+fn build_shielded_deposit_fixed_for_call(
     executor: Felt,
+    depositor: Felt,
     token: Felt,
     note_commitment: Felt,
 ) -> Result<Call> {
-    let selector = get_selector_from_name("deposit_fixed")
+    let selector = get_selector_from_name("deposit_fixed_for")
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
     Ok(Call {
         to: executor,
         selector,
-        calldata: vec![token, note_commitment],
-    })
-}
-
-// Internal helper that builds inputs for `build_erc20_approve_call` in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-fn build_erc20_approve_call(
-    token: Felt,
-    spender: Felt,
-    amount_low: Felt,
-    amount_high: Felt,
-) -> Result<Call> {
-    let selector = get_selector_from_name("approve")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    Ok(Call {
-        to: token,
-        selector,
-        calldata: vec![spender, amount_low, amount_high],
+        calldata: vec![depositor, token, note_commitment],
     })
 }
 
@@ -458,6 +475,92 @@ async fn shielded_fixed_amount(
     Ok((out[0], out[1]))
 }
 
+// Internal helper that supports `u256_is_greater` operations in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn u256_is_greater(
+    left_low: Felt,
+    left_high: Felt,
+    right_low: Felt,
+    right_high: Felt,
+    left_label: &str,
+    right_label: &str,
+) -> Result<bool> {
+    let left_low_u128 = felt_to_u128(&left_low).map_err(|_| {
+        crate::error::AppError::BadRequest(format!(
+            "Invalid {} (low) from on-chain response",
+            left_label
+        ))
+    })?;
+    let left_high_u128 = felt_to_u128(&left_high).map_err(|_| {
+        crate::error::AppError::BadRequest(format!(
+            "Invalid {} (high) from on-chain response",
+            left_label
+        ))
+    })?;
+    let right_low_u128 = felt_to_u128(&right_low).map_err(|_| {
+        crate::error::AppError::BadRequest(format!(
+            "Invalid {} (low) from on-chain response",
+            right_label
+        ))
+    })?;
+    let right_high_u128 = felt_to_u128(&right_high).map_err(|_| {
+        crate::error::AppError::BadRequest(format!(
+            "Invalid {} (high) from on-chain response",
+            right_label
+        ))
+    })?;
+    Ok((left_high_u128, left_low_u128) > (right_high_u128, right_low_u128))
+}
+
+// Internal helper that fetches data for `read_erc20_balance_parts` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn read_erc20_balance_parts(
+    reader: &OnchainReader,
+    token: Felt,
+    owner: Felt,
+) -> Result<(Felt, Felt)> {
+    let selector = get_selector_from_name("balance_of")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: token,
+            entry_point_selector: selector,
+            calldata: vec![owner],
+        })
+        .await?;
+    if out.len() < 2 {
+        return Err(crate::error::AppError::BadRequest(
+            "ERC20 balance_of returned invalid response".to_string(),
+        ));
+    }
+    Ok((out[0], out[1]))
+}
+
+// Internal helper that fetches data for `read_erc20_allowance_parts` in the limit-order flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn read_erc20_allowance_parts(
+    reader: &OnchainReader,
+    token: Felt,
+    owner: Felt,
+    spender: Felt,
+) -> Result<(Felt, Felt)> {
+    let selector = get_selector_from_name("allowance")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: token,
+            entry_point_selector: selector,
+            calldata: vec![owner, spender],
+        })
+        .await?;
+    if out.len() < 2 {
+        return Err(crate::error::AppError::BadRequest(
+            "ERC20 allowance returned invalid response".to_string(),
+        ));
+    }
+    Ok((out[0], out[1]))
+}
+
 // Struct bantuan untuk menghitung total
 #[derive(sqlx::FromRow)]
 struct CountResult {
@@ -472,6 +575,10 @@ pub async fn create_order(
 ) -> Result<Json<ApiResponse<CreateOrderResponse>>> {
     let auth_subject = require_user(&headers, &state).await?;
     let user_address = require_starknet_user(&headers, &state).await?;
+    let _ = state
+        .db
+        .expire_limit_orders_for_owner(&user_address)
+        .await?;
 
     let amount: f64 = req
         .amount
@@ -488,6 +595,7 @@ pub async fn create_order(
             "Amount and price must be greater than 0".to_string(),
         ));
     }
+    ensure_supported_limit_order_pair(&req.from_token, &req.to_token)?;
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
     let expiry_duration = expiry_duration_for(&req.expiry);
     let now = chrono::Utc::now();
@@ -503,7 +611,7 @@ pub async fn create_order(
             now.timestamp(),
         )
     });
-    let use_relayer_pool_hide = should_hide && hide_balance_relayer_pool_enabled();
+    let use_relayer_pool_hide = should_hide && hide_balance_limit_order_relayer_pool_enabled();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
         let action_target = resolve_limit_order_target_felt(&state)?;
@@ -566,6 +674,7 @@ pub async fn create_order(
         let mut relayer_calls: Vec<Call> = Vec::new();
         if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
+            let user_felt = parse_felt(&user_address)?;
             let note_registered =
                 shielded_note_registered(&state, executor, commitment_felt).await?;
             if !note_registered {
@@ -579,14 +688,43 @@ pub async fn create_order(
                         amount_high,
                     )?);
                 }
-                relayer_calls.push(build_erc20_approve_call(
-                    from_token,
-                    executor,
+                let reader = OnchainReader::from_config(&state.config)?;
+                let (balance_low, balance_high) =
+                    read_erc20_balance_parts(&reader, from_token, user_felt).await?;
+                if u256_is_greater(
                     amount_low,
                     amount_high,
-                )?);
-                relayer_calls.push(build_shielded_deposit_fixed_call(
+                    balance_low,
+                    balance_high,
+                    "requested hide deposit",
+                    "user balance",
+                )? {
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "Shielded note funding failed: insufficient {} balance. Needed {}.",
+                        req.from_token.to_ascii_uppercase(),
+                        req.amount
+                    )));
+                }
+                let (allowance_low, allowance_high) =
+                    read_erc20_allowance_parts(&reader, from_token, user_felt, executor).await?;
+                if u256_is_greater(
+                    amount_low,
+                    amount_high,
+                    allowance_low,
+                    allowance_high,
+                    "requested hide deposit",
+                    "token allowance",
+                )? {
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "Shielded note funding failed: insufficient allowance. Approve {} {} to executor {} first.",
+                        req.amount,
+                        req.from_token.to_ascii_uppercase(),
+                        format!("{:#x}", executor)
+                    )));
+                }
+                relayer_calls.push(build_shielded_deposit_fixed_for_call(
                     executor,
+                    user_felt,
                     from_token,
                     commitment_felt,
                 )?);
@@ -713,6 +851,10 @@ pub async fn list_orders(
     axum::extract::Query(query): axum::extract::Query<ListOrdersQuery>,
 ) -> Result<Json<ApiResponse<PaginatedResponse<LimitOrder>>>> {
     let user_address = require_starknet_user(&headers, &state).await?;
+    let _ = state
+        .db
+        .expire_limit_orders_for_owner(&user_address)
+        .await?;
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(10);
     let offset = (page - 1) * limit;
@@ -782,6 +924,10 @@ pub async fn cancel_order(
 ) -> Result<Json<ApiResponse<String>>> {
     let auth_subject = require_user(&headers, &state).await?;
     let user_address = require_starknet_user(&headers, &state).await?;
+    let _ = state
+        .db
+        .expire_limit_orders_for_owner(&user_address)
+        .await?;
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
     let order = state
         .db
@@ -800,8 +946,13 @@ pub async fn cancel_order(
             "Order already filled".to_string(),
         ));
     }
+    if order.status == 4 {
+        return Err(crate::error::AppError::BadRequest(
+            "Order already expired. Create a new order if you still want to trade.".to_string(),
+        ));
+    }
 
-    let use_relayer_pool_hide = should_hide && hide_balance_relayer_pool_enabled();
+    let use_relayer_pool_hide = should_hide && hide_balance_limit_order_relayer_pool_enabled();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
         let action_target = resolve_limit_order_target_felt(&state)?;
@@ -863,31 +1014,63 @@ pub async fn cancel_order(
         )?;
         let mut relayer_calls: Vec<Call> = Vec::new();
         if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-            let amount_raw = order.amount.to_string();
-            let (amount_low, amount_high) =
-                parse_decimal_to_u256_parts(&amount_raw, token_decimals(&order.from_token))?;
             let commitment_felt = parse_felt(payload.commitment.trim())?;
+            let user_felt = parse_felt(&user_address)?;
             let note_registered =
                 shielded_note_registered(&state, executor, commitment_felt).await?;
             if !note_registered {
+                let (mut note_amount_low, mut note_amount_high) =
+                    shielded_fixed_amount(&state, executor, approval_token).await?;
+                if note_amount_low == Felt::ZERO && note_amount_high == Felt::ZERO {
+                    note_amount_low = Felt::from(1_u8);
+                    note_amount_high = Felt::ZERO;
+                }
                 let (fixed_low, fixed_high) =
                     shielded_fixed_amount(&state, executor, approval_token).await?;
-                if fixed_low != amount_low || fixed_high != amount_high {
+                if fixed_low != note_amount_low || fixed_high != note_amount_high {
                     relayer_calls.push(build_shielded_set_asset_rule_call(
                         executor,
                         approval_token,
-                        amount_low,
-                        amount_high,
+                        note_amount_low,
+                        note_amount_high,
                     )?);
                 }
-                relayer_calls.push(build_erc20_approve_call(
-                    approval_token,
+                let reader = OnchainReader::from_config(&state.config)?;
+                let (balance_low, balance_high) =
+                    read_erc20_balance_parts(&reader, approval_token, user_felt).await?;
+                if u256_is_greater(
+                    note_amount_low,
+                    note_amount_high,
+                    balance_low,
+                    balance_high,
+                    "requested hide deposit",
+                    "user balance",
+                )? {
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "Shielded note funding failed: insufficient {} balance for cancel action.",
+                        order.from_token.to_ascii_uppercase()
+                    )));
+                }
+                let (allowance_low, allowance_high) =
+                    read_erc20_allowance_parts(&reader, approval_token, user_felt, executor)
+                        .await?;
+                if u256_is_greater(
+                    note_amount_low,
+                    note_amount_high,
+                    allowance_low,
+                    allowance_high,
+                    "requested hide deposit",
+                    "token allowance",
+                )? {
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "Shielded note funding failed: insufficient allowance. Approve one-time spending limit for token {} to executor {} first.",
+                        order.from_token.to_ascii_uppercase(),
+                        format!("{:#x}", executor)
+                    )));
+                }
+                relayer_calls.push(build_shielded_deposit_fixed_for_call(
                     executor,
-                    amount_low,
-                    amount_high,
-                )?);
-                relayer_calls.push(build_shielded_deposit_fixed_call(
-                    executor,
+                    user_felt,
                     approval_token,
                     commitment_felt,
                 )?);
@@ -969,5 +1152,16 @@ mod tests {
         let order_data = format!("{}{}{}{}{}", "0xabc", "ETH", "USDT", 10.0, 1_700_000_000);
         let expected = hash::hash_string(&order_data);
         assert_eq!(id, expected);
+    }
+
+    #[test]
+    // Internal helper that runs side-effecting logic for `ensure_supported_limit_order_pair_accepts_listed_tokens` in the limit-order flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
+    fn ensure_supported_limit_order_pair_accepts_listed_tokens() {
+        assert!(ensure_supported_limit_order_pair("STRK", "USDT").is_ok());
+        assert!(ensure_supported_limit_order_pair("CAREL", "USDC").is_ok());
+        assert!(ensure_supported_limit_order_pair("WBTC", "USDT").is_err());
+        assert!(ensure_supported_limit_order_pair("ETH", "USDT").is_err());
+        assert!(ensure_supported_limit_order_pair("USDT", "USDT").is_err());
     }
 }

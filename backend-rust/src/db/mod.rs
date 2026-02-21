@@ -41,6 +41,7 @@ mod tests {
             ai_signature_verifier_address: None,
             bridge_aggregator_address: "0x0000000000000000000000000000000000000007".to_string(),
             zk_privacy_router_address: "0x0000000000000000000000000000000000000008".to_string(),
+            battleship_garaga_address: None,
             privacy_router_address: None,
             privacy_auto_garaga_payload_file: None,
             privacy_auto_garaga_proof_file: None,
@@ -65,6 +66,9 @@ mod tests {
             jwt_secret: "test_secret".to_string(),
             jwt_expiry_hours: 24,
             openai_api_key: None,
+            cairo_coder_api_key: None,
+            cairo_coder_api_url: "https://api.cairo-coder.com/v1/chat/completions".to_string(),
+            cairo_coder_model: None,
             gemini_api_key: None,
             gemini_api_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
             gemini_model: "gemini-2.0-flash".to_string(),
@@ -74,6 +78,7 @@ mod tests {
             social_tasks_json: None,
             admin_manual_key: None,
             dev_wallet_address: None,
+            ai_level_burn_address: None,
             layerswap_api_key: None,
             layerswap_api_url: "https://api.layerswap.io/api/v2".to_string(),
             atomiq_api_key: None,
@@ -270,6 +275,123 @@ impl Database {
             .fetch_optional(&self.pool)
             .await?;
         Ok(row)
+    }
+
+    /// Fetches data for `get_user_ai_level`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub async fn get_user_ai_level(&self, address: &str) -> Result<u8> {
+        ensure_varchar_max("user_ai_levels.user_address", address, 66)?;
+        let level = sqlx::query_scalar::<_, i16>(
+            "SELECT level FROM user_ai_levels WHERE user_address = $1 LIMIT 1",
+        )
+        .bind(address)
+        .fetch_optional(&self.pool)
+        .await?
+        .unwrap_or(1);
+        Ok(level.clamp(1, 3) as u8)
+    }
+
+    /// Updates state for `upsert_user_ai_level`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub async fn upsert_user_ai_level(&self, address: &str, level: u8) -> Result<u8> {
+        ensure_varchar_max("user_ai_levels.user_address", address, 66)?;
+        if !(1..=3).contains(&level) {
+            return Err(AppError::BadRequest("Invalid AI level".to_string()));
+        }
+
+        let mut db_tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO users (address, last_active)
+             VALUES ($1, NOW())
+             ON CONFLICT (address)
+             DO UPDATE SET last_active = NOW()",
+        )
+        .bind(address)
+        .execute(&mut *db_tx)
+        .await?;
+
+        let applied = sqlx::query_scalar::<_, i16>(
+            "INSERT INTO user_ai_levels (user_address, level, upgraded_at, updated_at)
+             VALUES ($1, $2, CASE WHEN $2 > 1 THEN NOW() ELSE NULL END, NOW())
+             ON CONFLICT (user_address)
+             DO UPDATE
+             SET level = GREATEST(user_ai_levels.level, EXCLUDED.level),
+                 upgraded_at = CASE
+                    WHEN GREATEST(user_ai_levels.level, EXCLUDED.level) > 1
+                        THEN COALESCE(user_ai_levels.upgraded_at, NOW())
+                    ELSE user_ai_levels.upgraded_at
+                 END,
+                 updated_at = NOW()
+             RETURNING level",
+        )
+        .bind(address)
+        .bind(level as i16)
+        .fetch_one(&mut *db_tx)
+        .await?;
+
+        db_tx.commit().await?;
+        Ok(applied.clamp(1, 3) as u8)
+    }
+
+    /// Updates state for `record_ai_level_upgrade`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub async fn record_ai_level_upgrade(
+        &self,
+        user_address: &str,
+        previous_level: u8,
+        target_level: u8,
+        payment_carel: rust_decimal::Decimal,
+        onchain_tx_hash: &str,
+        block_number: i64,
+    ) -> Result<()> {
+        ensure_varchar_max("ai_level_upgrades.user_address", user_address, 66)?;
+        ensure_varchar_max("ai_level_upgrades.onchain_tx_hash", onchain_tx_hash, 66)?;
+        if !(1..=3).contains(&previous_level) || !(2..=3).contains(&target_level) {
+            return Err(AppError::BadRequest(
+                "Invalid AI level upgrade payload".to_string(),
+            ));
+        }
+        sqlx::query(
+            "INSERT INTO ai_level_upgrades
+                (user_address, previous_level, target_level, payment_carel, onchain_tx_hash, block_number)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(user_address)
+        .bind(previous_level as i16)
+        .bind(target_level as i16)
+        .bind(payment_carel)
+        .bind(onchain_tx_hash)
+        .bind(block_number)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Fetches data for `find_user_by_sumo_subject`.
@@ -1372,6 +1494,27 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(orders)
+    }
+
+    /// Marks expired limit orders for a specific owner.
+    ///
+    /// Status transition:
+    /// - 0 (active) -> 4 (expired)
+    /// - 1 (partial) -> 4 (expired)
+    pub async fn expire_limit_orders_for_owner(&self, owner: &str) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE limit_orders
+            SET status = 4
+            WHERE owner = $1
+              AND status IN (0, 1)
+              AND expiry <= NOW()
+            "#,
+        )
+        .bind(owner)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     /// Updates state for `update_order_status`.

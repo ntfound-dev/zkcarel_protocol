@@ -380,6 +380,8 @@ export interface AIResponse {
   response: string
   actions: string[]
   confidence: number
+  level?: number
+  data?: Record<string, unknown> | null
 }
 
 export interface PendingActionsResponse {
@@ -391,6 +393,14 @@ export interface AiRuntimeConfigResponse {
   executor_address?: string | null
 }
 
+export interface AiExecutorReadyResponse {
+  ready: boolean
+  burner_role_granted: boolean
+  updated_onchain: boolean
+  tx_hash?: string | null
+  message: string
+}
+
 export interface PrepareAiActionResponse {
   tx_hash: string
   action_type: number
@@ -398,6 +408,26 @@ export interface PrepareAiActionResponse {
   hashes_prepared: number
   from_timestamp: number
   to_timestamp: number
+}
+
+export interface AiLevelResponse {
+  current_level: number
+  max_level: number
+  next_level?: number | null
+  next_upgrade_cost_carel?: string | null
+  payment_address_configured?: boolean
+  payment_address?: string | null
+  burn_address_configured: boolean
+  burn_address?: string | null
+}
+
+export interface AiUpgradeLevelResponse {
+  previous_level: number
+  current_level: number
+  target_level: number
+  burned_carel: string
+  onchain_tx_hash: string
+  block_number: number
 }
 
 export interface PrivacySubmitResponse {
@@ -610,6 +640,10 @@ type ApiFetchOptions = RequestInit & {
 
 const DEFAULT_TIMEOUT_MS = 15000
 const AUTH_TOKEN_STORAGE_KEY = "auth_token"
+const WALLET_ADDRESS_STORAGE_KEY = "wallet_address"
+const WALLET_NETWORK_STORAGE_KEY = "wallet_network"
+const STARKNET_ADDRESS_STORAGE_KEY = "wallet_address_starknet"
+const STARKNET_ADDRESS_HEADER = "X-Starknet-Address"
 const AUTH_EXPIRED_EMIT_DEDUPE_MS = 5000
 const INVALID_TOKEN_MESSAGE_REGEX = /invalid or expired token|invalid token|token expired|jwt/i
 const SHARED_READ_CACHE_TTL_MS = 8000
@@ -640,6 +674,17 @@ const onchainBalancesCache = new Map<string, TimedCacheEntry<OnchainBalancesResp
 function getStoredAuthToken() {
   if (typeof window === "undefined") return null
   return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+}
+
+// Internal helper that supports `getStoredActiveStarknetAddress` operations.
+function getStoredActiveStarknetAddress() {
+  if (typeof window === "undefined") return null
+  const explicit = (window.localStorage.getItem(STARKNET_ADDRESS_STORAGE_KEY) || "").trim()
+  if (explicit) return explicit
+  const network = (window.localStorage.getItem(WALLET_NETWORK_STORAGE_KEY) || "").trim().toLowerCase()
+  if (network !== "starknet") return null
+  const fallback = (window.localStorage.getItem(WALLET_ADDRESS_STORAGE_KEY) || "").trim()
+  return fallback || null
 }
 
 /**
@@ -792,6 +837,12 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
   const headers = new Headers(requestInit?.headers || {})
   headers.set("Content-Type", "application/json")
   headers.set("Accept", "application/json")
+  if (typeof window !== "undefined" && !headers.has(STARKNET_ADDRESS_HEADER)) {
+    const starknetAddress = getStoredActiveStarknetAddress()
+    if (starknetAddress) {
+      headers.set(STARKNET_ADDRESS_HEADER, starknetAddress)
+    }
+  }
   if (typeof window !== "undefined" && !headers.has("Authorization")) {
     const token = getStoredAuthToken()
     if (token) {
@@ -1853,6 +1904,7 @@ export async function executeAiCommand(payload: { command: string; context?: str
     body: JSON.stringify(payload),
     context: "AI command",
     suppressErrorNotification: true,
+    timeoutMs: 45000,
   })
 }
 
@@ -1877,6 +1929,52 @@ export async function getAiRuntimeConfig() {
   return apiFetch<AiRuntimeConfigResponse>("/api/v1/ai/config", {
     context: "AI runtime config",
     suppressErrorNotification: true,
+  })
+}
+
+/**
+ * Runs `ensureAiExecutorReady` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
+export async function ensureAiExecutorReady() {
+  return apiFetch<AiExecutorReadyResponse>("/api/v1/ai/ensure-executor", {
+    method: "POST",
+    context: "AI executor preflight",
+    suppressErrorNotification: true,
+    timeoutMs: 60000,
+  })
+}
+
+/**
+ * Runs `getAiLevel` as part of the frontend API client workflow.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
+export async function getAiLevel() {
+  return apiFetch<AiLevelResponse>("/api/v1/ai/level", {
+    context: "AI level",
+    suppressErrorNotification: true,
+  })
+}
+
+/**
+ * Runs `upgradeAiLevel` as part of the frontend API client workflow.
+ *
+ * @param payload - Input used to compute or dispatch the `upgradeAiLevel` operation.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
+export async function upgradeAiLevel(payload: { target_level: number; onchain_tx_hash: string }) {
+  return apiFetch<AiUpgradeLevelResponse>("/api/v1/ai/upgrade", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "AI level upgrade",
+    suppressErrorNotification: true,
+    timeoutMs: 60000,
   })
 }
 

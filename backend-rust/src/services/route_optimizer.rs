@@ -23,13 +23,13 @@ fn normalize_chain(value: &str) -> String {
 // Internal helper that supports `bridge_providers_for` operations.
 fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     match (from, to) {
+        ("ethereum", "bitcoin") => vec![BRIDGE_GARDEN.to_string()],
+        ("bitcoin", "ethereum") => vec![BRIDGE_GARDEN.to_string()],
         ("bitcoin", "starknet") => vec![BRIDGE_GARDEN.to_string()],
         ("starknet", "bitcoin") => vec![BRIDGE_GARDEN.to_string()],
-        ("bitcoin", "ethereum") => vec![BRIDGE_GARDEN.to_string()],
-        ("ethereum", "bitcoin") => vec![BRIDGE_GARDEN.to_string()],
-        ("ethereum", "starknet") => vec![BRIDGE_STARKGATE.to_string(), BRIDGE_GARDEN.to_string()],
-        ("starknet", "ethereum") => vec![BRIDGE_STARKGATE.to_string(), BRIDGE_GARDEN.to_string()],
-        _ => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
+        ("ethereum", "starknet") => vec![BRIDGE_GARDEN.to_string()],
+        ("starknet", "ethereum") => vec![BRIDGE_GARDEN.to_string()],
+        _ => vec![],
     }
 }
 
@@ -76,24 +76,8 @@ fn garden_token_supported_on_chain(chain: &str, token: &str) -> bool {
     let token = normalize_token_symbol(token);
     match chain.as_str() {
         "bitcoin" => token == "BTC" || token == "WBTC",
-        "ethereum" => {
-            token == "ETH"
-                || token == "BTC"
-                || token == "WBTC"
-                || token == "USDC"
-                || token == "USDT"
-                || token == "CAREL"
-                || token == "STRK"
-        }
-        "starknet" => {
-            // Garden currently rejects starknet ETH as destination on Sepolia.
-            token == "STRK"
-                || token == "BTC"
-                || token == "WBTC"
-                || token == "USDC"
-                || token == "USDT"
-                || token == "CAREL"
-        }
+        "ethereum" => token == "ETH",
+        "starknet" => token == "WBTC",
         _ => false,
     }
 }
@@ -101,10 +85,10 @@ fn garden_token_supported_on_chain(chain: &str, token: &str) -> bool {
 // Internal helper that supports `garden_supports_route` operations.
 fn garden_supports_route(from: &str, to: &str) -> bool {
     match (from, to) {
-        ("bitcoin", "starknet")
-        | ("starknet", "bitcoin")
+        ("ethereum", "bitcoin")
         | ("bitcoin", "ethereum")
-        | ("ethereum", "bitcoin")
+        | ("bitcoin", "starknet")
+        | ("starknet", "bitcoin")
         | ("ethereum", "starknet")
         | ("starknet", "ethereum") => true,
         _ => false,
@@ -126,6 +110,27 @@ fn has_non_empty(value: Option<&String>) -> bool {
     value
         .map(|item| is_active_config_value(item))
         .unwrap_or(false)
+}
+
+// Internal helper that supports `bridge_force_garden_enabled` operations.
+fn bridge_force_garden_enabled() -> bool {
+    std::env::var("BRIDGE_FORCE_GARDEN")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+// Internal helper that supports `apply_bridge_provider_mode` operations.
+fn apply_bridge_provider_mode(mut providers: Vec<String>, force_garden: bool) -> Vec<String> {
+    if force_garden && providers.iter().any(|provider| provider == BRIDGE_GARDEN) {
+        providers.retain(|provider| provider == BRIDGE_GARDEN);
+    }
+    providers
 }
 
 // Internal helper that supports `bridge_score` operations.
@@ -271,7 +276,10 @@ impl RouteOptimizer {
         let from_chain_normalized = normalize_chain(from_chain);
         let to_chain_normalized = normalize_chain(to_chain);
         let expected_providers = bridge_providers_for(&from_chain_normalized, &to_chain_normalized);
-        let mut providers = self.get_bridge_providers(&from_chain_normalized, &to_chain_normalized);
+        let mut providers = apply_bridge_provider_mode(
+            self.get_bridge_providers(&from_chain_normalized, &to_chain_normalized),
+            bridge_force_garden_enabled(),
+        );
         let normalized_from_token = normalize_token_symbol(token);
         let normalized_to_token = to_token
             .map(normalize_token_symbol)
@@ -293,7 +301,7 @@ impl RouteOptimizer {
             normalized_to_token.as_deref(),
         ) {
             return Err(crate::error::AppError::BadRequest(
-                "Bridge pair is not supported on current testnet routes. Supported pairs: ETH<->BTC, BTC<->WBTC, ETH<->WBTC."
+                "Bridge pair is not supported on current testnet routes. Supported pairs: ETH<->BTC, BTC<->WBTC, and ETH<->WBTC (Ethereum<->Starknet)."
                     .to_string(),
             ));
         }
@@ -586,6 +594,50 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `bridge_providers_for_ethereum_to_starknet_prefers_garden` operations.
+    fn bridge_providers_for_ethereum_to_starknet_prefers_garden() {
+        let providers = bridge_providers_for("ethereum", "starknet");
+        assert_eq!(providers.first().map(String::as_str), Some(BRIDGE_GARDEN));
+        assert_eq!(providers.len(), 1);
+    }
+
+    #[test]
+    // Internal helper that supports `bridge_providers_for_bitcoin_to_ethereum_prefers_garden` operations.
+    fn bridge_providers_for_bitcoin_to_ethereum_prefers_garden() {
+        let providers = bridge_providers_for("bitcoin", "ethereum");
+        assert_eq!(providers.first().map(String::as_str), Some(BRIDGE_GARDEN));
+        assert_eq!(providers.len(), 1);
+    }
+
+    #[test]
+    // Internal helper that supports `bridge_providers_for_starknet_to_bitcoin_prefers_garden` operations.
+    fn bridge_providers_for_starknet_to_bitcoin_prefers_garden() {
+        let providers = bridge_providers_for("starknet", "bitcoin");
+        assert_eq!(providers.first().map(String::as_str), Some(BRIDGE_GARDEN));
+        assert_eq!(providers.len(), 1);
+    }
+
+    #[test]
+    // Internal helper that supports `apply_bridge_provider_mode_forced_garden` operations.
+    fn apply_bridge_provider_mode_forced_garden() {
+        let providers = vec![
+            BRIDGE_STARKGATE.to_string(),
+            BRIDGE_GARDEN.to_string(),
+            BRIDGE_ATOMIQ.to_string(),
+        ];
+        let filtered = apply_bridge_provider_mode(providers, true);
+        assert_eq!(filtered, vec![BRIDGE_GARDEN.to_string()]);
+    }
+
+    #[test]
+    // Internal helper that supports `apply_bridge_provider_mode_without_garden_fallback` operations.
+    fn apply_bridge_provider_mode_without_garden_fallback() {
+        let providers = vec![BRIDGE_STARKGATE.to_string(), BRIDGE_ATOMIQ.to_string()];
+        let filtered = apply_bridge_provider_mode(providers.clone(), true);
+        assert_eq!(filtered, providers);
+    }
+
+    #[test]
     // Internal helper that supports `garden_destination_token_for_bitcoin_is_btc` operations.
     fn garden_destination_token_for_bitcoin_is_btc() {
         assert_eq!(garden_destination_token("bitcoin", "ETH", None), "BTC");
@@ -605,6 +657,9 @@ mod tests {
     // Internal helper that supports `garden_supports_common_routes` operations.
     fn garden_supports_common_routes() {
         assert!(garden_supports_route("ethereum", "bitcoin"));
+        assert!(garden_supports_route("bitcoin", "ethereum"));
+        assert!(garden_supports_route("bitcoin", "starknet"));
+        assert!(garden_supports_route("starknet", "bitcoin"));
         assert!(garden_supports_route("ethereum", "starknet"));
         assert!(garden_supports_route("starknet", "ethereum"));
     }
@@ -612,8 +667,10 @@ mod tests {
     #[test]
     // Internal helper that supports `garden_token_support_rejects_eth_on_starknet` operations.
     fn garden_token_support_rejects_eth_on_starknet() {
-        assert!(garden_token_supported_on_chain("starknet", "STRK"));
+        assert!(garden_token_supported_on_chain("starknet", "WBTC"));
+        assert!(!garden_token_supported_on_chain("ethereum", "WBTC"));
         assert!(!garden_token_supported_on_chain("starknet", "ETH"));
+        assert!(!garden_token_supported_on_chain("starknet", "STRK"));
     }
 
     #[test]
@@ -717,6 +774,18 @@ mod tests {
             "ethereum",
             "WBTC",
             Some("ETH")
+        ));
+        assert!(!bridge_pair_supported_for_current_routes(
+            "ethereum",
+            "ethereum",
+            "WBTC",
+            Some("ETH")
+        ));
+        assert!(!bridge_pair_supported_for_current_routes(
+            "ethereum",
+            "starknet",
+            "WBTC",
+            Some("WBTC")
         ));
         assert!(!bridge_pair_supported_for_current_routes(
             "ethereum",

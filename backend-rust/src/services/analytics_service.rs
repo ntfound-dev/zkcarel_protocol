@@ -1,4 +1,9 @@
-use crate::{config::Config, db::Database, error::Result};
+use crate::{
+    config::Config,
+    db::Database,
+    error::Result,
+    services::price_guard::{fallback_price_for, first_sane_price, symbol_candidates_for},
+};
 use chrono::{Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::Row;
@@ -23,32 +28,21 @@ fn pnl_multiplier(is_testnet: bool) -> f64 {
     }
 }
 
-// Internal helper that supports `fallback_price_for` operations.
-fn fallback_price_for(token: &str) -> f64 {
-    match token.to_uppercase().as_str() {
-        "USDT" | "USDC" | "CAREL" => 1.0,
-        _ => 0.0,
-    }
-}
-
 // Internal helper that supports `latest_price_for_token` operations.
 async fn latest_price_for_token(db: &Database, token: &str) -> Result<Option<f64>> {
     let token_upper = token.to_ascii_uppercase();
-    let mut price: Option<f64> = sqlx::query_scalar(
-        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
-    )
-    .bind(&token_upper)
-    .fetch_optional(db.pool())
-    .await?;
-    if price.is_none() && token_upper == "WBTC" {
-        price = sqlx::query_scalar(
-            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+    for candidate in symbol_candidates_for(&token_upper) {
+        let rows: Vec<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
         )
-        .bind("BTC")
-        .fetch_optional(db.pool())
+        .bind(&candidate)
+        .fetch_all(db.pool())
         .await?;
+        if let Some(price) = first_sane_price(&candidate, &rows) {
+            return Ok(Some(price));
+        }
     }
-    Ok(price)
+    Ok(None)
 }
 
 // Internal helper that parses or transforms values for `normalize_scope_addresses`.

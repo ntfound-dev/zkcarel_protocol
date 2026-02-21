@@ -315,6 +315,31 @@ fn test_shielded_pool_single_private_swap_with_payout() {
 }
 
 #[test]
+fn test_shielded_pool_relayer_deposit_for_debits_user_balance() {
+    let (pool, token_in, _token_out, _swap, _admin, relayer, user) = setup_pool();
+    let commitment: felt252 = 0xd001;
+    let pool_addr = pool.contract_address;
+
+    start_cheat_caller_address(token_in.contract_address, user);
+    token_in.approve(pool_addr, 100_u256);
+    stop_cheat_caller_address(token_in.contract_address);
+
+    let user_before = token_in.balance_of(user);
+    let pool_before = token_in.balance_of(pool_addr);
+
+    start_cheat_caller_address(pool.contract_address, relayer);
+    pool.deposit_fixed_for(user, token_in.contract_address, commitment);
+    stop_cheat_caller_address(pool.contract_address);
+
+    let user_after = token_in.balance_of(user);
+    let pool_after = token_in.balance_of(pool_addr);
+
+    assert(pool.is_note_registered(commitment), 'NOTE_REGISTERED');
+    assert(user_after == user_before - 100_u256, 'USER_DEBITED');
+    assert(pool_after == pool_before + 100_u256, 'POOL_CREDITED');
+}
+
+#[test]
 fn test_shielded_pool_batch_private_swap_with_payout() {
     let (pool, token_in, token_out, swap, _admin, relayer, user) = setup_pool();
     let selector = selector!("fill_payout");

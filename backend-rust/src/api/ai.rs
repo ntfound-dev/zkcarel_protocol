@@ -1,24 +1,40 @@
 use super::{require_starknet_user, require_user, AppState};
 use crate::indexer::starknet_client::StarknetClient;
-use crate::services::onchain::{parse_felt, OnchainInvoker};
+use crate::services::onchain::{felt_to_u128, parse_felt, OnchainInvoker, OnchainReader};
 use crate::{
     error::{AppError, Result},
-    models::ApiResponse,
-    services::ai_service::{classify_command_scope, AIGuardScope, AIService},
+    models::{ApiResponse, Transaction},
+    services::ai_service::{
+        classify_command_scope, has_llm_provider_configured, AIGuardScope, AIResponse, AIService,
+    },
 };
 use axum::extract::Query;
 use axum::{extract::State, http::HeaderMap, Json};
+use chrono::Utc;
 use redis::AsyncCommands;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use starknet_core::types::{Call, Felt as CoreFelt};
+use starknet_core::types::{
+    Call, ExecutionResult, Felt as CoreFelt, FunctionCall, InvokeTransaction,
+    Transaction as StarknetTransaction, TransactionFinalityStatus,
+};
 use starknet_core::utils::get_selector_from_name;
 use starknet_crypto::{poseidon_hash_many, Felt as CryptoFelt};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::time::{sleep, Duration};
 
 const DEFAULT_SIGNATURE_WINDOW_SECONDS: u64 = 30;
 const MIN_SIGNATURE_WINDOW_SECONDS: u64 = 10;
 const MAX_SIGNATURE_WINDOW_SECONDS: u64 = 90;
 const SIGNATURE_PAST_SKEW_SECONDS: u64 = 2;
+const AI_EXECUTE_TIMEOUT_MS: u64 = 12_000;
+const AI_LEVEL_2_TOTAL_CAREL_WEI: u128 = 5_000_000_000_000_000_000;
+const AI_LEVEL_3_TOTAL_CAREL_WEI: u128 = 10_000_000_000_000_000_000;
+const AI_LEVEL_PAYMENT_DECIMALS: u32 = 18;
+const AI_EXECUTOR_READY_POLL_ATTEMPTS: usize = 12;
+const AI_EXECUTOR_READY_POLL_DELAY_MS: u64 = 1_500;
+const AI_PREPARE_READY_POLL_ATTEMPTS: usize = 16;
+const AI_PREPARE_READY_POLL_DELAY_MS: u64 = 900;
 
 #[derive(Debug, Deserialize)]
 pub struct AICommandRequest {
@@ -34,6 +50,7 @@ pub struct AICommandResponse {
     pub actions: Vec<String>,
     pub confidence: f64,
     pub level: u8,
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +70,15 @@ pub struct AIRuntimeConfigResponse {
     pub executor_address: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AIExecutorReadyResponse {
+    pub ready: bool,
+    pub burner_role_granted: bool,
+    pub updated_onchain: bool,
+    pub tx_hash: Option<String>,
+    pub message: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PrepareAIActionRequest {
     pub level: u8,
@@ -68,6 +94,42 @@ pub struct PrepareAIActionResponse {
     pub hashes_prepared: u64,
     pub from_timestamp: u64,
     pub to_timestamp: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AILevelResponse {
+    pub current_level: u8,
+    pub max_level: u8,
+    pub next_level: Option<u8>,
+    pub next_upgrade_cost_carel: Option<String>,
+    pub payment_address_configured: bool,
+    pub payment_address: Option<String>,
+    // Backward-compatible alias for legacy frontend fields.
+    pub burn_address_configured: bool,
+    pub burn_address: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AIUpgradeLevelRequest {
+    pub target_level: u8,
+    pub onchain_tx_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AIUpgradeLevelResponse {
+    pub previous_level: u8,
+    pub current_level: u8,
+    pub target_level: u8,
+    pub burned_carel: String,
+    pub onchain_tx_hash: String,
+    pub block_number: i64,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedExecuteCall {
+    to: CoreFelt,
+    selector: CoreFelt,
+    calldata: Vec<CoreFelt>,
 }
 
 // Internal helper that builds inputs for `build_command`.
@@ -87,6 +149,60 @@ fn confidence_score(has_llm_provider: bool) -> f64 {
     }
 }
 
+// Internal helper that supports `total_upgrade_cost_wei_for_level` operations.
+fn total_upgrade_cost_wei_for_level(level: u8) -> Option<u128> {
+    match level {
+        1 => Some(0),
+        2 => Some(AI_LEVEL_2_TOTAL_CAREL_WEI),
+        3 => Some(AI_LEVEL_3_TOTAL_CAREL_WEI),
+        _ => None,
+    }
+}
+
+// Internal helper that supports `incremental_upgrade_cost_wei` operations.
+fn incremental_upgrade_cost_wei(current_level: u8, target_level: u8) -> Option<u128> {
+    let current_total = total_upgrade_cost_wei_for_level(current_level)?;
+    let target_total = total_upgrade_cost_wei_for_level(target_level)?;
+    Some(target_total.saturating_sub(current_total))
+}
+
+// Internal helper that supports `wei_to_carel_decimal` operations.
+fn wei_to_carel_decimal(wei: u128) -> Decimal {
+    let capped = i128::try_from(wei).unwrap_or(i128::MAX);
+    Decimal::from_i128_with_scale(capped, AI_LEVEL_PAYMENT_DECIMALS)
+}
+
+// Internal helper that supports `wei_to_carel_string` operations.
+fn wei_to_carel_string(wei: u128) -> String {
+    wei_to_carel_decimal(wei).normalize().to_string()
+}
+
+// Internal helper that parses or transforms values for `normalize_onchain_tx_hash`.
+fn normalize_onchain_tx_hash(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash is required".to_string(),
+        ));
+    }
+    if !trimmed.starts_with("0x") {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash must start with 0x".to_string(),
+        ));
+    }
+    if trimmed.len() > 66 {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash exceeds maximum length (66)".to_string(),
+        ));
+    }
+    if !trimmed[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash must be hex-encoded".to_string(),
+        ));
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
 // Internal helper that runs side-effecting logic for `ensure_ai_level_scope`.
 fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
     let scope = classify_command_scope(command);
@@ -97,7 +213,7 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
                 AIGuardScope::SwapBridge | AIGuardScope::PortfolioAlert
             ) {
                 return Err(AppError::BadRequest(
-                    "Level 1 supports chat + read-only queries only. Swap/bridge/stake/portfolio actions require higher tier."
+                    "You need Level 2 (5 CAREL) for swap/bridge/stake/limit execution, or Level 3 (10 CAREL) for portfolio/alerts."
                         .to_string(),
                 ));
             }
@@ -108,7 +224,8 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
                 AIGuardScope::ReadOnly | AIGuardScope::SwapBridge | AIGuardScope::Unknown
             ) {
                 return Err(AppError::BadRequest(
-                    "Level 2 supports read-only + swap/bridge commands.".to_string(),
+                    "You need Level 3 (10 CAREL) for unstake/claim/portfolio/alert management commands."
+                        .to_string(),
                 ));
             }
         }
@@ -133,6 +250,26 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
     Ok(())
 }
 
+// Internal helper that supports `resolve_effective_ai_level` operations.
+async fn resolve_effective_ai_level(
+    state: &AppState,
+    user_address: &str,
+    requested_level: Option<u8>,
+) -> Result<(u8, u8)> {
+    let unlocked_level = state.db.get_user_ai_level(user_address).await?;
+    let selected_level = requested_level.unwrap_or(unlocked_level);
+    if !(1..=3).contains(&selected_level) {
+        return Err(AppError::BadRequest("Invalid AI level".to_string()));
+    }
+    if selected_level > unlocked_level {
+        return Err(AppError::BadRequest(format!(
+            "Your AI level is {}. Upgrade first to use Level {} commands.",
+            unlocked_level, selected_level
+        )));
+    }
+    Ok((unlocked_level, selected_level))
+}
+
 // Internal helper that supports `requires_onchain_action_id` operations.
 fn requires_onchain_action_id(level: u8, command: &str) -> bool {
     if level < 2 {
@@ -142,6 +279,57 @@ fn requires_onchain_action_id(level: u8, command: &str) -> bool {
         classify_command_scope(command),
         AIGuardScope::SwapBridge | AIGuardScope::PortfolioAlert
     )
+}
+
+// Internal helper that supports `should_consume_onchain_action` operations.
+fn should_consume_onchain_action(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    lower.contains("swap")
+        || lower.contains("bridge")
+        || lower.contains("tukar")
+        || lower.contains("jembatan")
+}
+
+// Internal helper that supports `ai_action_consumed_key` operations.
+fn ai_action_consumed_key(user_address: &str, action_id: u64) -> String {
+    format!(
+        "ai:action:consumed:{}:{}",
+        user_address.trim().to_ascii_lowercase(),
+        action_id
+    )
+}
+
+// Internal helper that supports `is_ai_action_consumed` operations.
+async fn is_ai_action_consumed(state: &AppState, user_address: &str, action_id: u64) -> bool {
+    let mut conn = state.redis.clone();
+    let key = ai_action_consumed_key(user_address, action_id);
+    match conn.exists::<_, bool>(&key).await {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                "AI consumed-action check skipped user={} action_id={} err={}",
+                user_address,
+                action_id,
+                err
+            );
+            false
+        }
+    }
+}
+
+// Internal helper that runs side-effecting logic for `mark_ai_action_consumed`.
+async fn mark_ai_action_consumed(state: &AppState, user_address: &str, action_id: u64) {
+    let mut conn = state.redis.clone();
+    let key = ai_action_consumed_key(user_address, action_id);
+    let result: std::result::Result<(), redis::RedisError> = conn.set(&key, 1_i32).await;
+    if let Err(err) = result {
+        tracing::warn!(
+            "AI consumed-action mark failed user={} action_id={} err={}",
+            user_address,
+            action_id,
+            err
+        );
+    }
 }
 
 // Internal helper that supports `ai_level_limit` operations.
@@ -228,48 +416,76 @@ pub async fn execute_command(
     headers: HeaderMap,
     Json(req): Json<AICommandRequest>,
 ) -> Result<Json<ApiResponse<AICommandResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let auth_subject = require_user(&headers, &state).await?;
     let config = state.config.clone();
     let service = AIService::new(state.db.clone(), config.clone());
 
     let command = build_command(&req.command, &req.context);
-    let level = req.level.unwrap_or(1);
+    let (unlocked_level, level) =
+        resolve_effective_ai_level(&state, &auth_subject, req.level).await?;
     tracing::info!(
-        "AI execute: user={}, level={}, action_id={:?}",
-        user_address,
+        "AI execute: user={}, level={}, unlocked_level={}, action_id={:?}",
+        auth_subject,
         level,
+        unlocked_level,
         req.action_id
     );
-
-    if level == 0 || level > 3 {
-        return Err(crate::error::AppError::BadRequest(
-            "Invalid AI level".into(),
-        ));
-    }
     ensure_ai_level_scope(level, &command)?;
 
     let needs_onchain_action = requires_onchain_action_id(level, &command);
+    let mut resolved_action_id: Option<u64> = None;
+    let mut onchain_action_user: Option<String> = None;
     if needs_onchain_action {
+        let starknet_user = require_starknet_user(&headers, &state).await?;
         let Some(action_id) = req.action_id else {
             return Err(crate::error::AppError::BadRequest(
-                "Missing on-chain AI action_id".into(),
+                "Please click Auto Setup On-Chain first, then retry your command.".into(),
             ));
         };
-        ensure_onchain_action(&config, &user_address, action_id).await?;
+        ensure_onchain_action(&state, &starknet_user, action_id).await?;
+        resolved_action_id = Some(action_id);
+        onchain_action_user = Some(starknet_user);
     }
-    enforce_ai_rate_limit(&state, &user_address, level, needs_onchain_action).await?;
+    enforce_ai_rate_limit(&state, &auth_subject, level, needs_onchain_action).await?;
 
-    let ai_response = service
-        .execute_command(&user_address, &command, level)
-        .await?;
-    let confidence =
-        confidence_score(config.gemini_api_key.is_some() || config.openai_api_key.is_some());
+    let ai_response = match tokio::time::timeout(
+        std::time::Duration::from_millis(AI_EXECUTE_TIMEOUT_MS),
+        service.execute_command(&auth_subject, &command, level),
+    )
+    .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(err)) => return Err(err),
+        Err(_) => {
+            tracing::warn!(
+                "AI execute timed out after {}ms for user={} level={}",
+                AI_EXECUTE_TIMEOUT_MS,
+                auth_subject,
+                level
+            );
+            AIResponse {
+                message: "AI service is taking too long right now. Please retry in a few seconds."
+                    .to_string(),
+                actions: vec![],
+                data: None,
+            }
+        }
+    };
+    if needs_onchain_action && should_consume_onchain_action(&command) {
+        if let Some(action_id) = resolved_action_id {
+            if let Some(action_user) = onchain_action_user.as_deref() {
+                mark_ai_action_consumed(&state, action_user, action_id).await;
+            }
+        }
+    }
+    let confidence = confidence_score(has_llm_provider_configured(&config));
 
     let response = AICommandResponse {
         response: ai_response.message,
         actions: ai_response.actions,
         confidence,
         level,
+        data: ai_response.data,
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -365,13 +581,64 @@ fn build_set_valid_hash_call(
     })
 }
 
+// Internal helper that runs side-effecting logic for `wait_for_prepare_hashes_confirmation`.
+async fn wait_for_prepare_hashes_confirmation(state: &AppState, tx_hash: CoreFelt) -> Result<()> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let mut last_error = String::new();
+
+    for attempt in 0..AI_PREPARE_READY_POLL_ATTEMPTS {
+        match reader.get_transaction_receipt(&tx_hash).await {
+            Ok(receipt) => {
+                if let ExecutionResult::Reverted { reason } = receipt.receipt.execution_result() {
+                    return Err(AppError::BadRequest(format!(
+                        "AI setup pre-signature transaction reverted: {}",
+                        reason
+                    )));
+                }
+                if matches!(
+                    receipt.receipt.finality_status(),
+                    TransactionFinalityStatus::PreConfirmed
+                ) {
+                    last_error = "transaction still pre-confirmed".to_string();
+                    if attempt + 1 < AI_PREPARE_READY_POLL_ATTEMPTS {
+                        sleep(Duration::from_millis(AI_PREPARE_READY_POLL_DELAY_MS)).await;
+                        continue;
+                    }
+                    break;
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                last_error = err.to_string();
+                if attempt + 1 < AI_PREPARE_READY_POLL_ATTEMPTS {
+                    sleep(Duration::from_millis(AI_PREPARE_READY_POLL_DELAY_MS)).await;
+                    continue;
+                }
+            }
+        }
+    }
+
+    Err(AppError::BadRequest(format!(
+        "AI setup signature window is not confirmed on-chain yet: {}",
+        last_error
+    )))
+}
+
 /// POST /api/v1/ai/prepare-action
 pub async fn prepare_action_signature(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<PrepareAIActionRequest>,
 ) -> Result<Json<ApiResponse<PrepareAIActionResponse>>> {
+    let auth_subject = require_user(&headers, &state).await?;
     let user_address = require_starknet_user(&headers, &state).await?;
+    let unlocked_level = state.db.get_user_ai_level(&auth_subject).await?;
+    if req.level > unlocked_level {
+        return Err(crate::error::AppError::BadRequest(format!(
+            "Your AI level is {}. Upgrade first to prepare Level {} action.",
+            unlocked_level, req.level
+        )));
+    }
     let action_type = action_type_for_level(req.level).ok_or_else(|| {
         crate::error::AppError::BadRequest(
             "Only AI level 2/3 can prepare on-chain signature.".to_string(),
@@ -423,6 +690,7 @@ pub async fn prepare_action_signature(
     }
 
     let tx_hash = onchain.invoke_many(calls).await?;
+    wait_for_prepare_hashes_confirmation(&state, tx_hash).await?;
     let response = PrepareAIActionResponse {
         tx_hash: format!("{:#x}", tx_hash),
         action_type,
@@ -441,7 +709,7 @@ pub async fn get_pending_actions(
     headers: HeaderMap,
     Query(query): Query<PendingActionsQuery>,
 ) -> Result<Json<ApiResponse<PendingActionsResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_address = require_starknet_user(&headers, &state).await?;
     let contract = state.config.ai_executor_address.trim();
     if contract.is_empty() || contract.starts_with("0x0000") {
         return Err(crate::error::AppError::BadRequest(
@@ -475,6 +743,15 @@ pub async fn get_pending_actions(
             }
         }
     }
+    if !pending.is_empty() {
+        let mut filtered = Vec::with_capacity(pending.len());
+        for id in pending {
+            if !is_ai_action_consumed(&state, &user_address, id).await {
+                filtered.push(id);
+            }
+        }
+        pending = filtered;
+    }
 
     Ok(Json(ApiResponse::success(PendingActionsResponse {
         pending,
@@ -494,18 +771,615 @@ pub async fn get_runtime_config(
     Ok(Json(ApiResponse::success(response)))
 }
 
-// Internal helper that runs side-effecting logic for `ensure_onchain_action`.
-async fn ensure_onchain_action(
+// Internal helper that supports `resolve_ai_executor_and_carel_addresses` operations.
+fn resolve_ai_executor_and_carel_addresses(
     config: &crate::config::Config,
-    user_address: &str,
-    action_id: u64,
+) -> Result<(String, String)> {
+    let executor = config.ai_executor_address.trim();
+    if executor.is_empty() || executor.starts_with("0x0000") {
+        return Err(AppError::BadRequest(
+            "AI_EXECUTOR_ADDRESS is not configured".to_string(),
+        ));
+    }
+    let carel = config.carel_token_address.trim();
+    if carel.is_empty() || carel.starts_with("0x0000") {
+        return Err(AppError::BadRequest(
+            "CAREL_TOKEN_ADDRESS is not configured".to_string(),
+        ));
+    }
+    Ok((executor.to_string(), carel.to_string()))
+}
+
+// Internal helper that supports `has_executor_burner_role` operations.
+async fn has_executor_burner_role(
+    state: &AppState,
+    carel_token_address: &str,
+    executor_address: &str,
+) -> Result<bool> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let contract_address = parse_felt(carel_token_address)?;
+    let role = get_selector_from_name("BURNER_ROLE")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let selector = get_selector_from_name("has_role")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let account = parse_felt(executor_address)?;
+    let result = reader
+        .call(FunctionCall {
+            contract_address,
+            entry_point_selector: selector,
+            calldata: vec![role, account],
+        })
+        .await?;
+    let Some(raw) = result.first() else {
+        return Err(AppError::BlockchainRPC(
+            "has_role returned empty payload".to_string(),
+        ));
+    };
+    Ok(felt_to_u128(raw).unwrap_or(0) != 0)
+}
+
+// Internal helper that supports `backend_set_executor_burner_role` operations.
+async fn backend_set_executor_burner_role(
+    state: &AppState,
+    carel_token_address: &str,
+    executor_address: &str,
+) -> Result<CoreFelt> {
+    let onchain = OnchainInvoker::from_config(&state.config)?.ok_or_else(|| {
+        AppError::BadRequest(
+            "Backend on-chain signer is not configured. Set BACKEND_ACCOUNT_ADDRESS and BACKEND_PRIVATE_KEY."
+                .to_string(),
+        )
+    })?;
+    let to = parse_felt(carel_token_address)?;
+    let selector = get_selector_from_name("set_burner")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let executor = parse_felt(executor_address)?;
+    onchain
+        .invoke(Call {
+            to,
+            selector,
+            calldata: vec![executor],
+        })
+        .await
+        .map_err(|err| {
+            let lower = err.to_string().to_ascii_lowercase();
+            if lower.contains("missing role")
+                || lower.contains("unauthorized")
+                || lower.contains("default_admin_role")
+            {
+                AppError::BadRequest(
+                    "Backend signer is not CAREL token admin. Grant DEFAULT_ADMIN_ROLE to backend account or run token.set_burner(AI_EXECUTOR_ADDRESS) manually once."
+                        .to_string(),
+                )
+            } else {
+                err
+            }
+        })
+}
+
+/// POST /api/v1/ai/ensure-executor
+pub async fn ensure_executor_ready(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<AIExecutorReadyResponse>>> {
+    let _ = require_user(&headers, &state).await?;
+    let (executor_address, carel_token_address) =
+        resolve_ai_executor_and_carel_addresses(&state.config)?;
+
+    let burner_role_granted =
+        has_executor_burner_role(&state, &carel_token_address, &executor_address).await?;
+    if burner_role_granted {
+        return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
+            ready: true,
+            burner_role_granted: true,
+            updated_onchain: false,
+            tx_hash: None,
+            message: "AI executor is ready.".to_string(),
+        })));
+    }
+
+    let tx_hash =
+        backend_set_executor_burner_role(&state, &carel_token_address, &executor_address).await?;
+    let tx_hash_hex = format!("{:#x}", tx_hash);
+
+    for _ in 0..AI_EXECUTOR_READY_POLL_ATTEMPTS {
+        sleep(Duration::from_millis(AI_EXECUTOR_READY_POLL_DELAY_MS)).await;
+        if has_executor_burner_role(&state, &carel_token_address, &executor_address)
+            .await
+            .unwrap_or(false)
+        {
+            return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
+                ready: true,
+                burner_role_granted: true,
+                updated_onchain: true,
+                tx_hash: Some(tx_hash_hex),
+                message: "AI executor burner role granted.".to_string(),
+            })));
+        }
+    }
+
+    Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
+        ready: false,
+        burner_role_granted: false,
+        updated_onchain: true,
+        tx_hash: Some(tx_hash_hex),
+        message:
+            "Burner role transaction submitted. Wait until confirmed, then retry Auto Setup On-Chain."
+                .to_string(),
+    })))
+}
+
+// Internal helper that supports `configured_ai_upgrade_payment_address` operations.
+fn configured_ai_upgrade_payment_address(config: &crate::config::Config) -> Option<String> {
+    config
+        .dev_wallet_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.starts_with("0x0000"))
+        .map(str::to_string)
+        .or_else(|| {
+            config
+                .ai_level_burn_address
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && !value.starts_with("0x0000"))
+                .map(str::to_string)
+        })
+}
+
+/// GET /api/v1/ai/level
+pub async fn get_ai_level(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<AILevelResponse>>> {
+    let user_address = require_user(&headers, &state).await?;
+    let current_level = state.db.get_user_ai_level(&user_address).await?;
+    let next_level = if current_level < 3 {
+        Some(current_level + 1)
+    } else {
+        None
+    };
+    let next_upgrade_cost_carel = next_level
+        .and_then(|target| incremental_upgrade_cost_wei(current_level, target))
+        .map(wei_to_carel_string);
+    let payment_address = configured_ai_upgrade_payment_address(&state.config);
+
+    Ok(Json(ApiResponse::success(AILevelResponse {
+        current_level,
+        max_level: 3,
+        next_level,
+        next_upgrade_cost_carel,
+        payment_address_configured: payment_address.is_some(),
+        payment_address: payment_address.clone(),
+        burn_address_configured: payment_address.is_some(),
+        burn_address: payment_address,
+    })))
+}
+
+/// POST /api/v1/ai/upgrade
+pub async fn upgrade_ai_level(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AIUpgradeLevelRequest>,
+) -> Result<Json<ApiResponse<AIUpgradeLevelResponse>>> {
+    let auth_subject = require_user(&headers, &state).await?;
+    let previous_level = state.db.get_user_ai_level(&auth_subject).await?;
+    if !(2..=3).contains(&req.target_level) {
+        return Err(AppError::BadRequest(
+            "target_level must be 2 or 3".to_string(),
+        ));
+    }
+    if req.target_level <= previous_level {
+        return Err(AppError::BadRequest(format!(
+            "AI Level {} is already active for this account.",
+            previous_level
+        )));
+    }
+
+    let required_wei = incremental_upgrade_cost_wei(previous_level, req.target_level)
+        .ok_or_else(|| AppError::BadRequest("Invalid AI level upgrade path".to_string()))?;
+    if required_wei == 0 {
+        return Err(AppError::BadRequest(
+            "No payment required for this upgrade path".to_string(),
+        ));
+    }
+
+    let tx_hash = normalize_onchain_tx_hash(&req.onchain_tx_hash)?;
+    if state.db.get_transaction(&tx_hash).await?.is_some() {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash has already been used".to_string(),
+        ));
+    }
+    let block_number =
+        verify_ai_upgrade_payment_tx_hash(&state, &auth_subject, &tx_hash, required_wei).await?;
+    let payment_carel = wei_to_carel_decimal(required_wei);
+
+    state
+        .db
+        .save_transaction(&Transaction {
+            tx_hash: tx_hash.clone(),
+            block_number,
+            user_address: auth_subject.clone(),
+            tx_type: "ai_level_upgrade".to_string(),
+            token_in: Some("CAREL".to_string()),
+            token_out: None,
+            amount_in: Some(payment_carel),
+            amount_out: None,
+            usd_value: None,
+            fee_paid: Some(payment_carel),
+            points_earned: Some(Decimal::ZERO),
+            timestamp: Utc::now(),
+            processed: true,
+        })
+        .await?;
+
+    if let Err(err) = state
+        .db
+        .record_ai_level_upgrade(
+            &auth_subject,
+            previous_level,
+            req.target_level,
+            payment_carel,
+            &tx_hash,
+            block_number,
+        )
+        .await
+    {
+        if is_unique_violation(&err) {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash has already been used for AI upgrade".to_string(),
+            ));
+        }
+        return Err(err);
+    }
+
+    let current_level = state
+        .db
+        .upsert_user_ai_level(&auth_subject, req.target_level)
+        .await?;
+    Ok(Json(ApiResponse::success(AIUpgradeLevelResponse {
+        previous_level,
+        current_level,
+        target_level: req.target_level,
+        burned_carel: payment_carel.normalize().to_string(),
+        onchain_tx_hash: tx_hash,
+        block_number,
+    })))
+}
+
+// Internal helper that checks conditions for `is_unique_violation`.
+fn is_unique_violation(err: &AppError) -> bool {
+    match err {
+        AppError::Database(sqlx::Error::Database(db_err)) => {
+            db_err.code().as_deref() == Some("23505")
+        }
+        _ => false,
+    }
+}
+
+// Internal helper that supports `felt_to_usize` operations.
+fn felt_to_usize(value: &CoreFelt, field_name: &str) -> Result<usize> {
+    let raw = felt_to_u128(value).map_err(|_| {
+        AppError::BadRequest(format!(
+            "Invalid invoke calldata: {field_name} is not a valid number"
+        ))
+    })?;
+    usize::try_from(raw).map_err(|_| {
+        AppError::BadRequest(format!(
+            "Invalid invoke calldata: {field_name} exceeds supported size"
+        ))
+    })
+}
+
+// Internal helper that parses or transforms values for `parse_execute_calls_offset`.
+fn parse_execute_calls_offset(calldata: &[CoreFelt]) -> Result<Vec<ParsedExecuteCall>> {
+    if calldata.is_empty() {
+        return Err(AppError::BadRequest(
+            "Invalid invoke calldata: empty calldata".to_string(),
+        ));
+    }
+    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
+    let header_start = 1usize;
+    let header_width = 4usize;
+    let headers_end = header_start
+        .checked_add(calls_len.checked_mul(header_width).ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: calls_len overflow".to_string())
+        })?)
+        .ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string())
+        })?;
+
+    if calldata.len() <= headers_end {
+        return Err(AppError::BadRequest(
+            "Invalid invoke calldata: missing calldata length".to_string(),
+        ));
+    }
+
+    let flattened_len = felt_to_usize(&calldata[headers_end], "flattened_len")?;
+    let flattened_start = headers_end + 1;
+    let flattened_end = flattened_start.checked_add(flattened_len).ok_or_else(|| {
+        AppError::BadRequest("Invalid invoke calldata: flattened overflow".to_string())
+    })?;
+    if calldata.len() < flattened_end {
+        return Err(AppError::BadRequest(
+            "Invalid invoke calldata: flattened segment out of bounds".to_string(),
+        ));
+    }
+
+    let flattened = &calldata[flattened_start..flattened_end];
+    let mut calls = Vec::with_capacity(calls_len);
+    for idx in 0..calls_len {
+        let offset = header_start + idx * header_width;
+        let to = calldata[offset];
+        let selector = calldata[offset + 1];
+        let data_offset = felt_to_usize(&calldata[offset + 2], "data_offset")?;
+        let data_len = felt_to_usize(&calldata[offset + 3], "data_len")?;
+        let data_end = data_offset.checked_add(data_len).ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: data segment overflow".to_string())
+        })?;
+        if data_end > flattened.len() {
+            return Err(AppError::BadRequest(
+                "Invalid invoke calldata: call segment out of bounds".to_string(),
+            ));
+        }
+        calls.push(ParsedExecuteCall {
+            to,
+            selector,
+            calldata: flattened[data_offset..data_end].to_vec(),
+        });
+    }
+    Ok(calls)
+}
+
+// Internal helper that parses or transforms values for `parse_execute_calls_inline`.
+fn parse_execute_calls_inline(calldata: &[CoreFelt]) -> Result<Vec<ParsedExecuteCall>> {
+    if calldata.is_empty() {
+        return Err(AppError::BadRequest(
+            "Invalid invoke calldata: empty calldata".to_string(),
+        ));
+    }
+    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
+    let mut cursor = 1usize;
+    let mut calls = Vec::with_capacity(calls_len);
+
+    for _ in 0..calls_len {
+        let header_end = cursor.checked_add(3).ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: malformed call header".to_string())
+        })?;
+        if calldata.len() < header_end {
+            return Err(AppError::BadRequest(
+                "Invalid invoke calldata: missing inline call header".to_string(),
+            ));
+        }
+
+        let to = calldata[cursor];
+        let selector = calldata[cursor + 1];
+        let data_len = felt_to_usize(&calldata[cursor + 2], "data_len")?;
+        let data_start = cursor + 3;
+        let data_end = data_start.checked_add(data_len).ok_or_else(|| {
+            AppError::BadRequest("Invalid invoke calldata: inline data overflow".to_string())
+        })?;
+        if data_end > calldata.len() {
+            return Err(AppError::BadRequest(
+                "Invalid invoke calldata: inline data out of bounds".to_string(),
+            ));
+        }
+
+        calls.push(ParsedExecuteCall {
+            to,
+            selector,
+            calldata: calldata[data_start..data_end].to_vec(),
+        });
+        cursor = data_end;
+    }
+
+    Ok(calls)
+}
+
+// Internal helper that parses or transforms values for `parse_execute_calls`.
+fn parse_execute_calls(calldata: &[CoreFelt]) -> Result<Vec<ParsedExecuteCall>> {
+    if let Ok(calls) = parse_execute_calls_offset(calldata) {
+        return Ok(calls);
+    }
+    parse_execute_calls_inline(calldata)
+}
+
+// Internal helper that fetches data for `resolve_allowed_starknet_senders_async`.
+async fn resolve_allowed_starknet_senders_async(
+    state: &AppState,
+    auth_subject: &str,
+) -> Result<Vec<CoreFelt>> {
+    let mut out: Vec<CoreFelt> = Vec::new();
+    if let Ok(subject_felt) = parse_felt(auth_subject) {
+        out.push(subject_felt);
+    }
+
+    if let Ok(linked_wallets) = state.db.list_wallet_addresses(auth_subject).await {
+        for wallet in linked_wallets {
+            if !wallet.chain.eq_ignore_ascii_case("starknet") {
+                continue;
+            }
+            if let Ok(felt) = parse_felt(wallet.wallet_address.trim()) {
+                if !out.iter().any(|existing| *existing == felt) {
+                    out.push(felt);
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        return Err(AppError::BadRequest(
+            "No Starknet sender resolved for AI upgrade verification".to_string(),
+        ));
+    }
+    Ok(out)
+}
+
+// Internal helper that supports `verify_ai_upgrade_fee_invoke_payload` operations.
+fn verify_ai_upgrade_fee_invoke_payload(
+    tx: &StarknetTransaction,
+    allowed_senders: &[CoreFelt],
+    carel_token: CoreFelt,
+    payment_address: CoreFelt,
+    min_amount_wei: u128,
 ) -> Result<()> {
+    let invoke = match tx {
+        StarknetTransaction::Invoke(invoke) => invoke,
+        _ => {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash must be an INVOKE transaction".to_string(),
+            ))
+        }
+    };
+
+    let transfer_selector = get_selector_from_name("transfer")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let (sender, calldata) = match invoke {
+        InvokeTransaction::V1(tx) => (tx.sender_address, tx.calldata.as_slice()),
+        InvokeTransaction::V3(tx) => (tx.sender_address, tx.calldata.as_slice()),
+        InvokeTransaction::V0(_) => {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash uses unsupported INVOKE v0".to_string(),
+            ))
+        }
+    };
+
+    if !allowed_senders.iter().any(|candidate| *candidate == sender) {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash sender does not match authenticated Starknet user".to_string(),
+        ));
+    }
+
+    let calls = parse_execute_calls(calldata)?;
+    for call in calls {
+        if call.to != carel_token || call.selector != transfer_selector {
+            continue;
+        }
+        if call.calldata.len() < 3 {
+            continue;
+        }
+        let recipient = call.calldata[0];
+        if recipient != payment_address {
+            continue;
+        }
+        let low = felt_to_u128(&call.calldata[1]).unwrap_or(0);
+        let high = felt_to_u128(&call.calldata[2]).unwrap_or(0);
+        if high != 0 {
+            continue;
+        }
+        if low >= min_amount_wei {
+            return Ok(());
+        }
+    }
+
+    Err(AppError::BadRequest(format!(
+        "onchain_tx_hash must include CAREL transfer >= {} to configured DEV wallet",
+        wei_to_carel_string(min_amount_wei)
+    )))
+}
+
+// Internal helper that supports `verify_ai_upgrade_payment_tx_hash` operations.
+async fn verify_ai_upgrade_payment_tx_hash(
+    state: &AppState,
+    auth_subject: &str,
+    tx_hash: &str,
+    min_amount_wei: u128,
+) -> Result<i64> {
+    let payment_address =
+        configured_ai_upgrade_payment_address(&state.config).ok_or_else(|| {
+            AppError::BadRequest(
+                "DEV_WALLET_ADDRESS is not configured. Cannot verify AI upgrade payment."
+                    .to_string(),
+            )
+        })?;
+    let carel_token = state.config.carel_token_address.trim();
+    if carel_token.is_empty() || carel_token.starts_with("0x0000") {
+        return Err(AppError::BadRequest(
+            "CAREL_TOKEN_ADDRESS is not configured".to_string(),
+        ));
+    }
+
+    let allowed_senders = resolve_allowed_starknet_senders_async(state, auth_subject).await?;
+    let reader = OnchainReader::from_config(&state.config)?;
+    let tx_hash_felt = parse_felt(tx_hash)?;
+    let carel_token_felt = parse_felt(carel_token)?;
+    let payment_felt = parse_felt(&payment_address)?;
+    let mut last_error = String::new();
+
+    for attempt in 0..5 {
+        let tx = match reader.get_transaction(&tx_hash_felt).await {
+            Ok(value) => value,
+            Err(err) => {
+                last_error = err.to_string();
+                if attempt < 4 {
+                    sleep(Duration::from_millis(900)).await;
+                    continue;
+                }
+                break;
+            }
+        };
+
+        verify_ai_upgrade_fee_invoke_payload(
+            &tx,
+            &allowed_senders,
+            carel_token_felt,
+            payment_felt,
+            min_amount_wei,
+        )?;
+
+        match reader.get_transaction_receipt(&tx_hash_felt).await {
+            Ok(receipt) => {
+                if let ExecutionResult::Reverted { reason } = receipt.receipt.execution_result() {
+                    return Err(AppError::BadRequest(format!(
+                        "onchain_tx_hash reverted: {}",
+                        reason
+                    )));
+                }
+                if matches!(
+                    receipt.receipt.finality_status(),
+                    TransactionFinalityStatus::PreConfirmed
+                ) {
+                    last_error = "transaction still pre-confirmed".to_string();
+                    if attempt < 4 {
+                        sleep(Duration::from_millis(900)).await;
+                        continue;
+                    }
+                    break;
+                }
+                return Ok(receipt.block.block_number() as i64);
+            }
+            Err(err) => {
+                last_error = err.to_string();
+                if attempt < 4 {
+                    sleep(Duration::from_millis(900)).await;
+                    continue;
+                }
+            }
+        }
+    }
+
+    Err(AppError::BadRequest(format!(
+        "onchain_tx_hash not confirmed on Starknet RPC: {}",
+        last_error
+    )))
+}
+
+// Internal helper that runs side-effecting logic for `ensure_onchain_action`.
+async fn ensure_onchain_action(state: &AppState, user_address: &str, action_id: u64) -> Result<()> {
     if action_id == 0 {
         return Err(crate::error::AppError::BadRequest(
             "Invalid on-chain AI action_id".into(),
         ));
     }
 
+    if is_ai_action_consumed(state, user_address, action_id).await {
+        return Err(crate::error::AppError::BadRequest(
+            "Please click Auto Setup On-Chain first, then retry your command.".into(),
+        ));
+    }
+
+    let config = &state.config;
     let contract = config.ai_executor_address.trim();
     if contract.is_empty() || contract.starts_with("0x0000") {
         return Err(crate::error::AppError::BadRequest(
@@ -537,7 +1411,7 @@ async fn ensure_onchain_action(
 
     if !pending.contains(&action_id) {
         return Err(crate::error::AppError::BadRequest(
-            "Invalid or missing on-chain AI action".into(),
+            "Please click Auto Setup On-Chain first, then retry your command.".into(),
         ));
     }
     Ok(())
@@ -590,6 +1464,31 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `incremental_upgrade_cost_wei_matches_expected` operations.
+    fn incremental_upgrade_cost_wei_matches_expected() {
+        assert_eq!(
+            incremental_upgrade_cost_wei(1, 2),
+            Some(AI_LEVEL_2_TOTAL_CAREL_WEI)
+        );
+        assert_eq!(
+            incremental_upgrade_cost_wei(1, 3),
+            Some(AI_LEVEL_3_TOTAL_CAREL_WEI)
+        );
+        assert_eq!(
+            incremental_upgrade_cost_wei(2, 3),
+            Some(AI_LEVEL_3_TOTAL_CAREL_WEI - AI_LEVEL_2_TOTAL_CAREL_WEI)
+        );
+    }
+
+    #[test]
+    // Internal helper that supports `normalize_onchain_tx_hash_validates_hex_format` operations.
+    fn normalize_onchain_tx_hash_validates_hex_format() {
+        assert!(normalize_onchain_tx_hash("0xabc123").is_ok());
+        assert!(normalize_onchain_tx_hash("abc123").is_err());
+        assert!(normalize_onchain_tx_hash("0xzzzz").is_err());
+    }
+
+    #[test]
     // Internal helper that supports `level_1_allows_generic_chat_prompt` operations.
     fn level_1_allows_generic_chat_prompt() {
         // Memastikan level 1 tetap bisa dipakai untuk chat umum/non-trading
@@ -601,10 +1500,7 @@ mod tests {
     fn level_1_rejects_swap_execution_scope() {
         // Memastikan level 1 tetap memblokir intent eksekusi trading
         let err = ensure_ai_level_scope(1, "swap 1 STRK to CAREL").expect_err("must reject");
-        assert!(err
-            .to_string()
-            .to_ascii_lowercase()
-            .contains("supports chat + read-only"));
+        assert!(err.to_string().to_ascii_lowercase().contains("level 2"));
     }
 
     #[test]
@@ -636,6 +1532,16 @@ mod tests {
         assert!(requires_onchain_action_id(2, "unstake 50 USDT"));
         assert!(requires_onchain_action_id(2, "claim rewards USDT"));
         assert!(requires_onchain_action_id(3, "set price alert for STRK"));
+    }
+
+    #[test]
+    // Internal helper that supports `should_consume_onchain_action_only_for_swap_bridge_commands` operations.
+    fn should_consume_onchain_action_only_for_swap_bridge_commands() {
+        assert!(should_consume_onchain_action("swap 25 STRK to WBTC"));
+        assert!(should_consume_onchain_action("bridge 0.1 ETH to BTC"));
+        assert!(should_consume_onchain_action("tukar 10 usdt ke carel"));
+        assert!(!should_consume_onchain_action("stake 100 USDT"));
+        assert!(!should_consume_onchain_action("cancel order 10"));
     }
 
     #[test]

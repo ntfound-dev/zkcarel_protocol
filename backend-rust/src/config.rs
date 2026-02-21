@@ -74,6 +74,9 @@ pub struct Config {
 
     // External APIs
     pub openai_api_key: Option<String>,
+    pub cairo_coder_api_key: Option<String>,
+    pub cairo_coder_api_url: String,
+    pub cairo_coder_model: Option<String>,
     pub gemini_api_key: Option<String>,
     pub gemini_api_url: String,
     pub gemini_model: String,
@@ -83,6 +86,7 @@ pub struct Config {
     pub social_tasks_json: Option<String>,
     pub admin_manual_key: Option<String>,
     pub dev_wallet_address: Option<String>,
+    pub ai_level_burn_address: Option<String>,
     pub layerswap_api_key: Option<String>,
     pub layerswap_api_url: String,
     pub atomiq_api_key: Option<String>,
@@ -253,6 +257,13 @@ impl Config {
                 .parse()?,
 
             openai_api_key: env::var("OPENAI_API_KEY").ok(),
+            cairo_coder_api_key: env::var("CAIRO_CODER_API_KEY").ok(),
+            cairo_coder_api_url: env::var("CAIRO_CODER_API_URL")
+                .unwrap_or_else(|_| "https://api.cairo-coder.com/v1/chat/completions".to_string()),
+            cairo_coder_model: env::var("CAIRO_CODER_MODEL")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             gemini_api_key: env::var("GEMINI_API_KEY")
                 .ok()
                 .or_else(|| env::var("GOOGLE_GEMINI_API_KEY").ok()),
@@ -268,6 +279,10 @@ impl Config {
             dev_wallet_address: env::var("DEV_WALLET_ADDRESS")
                 .ok()
                 .or_else(|| env::var("DEV_WALLET").ok()),
+            ai_level_burn_address: env::var("AI_LEVEL_BURN_ADDRESS")
+                .ok()
+                .or_else(|| env::var("CAREL_BURN_ADDRESS").ok())
+                .or_else(|| env::var("BURN_WALLET_ADDRESS").ok()),
             layerswap_api_key: env::var("LAYERSWAP_API_KEY").ok(),
             layerswap_api_url: env::var("LAYERSWAP_API_URL")
                 .unwrap_or_else(|_| "https://api.layerswap.io/api/v2".to_string()),
@@ -388,6 +403,23 @@ impl Config {
                 tracing::warn!("Using placeholder AI signature verifier address");
             }
         }
+        if let Some(addr) = &self.dev_wallet_address {
+            if is_placeholder_address(addr) {
+                tracing::warn!("Using placeholder DEV wallet address");
+            }
+        } else if let Some(addr) = &self.ai_level_burn_address {
+            if is_placeholder_address(addr) {
+                tracing::warn!("Using placeholder AI level burn address");
+            } else {
+                tracing::warn!(
+                    "DEV_WALLET_ADDRESS is not configured; using legacy AI_LEVEL_BURN_ADDRESS as AI level payment target"
+                );
+            }
+        } else {
+            tracing::warn!(
+                "DEV_WALLET_ADDRESS is not configured; AI level upgrade payment verification will fail"
+            );
+        }
         if is_placeholder_address(&self.bridge_aggregator_address) {
             tracing::warn!("Using placeholder bridge aggregator address");
         }
@@ -443,12 +475,19 @@ impl Config {
         }
 
         let _ = &self.openai_api_key;
+        let _ = &self.cairo_coder_api_key;
+        let _ = &self.cairo_coder_api_url;
+        let _ = &self.cairo_coder_model;
         let _ = &self.gemini_api_key;
         let _ = &self.gemini_api_url;
         let _ = &self.gemini_model;
         let _ = &self.twitter_bearer_token;
         let _ = &self.telegram_bot_token;
         let _ = &self.discord_bot_token;
+        let _ = &self.social_tasks_json;
+        let _ = &self.admin_manual_key;
+        let _ = &self.dev_wallet_address;
+        let _ = &self.ai_level_burn_address;
         let _ = &self.layerswap_api_key;
         let _ = &self.layerswap_api_url;
         let _ = &self.atomiq_api_key;

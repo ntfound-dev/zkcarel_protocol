@@ -144,11 +144,22 @@ const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED || "false").toLowerCase() ===
     "true" && PRIVATE_ACTION_EXECUTOR_ADDRESS.length > 0
 const HIDE_BALANCE_RELAYER_POOL_ENABLED =
-  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "true").toLowerCase() === "true"
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true"
+const HIDE_BALANCE_RELAYER_APPROVE_MAX =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_APPROVE_MAX || "false").toLowerCase() === "true"
+const HIDE_BALANCE_EXECUTOR_KIND = (
+  process.env.NEXT_PUBLIC_HIDE_BALANCE_EXECUTOR_KIND || ""
+)
+  .trim()
+  .toLowerCase()
+const HIDE_BALANCE_SHIELDED_POOL_V2 =
+  HIDE_BALANCE_EXECUTOR_KIND === "shielded_pool_v2" ||
+  HIDE_BALANCE_EXECUTOR_KIND === "shielded-v2" ||
+  HIDE_BALANCE_EXECUTOR_KIND === "v2"
 const BRIDGE_TO_STRK_DISABLED_MESSAGE =
   "Bridge to STRK is currently disabled. Use Starknet L2 Swap for STRK pairs."
 const UNSUPPORTED_BRIDGE_PAIR_MESSAGE =
-  "Bridge pair is not supported on current testnet routes. Supported pairs: ETH↔BTC, BTC↔WBTC, ETH↔WBTC."
+  "Bridge pair is not supported on current testnet routes. Supported pairs: ETH↔BTC, BTC↔WBTC, and ETH↔WBTC (Ethereum↔Starknet)."
 
 const CAREL_PROTOCOL_ADDRESS = process.env.NEXT_PUBLIC_CAREL_PROTOCOL_ADDRESS || ""
 const STARKNET_SWAP_CONTRACT_ADDRESS =
@@ -170,6 +181,8 @@ const STARKGATE_ETH_TOKEN_ADDRESS =
   "0x0000000000000000000000000000000000455448"
 const BTC_TESTNET_EXPLORER_BASE_URL =
   process.env.NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL || "https://mempool.space/testnet4"
+const GARDEN_ORDER_EXPLORER_BASE_URL =
+  process.env.NEXT_PUBLIC_GARDEN_ORDER_EXPLORER_URL || "https://testnet-explorer.garden.finance/order"
 const BTC_TESTNET_FAUCET_URL =
   process.env.NEXT_PUBLIC_BTC_TESTNET_FAUCET_URL || "https://testnet4.info/"
 const BTC_VAULT_ADDRESS = (process.env.NEXT_PUBLIC_BTC_VAULT_ADDRESS || "").trim()
@@ -202,6 +215,8 @@ const TOKEN_DECIMALS: Record<string, number> = {
   STRK: 18,
   CAREL: 18,
 }
+const U256_MAX_LOW_HEX = "0xffffffffffffffffffffffffffffffff"
+const U256_MAX_HIGH_HEX = "0xffffffffffffffffffffffffffffffff"
 
 /**
  * Handles `chainFromNetwork` logic.
@@ -752,6 +767,22 @@ const pickNestedString = (value: unknown, path: Array<string>): string => {
   return typeof current === "string" ? current.trim() : ""
 }
 
+const buildGardenOrderExplorerUrl = (orderId: string): string => {
+  const normalizedOrderId = orderId.trim()
+  if (!normalizedOrderId) return ""
+  const base = GARDEN_ORDER_EXPLORER_BASE_URL.trim().replace(/\/$/, "")
+  if (!base) return ""
+  return `${base}/${encodeURIComponent(normalizedOrderId)}`
+}
+
+const buildGardenOrderExplorerLinks = (
+  orderId: string
+): Array<{ label: string; url: string }> | undefined => {
+  const url = buildGardenOrderExplorerUrl(orderId)
+  if (!url) return undefined
+  return [{ label: "Open Garden Explorer", url }]
+}
+
 interface TokenSelectorProps {
   selectedToken: TokenWithBalance
   onSelect: (token: TokenWithBalance) => void
@@ -1071,12 +1102,12 @@ export function TradingInterface() {
     }))
   }, [resolveTokenBalance, resolveTokenPrice])
 
-  const [fromTokenSymbol, setFromTokenSymbol] = React.useState("ETH")
+  const [fromTokenSymbol, setFromTokenSymbol] = React.useState("STRK")
   const [toTokenSymbol, setToTokenSymbol] = React.useState("WBTC")
   const fromToken = React.useMemo(() => {
     return (
       tokens.find((token) => token.symbol === fromTokenSymbol) ||
-      tokens.find((token) => token.symbol === "ETH") ||
+      tokens.find((token) => token.symbol === "STRK") ||
       tokens[0]
     )
   }, [fromTokenSymbol, tokens])
@@ -1306,6 +1337,10 @@ export function TradingInterface() {
     const base = BTC_TESTNET_EXPLORER_BASE_URL.replace(/\/$/, "")
     return `${base}/address/${encodeURIComponent(pendingBtcDeposit.depositAddress)}`
   }, [pendingBtcDeposit?.depositAddress])
+  const pendingGardenOrderExplorerUrl = React.useMemo(() => {
+    if (!pendingBtcDeposit?.bridgeId) return ""
+    return buildGardenOrderExplorerUrl(pendingBtcDeposit.bridgeId)
+  }, [pendingBtcDeposit?.bridgeId])
 
   const preferredReceiveAddress = React.useMemo(
     () =>
@@ -2302,14 +2337,47 @@ export function TradingInterface() {
       })
     }
 
-    return invokeStarknetCallsFromWallet(
-      preparedCalls.map((call) => ({
-        contractAddress: call.contractAddress,
-        entrypoint: call.entrypoint,
-        calldata: call.calldata,
-      })),
-      starknetProviderHint
-    )
+    const starknetCalls = preparedCalls.map((call) => ({
+      contractAddress: call.contractAddress,
+      entrypoint: call.entrypoint,
+      calldata: call.calldata,
+    }))
+
+    try {
+      return await invokeStarknetCallsFromWallet(starknetCalls, starknetProviderHint)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || "")
+      const isAllowanceFailure = /insufficient allowance/i.test(message)
+      if (!isAllowanceFailure) {
+        throw error
+      }
+
+      const approveIndex = starknetCalls.findIndex(
+        (call) => call.entrypoint.toLowerCase() === "approve"
+      )
+      const hasExecuteSwap = starknetCalls.some(
+        (call) => call.entrypoint.toLowerCase() === "execute_swap"
+      )
+      if (approveIndex < 0 || !hasExecuteSwap) {
+        throw error
+      }
+
+      const approveCall = starknetCalls[approveIndex]
+      const remainingCalls = starknetCalls.filter((_, index) => index !== approveIndex)
+      if (!approveCall || remainingCalls.length === 0) {
+        throw error
+      }
+
+      notifications.addNotification({
+        type: "warning",
+        title: "Retry swap with separate approval",
+        message:
+          "Wallet multicall hit allowance issue. Approve will be sent first, then swap execution.",
+      })
+
+      await invokeStarknetCallsFromWallet([approveCall], starknetProviderHint)
+      return invokeStarknetCallsFromWallet(remainingCalls, starknetProviderHint)
+    }
     },
     [
       activeSlippage,
@@ -2327,6 +2395,58 @@ export function TradingInterface() {
       toToken.symbol,
       resolveHideBalancePrivacyPayload,
     ]
+  )
+
+  const fundRelayerHideNoteForSwap = React.useCallback(
+    async (_privacyPayload: PrivacyVerificationPayload) => {
+      const tokenAddress = resolveTokenAddress(fromToken.symbol).trim()
+      if (!tokenAddress) {
+        throw new Error(
+          `Token address for ${fromToken.symbol} is not configured for hide-mode relayer funding.`
+        )
+      }
+
+      const executorRaw =
+        PRIVATE_ACTION_EXECUTOR_ADDRESS.trim() || STARKNET_ZK_PRIVACY_ROUTER_ADDRESS.trim()
+      const executorAddress = normalizeFeltAddress(executorRaw)
+      if (!executorAddress) {
+        throw new Error(
+          "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS is not configured for shielded relayer mode."
+        )
+      }
+
+      const decimals = resolveTokenDecimals(fromToken.symbol)
+      const [amountLow, amountHigh] = decimalToU256Parts(fromAmount, decimals)
+      const [approvalLow, approvalHigh] = HIDE_BALANCE_RELAYER_APPROVE_MAX
+        ? [U256_MAX_LOW_HEX, U256_MAX_HIGH_HEX]
+        : [amountLow, amountHigh]
+      const approvalCall = {
+        contractAddress: tokenAddress,
+        entrypoint: "approve",
+        calldata: [executorAddress, approvalLow, approvalHigh],
+      }
+
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: HIDE_BALANCE_RELAYER_APPROVE_MAX
+          ? `Approve one-time ${fromToken.symbol} spending limit for private relayer funding.`
+          : `Approve ${fromAmount} ${fromToken.symbol} for private relayer note funding.`,
+      })
+
+      const txHash = await invokeStarknetCallsFromWallet([approvalCall], starknetProviderHint)
+      notifications.addNotification({
+        type: "success",
+        title: "Allowance approved",
+        message: HIDE_BALANCE_RELAYER_APPROVE_MAX
+          ? `Relayer allowance for ${fromToken.symbol} is now active (one-time setup).`
+          : `Relayer can now fund private note from your ${fromToken.symbol} balance.`,
+        txHash,
+        txNetwork: "starknet",
+      })
+      return txHash
+    },
+    [fromAmount, fromToken.symbol, notifications, starknetProviderHint]
   )
 
   const submitOnchainBridgeTx = React.useCallback(async () => {
@@ -2444,6 +2564,7 @@ export function TradingInterface() {
           : destinationChain === "ethereum"
           ? "evm"
           : "starknet"
+      const orderExplorerLinks = buildGardenOrderExplorerLinks(bridgeId)
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         if (attempt > 0) {
@@ -2488,6 +2609,7 @@ export function TradingInterface() {
                 message: `Order ${bridgeId.slice(0, 10)}... selesai di chain tujuan.`,
                 txHash: txHash || undefined,
                 txNetwork,
+                txExplorerUrls: orderExplorerLinks,
               })
             }
             setPendingBtcDeposit((prev) => (prev && prev.bridgeId === bridgeId ? null : prev))
@@ -2525,6 +2647,7 @@ export function TradingInterface() {
                 message: `Order ${bridgeId.slice(0, 10)}... has been refunded.`,
                 txHash: refundTxHash,
                 txNetwork: "btc",
+                txExplorerUrls: orderExplorerLinks,
               })
             }
             lastGardenOrderStatusRef.current[bridgeId] = "refunded"
@@ -2537,6 +2660,7 @@ export function TradingInterface() {
               type: "warning",
               title: "Order expired",
               message: `Order ${bridgeId.slice(0, 10)}... expired. Click Claim Refund to process BTC return.`,
+              txExplorerUrls: orderExplorerLinks,
             })
           }
 
@@ -2548,6 +2672,7 @@ export function TradingInterface() {
               type: "info",
               title: "Bridge processing",
               message: `Order ${bridgeId.slice(0, 10)}... is waiting for settlement.`,
+              txExplorerUrls: orderExplorerLinks,
             })
           }
         } catch {
@@ -2561,6 +2686,7 @@ export function TradingInterface() {
           type: "info",
           title: "Bridge still processing",
           message: `Order ${bridgeId.slice(0, 10)}... masih diproses solver. Cek lagi beberapa menit.`,
+          txExplorerUrls: orderExplorerLinks,
         })
       }
     },
@@ -2728,6 +2854,11 @@ export function TradingInterface() {
             "Proof belum siap. Transaksi dilanjutkan dalam mode publik supaya tidak blok user.",
         })
       }
+      if (effectiveHideBalance && HIDE_BALANCE_SHIELDED_POOL_V2 && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
+        throw new Error(
+          "Hide Balance strict mode aktif: relayer pool harus enabled. Public wallet path diblok untuk cegah kebocoran data swap di explorer."
+        )
+      }
       if (isCrossChain) {
         const recipient = (receiveAddress || preferredReceiveAddress).trim()
         const sourceChain = chainFromNetwork(fromToken.network)
@@ -2802,6 +2933,12 @@ export function TradingInterface() {
           if (!orderId) {
             throw new Error("Garden order id is missing. Please retry bridge creation.")
           }
+          notifications.addNotification({
+            type: "info",
+            title: "Garden order created",
+            message: `Order ${orderId.slice(0, 10)}... created. Continue with wallet signature.`,
+            txExplorerUrls: buildGardenOrderExplorerLinks(orderId),
+          })
 
           if (sourceChain === "ethereum") {
             notifications.addNotification({
@@ -2886,6 +3023,10 @@ export function TradingInterface() {
         }
         const normalizedStatus = (response.status || "").toLowerCase()
         const isBridgeFinalized = normalizedStatus === "completed" || normalizedStatus === "success"
+        const gardenOrderExplorerLinks =
+          isGardenProvider && response.bridge_id
+            ? buildGardenOrderExplorerLinks(response.bridge_id)
+            : undefined
         tradeFinalized = isBridgeFinalized
         if (response.privacy_tx_hash) {
           notifications.addNotification({
@@ -2924,6 +3065,7 @@ export function TradingInterface() {
             type: "info",
             title: "Bridge order created",
             message: `Order ${response.bridge_id.slice(0, 10)}... ready. Send ${btcAmountDisplay} to ${response.deposit_address} to continue settlement.`,
+            txExplorerUrls: gardenOrderExplorerLinks,
           })
 
           if (wallet.btcAddress && amountSats > 0) {
@@ -2997,6 +3139,7 @@ export function TradingInterface() {
               : `Bridge ${fromAmount} ${fromToken.symbol} is still processing settlement to ${toToken.network}.`,
             txHash: onchainTxHash || undefined,
             txNetwork,
+            txExplorerUrls: gardenOrderExplorerLinks,
           })
         } else if (btcAutoSendSucceeded) {
           notifications.addNotification({
@@ -3005,17 +3148,23 @@ export function TradingInterface() {
             message: `Order ${response.bridge_id.slice(0, 10)}... BTC deposit received. Waiting for settlement.`,
             txHash: btcDepositTxHash || undefined,
             txNetwork: "btc",
+            txExplorerUrls: gardenOrderExplorerLinks,
           })
         } else if (btcAutoSendAttempted) {
           notifications.addNotification({
             type: "warning",
             title: "Deposit not sent yet",
             message: `Order ${response.bridge_id.slice(0, 10)}... was created, but BTC deposit has not been sent yet.`,
+            txExplorerUrls: gardenOrderExplorerLinks,
           })
         }
       } else {
         const slippageValue = Number(activeSlippage || "0.5")
-        const minAmountOut = (Number.parseFloat(toAmount || "0") * (1 - slippageValue / 100)).toFixed(6)
+        const toTokenDecimals = TOKEN_DECIMALS[toToken.symbol.toUpperCase()] ?? 6
+        const minAmountPrecision = Math.min(8, Math.max(6, toTokenDecimals))
+        const minAmountOut = (
+          Number.parseFloat(toAmount || "0") * (1 - slippageValue / 100)
+        ).toFixed(minAmountPrecision)
         const deadline = Math.floor(Date.now() / 1000) + 60 * 20
         const recipient = (receiveAddress || preferredReceiveAddress).trim() || undefined
         const submittedPrivacyPayload =
@@ -3029,28 +3178,133 @@ export function TradingInterface() {
             title: "Submitting private swap",
             message: "Submitting hide-mode swap through Starknet relayer pool.",
           })
-          response = await executeSwap({
-            from_token: fromToken.symbol,
-            to_token: toToken.symbol,
-            amount: fromAmount,
-            min_amount_out: minAmountOut,
-            slippage: slippageValue,
-            deadline,
-            recipient,
-            mode: mevProtection ? "private" : "transparent",
-            hide_balance: true,
-            privacy: submittedPrivacyPayload,
-          })
-          finalTxHash = response.tx_hash
-          submittedSwapTxHash = response.tx_hash || null
-          if (finalTxHash) {
-            notifications.addNotification({
-              type: "info",
-              title: "Private swap pending",
-              message: `Hide swap ${fromAmount} ${fromToken.symbol} submitted (${finalTxHash.slice(0, 10)}...).`,
-              txHash: finalTxHash,
-              txNetwork: "starknet",
+          try {
+            response = await executeSwap({
+              from_token: fromToken.symbol,
+              to_token: toToken.symbol,
+              amount: fromAmount,
+              min_amount_out: minAmountOut,
+              slippage: slippageValue,
+              deadline,
+              recipient,
+              mode: mevProtection ? "private" : "transparent",
+              hide_balance: true,
+              privacy: submittedPrivacyPayload,
             })
+            finalTxHash = response.tx_hash
+            submittedSwapTxHash = response.tx_hash || null
+            if (finalTxHash) {
+              notifications.addNotification({
+                type: "info",
+                title: "Private swap pending",
+                message: `Hide swap ${fromAmount} ${fromToken.symbol} submitted (${finalTxHash.slice(0, 10)}...).`,
+                txHash: finalTxHash,
+                txNetwork: "starknet",
+              })
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error || "")
+            if (/request timeout|failed to fetch|network error|network_error/i.test(message)) {
+              throw new Error(
+                "Backend API tidak terhubung. Jalankan backend di port 8080 dulu, lalu retry private swap."
+              )
+            }
+            if (/swap requires onchain_tx_hash/i.test(message)) {
+              throw new Error(
+                "Backend relayer hide-mode belum aktif (masih minta onchain_tx_hash). Set HIDE_BALANCE_RELAYER_POOL_ENABLED=true lalu restart backend."
+              )
+            }
+            if (
+              HIDE_BALANCE_SHIELDED_POOL_V2 &&
+              /(requested entrypoint does not exist|entrypoint does not exist|entry point .* not found|entrypoint .* not found|entry_point_not_found)/i.test(
+                message
+              )
+            ) {
+              throw new Error(
+                `ShieldedPoolV2 executor terdeteksi versi lama (entrypoint deposit_fixed_for belum ada). Detail backend: ${message}`
+              )
+            }
+            const shouldFundShieldedNote =
+              HIDE_BALANCE_SHIELDED_POOL_V2 &&
+              /(note is not funded|insufficient allowance|deposit_fixed_for|approve\(|u256_sub overflow|u256_sub)/i.test(
+                message
+              )
+            if (shouldFundShieldedNote && submittedPrivacyPayload) {
+              await fundRelayerHideNoteForSwap(submittedPrivacyPayload)
+              response = await executeSwap({
+                from_token: fromToken.symbol,
+                to_token: toToken.symbol,
+                amount: fromAmount,
+                min_amount_out: minAmountOut,
+                slippage: slippageValue,
+                deadline,
+                recipient,
+                mode: mevProtection ? "private" : "transparent",
+                hide_balance: true,
+                privacy: submittedPrivacyPayload,
+              })
+              finalTxHash = response.tx_hash
+              submittedSwapTxHash = response.tx_hash || null
+              if (finalTxHash) {
+                notifications.addNotification({
+                  type: "info",
+                  title: "Private swap pending",
+                  message: `Hide swap ${fromAmount} ${fromToken.symbol} submitted (${finalTxHash.slice(0, 10)}...).`,
+                  txHash: finalTxHash,
+                  txNetwork: "starknet",
+                })
+              }
+            } else {
+              if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+                throw new Error(
+                  `Hide relayer unavailable. Wallet fallback diblok di shielded_pool_v2 agar detail swap tidak bocor di explorer. Detail: ${message}`
+                )
+              }
+              const shouldFallbackToWalletHidePath = /(relayer|privateactionexecutor|not configured|executor|submit_private)/i.test(
+                message
+              )
+              if (!shouldFallbackToWalletHidePath) {
+                throw error
+              }
+
+              notifications.addNotification({
+                type: "warning",
+                title: "Relayer unavailable",
+                message:
+                  "Hide relayer is not ready. Switching to wallet-signed Hide Balance transaction.",
+              })
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: "Confirm private swap transaction in your Starknet wallet.",
+              })
+
+              const onchainTxHash = await submitOnchainSwapTx(tradePrivacyPayload, true)
+              submittedSwapTxHash = onchainTxHash
+              finalTxHash = onchainTxHash
+
+              notifications.addNotification({
+                type: "info",
+                title: "Private swap pending",
+                message: `Hide swap ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+                txHash: onchainTxHash,
+                txNetwork: "starknet",
+              })
+
+              response = await executeSwap({
+                from_token: fromToken.symbol,
+                to_token: toToken.symbol,
+                amount: fromAmount,
+                min_amount_out: minAmountOut,
+                slippage: slippageValue,
+                deadline,
+                recipient,
+                onchain_tx_hash: onchainTxHash || undefined,
+                mode: mevProtection ? "private" : "transparent",
+                hide_balance: true,
+                privacy: submittedPrivacyPayload,
+              })
+            }
           }
         } else {
           notifications.addNotification({
@@ -3242,8 +3496,8 @@ export function TradingInterface() {
           {fromToken.symbol === "BTC" && !wallet.btcAddress && (
             <div className="px-3 py-2 rounded-lg bg-warning/10 border border-warning/30">
               <p className="text-xs text-foreground">
-                Source BTC membutuhkan wallet BTC testnet (UniSat/Xverse). Untuk quick test tanpa
-                wallet BTC, gunakan pair ETH ↔ WBTC.
+                Source BTC membutuhkan wallet BTC testnet (UniSat/Xverse). Untuk quick test,
+                gunakan pair ETH → BTC dulu.
               </p>
             </div>
           )}
@@ -3688,6 +3942,16 @@ export function TradingInterface() {
               >
                 Refresh Status
               </Button>
+              {pendingGardenOrderExplorerUrl && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 px-3 text-xs"
+                  onClick={() => openExternalUrl(pendingGardenOrderExplorerUrl)}
+                >
+                  Open Garden Order
+                </Button>
+              )}
               {pendingCanClaimRefund && (
                 <Button
                   type="button"

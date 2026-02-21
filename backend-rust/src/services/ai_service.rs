@@ -1,5 +1,9 @@
 use crate::{
-    config::Config, constants::EPOCH_DURATION_SECONDS, db::Database, error::Result,
+    config::Config,
+    constants::EPOCH_DURATION_SECONDS,
+    db::Database,
+    error::Result,
+    services::price_guard::{fallback_price_for, first_sane_price, symbol_candidates_for},
     tokenomics::rewards_distribution_pool_for_environment,
 };
 use rust_decimal::prelude::ToPrimitive;
@@ -118,12 +122,171 @@ fn contains_any_keyword(text: &str, keywords: &[&str]) -> bool {
     keywords.iter().any(|keyword| text.contains(keyword))
 }
 
-// Internal helper that supports `fallback_price_for` operations.
-fn fallback_price_for(token: &str) -> f64 {
-    match token {
-        "USDT" | "USDC" | "CAREL" => 1.0,
-        _ => 0.0,
+// Internal helper that supports `contains_any_exact_word` operations.
+fn contains_any_exact_word(text: &str, keywords: &[&str]) -> bool {
+    let words = tokenize_words(text);
+    words
+        .iter()
+        .any(|word| keywords.iter().any(|keyword| word == keyword))
+}
+
+// Internal helper that supports `has_non_empty_value` operations.
+fn has_non_empty_value(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+}
+
+// Internal helper that supports `extract_text_from_json_pointers` operations.
+fn extract_text_from_json_pointers(value: &serde_json::Value, pointers: &[&str]) -> Option<String> {
+    pointers.iter().find_map(|pointer| {
+        value
+            .pointer(pointer)
+            .and_then(|entry| entry.as_str())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    })
+}
+
+// Internal helper that supports `detect_locale_from_command` operations.
+fn detect_locale_from_command(command_lower: &str) -> &'static str {
+    if contains_any_keyword(
+        command_lower,
+        &[
+            "bahasa",
+            "indonesia",
+            "indo",
+            "cek",
+            "saldo",
+            "harga",
+            "berapa",
+            "poin",
+            "tukar",
+            "jembatan",
+            "klaim",
+            "batalkan",
+            "alokasi",
+            "notifikasi",
+            "pemula",
+        ],
+    ) || contains_any_exact_word(command_lower, &["halo", "hai"])
+    {
+        "id"
+    } else {
+        "en"
     }
+}
+
+// Internal helper that supports `with_locale` operations.
+fn with_locale(mut parameters: serde_json::Value, locale: &str) -> serde_json::Value {
+    if let Some(map) = parameters.as_object_mut() {
+        map.insert(
+            "locale".to_string(),
+            serde_json::Value::String(locale.to_string()),
+        );
+    }
+    parameters
+}
+
+// Internal helper that supports `locale_from_intent` operations.
+fn locale_from_intent(intent: &Intent) -> &str {
+    intent
+        .parameters
+        .get("locale")
+        .and_then(|value| value.as_str())
+        .unwrap_or("en")
+}
+
+// Internal helper that supports `is_indonesian_locale` operations.
+fn is_indonesian_locale(locale: &str) -> bool {
+    locale.eq_ignore_ascii_case("id")
+}
+
+// Internal helper that supports `build_real_execution_system_prompt` operations.
+fn build_real_execution_system_prompt(level: u8, locale: &str) -> String {
+    let language_rule = if is_indonesian_locale(locale) {
+        "Reply in Indonesian."
+    } else {
+        "Reply in English unless user writes Indonesian."
+    };
+
+    format!(
+        "You are CAREL AI Assistant, a DeFi execution agent on CAREL platform.\n\
+         You do NOT simulate. For on-chain operations, treat execution as REAL after user wallet confirmation.\n\
+         ACCESS LEVELS:\n\
+         - Level 1: chat + read-only (price, balance, points, market)\n\
+         - Level 2: real swap, bridge, stake, limit order after one Auto Setup On-Chain\n\
+         - Level 3: Level 2 + unstake, claim rewards, portfolio rebalance, alerts\n\
+         CURRENT USER LEVEL: {level}\n\
+         ON-CHAIN RULES:\n\
+         - Never execute without wallet confirmation.\n\
+         - Ask confirmation before execution (example: 'You're about to swap X -> Y. Confirm?').\n\
+         - If level is insufficient, explain required level upgrade clearly.\n\
+         - If setup is missing, tell user to click Auto Setup On-Chain once.\n\
+         RESPONSE STYLE:\n\
+         - Answer user intent first, then next action.\n\
+         - Friendly, clear, conversational. Avoid robotic template repetition.\n\
+         - Never repeat tutorial/menu unless user explicitly asks for tutorial/help.\n\
+         {language_rule}\n\
+         Return plain text only."
+    )
+}
+
+// Internal helper that supports `build_real_execution_user_prompt` operations.
+fn build_real_execution_user_prompt(
+    level: u8,
+    user_address: &str,
+    command: &str,
+    intent: &Intent,
+    fallback: &AIResponse,
+) -> String {
+    let onchain_setup = if level >= 2
+        && matches!(
+            intent.action.as_str(),
+            "swap"
+                | "bridge"
+                | "stake"
+                | "unstake"
+                | "claim_staking_rewards"
+                | "limit_order_create"
+                | "limit_order_cancel"
+                | "portfolio_management"
+                | "alerts"
+        ) {
+        "true (validated by backend for current request)"
+    } else if level >= 2 {
+        "unknown (not required for this intent)"
+    } else {
+        "not_required_level_1"
+    };
+    let carel_balance = fallback
+        .data
+        .as_ref()
+        .and_then(|data| data.get("carel_balance"))
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let user_points = fallback
+        .data
+        .as_ref()
+        .and_then(|data| data.get("total_points"))
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    format!(
+        "USER CONTEXT:\n\
+         - User Level: {level}\n\
+         - Wallet Address: {user_address}\n\
+         - On-chain Setup Done: {onchain_setup}\n\
+         - CAREL Balance: {carel_balance}\n\
+         - Current Epoch Points: {user_points}\n\
+         Parsed intent: {}\n\
+         User command: {command}\n\
+         Deterministic fallback: {}\n\
+         Keep it concise (max 120 words).",
+        intent.action, fallback.message
+    )
 }
 
 // Internal helper that supports `extract_amount_from_text` operations.
@@ -190,6 +353,7 @@ fn parse_limit_order_parameters(text: &str) -> (String, String, f64, f64, String
 // Internal helper that parses or transforms values for `parse_intent_from_command`.
 fn parse_intent_from_command(command: &str) -> Intent {
     let command_lower = command.to_lowercase();
+    let locale = detect_locale_from_command(&command_lower);
 
     if contains_any_keyword(
         &command_lower,
@@ -197,7 +361,7 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "limit_order_cancel".to_string(),
-            parameters: serde_json::json!({}),
+            parameters: with_locale(serde_json::json!({}), locale),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -206,13 +370,16 @@ fn parse_intent_from_command(command: &str) -> Intent {
         let (from, to, amount, price, expiry) = parse_limit_order_parameters(&command_lower);
         Intent {
             action: "limit_order_create".to_string(),
-            parameters: serde_json::json!({
-                "from": from,
-                "to": to,
-                "amount": amount,
-                "price": price,
-                "expiry": expiry,
-            }),
+            parameters: with_locale(
+                serde_json::json!({
+                    "from": from,
+                    "to": to,
+                    "amount": amount,
+                    "price": price,
+                    "expiry": expiry,
+                }),
+                locale,
+            ),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -226,9 +393,12 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "claim_staking_rewards".to_string(),
-            parameters: serde_json::json!({
-                "token": extract_token_from_text(&command_lower),
-            }),
+            parameters: with_locale(
+                serde_json::json!({
+                    "token": extract_token_from_text(&command_lower),
+                }),
+                locale,
+            ),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -236,30 +406,39 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "unstake".to_string(),
-            parameters: serde_json::json!({
-                "token": extract_token_from_text(&command_lower),
-                "amount": extract_amount_from_text(&command_lower),
-            }),
+            parameters: with_locale(
+                serde_json::json!({
+                    "token": extract_token_from_text(&command_lower),
+                    "amount": extract_amount_from_text(&command_lower),
+                }),
+                locale,
+            ),
         }
     } else if contains_any_keyword(&command_lower, &["swap", "exchange", "tukar"]) {
         let (from, to, amount) = parse_swap_parameters(&command_lower);
         Intent {
             action: "swap".to_string(),
-            parameters: serde_json::json!({
-                "from": from,
-                "to": to,
-                "amount": amount,
-            }),
+            parameters: with_locale(
+                serde_json::json!({
+                    "from": from,
+                    "to": to,
+                    "amount": amount,
+                }),
+                locale,
+            ),
         }
     } else if contains_any_keyword(&command_lower, &["bridge", "jembatan"]) {
         let (from, to, amount) = parse_swap_parameters(&command_lower);
         Intent {
             action: "bridge".to_string(),
-            parameters: serde_json::json!({
-                "from": from,
-                "to": to,
-                "amount": amount,
-            }),
+            parameters: with_locale(
+                serde_json::json!({
+                    "from": from,
+                    "to": to,
+                    "amount": amount,
+                }),
+                locale,
+            ),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -273,7 +452,7 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "portfolio_management".to_string(),
-            parameters: serde_json::json!({}),
+            parameters: with_locale(serde_json::json!({}), locale),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -281,7 +460,31 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "alerts".to_string(),
-            parameters: serde_json::json!({}),
+            parameters: with_locale(serde_json::json!({}), locale),
+        }
+    } else if contains_any_keyword(
+        &command_lower,
+        &[
+            "bahasa indonesia",
+            "bahasa indo",
+            "bhs indo",
+            "pakai bahasa indonesia",
+            "bahsa indo",
+        ],
+    ) {
+        Intent {
+            action: "set_language_indonesian".to_string(),
+            parameters: with_locale(serde_json::json!({}), "id"),
+        }
+    } else if contains_any_keyword(&command_lower, &["price", "harga"]) {
+        Intent {
+            action: "check_price".to_string(),
+            parameters: with_locale(
+                serde_json::json!({
+                    "token": extract_token_from_text(&command_lower),
+                }),
+                locale,
+            ),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -289,7 +492,7 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "check_balance".to_string(),
-            parameters: serde_json::json!({}),
+            parameters: with_locale(serde_json::json!({}), locale),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -297,15 +500,18 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "check_points".to_string(),
-            parameters: serde_json::json!({}),
+            parameters: with_locale(serde_json::json!({}), locale),
         }
     } else if contains_any_keyword(&command_lower, &["stake", "staking"]) {
         Intent {
             action: "stake".to_string(),
-            parameters: serde_json::json!({
-                "token": extract_token_from_text(&command_lower),
-                "amount": extract_amount_from_text(&command_lower),
-            }),
+            parameters: with_locale(
+                serde_json::json!({
+                    "token": extract_token_from_text(&command_lower),
+                    "amount": extract_amount_from_text(&command_lower),
+                }),
+                locale,
+            ),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -313,9 +519,12 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "market_analysis".to_string(),
-            parameters: serde_json::json!({
-                "token": extract_token_from_text(&command_lower),
-            }),
+            parameters: with_locale(
+                serde_json::json!({
+                    "token": extract_token_from_text(&command_lower),
+                }),
+                locale,
+            ),
         }
     } else if contains_any_keyword(
         &command_lower,
@@ -323,12 +532,17 @@ fn parse_intent_from_command(command: &str) -> Intent {
     ) {
         Intent {
             action: "tutorial".to_string(),
-            parameters: serde_json::json!({}),
+            parameters: with_locale(serde_json::json!({}), locale),
+        }
+    } else if contains_any_exact_word(&command_lower, &["hello", "hi", "hey", "halo", "hai"]) {
+        Intent {
+            action: "chat_greeting".to_string(),
+            parameters: with_locale(serde_json::json!({}), locale),
         }
     } else {
         Intent {
             action: "unknown".to_string(),
-            parameters: serde_json::json!({}),
+            parameters: with_locale(serde_json::json!({}), locale),
         }
     }
 }
@@ -377,12 +591,63 @@ struct GeminiResponsePart {
     text: Option<String>,
 }
 
+const OPENAI_CHAT_COMPLETIONS_URL: &str = "https://api.openai.com/v1/chat/completions";
+const OPENAI_DEFAULT_MODEL: &str = "gpt-4o-mini";
+const LLM_REWRITE_TIMEOUT_MS: u64 = 8_000;
+
+#[derive(Debug, Serialize)]
+struct CairoCoderChatRequest {
+    messages: Vec<OpenAIChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAIChatRequest {
+    model: String,
+    messages: Vec<OpenAIChatMessage>,
+    temperature: f64,
+    max_tokens: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAIChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIChatResponse {
+    choices: Vec<OpenAIChatChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIChatChoice {
+    message: OpenAIResponseMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIResponseMessage {
+    content: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AIGuardScope {
     ReadOnly,
     SwapBridge,
     PortfolioAlert,
     Unknown,
+}
+
+/// Internal helper that supports `has_llm_provider_configured` operations.
+pub fn has_llm_provider_configured(config: &Config) -> bool {
+    let openai_enabled = has_non_empty_value(config.openai_api_key.as_deref());
+    let cairo_enabled = has_non_empty_value(config.cairo_coder_api_key.as_deref())
+        && !config.cairo_coder_api_url.trim().is_empty();
+    let gemini_enabled = has_non_empty_value(config.gemini_api_key.as_deref())
+        && !config.gemini_api_url.trim().is_empty()
+        && !config.gemini_model.trim().is_empty();
+    openai_enabled || cairo_enabled || gemini_enabled
 }
 
 /// Handles `classify_command_scope` logic.
@@ -399,20 +664,24 @@ pub enum AIGuardScope {
 pub fn classify_command_scope(command: &str) -> AIGuardScope {
     let intent = parse_intent_from_command(command);
     match intent.action.as_str() {
-        "check_balance" | "check_points" | "market_analysis" | "tutorial" => AIGuardScope::ReadOnly,
-        "swap"
-        | "bridge"
-        | "stake"
-        | "unstake"
-        | "claim_staking_rewards"
-        | "limit_order_create"
-        | "limit_order_cancel" => AIGuardScope::SwapBridge,
-        "portfolio_management" | "alerts" => AIGuardScope::PortfolioAlert,
+        "check_balance"
+        | "check_points"
+        | "check_price"
+        | "market_analysis"
+        | "tutorial"
+        | "chat_greeting"
+        | "set_language_indonesian" => AIGuardScope::ReadOnly,
+        "swap" | "bridge" | "stake" | "limit_order_create" | "limit_order_cancel" => {
+            AIGuardScope::SwapBridge
+        }
+        "unstake" | "claim_staking_rewards" | "portfolio_management" | "alerts" => {
+            AIGuardScope::PortfolioAlert
+        }
         _ => AIGuardScope::Unknown,
     }
 }
 
-/// AI Service - keyword intent + Gemini (if configured)
+/// AI Service - keyword intent + optional LLM rewrite (Gemini/Cairo/OpenAI)
 pub struct AIService {
     db: Database,
     config: Config,
@@ -437,7 +706,7 @@ impl AIService {
     /// Execute AI command.
     /// Flow:
     /// 1) intent routing (deterministic)
-    /// 2) optional Gemini rewrite (if GEMINI_API_KEY is set)
+    /// 2) optional LLM rewrite (Gemini/Cairo/OpenAI if configured)
     pub async fn execute_command(
         &self,
         user_address: &str,
@@ -446,37 +715,48 @@ impl AIService {
     ) -> Result<AIResponse> {
         // Parse user intent
         let intent = self.parse_intent(command).await?;
+        let locale = locale_from_intent(&intent);
 
         // Execute based on intent
         let mut response = match intent.action.as_str() {
             "swap" => self.execute_swap_command(&intent).await?,
             "bridge" => self.execute_bridge_command(&intent).await?,
             "limit_order_create" => self.execute_limit_order_create_command(&intent).await?,
-            "limit_order_cancel" => self.execute_limit_order_cancel_command().await?,
-            "check_balance" => self.execute_balance_command(user_address).await?,
-            "check_points" => self.execute_points_command(user_address).await?,
+            "limit_order_cancel" => self.execute_limit_order_cancel_command(locale).await?,
+            "check_balance" => self.execute_balance_command(user_address, locale).await?,
+            "check_points" => self.execute_points_command(user_address, locale).await?,
+            "check_price" => self.execute_price_command(&intent).await?,
             "stake" => self.execute_stake_command(&intent).await?,
             "unstake" => self.execute_unstake_command(&intent).await?,
             "claim_staking_rewards" => self.execute_stake_claim_command(&intent).await?,
             "market_analysis" => self.execute_market_analysis(&intent).await?,
             "portfolio_management" => {
-                self.execute_portfolio_management_command(user_address)
+                self.execute_portfolio_management_command(user_address, locale)
                     .await?
             }
-            "alerts" => self.execute_alerts_command().await?,
-            "tutorial" => self.execute_tutorial_command(level).await?,
-            _ => AIResponse {
-                message: "I can chat and help with market, balance, points, swap, bridge, stake, unstake, claim rewards, and limit orders. Tell me what you want to do.".to_string(),
-                actions: vec![],
-                data: None,
-            },
+            "alerts" => self.execute_alerts_command(locale).await?,
+            "tutorial" => self.execute_tutorial_command(level, locale).await?,
+            "chat_greeting" => self.execute_greeting_command(level, &intent).await?,
+            "set_language_indonesian" => self.execute_set_language_indonesian_command().await?,
+            _ => self.execute_unknown_command(level, locale),
         };
 
-        if let Some(gemini_text) = self
-            .generate_with_gemini(user_address, command, level, &intent, &response)
+        let should_try_llm_rewrite = matches!(intent.action.as_str(), "unknown");
+        if should_try_llm_rewrite {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(LLM_REWRITE_TIMEOUT_MS),
+                self.generate_with_llm(user_address, command, level, &intent, &response),
+            )
             .await
-        {
-            response.message = gemini_text;
+            {
+                Ok(Some(llm_text)) => {
+                    response.message = llm_text;
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    tracing::warn!("LLM rewrite timed out after {}ms", LLM_REWRITE_TIMEOUT_MS);
+                }
+            }
         }
 
         Ok(response)
@@ -485,6 +765,31 @@ impl AIService {
     /// Parse user intent using OpenAI (placeholder: keyword matching)
     async fn parse_intent(&self, command: &str) -> Result<Intent> {
         Ok(parse_intent_from_command(command))
+    }
+
+    // Internal helper that builds inputs for `generate_with_llm`.
+    async fn generate_with_llm(
+        &self,
+        user_address: &str,
+        command: &str,
+        level: u8,
+        intent: &Intent,
+        fallback: &AIResponse,
+    ) -> Option<String> {
+        if let Some(text) = self
+            .generate_with_cairo_coder(user_address, command, level, intent, fallback)
+            .await
+        {
+            return Some(text);
+        }
+        if let Some(text) = self
+            .generate_with_gemini(user_address, command, level, intent, fallback)
+            .await
+        {
+            return Some(text);
+        }
+        self.generate_with_openai(user_address, command, level, intent, fallback)
+            .await
     }
 
     // Internal helper that builds inputs for `generate_with_gemini`.
@@ -508,24 +813,11 @@ impl AIService {
             return None;
         }
 
-        let level_policy = match level {
-            1 => "Level 1: free, only basic query + price check. No auto execution.",
-            2 => "Level 2: user already pays 1 CAREL on-chain. You may assist auto swap/bridge flow.",
-            3 => "Level 3: user already pays 2 CAREL on-chain. You may assist portfolio management and alerts.",
-            _ => "Unknown level. Keep response safe and concise.",
-        };
-
-        let prompt = format!(
-            "You are ZkCarel AI assistant.\n\
-             Language: English, concise, practical.\n\
-             {level_policy}\n\
-             User: {user_address}\n\
-             Intent: {}\n\
-             User command: {command}\n\
-             Fallback answer: {}\n\
-             Return plain text only (max 120 words).",
-            intent.action, fallback.message
-        );
+        let locale = locale_from_intent(intent);
+        let system_prompt = build_real_execution_system_prompt(level, locale);
+        let user_prompt =
+            build_real_execution_user_prompt(level, user_address, command, intent, fallback);
+        let prompt = format!("SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}");
 
         let request = GeminiGenerateRequest {
             contents: vec![GeminiContent {
@@ -578,6 +870,187 @@ impl AIService {
             .find(|text| !text.is_empty())
     }
 
+    // Internal helper that builds inputs for `generate_with_cairo_coder`.
+    async fn generate_with_cairo_coder(
+        &self,
+        user_address: &str,
+        command: &str,
+        level: u8,
+        intent: &Intent,
+        fallback: &AIResponse,
+    ) -> Option<String> {
+        let api_key = self
+            .config
+            .cairo_coder_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let api_url = self.config.cairo_coder_api_url.trim();
+        if api_url.is_empty() {
+            return None;
+        }
+
+        let locale = locale_from_intent(intent);
+        let system_prompt = build_real_execution_system_prompt(level, locale);
+        let user_prompt =
+            build_real_execution_user_prompt(level, user_address, command, intent, fallback);
+
+        let request = CairoCoderChatRequest {
+            messages: vec![
+                OpenAIChatMessage {
+                    role: "system".to_string(),
+                    content: system_prompt.to_string(),
+                },
+                OpenAIChatMessage {
+                    role: "user".to_string(),
+                    content: user_prompt,
+                },
+            ],
+            model: self
+                .config
+                .cairo_coder_model
+                .as_ref()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+        };
+
+        let client = reqwest::Client::new();
+        let response = match client
+            .post(api_url)
+            .header("x-api-key", api_key)
+            .json(&request)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("Cairo Coder request failed: {}", err);
+                return None;
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::warn!("Cairo Coder returned {}: {}", status, body);
+            return None;
+        }
+
+        let body = match response.text().await {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("Cairo Coder body read failed: {}", err);
+                return None;
+            }
+        };
+
+        if body.trim().is_empty() {
+            return None;
+        }
+
+        let parsed_json: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(value) => value,
+            Err(_) => {
+                return Some(body.trim().to_string());
+            }
+        };
+
+        extract_text_from_json_pointers(
+            &parsed_json,
+            &[
+                "/choices/0/message/content",
+                "/data/choices/0/message/content",
+                "/data/message/content",
+                "/message",
+                "/data/message",
+                "/response",
+                "/output_text",
+            ],
+        )
+    }
+
+    // Internal helper that builds inputs for `generate_with_openai`.
+    async fn generate_with_openai(
+        &self,
+        user_address: &str,
+        command: &str,
+        level: u8,
+        intent: &Intent,
+        fallback: &AIResponse,
+    ) -> Option<String> {
+        let api_key = self
+            .config
+            .openai_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let locale = locale_from_intent(intent);
+        let system_prompt = build_real_execution_system_prompt(level, locale);
+        let user_prompt =
+            build_real_execution_user_prompt(level, user_address, command, intent, fallback);
+
+        let request = OpenAIChatRequest {
+            model: OPENAI_DEFAULT_MODEL.to_string(),
+            messages: vec![
+                OpenAIChatMessage {
+                    role: "system".to_string(),
+                    content: system_prompt.to_string(),
+                },
+                OpenAIChatMessage {
+                    role: "user".to_string(),
+                    content: user_prompt,
+                },
+            ],
+            temperature: 0.2,
+            max_tokens: 256,
+        };
+
+        let client = reqwest::Client::new();
+        let response = match client
+            .post(OPENAI_CHAT_COMPLETIONS_URL)
+            .bearer_auth(api_key)
+            .json(&request)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("OpenAI request failed: {}", err);
+                return None;
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::warn!("OpenAI returned {}: {}", status, body);
+            return None;
+        }
+
+        let payload: OpenAIChatResponse = match response.json().await {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("OpenAI response parse failed: {}", err);
+                return None;
+            }
+        };
+
+        payload
+            .choices
+            .into_iter()
+            .filter_map(|choice| {
+                let text = choice.message.content?.trim().to_string();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            })
+            .next()
+    }
+
     // Internal helper that runs side-effecting logic for `execute_swap_command`.
     async fn execute_swap_command(&self, intent: &Intent) -> Result<AIResponse> {
         let from = intent
@@ -595,25 +1068,39 @@ impl AIService {
             .get("amount")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
+        let locale = locale_from_intent(intent);
+        let is_id = is_indonesian_locale(locale);
 
         if from.is_empty() || to.is_empty() || amount == 0.0 || from == to {
             return Ok(AIResponse {
-                message: "I need swap details in this format: swap <amount> <FROM> to <TO>. Example: swap 25 STRK to CAREL".to_string(),
+                message: if is_id {
+                    "Saya butuh detail swap dengan format: swap <jumlah> <DARI> ke <TUJUAN>. Contoh: swap 25 STRK ke CAREL".to_string()
+                } else {
+                    "I need swap details in this format: swap <amount> <FROM> to <TO>. Example: swap 25 STRK to CAREL".to_string()
+                },
                 actions: vec![],
                 data: None,
             });
         }
 
         Ok(AIResponse {
-            message: format!(
-                "I'll help you swap {} {} to {}. Let me get the best rate...",
-                amount, from, to
-            ),
+            message: if is_id {
+                format!(
+                    "Aksi ini REAL on-chain. Kamu akan swap {} {} ke {}. Konfirmasi dulu: lanjutkan? (ya/tidak)",
+                    amount, from, to
+                )
+            } else {
+                format!(
+                    "This is a REAL on-chain action. You're about to swap {} {} to {}. Confirm to proceed? (yes/no)",
+                    amount, from, to
+                )
+            },
             actions: vec!["get_swap_quote".to_string()],
             data: Some(serde_json::json!({
                 "from_token": from,
                 "to_token": to,
                 "amount": amount,
+                "locale": locale,
             })),
         })
     }
@@ -635,41 +1122,65 @@ impl AIService {
             .get("amount")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
+        let locale = locale_from_intent(intent);
+        let is_id = is_indonesian_locale(locale);
 
         if from.is_empty() || to.is_empty() || amount == 0.0 || from == to {
             return Ok(AIResponse {
-                message: "I need bridge details in this format: bridge <amount> <FROM> to <TO>. Example: bridge 100 USDT to STRK".to_string(),
+                message: if is_id {
+                    "Saya butuh detail bridge dengan format: bridge <jumlah> <DARI> ke <TUJUAN>. Contoh: bridge 100 USDT ke STRK".to_string()
+                } else {
+                    "I need bridge details in this format: bridge <amount> <FROM> to <TO>. Example: bridge 100 USDT to STRK".to_string()
+                },
                 actions: vec![],
                 data: None,
             });
         }
 
         Ok(AIResponse {
-            message: format!(
-                "I can help bridge {} {} to {}. Let me check the best route and fee first.",
-                amount, from, to
-            ),
+            message: if is_id {
+                format!(
+                    "Aksi ini REAL on-chain. Kamu akan bridge {} {} ke {}. Konfirmasi dulu: lanjutkan? (ya/tidak)",
+                    amount, from, to
+                )
+            } else {
+                format!(
+                    "This is a REAL on-chain action. You're about to bridge {} {} to {}. Confirm to proceed? (yes/no)",
+                    amount, from, to
+                )
+            },
             actions: vec!["get_bridge_quote".to_string()],
             data: Some(serde_json::json!({
                 "from_token": from,
                 "to_token": to,
                 "amount": amount,
+                "locale": locale,
             })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_balance_command`.
-    async fn execute_balance_command(&self, user_address: &str) -> Result<AIResponse> {
+    async fn execute_balance_command(
+        &self,
+        user_address: &str,
+        locale: &str,
+    ) -> Result<AIResponse> {
+        let is_id = is_indonesian_locale(locale);
         let assets = self.fetch_portfolio_assets(user_address).await?;
         if assets.is_empty() {
             return Ok(AIResponse {
-                message:
+                message: if is_id {
+                    "Belum ada data portfolio. Lakukan transaksi on-chain pertama dulu lalu cek lagi."
+                        .to_string()
+                } else {
                     "No portfolio data yet. Do your first on-chain transaction and check again."
-                        .to_string(),
+                        .to_string()
+                },
                 actions: vec!["open_portfolio".to_string()],
                 data: Some(serde_json::json!({
                     "total_usd": 0.0,
                     "assets": [],
+                    "locale": locale,
                 })),
             });
         }
@@ -683,20 +1194,29 @@ impl AIService {
             .join(", ");
 
         Ok(AIResponse {
-            message: format!(
-                "Portfolio {} is around ${:.2}. Top assets: {}.",
-                user_address, total_usd, top_assets
-            ),
+            message: if is_id {
+                format!(
+                    "Portfolio {} sekitar ${:.2}. Aset utama: {}.",
+                    user_address, total_usd, top_assets
+                )
+            } else {
+                format!(
+                    "Portfolio {} is around ${:.2}. Top assets: {}.",
+                    user_address, total_usd, top_assets
+                )
+            },
             actions: vec!["show_balance".to_string()],
             data: Some(serde_json::json!({
                 "total_usd": total_usd,
                 "assets": assets,
+                "locale": locale,
             })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_points_command`.
-    async fn execute_points_command(&self, user_address: &str) -> Result<AIResponse> {
+    async fn execute_points_command(&self, user_address: &str, locale: &str) -> Result<AIResponse> {
+        let is_id = is_indonesian_locale(locale);
         let epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
         let points = self.db.get_user_points(user_address, epoch).await?;
@@ -722,17 +1242,75 @@ impl AIService {
         .unwrap_or(0.0);
 
         Ok(AIResponse {
-            message: format!("You have {} points this epoch! 🎉", total),
+            message: if is_id {
+                format!("Kamu punya {} poin di epoch ini! 🎉", total)
+            } else {
+                format!("You have {} points this epoch! 🎉", total)
+            },
             actions: vec!["show_points_breakdown".to_string()],
             data: Some(serde_json::json!({
                 "total_points": total,
                 "estimated_carel": estimated_carel,
+                "locale": locale,
+            })),
+        })
+    }
+
+    // Internal helper that runs side-effecting logic for `execute_price_command`.
+    async fn execute_price_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let locale = locale_from_intent(intent);
+        let is_id = is_indonesian_locale(locale);
+        let token = intent
+            .parameters
+            .get("token")
+            .and_then(|v| v.as_str())
+            .filter(|token| !token.trim().is_empty())
+            .unwrap_or("STRK")
+            .trim()
+            .to_uppercase();
+
+        let price = self.latest_price_for(&token).await?;
+        if price <= 0.0 {
+            return Ok(AIResponse {
+                message: if is_id {
+                    format!(
+                        "Data harga untuk {} belum tersedia. Coba BTC, ETH, STRK, USDT, atau USDC.",
+                        token
+                    )
+                } else {
+                    format!(
+                        "Price data for {} is not available yet. Try BTC, ETH, STRK, USDT, or USDC.",
+                        token
+                    )
+                },
+                actions: vec![],
+                data: Some(serde_json::json!({
+                    "token": token,
+                    "price_usd": 0.0,
+                    "locale": locale,
+                })),
+            });
+        }
+
+        Ok(AIResponse {
+            message: if is_id {
+                format!("Harga terbaru {} sekitar ${:.6}.", token, price)
+            } else {
+                format!("Latest {} price is about ${:.6}.", token, price)
+            },
+            actions: vec!["show_chart".to_string()],
+            data: Some(serde_json::json!({
+                "token": token,
+                "price_usd": price,
+                "locale": locale,
             })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_stake_command`.
     async fn execute_stake_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let locale = locale_from_intent(intent);
+        let is_id = is_indonesian_locale(locale);
         // Use intent parameters (if provided) to craft a more useful reply
         let token = intent
             .parameters
@@ -746,23 +1324,38 @@ impl AIService {
             .unwrap_or(0.0);
 
         let message = if amount > 0.0 && !token.is_empty() {
-            format!(
-                "Staking {} {} will help you earn rewards and boost your points!",
-                amount, token
-            )
+            if is_id {
+                format!(
+                    "Aksi ini REAL on-chain. Kamu akan stake {} {}. Konfirmasi dulu: lanjutkan? (ya/tidak)",
+                    amount, token
+                )
+            } else {
+                format!(
+                    "This is a REAL on-chain action. You're about to stake {} {}. Confirm to proceed? (yes/no)",
+                    amount, token
+                )
+            }
+        } else if is_id {
+            "Aksi stake ini REAL on-chain. Kirim format: stake <jumlah> <token>. Contoh: stake 100 USDT.".to_string()
         } else {
-            "Staking will help you earn rewards and boost your points!".to_string()
+            "This stake action is REAL on-chain. Share details as: stake <amount> <token>. Example: stake 100 USDT.".to_string()
         };
 
         Ok(AIResponse {
             message,
             actions: vec!["show_staking_pools".to_string()],
-            data: None,
+            data: Some(serde_json::json!({
+                "token": token,
+                "amount": amount,
+                "locale": locale,
+            })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_unstake_command`.
     async fn execute_unstake_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let locale = locale_from_intent(intent);
+        let is_id = is_indonesian_locale(locale);
         let token = intent
             .parameters
             .get("token")
@@ -775,9 +1368,21 @@ impl AIService {
             .unwrap_or(0.0);
 
         let message = if amount > 0.0 {
+            if is_id {
+                format!(
+                    "Aksi ini REAL on-chain. Kamu akan unstake {} {}. Konfirmasi dulu: lanjutkan? (ya/tidak)",
+                    amount, token
+                )
+            } else {
+                format!(
+                    "This is a REAL on-chain action. You're about to unstake {} {}. Confirm to proceed? (yes/no)",
+                    amount, token
+                )
+            }
+        } else if is_id {
             format!(
-                "Got it. I can help unstake {} {}. I'll prepare the unstake flow next.",
-                amount, token
+                "Saya bisa bantu unstake {}. Tambahkan jumlah agar bisa lanjut eksekusi.",
+                token
             )
         } else {
             format!(
@@ -792,33 +1397,51 @@ impl AIService {
             data: Some(serde_json::json!({
                 "token": token,
                 "amount": amount,
+                "locale": locale,
             })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_stake_claim_command`.
     async fn execute_stake_claim_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let locale = locale_from_intent(intent);
+        let is_id = is_indonesian_locale(locale);
         let token = intent
             .parameters
             .get("token")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let message = if token.is_empty() {
-            "I can help claim your staking rewards. If you want specific pool, add token name (e.g. claim rewards USDT).".to_string()
+            if is_id {
+                "Saya bisa bantu claim reward staking kamu. Kalau mau pool tertentu, tambahkan token (contoh: claim rewards USDT).".to_string()
+            } else {
+                "I can help claim your staking rewards. If you want specific pool, add token name (e.g. claim rewards USDT).".to_string()
+            }
+        } else if is_id {
+            format!(
+                "Aksi ini REAL on-chain. Kamu akan claim rewards staking untuk {}. Konfirmasi dulu: lanjutkan? (ya/tidak)",
+                token
+            )
         } else {
-            format!("I can help claim staking rewards for {}.", token)
+            format!(
+                "This is a REAL on-chain action. You're about to claim staking rewards for {}. Confirm to proceed? (yes/no)",
+                token
+            )
         };
         Ok(AIResponse {
             message,
             actions: vec!["prepare_stake_claim".to_string()],
             data: Some(serde_json::json!({
                 "token": token,
+                "locale": locale,
             })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_limit_order_create_command`.
     async fn execute_limit_order_create_command(&self, intent: &Intent) -> Result<AIResponse> {
+        let locale = locale_from_intent(intent);
+        let is_id = is_indonesian_locale(locale);
         let from = intent
             .parameters
             .get("from")
@@ -847,20 +1470,36 @@ impl AIService {
 
         if from.is_empty() || to.is_empty() || amount <= 0.0 || from == to {
             return Ok(AIResponse {
-                message: "I need limit order details in this format: create limit order <amount> <FROM> to <TO> at <price>. Example: create limit order 10 STRK to USDC at 1.2".to_string(),
+                message: if is_id {
+                    "Saya butuh detail limit order dengan format: create limit order <jumlah> <DARI> ke <TUJUAN> at <harga>. Contoh: create limit order 10 STRK ke USDC at 1.2".to_string()
+                } else {
+                    "I need limit order details in this format: create limit order <amount> <FROM> to <TO> at <price>. Example: create limit order 10 STRK to USDC at 1.2".to_string()
+                },
                 actions: vec![],
                 data: None,
             });
         }
 
         let message = if price > 0.0 {
+            if is_id {
+                format!(
+                    "Aksi ini REAL on-chain. Kamu akan buat limit order: {} {} -> {} di harga {} (expiry {}). Konfirmasi dulu: lanjutkan? (ya/tidak)",
+                    amount, from, to, price, expiry
+                )
+            } else {
+                format!(
+                    "This is a REAL on-chain action. You're about to place limit order: {} {} -> {} at price {} (expiry {}). Confirm to proceed? (yes/no)",
+                    amount, from, to, price, expiry
+                )
+            }
+        } else if is_id {
             format!(
-                "I can place a limit order: {} {} -> {} at price {} (expiry {}).",
-                amount, from, to, price, expiry
+                "Limit order terdeteksi: {} {} -> {} (expiry {}). Tambahkan 'at <harga>' lalu konfirmasi untuk lanjut.",
+                amount, from, to, expiry
             )
         } else {
             format!(
-                "I can place a limit order: {} {} -> {} (expiry {}). Add 'at <price>' to set target price.",
+                "Limit order detected: {} {} -> {} (expiry {}). Add 'at <price>' then confirm to proceed.",
                 amount, from, to, expiry
             )
         };
@@ -874,80 +1513,149 @@ impl AIService {
                 "amount": amount,
                 "price": price,
                 "expiry": expiry,
+                "locale": locale,
             })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_limit_order_cancel_command`.
-    async fn execute_limit_order_cancel_command(&self) -> Result<AIResponse> {
+    async fn execute_limit_order_cancel_command(&self, locale: &str) -> Result<AIResponse> {
+        let is_id = is_indonesian_locale(locale);
         Ok(AIResponse {
-            message:
-                "I can help cancel your active limit order. Provide order id if you want a specific one."
-                    .to_string(),
+            message: if is_id {
+                "Aksi ini REAL on-chain. Kamu akan batalkan limit order aktif. Beri order id kalau mau spesifik, lalu konfirmasi. Lanjutkan? (ya/tidak)"
+                    .to_string()
+            } else {
+                "This is a REAL on-chain action. You are about to cancel an active limit order. Provide order id for specific target, then confirm. Proceed? (yes/no)"
+                    .to_string()
+            },
             actions: vec!["prepare_limit_order_cancel".to_string()],
-            data: None,
+            data: Some(serde_json::json!({
+                "locale": locale,
+            })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_market_analysis`.
     async fn execute_market_analysis(&self, intent: &Intent) -> Result<AIResponse> {
-        // Optionally use token parameter if provided
-        let token_opt = intent.parameters.get("token").and_then(|v| v.as_str());
+        let locale = locale_from_intent(intent);
+        let is_id = is_indonesian_locale(locale);
+        let token = intent
+            .parameters
+            .get("token")
+            .and_then(|v| v.as_str())
+            .filter(|token| !token.trim().is_empty())
+            .unwrap_or("BTC")
+            .trim()
+            .to_uppercase();
+        let price = self.latest_price_for(&token).await?;
 
-        let message = if let Some(token) = token_opt {
-            format!("Based on current market conditions, {} is showing interesting signals. Here's a high-level summary...", token)
+        let message = if price > 0.0 {
+            if is_id {
+                format!(
+                    "Snapshot market real-time: {} sekitar ${:.6}. Kalau mau, saya lanjutkan analisis timeframe (1h/4h/1d).",
+                    token, price
+                )
+            } else {
+                format!(
+                    "Live market snapshot: {} is around ${:.6}. If you want, I can continue with timeframe analysis (1h/4h/1d).",
+                    token, price
+                )
+            }
+        } else if is_id {
+            format!(
+                "Data market real-time untuk {} belum tersedia. Coba token lain seperti BTC, ETH, STRK, USDT, atau USDC.",
+                token
+            )
         } else {
-            "Based on current market conditions, BTC is showing bullish momentum...".to_string()
+            format!(
+                "Live market data for {} is not available yet. Try another token like BTC, ETH, STRK, USDT, or USDC.",
+                token
+            )
         };
 
         Ok(AIResponse {
             message,
             actions: vec!["show_chart".to_string()],
-            data: None,
+            data: Some(serde_json::json!({
+                "token": token,
+                "price_usd": price,
+                "locale": locale,
+            })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_portfolio_management_command`.
-    async fn execute_portfolio_management_command(&self, user_address: &str) -> Result<AIResponse> {
+    async fn execute_portfolio_management_command(
+        &self,
+        user_address: &str,
+        locale: &str,
+    ) -> Result<AIResponse> {
+        let is_id = is_indonesian_locale(locale);
         let assets = self.fetch_portfolio_assets(user_address).await?;
         let total_usd: f64 = assets.iter().map(|asset| asset.value_usd).sum();
         Ok(AIResponse {
-            message: format!(
-                "Portfolio management summary for {} is ready. Current total value is about ${:.2}.",
-                user_address, total_usd
-            ),
-            actions: vec!["open_portfolio_manager".to_string(), "set_rebalance_plan".to_string()],
+            message: if is_id {
+                format!(
+                    "Ringkasan manajemen portfolio untuk {} siap. Total nilai saat ini sekitar ${:.2}.",
+                    user_address, total_usd
+                )
+            } else {
+                format!(
+                    "Portfolio management summary for {} is ready. Current total value is about ${:.2}.",
+                    user_address, total_usd
+                )
+            },
+            actions: vec![
+                "open_portfolio_manager".to_string(),
+                "set_rebalance_plan".to_string(),
+            ],
             data: Some(serde_json::json!({
                 "total_usd": total_usd,
                 "assets": assets,
+                "locale": locale,
             })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_alerts_command`.
-    async fn execute_alerts_command(&self) -> Result<AIResponse> {
+    async fn execute_alerts_command(&self, locale: &str) -> Result<AIResponse> {
+        let is_id = is_indonesian_locale(locale);
         Ok(AIResponse {
-            message: "Alerts are ready. Choose token, trigger condition, and notification channel."
-                .to_string(),
+            message: if is_id {
+                "Alert siap. Pilih token, kondisi trigger, dan channel notifikasi.".to_string()
+            } else {
+                "Alerts are ready. Choose token, trigger condition, and notification channel."
+                    .to_string()
+            },
             actions: vec!["configure_alerts".to_string()],
             data: Some(serde_json::json!({
-                "supported_triggers": ["price_above", "price_below", "volatility_spike"]
+                "supported_triggers": ["price_above", "price_below", "volatility_spike"],
+                "locale": locale,
             })),
         })
     }
 
     // Internal helper that runs side-effecting logic for `execute_tutorial_command`.
-    async fn execute_tutorial_command(&self, level: u8) -> Result<AIResponse> {
+    async fn execute_tutorial_command(&self, level: u8, locale: &str) -> Result<AIResponse> {
+        let is_id = is_indonesian_locale(locale);
         let level_hint = match level {
             1 => "You are on Level 1 (read-only).",
-            2 => "You are on Level 2 (read-only + swap/bridge).",
-            3 => "You are on Level 3 (all features).",
+            2 => "You are on Level 2 (read-only + swap/bridge/stake/limit).",
+            3 => "You are on Level 3 (full execution including unstake/claim/portfolio/alerts).",
             _ => "Unknown level.",
         };
         Ok(AIResponse {
-            message: format!(
-                "{level_hint} Beginner steps: 1) Connect wallet. 2) For on-chain commands click Auto Setup On-Chain once. 3) Try: 'check my balance'. 4) Then try swap/bridge/stake/limit commands. 5) Confirm only in wallet popup."
-            ),
+            message: if is_id {
+                format!(
+                    "Kamu ada di Level {}. Panduan singkat: 1) Hubungkan wallet. 2) Untuk command on-chain klik Auto Setup On-Chain sekali. 3) Coba 'cek saldo saya'. 4) Lanjut swap/bridge/stake/limit. 5) Konfirmasi hanya di popup wallet.",
+                    level
+                )
+            } else {
+                format!(
+                    "{level_hint} Beginner steps: 1) Connect wallet. 2) For on-chain commands click Auto Setup On-Chain once. 3) Try: 'check my balance'. 4) Then try swap/bridge/stake/limit commands. 5) Confirm only in wallet popup."
+                )
+            },
             actions: vec!["show_tutorial".to_string()],
             data: Some(serde_json::json!({
                 "steps": [
@@ -956,9 +1664,85 @@ impl AIService {
                     "Run read-only command",
                     "Run swap/bridge/stake/limit command",
                     "Confirm transaction in wallet"
-                ]
+                ],
+                "locale": locale,
             })),
         })
+    }
+
+    // Internal helper that runs side-effecting logic for `execute_greeting_command`.
+    async fn execute_greeting_command(&self, level: u8, intent: &Intent) -> Result<AIResponse> {
+        let locale = intent
+            .parameters
+            .get("locale")
+            .and_then(|v| v.as_str())
+            .unwrap_or("en");
+
+        let message = if locale == "id" {
+            "Halo! Tentu bisa. Mau cek harga, saldo, poin, atau langsung aksi tertentu?".to_string()
+        } else if level == 1 {
+            "Hey! Of course. On Level 1 I can help with price, balance, points, and market data."
+                .to_string()
+        } else if level == 2 {
+            "Hey! Of course. On Level 2 I can run real swap/bridge/stake/limit after setup confirmation."
+                .to_string()
+        } else {
+            "Hey! Of course. On Level 3 I can run full execution plus unstake/claim/portfolio/alerts."
+                .to_string()
+        };
+
+        Ok(AIResponse {
+            message,
+            actions: vec![],
+            data: None,
+        })
+    }
+
+    // Internal helper that runs side-effecting logic for `execute_set_language_indonesian_command`.
+    async fn execute_set_language_indonesian_command(&self) -> Result<AIResponse> {
+        Ok(AIResponse {
+            message:
+                "Siap, saya pakai Bahasa Indonesia. Coba perintah: 'cek saldo saya', 'berapa poin saya', 'harga STRK', atau 'tukar 25 STRK ke WBTC'."
+                    .to_string(),
+            actions: vec![],
+            data: None,
+        })
+    }
+
+    // Internal helper that supports `execute_unknown_command` operations.
+    fn execute_unknown_command(&self, level: u8, locale: &str) -> AIResponse {
+        let is_id = is_indonesian_locale(locale);
+        let message = if has_llm_provider_configured(&self.config) {
+            if is_id {
+                if level <= 1 {
+                    "Siap. Di Level 1 saya fokus chat + data real-time (saldo, poin, harga, market). Tulis tujuanmu satu kalimat.".to_string()
+                } else {
+                    "Siap. Di level ini saya bisa bantu eksekusi real setelah setup on-chain + konfirmasi wallet. Tulis tujuanmu satu kalimat.".to_string()
+                }
+            } else {
+                if level <= 1 {
+                    "Sure. On Level 1 I handle chat + real-time read-only data (balance, points, prices, market). Tell me your goal in one sentence.".to_string()
+                } else {
+                    "Sure. On this level I can help with real execution after on-chain setup + wallet confirmation. Tell me your goal in one sentence.".to_string()
+                }
+            }
+        } else {
+            if is_id {
+                "Chat bebas belum aktif karena provider AI belum dikonfigurasi di backend. Set GEMINI/OPENAI/CAIRO_CODER key lalu restart backend."
+                    .to_string()
+            } else {
+                "Free-form chat is not active because no AI provider is configured on backend. Set GEMINI/OPENAI/CAIRO_CODER key and restart backend."
+                    .to_string()
+            }
+        };
+
+        AIResponse {
+            message,
+            actions: vec![],
+            data: Some(serde_json::json!({
+                "locale": locale,
+            })),
+        }
     }
 
     // Internal helper that fetches data for `fetch_portfolio_assets`.
@@ -1000,15 +1784,19 @@ impl AIService {
 
     // Internal helper that supports `latest_price_for` operations.
     async fn latest_price_for(&self, token: &str) -> Result<f64> {
-        let latest: Option<f64> = sqlx::query_scalar(
-            "SELECT close::FLOAT8 FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
-        )
-        .bind(token)
-        .fetch_optional(self.db.pool())
-        .await?;
-        Ok(latest
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .unwrap_or_else(|| fallback_price_for(token)))
+        let symbol = token.to_ascii_uppercase();
+        for candidate in symbol_candidates_for(&symbol) {
+            let rows: Vec<f64> = sqlx::query_scalar(
+                "SELECT close::FLOAT8 FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
+            )
+            .bind(&candidate)
+            .fetch_all(self.db.pool())
+            .await?;
+            if let Some(price) = first_sane_price(&candidate, &rows) {
+                return Ok(price);
+            }
+        }
+        Ok(fallback_price_for(&symbol))
     }
 }
 
@@ -1147,6 +1935,45 @@ mod tests {
         assert_eq!(unstake_intent.action, "unstake");
         let claim_intent = parse_intent_from_command("claim rewards usdt");
         assert_eq!(claim_intent.action, "claim_staking_rewards");
+    }
+
+    #[test]
+    // Internal helper that parses or transforms values for `parse_intent_handles_price_query`.
+    fn parse_intent_handles_price_query() {
+        let intent = parse_intent_from_command("show strk price");
+        assert_eq!(intent.action, "check_price");
+        assert_eq!(
+            intent.parameters.get("token").and_then(|v| v.as_str()),
+            Some("STRK")
+        );
+    }
+
+    #[test]
+    // Internal helper that parses or transforms values for `parse_intent_handles_indonesian_language_request`.
+    fn parse_intent_handles_indonesian_language_request() {
+        let intent = parse_intent_from_command("bahsa indo lah");
+        assert_eq!(intent.action, "set_language_indonesian");
+    }
+
+    #[test]
+    // Internal helper that parses or transforms values for `parse_intent_handles_greeting`.
+    fn parse_intent_handles_greeting() {
+        let intent = parse_intent_from_command("hello there");
+        assert_eq!(intent.action, "chat_greeting");
+    }
+
+    #[test]
+    // Internal helper that supports `classify_command_scope_greeting_is_read_only` operations.
+    fn classify_command_scope_greeting_is_read_only() {
+        let scope = classify_command_scope("hello");
+        assert_eq!(scope, AIGuardScope::ReadOnly);
+    }
+
+    #[test]
+    // Internal helper that supports `classify_command_scope_price_is_read_only` operations.
+    fn classify_command_scope_price_is_read_only() {
+        let scope = classify_command_scope("show strk price");
+        assert_eq!(scope, AIGuardScope::ReadOnly);
     }
 
     #[test]

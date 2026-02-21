@@ -25,6 +25,23 @@ function shouldNotify(key: string, lastSeen: Map<string, number>) {
 }
 
 /**
+ * Checks conditions for `isIgnoredWindowErrorMessage`.
+ *
+ * @param message - Input used by `isIgnoredWindowErrorMessage` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
+function isIgnoredWindowErrorMessage(message: string) {
+  const normalized = message.trim().toLowerCase()
+  if (!normalized) return false
+  return (
+    normalized.includes("resizeobserver loop completed with undelivered notifications") ||
+    normalized.includes("resizeobserver loop limit exceeded")
+  )
+}
+
+/**
  * Handles `GlobalEventHandlers` logic.
  *
  * @returns Result consumed by caller flow, UI state updates, or async chaining.
@@ -81,6 +98,7 @@ export function GlobalEventHandlers() {
      */
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
       const message = getErrorMessage(event.reason, "Unhandled promise rejection")
+      if (isIgnoredWindowErrorMessage(message)) return
       const key = `unhandledrejection:${message}`
       if (!shouldNotify(key, lastSeenRef.current)) return
       notifications.addNotification({
@@ -100,6 +118,7 @@ export function GlobalEventHandlers() {
      */
     const onError = (event: ErrorEvent) => {
       const message = event.message || "Unexpected error"
+      if (isIgnoredWindowErrorMessage(message)) return
       const key = `windowerror:${message}`
       if (!shouldNotify(key, lastSeenRef.current)) return
       notifications.addNotification({

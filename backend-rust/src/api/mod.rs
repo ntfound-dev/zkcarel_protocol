@@ -48,6 +48,7 @@ const USER_TOUCH_TIMEOUT_MS: u64 = 1200;
 const USER_TOUCH_MIN_INTERVAL_SECS: u64 = 30;
 const USER_TOUCH_CACHE_MAX_ENTRIES: usize = 200_000;
 const USER_TOUCH_CACHE_RETENTION_SECS: u64 = 600;
+const STARKNET_ADDRESS_HEADER: &str = "x-starknet-address";
 
 static USER_TOUCH_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, Instant>>> = OnceLock::new();
 
@@ -214,6 +215,16 @@ fn is_starknet_like_address(address: &str) -> bool {
     hex.len() > 40
 }
 
+// Internal helper that parses or transforms values for `requested_starknet_header`.
+fn requested_starknet_header(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(STARKNET_ADDRESS_HEADER)?.to_str().ok()?;
+    let trimmed = raw.trim();
+    if !is_starknet_like_address(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 /// Handles `require_starknet_user` logic.
 ///
 /// # Arguments
@@ -228,29 +239,45 @@ fn is_starknet_like_address(address: &str) -> bool {
 pub async fn require_starknet_user(headers: &HeaderMap, state: &AppState) -> Result<String> {
     let user_address = require_user(headers, state).await?;
     let linked = state.db.list_wallet_addresses(&user_address).await?;
-    if let Some(starknet_wallet) = linked
+
+    let mut allowed_starknet_wallets: Vec<String> = linked
         .iter()
-        .rev()
-        .find(|wallet| {
+        .filter(|wallet| {
             wallet.chain.eq_ignore_ascii_case("starknet")
                 && !wallet.wallet_address.trim().is_empty()
         })
-        .map(|wallet| wallet.wallet_address.clone())
-    {
+        .map(|wallet| wallet.wallet_address.trim().to_string())
+        .collect();
+
+    if is_starknet_like_address(&user_address) {
+        allowed_starknet_wallets.push(user_address.clone());
+    }
+
+    if let Some(requested) = requested_starknet_header(headers) {
+        if allowed_starknet_wallets
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(&requested))
+        {
+            tracing::debug!(
+                "Resolved Starknet wallet from request header: subject={} starknet_wallet={}",
+                user_address,
+                requested
+            );
+            return Ok(requested);
+        }
+        return Err(AppError::BadRequest(
+            "Connected Starknet wallet is not linked to this account. Reconnect the correct wallet first."
+                .to_string(),
+        ));
+    }
+
+    if let Some(starknet_wallet) = allowed_starknet_wallets.last() {
         tracing::debug!(
             "Resolved Starknet wallet from linked addresses: subject={} starknet_wallet={}",
             user_address,
             starknet_wallet
         );
-        return Ok(starknet_wallet);
-    }
-
-    if is_starknet_like_address(&user_address) {
-        tracing::debug!(
-            "Using Starknet-like auth subject as Starknet user: {}",
-            user_address
-        );
-        return Ok(user_address);
+        return Ok(starknet_wallet.clone());
     }
 
     Err(AppError::BadRequest(

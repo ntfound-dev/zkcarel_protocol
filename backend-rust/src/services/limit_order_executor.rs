@@ -5,6 +5,9 @@ use crate::{
     db::Database,
     error::Result,
     models::{LimitOrder, Transaction},
+    services::price_guard::{
+        fallback_price_for, first_sane_price, sanitize_usd_notional, symbol_candidates_for,
+    },
 };
 use rust_decimal::prelude::ToPrimitive; // Penting untuk f64 conversion
 use sqlx::Row; // Penting untuk .get()
@@ -32,18 +35,6 @@ fn to_u256_felts(value: f64) -> (Felt, Felt) {
     }
     let scaled = (value * 1e18_f64).round() as u128;
     (Felt::from(scaled), Felt::from(0_u128))
-}
-
-// Internal helper that supports `fallback_price_for` operations.
-fn fallback_price_for(token: &str) -> f64 {
-    match token.to_ascii_uppercase().as_str() {
-        "BTC" | "WBTC" => 65_000.0,
-        "ETH" => 1_900.0,
-        "STRK" => 0.05,
-        "USDT" | "USDC" => 1.0,
-        "CAREL" => 1.0,
-        _ => 0.0,
-    }
 }
 
 // Internal helper that parses or transforms values for `normalize_usd_volume`.
@@ -169,13 +160,18 @@ impl LimitOrderExecutor {
     // Internal helper that supports `latest_price_usd` operations.
     async fn latest_price_usd(&self, token: &str) -> Result<f64> {
         let symbol = token.to_ascii_uppercase();
-        let price: Option<f64> = sqlx::query_scalar(
-            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
-        )
-        .bind(&symbol)
-        .fetch_optional(self.db.pool())
-        .await?;
-        Ok(price.unwrap_or_else(|| fallback_price_for(&symbol)))
+        for candidate in symbol_candidates_for(&symbol) {
+            let prices: Vec<f64> = sqlx::query_scalar(
+                "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
+            )
+            .bind(&candidate)
+            .fetch_all(self.db.pool())
+            .await?;
+            if let Some(price) = first_sane_price(&candidate, &prices) {
+                return Ok(price);
+            }
+        }
+        Ok(fallback_price_for(&symbol))
     }
 
     /// Execute limit order (Ganti query! ke query)
@@ -188,7 +184,10 @@ impl LimitOrderExecutor {
         let amount_out = (filled_amount * order.price).to_f64().unwrap_or(0.0);
         let from_price_usd = self.latest_price_usd(&order.from_token).await?;
         let to_price_usd = self.latest_price_usd(&order.to_token).await?;
-        let usd_value = normalize_usd_volume(amount_in * from_price_usd, amount_out * to_price_usd);
+        let usd_value = sanitize_usd_notional(normalize_usd_volume(
+            amount_in * from_price_usd,
+            amount_out * to_price_usd,
+        ));
 
         self.db.fill_order(&order.order_id, filled_amount).await?;
 

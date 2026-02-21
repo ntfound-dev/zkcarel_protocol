@@ -411,7 +411,13 @@ fn build_router(state: api::AppState) -> Router {
             "/api/v1/ai/prepare-action",
             post(api::ai::prepare_action_signature),
         )
+        .route("/api/v1/ai/level", get(api::ai::get_ai_level))
+        .route("/api/v1/ai/upgrade", post(api::ai::upgrade_ai_level))
         .route("/api/v1/ai/config", get(api::ai::get_runtime_config))
+        .route(
+            "/api/v1/ai/ensure-executor",
+            post(api::ai::ensure_executor_ready),
+        )
         .route("/api/v1/ai/execute", post(api::ai::execute_command))
         .route("/api/v1/ai/pending", get(api::ai::get_pending_actions))
         // DeFi Futures (Battleship with Garaga payload flow)
@@ -425,7 +431,10 @@ fn build_router(state: api::AppState) -> Router {
             post(api::battleship::place_ships),
         )
         .route("/api/v1/battleship/fire", post(api::battleship::fire_shot))
-        .route("/api/v1/battleship/respond", post(api::battleship::respond_shot))
+        .route(
+            "/api/v1/battleship/respond",
+            post(api::battleship::respond_shot),
+        )
         .route(
             "/api/v1/battleship/claim-timeout",
             post(api::battleship::claim_timeout),

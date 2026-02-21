@@ -27,6 +27,9 @@ use crate::{
     },
     models::{ApiResponse, BridgeQuoteRequest, BridgeQuoteResponse, LinkedWalletAddress},
     services::nft_discount::consume_nft_usage_if_active,
+    services::price_guard::{
+        fallback_price_for, first_sane_price, sanitize_usd_notional, symbol_candidates_for,
+    },
     services::RouteOptimizer,
 };
 use starknet_core::types::{Call, ExecutionResult, Felt, FunctionCall, TransactionFinalityStatus};
@@ -386,32 +389,22 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
     normalized
 }
 
-// Internal helper that supports `fallback_price_for` operations in the bridge flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-fn fallback_price_for(token: &str) -> f64 {
-    match token.to_ascii_uppercase().as_str() {
-        "BTC" | "WBTC" => 65_000.0,
-        "ETH" => 1_900.0,
-        "STRK" => 0.05,
-        "USDT" | "USDC" => 1.0,
-        "CAREL" => 1.0,
-        _ => 0.0,
-    }
-}
-
 // Internal helper that supports `latest_price_usd` operations in the bridge flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 async fn latest_price_usd(state: &AppState, token: &str) -> Result<f64> {
     let symbol = token.to_ascii_uppercase();
-    let price: Option<f64> = sqlx::query_scalar(
-        "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
-    )
-    .bind(&symbol)
-    .fetch_optional(state.db.pool())
-    .await?;
-    Ok(price
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or_else(|| fallback_price_for(&symbol)))
+    for candidate in symbol_candidates_for(&symbol) {
+        let prices: Vec<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
+        )
+        .bind(&candidate)
+        .fetch_all(state.db.pool())
+        .await?;
+        if let Some(sane) = first_sane_price(&candidate, &prices) {
+            return Ok(sane);
+        }
+    }
+    Ok(fallback_price_for(&symbol))
 }
 
 // Internal helper that builds inputs for `build_bridge_id` in the bridge flow.
@@ -1254,7 +1247,7 @@ pub async fn execute_bridge(
     }
 
     let token_price = latest_price_usd(&state, &from_token).await?;
-    let volume_usd = amount * token_price;
+    let volume_usd = sanitize_usd_notional(amount * token_price);
 
     let tx = crate::models::Transaction {
         tx_hash: tx_hash.clone(),

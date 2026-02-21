@@ -6,6 +6,7 @@ use crate::{
     db::Database,
     error::{AppError, Result},
     models::PriceTick,
+    services::price_guard::sanitize_price_usd,
 };
 
 use chrono::{DateTime, TimeZone, Timelike, Utc};
@@ -84,7 +85,7 @@ impl PriceChartService {
         let tokens = self.config.price_tokens_list();
 
         for token in tokens.iter() {
-            let price = match self.fetch_price(token.as_str()).await {
+            let raw_price = match self.fetch_price(token.as_str()).await {
                 Ok(value) => value,
                 Err(err) => {
                     tracing::warn!("Oracle price fetch failed for {}: {}", token, err);
@@ -95,6 +96,18 @@ impl PriceChartService {
                         continue;
                     }
                 }
+            };
+            let raw_price_f64 = raw_price.to_f64().unwrap_or(0.0);
+            let Some(sane_price_f64) = sanitize_price_usd(token, raw_price_f64) else {
+                tracing::warn!(
+                    "Ignoring outlier price for {}: raw={}",
+                    token,
+                    raw_price_f64
+                );
+                continue;
+            };
+            let Some(price) = Decimal::from_f64(sane_price_f64) else {
+                continue;
             };
 
             let mut cache = self.price_cache.write().await;
@@ -142,10 +155,24 @@ impl PriceChartService {
             )
             .await?;
 
-        let price = parse_u256_low(&result)?;
-        let raw = Decimal::from_u128(price)
-            .ok_or_else(|| AppError::Internal("Failed to convert price".into()))?;
-        Ok(raw / Decimal::from(100_000_000u64))
+        let raw = parse_u256_low(&result)? as f64;
+        if !raw.is_finite() || raw <= 0.0 {
+            return Err(AppError::Internal("Invalid oracle price".into()));
+        }
+
+        let candidates = [raw / 100_000_000.0, raw / 1_000_000_000_000_000_000.0];
+        for candidate in candidates {
+            if let Some(sane) = sanitize_price_usd(token, candidate) {
+                if let Some(decimal) = Decimal::from_f64(sane) {
+                    return Ok(decimal);
+                }
+            }
+        }
+
+        Err(AppError::Internal(format!(
+            "Oracle price out of sane range for {}",
+            token
+        )))
     }
 
     // Internal helper that fetches data for `fetch_price_from_coingecko`.
@@ -189,9 +216,9 @@ impl PriceChartService {
         if usd_price.is_sign_negative() {
             return Err(AppError::Internal("Negative price".into()));
         }
-
-        Decimal::from_f64(usd_price)
-            .ok_or_else(|| AppError::Internal("Failed to convert price".into()))
+        let sane = sanitize_price_usd(token, usd_price)
+            .ok_or_else(|| AppError::Internal(format!("Outlier CoinGecko price for {}", token)))?;
+        Decimal::from_f64(sane).ok_or_else(|| AppError::Internal("Failed to convert price".into()))
     }
 
     /// Fetches data for `get_ohlcv_from_coingecko`.
@@ -267,10 +294,16 @@ impl PriceChartService {
             let Some(timestamp) = Utc.timestamp_millis_opt(ts_ms).single() else {
                 continue;
             };
-            let open = Decimal::from_f64(row[1]).unwrap_or(Decimal::ZERO);
-            let high = Decimal::from_f64(row[2]).unwrap_or(open);
-            let low = Decimal::from_f64(row[3]).unwrap_or(open);
-            let close = Decimal::from_f64(row[4]).unwrap_or(open);
+            let Some(close_f64) = sanitize_price_usd(&symbol, row[4]) else {
+                continue;
+            };
+            let close = Decimal::from_f64(close_f64).unwrap_or(Decimal::ZERO);
+            let open_f64 = sanitize_price_usd(&symbol, row[1]).unwrap_or(close_f64);
+            let high_f64 = sanitize_price_usd(&symbol, row[2]).unwrap_or(close_f64);
+            let low_f64 = sanitize_price_usd(&symbol, row[3]).unwrap_or(close_f64);
+            let open = Decimal::from_f64(open_f64).unwrap_or(close);
+            let high = Decimal::from_f64(high_f64).unwrap_or(close);
+            let low = Decimal::from_f64(low_f64).unwrap_or(close);
             candles.push(PriceTick {
                 token: symbol.clone(),
                 timestamp,
@@ -376,21 +409,40 @@ impl PriceChartService {
         close: Decimal,
         interval: &str,
     ) -> Result<()> {
+        let close_f64 = close
+            .to_f64()
+            .ok_or_else(|| AppError::Internal("close".into()))?;
+        let Some(close_sane) = sanitize_price_usd(token, close_f64) else {
+            tracing::warn!(
+                "Skip saving outlier candle for {} interval {}: close={}",
+                token,
+                interval,
+                close_f64
+            );
+            return Ok(());
+        };
+        let open_sane = open
+            .to_f64()
+            .ok_or_else(|| AppError::Internal("open".into()))
+            .ok()
+            .and_then(|v| sanitize_price_usd(token, v))
+            .unwrap_or(close_sane);
+        let high_sane = high
+            .to_f64()
+            .ok_or_else(|| AppError::Internal("high".into()))
+            .ok()
+            .and_then(|v| sanitize_price_usd(token, v))
+            .unwrap_or(open_sane.max(close_sane));
+        let low_sane = low
+            .to_f64()
+            .ok_or_else(|| AppError::Internal("low".into()))
+            .ok()
+            .and_then(|v| sanitize_price_usd(token, v))
+            .unwrap_or(open_sane.min(close_sane));
+
         self.db
             .save_price_tick(
-                token,
-                timestamp,
-                open.to_f64()
-                    .ok_or_else(|| AppError::Internal("open".into()))?,
-                high.to_f64()
-                    .ok_or_else(|| AppError::Internal("high".into()))?,
-                low.to_f64()
-                    .ok_or_else(|| AppError::Internal("low".into()))?,
-                close
-                    .to_f64()
-                    .ok_or_else(|| AppError::Internal("close".into()))?,
-                0.0,
-                interval,
+                token, timestamp, open_sane, high_sane, low_sane, close_sane, 0.0, interval,
             )
             .await?;
 

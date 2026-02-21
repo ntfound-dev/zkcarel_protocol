@@ -18,6 +18,7 @@ use crate::{
     },
     db::Database,
     error::Result,
+    services::price_guard::sanitize_points_usd_base,
 };
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
@@ -274,7 +275,8 @@ impl PointCalculator {
 
     // Internal helper that supports `calculate_swap_points` operations.
     async fn calculate_swap_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        let usd_value =
+            sanitize_points_usd_base(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0));
         let min_usd = if self.config.is_testnet() {
             POINTS_MIN_USD_SWAP_TESTNET
         } else {
@@ -289,7 +291,8 @@ impl PointCalculator {
 
     // Internal helper that supports `calculate_limit_order_points` operations.
     async fn calculate_limit_order_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        let usd_value =
+            sanitize_points_usd_base(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0));
         if usd_value < POINTS_MIN_USD_LIMIT_ORDER {
             return Ok(0.0);
         }
@@ -299,7 +302,8 @@ impl PointCalculator {
 
     // Internal helper that supports `calculate_bridge_points` operations.
     async fn calculate_bridge_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
-        let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        let usd_value =
+            sanitize_points_usd_base(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0));
         let is_btc_bridge = is_btc_bridge(tx);
         let (min_threshold, per_usd_rate) = if is_btc_bridge {
             (POINTS_MIN_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_BTC)
@@ -316,7 +320,8 @@ impl PointCalculator {
     // Internal helper that supports `calculate_stake_points` operations.
     async fn calculate_stake_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
         let amount = tx.amount_in.and_then(|v| v.to_f64()).unwrap_or(0.0);
-        let usd_value = tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0);
+        let usd_value =
+            sanitize_points_usd_base(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0));
         if amount <= 0.0 || usd_value <= 0.0 {
             return Ok(0.0);
         }

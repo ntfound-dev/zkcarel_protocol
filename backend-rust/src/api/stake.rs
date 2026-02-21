@@ -14,6 +14,9 @@ use crate::{
     error::Result,
     models::{user::PrivacyVerificationPayload as ModelPrivacyVerificationPayload, ApiResponse},
     services::nft_discount::consume_nft_usage_if_active,
+    services::price_guard::{
+        fallback_price_for, first_sane_price, sanitize_usd_notional, symbol_candidates_for,
+    },
     services::privacy_verifier::parse_privacy_verifier_kind,
 };
 use starknet_core::types::{Call, Felt, FunctionCall};
@@ -258,7 +261,7 @@ fn env_flag(name: &str, default: bool) -> bool {
 
 // Internal helper that supports `hide_balance_relayer_pool_enabled` operations.
 fn hide_balance_relayer_pool_enabled() -> bool {
-    env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", true)
+    env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", false)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -709,34 +712,19 @@ fn build_shielded_set_asset_rule_call(
     })
 }
 
-// Internal helper that builds inputs for `build_shielded_deposit_fixed_call`.
-fn build_shielded_deposit_fixed_call(
+// Internal helper that builds inputs for `build_shielded_deposit_fixed_for_call`.
+fn build_shielded_deposit_fixed_for_call(
     executor: Felt,
+    depositor: Felt,
     token: Felt,
     note_commitment: Felt,
 ) -> Result<Call> {
-    let selector = get_selector_from_name("deposit_fixed")
+    let selector = get_selector_from_name("deposit_fixed_for")
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
     Ok(Call {
         to: executor,
         selector,
-        calldata: vec![token, note_commitment],
-    })
-}
-
-// Internal helper that builds inputs for `build_erc20_approve_call`.
-fn build_erc20_approve_call(
-    token: Felt,
-    spender: Felt,
-    amount_low: Felt,
-    amount_high: Felt,
-) -> Result<Call> {
-    let selector = get_selector_from_name("approve")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    Ok(Call {
-        to: token,
-        selector,
-        calldata: vec![spender, amount_low, amount_high],
+        calldata: vec![depositor, token, note_commitment],
     })
 }
 
@@ -784,15 +772,101 @@ async fn shielded_fixed_amount(
     Ok((out[0], out[1]))
 }
 
+// Internal helper that supports `u256_is_greater` operations.
+fn u256_is_greater(
+    left_low: Felt,
+    left_high: Felt,
+    right_low: Felt,
+    right_high: Felt,
+    left_label: &str,
+    right_label: &str,
+) -> Result<bool> {
+    let left_low_u128 = felt_to_u128(&left_low).map_err(|_| {
+        crate::error::AppError::BadRequest(format!(
+            "Invalid {} (low) from on-chain response",
+            left_label
+        ))
+    })?;
+    let left_high_u128 = felt_to_u128(&left_high).map_err(|_| {
+        crate::error::AppError::BadRequest(format!(
+            "Invalid {} (high) from on-chain response",
+            left_label
+        ))
+    })?;
+    let right_low_u128 = felt_to_u128(&right_low).map_err(|_| {
+        crate::error::AppError::BadRequest(format!(
+            "Invalid {} (low) from on-chain response",
+            right_label
+        ))
+    })?;
+    let right_high_u128 = felt_to_u128(&right_high).map_err(|_| {
+        crate::error::AppError::BadRequest(format!(
+            "Invalid {} (high) from on-chain response",
+            right_label
+        ))
+    })?;
+    Ok((left_high_u128, left_low_u128) > (right_high_u128, right_low_u128))
+}
+
+// Internal helper that fetches data for `read_erc20_balance_parts`.
+async fn read_erc20_balance_parts(
+    reader: &OnchainReader,
+    token: Felt,
+    owner: Felt,
+) -> Result<(Felt, Felt)> {
+    let selector = get_selector_from_name("balance_of")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: token,
+            entry_point_selector: selector,
+            calldata: vec![owner],
+        })
+        .await?;
+    if out.len() < 2 {
+        return Err(crate::error::AppError::BadRequest(
+            "ERC20 balance_of returned invalid response".to_string(),
+        ));
+    }
+    Ok((out[0], out[1]))
+}
+
+// Internal helper that fetches data for `read_erc20_allowance_parts`.
+async fn read_erc20_allowance_parts(
+    reader: &OnchainReader,
+    token: Felt,
+    owner: Felt,
+    spender: Felt,
+) -> Result<(Felt, Felt)> {
+    let selector = get_selector_from_name("allowance")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: token,
+            entry_point_selector: selector,
+            calldata: vec![owner, spender],
+        })
+        .await?;
+    if out.len() < 2 {
+        return Err(crate::error::AppError::BadRequest(
+            "ERC20 allowance returned invalid response".to_string(),
+        ));
+    }
+    Ok((out[0], out[1]))
+}
+
 // Internal helper that supports `append_shielded_note_registration_calls` operations.
 async fn append_shielded_note_registration_calls(
     state: &AppState,
     relayer_calls: &mut Vec<Call>,
     executor: Felt,
+    depositor: Felt,
     commitment: Felt,
     note_token: Felt,
     amount_low: Felt,
     amount_high: Felt,
+    symbol: &str,
+    amount_text: &str,
 ) -> Result<()> {
     if note_token == Felt::ZERO {
         return Err(crate::error::AppError::BadRequest(
@@ -818,25 +892,44 @@ async fn append_shielded_note_registration_calls(
             amount_high,
         )?);
     }
-    relayer_calls.push(build_erc20_approve_call(
-        note_token,
-        executor,
+    let reader = OnchainReader::from_config(&state.config)?;
+    let (balance_low, balance_high) =
+        read_erc20_balance_parts(&reader, note_token, depositor).await?;
+    if u256_is_greater(
         amount_low,
         amount_high,
-    )?);
-    relayer_calls.push(build_shielded_deposit_fixed_call(
-        executor, note_token, commitment,
+        balance_low,
+        balance_high,
+        "requested hide deposit",
+        "user balance",
+    )? {
+        return Err(crate::error::AppError::BadRequest(format!(
+            "Shielded note funding failed: insufficient {} balance. Needed {}.",
+            symbol.to_ascii_uppercase(),
+            amount_text
+        )));
+    }
+    let (allowance_low, allowance_high) =
+        read_erc20_allowance_parts(&reader, note_token, depositor, executor).await?;
+    if u256_is_greater(
+        amount_low,
+        amount_high,
+        allowance_low,
+        allowance_high,
+        "requested hide deposit",
+        "token allowance",
+    )? {
+        return Err(crate::error::AppError::BadRequest(format!(
+            "Shielded note funding failed: insufficient allowance. Approve {} {} to executor {} first.",
+            amount_text,
+            symbol.to_ascii_uppercase(),
+            format!("{:#x}", executor)
+        )));
+    }
+    relayer_calls.push(build_shielded_deposit_fixed_for_call(
+        executor, depositor, note_token, commitment,
     )?);
     Ok(())
-}
-
-// Internal helper that supports `fallback_price_for` operations.
-fn fallback_price_for(token: &str) -> f64 {
-    match token.to_uppercase().as_str() {
-        "USDT" | "USDC" => 1.0,
-        "BTC" | "WBTC" => 70_000.0,
-        _ => 1.0,
-    }
 }
 
 const CAREL_DECIMALS: f64 = 1_000_000_000_000_000_000.0;
@@ -848,23 +941,16 @@ fn u128_to_token_amount(value: u128) -> f64 {
 
 // Internal helper that supports `latest_price` operations.
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
-    let token = token.to_uppercase();
-    let mut candidates = vec![token.clone()];
-    if token == "WBTC" {
-        candidates.push("BTC".to_string());
-    } else if token == "BTC" {
-        candidates.push("WBTC".to_string());
-    }
-
-    for candidate in candidates {
-        let price: Option<f64> = sqlx::query_scalar(
-            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 1",
+    let token = token.to_ascii_uppercase();
+    for candidate in symbol_candidates_for(&token) {
+        let prices: Vec<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
         )
         .bind(&candidate)
-        .fetch_optional(state.db.pool())
+        .fetch_all(state.db.pool())
         .await?;
 
-        if let Some(value) = price.filter(|value| value.is_finite() && *value > 0.0) {
+        if let Some(value) = first_sane_price(&candidate, &prices) {
             return Ok(value);
         }
     }
@@ -1054,16 +1140,20 @@ pub async fn deposit(
         let mut relayer_calls: Vec<Call> = Vec::new();
         if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
+            let user_felt = parse_felt(&user_address)?;
             let (note_amount_low, note_amount_high) =
                 parse_decimal_to_u256_parts(&req.amount, token_decimals(pool_token))?;
             append_shielded_note_registration_calls(
                 &state,
                 &mut relayer_calls,
                 executor,
+                user_felt,
                 commitment_felt,
                 approval_token,
                 note_amount_low,
                 note_amount_high,
+                pool_token,
+                &req.amount,
             )
             .await?;
         }
@@ -1119,7 +1209,7 @@ pub async fn deposit(
     );
 
     let price = latest_price(&state, pool_token).await?;
-    let usd_value = amount * price;
+    let usd_value = sanitize_usd_notional(amount * price);
     let onchain_block_number = resolve_onchain_block_number_best_effort(&state, &tx_hash).await;
     let tx = crate::models::Transaction {
         tx_hash: tx_hash.clone(),
@@ -1255,16 +1345,20 @@ pub async fn withdraw(
         let mut relayer_calls: Vec<Call> = Vec::new();
         if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
+            let user_felt = parse_felt(&user_address)?;
             let (note_amount_low, note_amount_high) =
                 parse_decimal_to_u256_parts(&req.amount, token_decimals(&pool_token))?;
             append_shielded_note_registration_calls(
                 &state,
                 &mut relayer_calls,
                 executor,
+                user_felt,
                 commitment_felt,
                 approval_token,
                 note_amount_low,
                 note_amount_high,
+                &pool_token,
+                &req.amount,
             )
             .await?;
         }
@@ -1317,7 +1411,7 @@ pub async fn withdraw(
     );
 
     let price = latest_price(&state, &pool_token).await?;
-    let usd_value = amount * price;
+    let usd_value = sanitize_usd_notional(amount * price);
     let onchain_block_number = resolve_onchain_block_number_best_effort(&state, &tx_hash).await;
     let tx = crate::models::Transaction {
         tx_hash: tx_hash.clone(),
@@ -1448,6 +1542,7 @@ pub async fn claim(
         let mut relayer_calls: Vec<Call> = Vec::new();
         if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
+            let user_felt = parse_felt(&user_address)?;
             let (mut note_amount_low, mut note_amount_high) =
                 shielded_fixed_amount(&state, executor, approval_token).await?;
             if note_amount_low == Felt::ZERO && note_amount_high == Felt::ZERO {
@@ -1458,10 +1553,13 @@ pub async fn claim(
                 &state,
                 &mut relayer_calls,
                 executor,
+                user_felt,
                 commitment_felt,
                 approval_token,
                 note_amount_low,
                 note_amount_high,
+                &pool_token,
+                "required note amount",
             )
             .await?;
         }

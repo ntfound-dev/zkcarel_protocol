@@ -93,7 +93,11 @@ const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED || "false").toLowerCase() ===
     "true" && PRIVATE_ACTION_EXECUTOR_ADDRESS.length > 0
 const HIDE_BALANCE_RELAYER_POOL_ENABLED =
-  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "true").toLowerCase() === "true"
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true"
+const HIDE_BALANCE_RELAYER_APPROVE_MAX =
+  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_APPROVE_MAX || "false").toLowerCase() === "true"
+const U256_MAX_LOW_HEX = "0xffffffffffffffffffffffffffffffff"
+const U256_MAX_HIGH_HEX = "0xffffffffffffffffffffffffffffffff"
 
 const normalizeHexArray = (values?: string[] | null): string[] => {
   if (!Array.isArray(values)) return []
@@ -325,6 +329,64 @@ export function StakeEarn() {
     }
     return "starknet"
   }, [wallet.provider])
+
+  const resolvePoolTokenAddress = React.useCallback((poolSymbol: string): string => {
+    const symbol = poolSymbol.trim().toUpperCase()
+    if (symbol === "CAREL") return TOKEN_CAREL_ADDRESS.trim()
+    if (symbol === "USDC") return TOKEN_USDC_ADDRESS.trim()
+    if (symbol === "USDT") return TOKEN_USDT_ADDRESS.trim()
+    if (symbol === "WBTC") return TOKEN_WBTC_ADDRESS.trim()
+    if (symbol === "STRK") return TOKEN_STRK_ADDRESS.trim()
+    return ""
+  }, [])
+
+  const approveRelayerFundingForStake = React.useCallback(
+    async (poolSymbol: string, amountValue: string) => {
+      const symbol = poolSymbol.trim().toUpperCase()
+      const tokenAddress = resolvePoolTokenAddress(symbol)
+      if (!tokenAddress) {
+        throw new Error(`Token address for ${symbol} is not configured for hide-mode relayer funding.`)
+      }
+      const executorAddress =
+        (PRIVATE_ACTION_EXECUTOR_ADDRESS || STARKNET_ZK_PRIVACY_ROUTER_ADDRESS || "").trim()
+      if (!executorAddress) {
+        throw new Error(
+          "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS is not configured for shielded relayer mode."
+        )
+      }
+      const [amountLow, amountHigh] = decimalToU256Parts(amountValue || "1", POOL_DECIMALS[symbol] || 18)
+      const [approvalLow, approvalHigh] = HIDE_BALANCE_RELAYER_APPROVE_MAX
+        ? [U256_MAX_LOW_HEX, U256_MAX_HIGH_HEX]
+        : [amountLow, amountHigh]
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: HIDE_BALANCE_RELAYER_APPROVE_MAX
+          ? `Approve one-time ${symbol} spending limit for private relayer funding.`
+          : `Approve ${amountValue} ${symbol} for private relayer note funding.`,
+      })
+      const txHash = await invokeStarknetCallsFromWallet(
+        [
+          {
+            contractAddress: tokenAddress,
+            entrypoint: "approve",
+            calldata: [executorAddress, approvalLow, approvalHigh],
+          },
+        ],
+        starknetProviderHint
+      )
+      notifications.addNotification({
+        type: "success",
+        title: "Allowance approved",
+        message: HIDE_BALANCE_RELAYER_APPROVE_MAX
+          ? `Relayer allowance for ${symbol} is now active (one-time setup).`
+          : `Relayer can now fund private note from your ${symbol} balance.`,
+        txHash,
+        txNetwork: "starknet",
+      })
+    },
+    [notifications, resolvePoolTokenAddress, starknetProviderHint]
+  )
 
   const refreshTradePrivacyPayload = React.useCallback(() => {
     setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
@@ -994,15 +1056,39 @@ export function StakeEarn() {
           message: "Submitting hide-mode stake via Starknet relayer pool.",
         })
       }
-      const response = await stakeDeposit({
-        pool_id: selectedPool.symbol,
-        amount: stakeAmount,
-        onchain_tx_hash: onchainTxHash,
-        hide_balance: effectiveHideBalance,
-        privacy: effectiveHideBalance
-          ? payloadForBackend || resolvedPrivacyPayload
-          : undefined,
-      })
+      let response: Awaited<ReturnType<typeof stakeDeposit>>
+      try {
+        response = await stakeDeposit({
+          pool_id: selectedPool.symbol,
+          amount: stakeAmount,
+          onchain_tx_hash: onchainTxHash,
+          hide_balance: effectiveHideBalance,
+          privacy: effectiveHideBalance
+            ? payloadForBackend || resolvedPrivacyPayload
+            : undefined,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || "")
+        if (
+          useRelayerPoolHide &&
+          /(insufficient allowance|shielded note funding failed|deposit_fixed_for|allowance)/i.test(
+            message
+          )
+        ) {
+          await approveRelayerFundingForStake(selectedPool.symbol, stakeAmount)
+          response = await stakeDeposit({
+            pool_id: selectedPool.symbol,
+            amount: stakeAmount,
+            onchain_tx_hash: onchainTxHash,
+            hide_balance: effectiveHideBalance,
+            privacy: effectiveHideBalance
+              ? payloadForBackend || resolvedPrivacyPayload
+              : undefined,
+          })
+        } else {
+          throw error
+        }
+      }
       const finalTxHash = response.tx_hash || onchainTxHash
       if (useRelayerPoolHide && finalTxHash) {
         notifications.addNotification({
@@ -1103,15 +1189,39 @@ export function StakeEarn() {
           message: "Submitting hide-mode unstake via Starknet relayer pool.",
         })
       }
-      const response = await stakeWithdraw({
-        position_id: positionId,
-        amount: target.amount.toString(),
-        onchain_tx_hash: onchainTxHash,
-        hide_balance: effectiveHideBalance,
-        privacy: effectiveHideBalance
-          ? payloadForBackend || resolvedPrivacyPayload
-          : undefined,
-      })
+      let response: Awaited<ReturnType<typeof stakeWithdraw>>
+      try {
+        response = await stakeWithdraw({
+          position_id: positionId,
+          amount: target.amount.toString(),
+          onchain_tx_hash: onchainTxHash,
+          hide_balance: effectiveHideBalance,
+          privacy: effectiveHideBalance
+            ? payloadForBackend || resolvedPrivacyPayload
+            : undefined,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || "")
+        if (
+          useRelayerPoolHide &&
+          /(insufficient allowance|shielded note funding failed|deposit_fixed_for|allowance)/i.test(
+            message
+          )
+        ) {
+          await approveRelayerFundingForStake(target.pool.symbol, target.amount.toString())
+          response = await stakeWithdraw({
+            position_id: positionId,
+            amount: target.amount.toString(),
+            onchain_tx_hash: onchainTxHash,
+            hide_balance: effectiveHideBalance,
+            privacy: effectiveHideBalance
+              ? payloadForBackend || resolvedPrivacyPayload
+              : undefined,
+          })
+        } else {
+          throw error
+        }
+      }
       const finalTxHash = response.tx_hash || onchainTxHash
       if (useRelayerPoolHide && finalTxHash) {
         notifications.addNotification({
@@ -1204,14 +1314,37 @@ export function StakeEarn() {
           message: "Submitting hide-mode claim via Starknet relayer pool.",
         })
       }
-      const response = await stakeClaim({
-        position_id: positionId,
-        onchain_tx_hash: onchainTxHash,
-        hide_balance: effectiveHideBalance,
-        privacy: effectiveHideBalance
-          ? payloadForBackend || resolvedPrivacyPayload
-          : undefined,
-      })
+      let response: Awaited<ReturnType<typeof stakeClaim>>
+      try {
+        response = await stakeClaim({
+          position_id: positionId,
+          onchain_tx_hash: onchainTxHash,
+          hide_balance: effectiveHideBalance,
+          privacy: effectiveHideBalance
+            ? payloadForBackend || resolvedPrivacyPayload
+            : undefined,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || "")
+        if (
+          useRelayerPoolHide &&
+          /(insufficient allowance|shielded note funding failed|deposit_fixed_for|allowance)/i.test(
+            message
+          )
+        ) {
+          await approveRelayerFundingForStake(target.pool.symbol, "1")
+          response = await stakeClaim({
+            position_id: positionId,
+            onchain_tx_hash: onchainTxHash,
+            hide_balance: effectiveHideBalance,
+            privacy: effectiveHideBalance
+              ? payloadForBackend || resolvedPrivacyPayload
+              : undefined,
+          })
+        } else {
+          throw error
+        }
+      }
       const finalTxHash = response.tx_hash || onchainTxHash
       if (useRelayerPoolHide && finalTxHash) {
         notifications.addNotification({

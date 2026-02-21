@@ -13,6 +13,7 @@ pub mod notification_service;
 pub mod onchain;
 pub mod point_calculator;
 pub mod price_chart_service;
+pub mod price_guard;
 pub mod privacy_verifier;
 pub mod route_optimizer;
 pub mod snapshot_manager;

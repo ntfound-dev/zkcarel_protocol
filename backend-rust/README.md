@@ -156,10 +156,14 @@ GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | No | Empty | Optional LLM provider key |
+| `CAIRO_CODER_API_KEY` | No | Empty | Cairo Coder API key (`x-api-key`) |
+| `CAIRO_CODER_API_URL` | No | `https://api.cairo-coder.com/v1/chat/completions` | Cairo Coder chat completion URL |
+| `CAIRO_CODER_MODEL` | No | Empty | Optional model name forwarded to Cairo Coder request |
 | `GEMINI_API_KEY` | No | Empty | Gemini API key |
 | `GOOGLE_GEMINI_API_KEY` | No | Empty | Alias for Gemini key |
 | `GEMINI_API_URL` | No | `https://generativelanguage.googleapis.com/v1beta` | Gemini base URL |
 | `GEMINI_MODEL` | No | `gemini-2.0-flash` | Gemini model name |
+| `AI_LEVEL_BURN_ADDRESS` | Recommended | Empty | Burn destination used to verify L2/L3 upgrade payments |
 | `TWITTER_BEARER_TOKEN` | No | Empty | Optional token for social verification features |
 | `TELEGRAM_BOT_TOKEN` | No | Empty | Optional token for social verification features |
 | `DISCORD_BOT_TOKEN` | No | Empty | Optional token for social verification features |
@@ -181,6 +185,7 @@ GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 | `GARDEN_APP_ID` | Recommended for Garden | Empty | Garden app-id header |
 | `GARDEN_API_KEY` | No | Empty | Legacy Garden auth alias |
 | `GARDEN_API_URL` | No | Empty | Garden base URL |
+| `BRIDGE_FORCE_GARDEN` | No | `false` | Force bridge route selection to Garden provider when available |
 | `SUMO_LOGIN_API_KEY` | No | Empty | Sumo Login auth |
 | `SUMO_LOGIN_API_URL` | No | Empty | Sumo Login base URL |
 | `XVERSE_API_KEY` | No | Empty | Xverse auth |
