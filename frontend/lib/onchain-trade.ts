@@ -1161,24 +1161,33 @@ async function requestStarknet(
   payload: { type: string; params?: unknown }
 ): Promise<unknown> {
   if (!injected.request) throw new Error("Starknet request() unavailable.")
-  const variants: Array<{ type?: string; method?: string; params?: unknown }> = [
-    { type: payload.type, params: payload.params },
-    { method: payload.type, params: payload.params },
-  ]
-  if (payload.params !== undefined && !Array.isArray(payload.params)) {
-    variants.push({ type: payload.type, params: [payload.params] })
-    variants.push({ method: payload.type, params: [payload.params] })
+  const variants: Array<{ type?: string; method?: string; params?: unknown }> = []
+  const paramsCandidates =
+    payload.params !== undefined && !Array.isArray(payload.params)
+      ? [payload.params, [payload.params]]
+      : [payload.params]
+
+  for (const params of paramsCandidates) {
+    variants.push({ type: payload.type, method: payload.type, params })
+    variants.push({ type: payload.type, params })
+  }
+  for (const params of paramsCandidates) {
+    variants.push({ method: payload.type, params })
   }
 
   let lastError: unknown = null
+  let lastTypeError: unknown = null
   for (const variant of variants) {
     try {
       return await injected.request(variant)
     } catch (error) {
       lastError = error
+      if (variant.type) {
+        lastTypeError = error
+      }
     }
   }
-  throw lastError || new Error("Starknet wallet request failed.")
+  throw lastTypeError || lastError || new Error("Starknet wallet request failed.")
 }
 
 /**

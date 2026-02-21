@@ -1921,7 +1921,11 @@ export async function executeAiCommand(payload: { command: string; context?: str
  */
 export async function getAiPendingActions(offset = 0, limit = 10) {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
-  return apiFetch<PendingActionsResponse>(`/api/v1/ai/pending?${params.toString()}`)
+  return apiFetch<PendingActionsResponse>(`/api/v1/ai/pending?${params.toString()}`, {
+    context: "AI pending actions",
+    suppressErrorNotification: true,
+    timeoutMs: 45000,
+  })
 }
 
 /**
@@ -2001,6 +2005,7 @@ export async function prepareAiAction(payload: {
     body: JSON.stringify(payload),
     context: "AI prepare action",
     suppressErrorNotification: true,
+    timeoutMs: 60000,
   })
 }
 

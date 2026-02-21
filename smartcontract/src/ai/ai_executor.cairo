@@ -193,6 +193,20 @@ pub mod AIExecutor {
         pub privacy_router: ContractAddress,
     }
 
+    #[event]
+    #[derive(Drop, starknet::Event)]
+    pub enum Event {
+        AIFeeBurned: AIFeeBurned,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct AIFeeBurned {
+        pub payer: ContractAddress,
+        pub action_id: u64,
+        pub action_type: felt252,
+        pub amount: u256,
+    }
+
     // Initializes the AI executor.
     // Sets token, backend signer, and default fee/rate settings.
     // `carel_token` is used for fee settlement and `backend_signer` authorizes AI actions.
@@ -295,6 +309,7 @@ pub mod AIExecutor {
                 assert!(ok, "Invalid user signature");
             }
 
+            let action_id = self.action_count.read() + 1;
             let mut fee: u256 = 0;
             if self.fee_enabled.read() {
                 fee = match action_type {
@@ -308,10 +323,14 @@ pub mod AIExecutor {
                     let ok = token.transfer_from(caller, get_contract_address(), fee);
                     assert!(ok, "Fee transfer failed");
                     token.burn(fee);
+                    self.emit(Event::AIFeeBurned(AIFeeBurned {
+                        payer: caller,
+                        action_id,
+                        action_type: action_type_to_felt(action_type),
+                        amount: fee,
+                    }));
                 }
             }
-
-            let action_id = self.action_count.read() + 1;
 
             self.action_user.entry(action_id).write(caller);
             if action_hash != 0 {
