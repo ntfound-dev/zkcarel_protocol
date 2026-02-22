@@ -151,5 +151,7 @@ Notes:
 | Payload is `null` in localStorage | Prover command or file config is missing | Recheck `PRIVACY_AUTO_GARAGA_PROVER_CMD` and restart backend |
 | Explorer shows dummy proof (`0x1`) | Dev autofill or dummy payload path still active | Set `NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL=false` and use real payload config |
 | Bridge order exists but no progress | BTC deposit not sent to returned address yet | Send BTC to `deposit_address` from wallet and refresh bridge status |
+| AI bridge returns `insufficient liquidity` / range error | Live Garden quote cannot satisfy pair+amount now | Retry with adjusted amount or later; AI L2 pre-check stops before setup burn (`No CAREL was burned`) |
+| Explorer shows `Created 6 hours ago` but `Completed in 10 secs` | Different metrics are being shown | `Created` is order age; `Completed in` is settlement duration once initiated |
 | Swap quote is intermittent | RPC/provider rate limit | Retry after cooldown or switch RPC/provider |
 | Battleship state looks reset after backend restart | Current state stored in backend memory | Keep backend stable during demo; avoid restart mid-match |

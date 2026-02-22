@@ -42,6 +42,15 @@ Hide Mode notes:
 - Bridge to `STRK` is disabled; use `STRK/WBTC` through Swap.
 - Active bridge pairs: `ETH<->BTC`, `BTC<->WBTC`, `ETH<->WBTC`.
 
+AI Bridge notes (Level 2):
+- Before on-chain setup/signature, frontend runs live bridge quote pre-check (`/api/v1/bridge/quote`).
+- If provider returns amount-range error, route unavailable, or `insufficient liquidity`, execution is stopped early and CAREL is not burned.
+- Bridge source signing is chain-specific:
+  - `ETH` source uses MetaMask (`evm approval + initiate` when required).
+  - `WBTC` source uses Starknet wallet (`approve + initiate` when required).
+  - `BTC` source creates order first, then user sends BTC deposit to returned Garden address.
+- Liquidity is dynamic and can change per minute; the same pair/amount may fail now and pass later.
+
 ## Deployed Contracts (Starknet Sepolia)
 | Contract | Address |
 | --- | --- |

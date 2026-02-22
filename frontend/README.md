@@ -14,6 +14,7 @@ This README explains frontend setup, environment configuration, wallet integrati
 - [Wallet Integration Matrix](#wallet-integration-matrix)
 - [Hide Mode Verification](#hide-mode-verification)
 - [AI Assistant Tiers](#ai-assistant-tiers)
+- [AI Bridge L2 Behavior](#ai-bridge-l2-behavior)
 - [Build and Deploy](#build-and-deploy)
 
 ## Scope and Related Docs
@@ -145,6 +146,26 @@ Hide Mode troubleshooting:
 | Tier 1 | Free | Read-only assistant: basic query, market context, non-transaction guidance |
 | Tier 2 | 1 CAREL | Assisted execution for swap/bridge flows |
 | Tier 3 | 2 CAREL | Portfolio-level actions and advanced automation |
+
+## AI Bridge L2 Behavior
+Execution flow for AI bridge command:
+1. User sends command (example: `bridge eth 0.005 to wbtc`) and confirms with `yes`.
+2. Frontend runs route/liquidity pre-check using backend `POST /api/v1/bridge/quote`.
+3. If pre-check fails (`insufficient liquidity`, amount out of allowed range, unsupported route), flow stops before on-chain setup and CAREL is not burned.
+4. If pre-check passes, frontend continues to on-chain setup/signature:
+   - ETH source: MetaMask signs Garden source transaction (approval/initiate when present).
+   - WBTC source: Starknet wallet signs approval/initiate.
+   - BTC source: order is created, then user sends BTC deposit.
+5. After source tx is signed/submitted, frontend finalizes using `existing_bridge_id + onchain_tx_hash`.
+
+Common messages:
+- `No CAREL was burned` means pre-check stopped execution before setup burn.
+- `No pending confirmation right now` appears when user sends `yes/no` without active pending command.
+
+Timing interpretation in Garden Explorer:
+- `Created at` / `Created X hours ago` = age of order record since creation.
+- `Completed in 10 secs` = settlement duration once required on-chain/deposit steps actually started.
+- Both values can appear together and are not contradictory.
 
 ## Build and Deploy
 Local production run:

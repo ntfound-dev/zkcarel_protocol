@@ -150,7 +150,56 @@ fn bridge_score(route: &BridgeRoute, is_testnet: bool) -> f64 {
 
 // Internal helper that supports `compact_error_message` operations.
 fn compact_error_message(raw: &str) -> String {
-    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    for prefix in ["External API error: ", "Bad request: "] {
+        if let Some(stripped) = collapsed.strip_prefix(prefix) {
+            return stripped.to_string();
+        }
+    }
+    collapsed
+}
+
+// Internal helper that supports `bridge_token_decimals` operations.
+fn bridge_token_decimals(token: &str) -> u32 {
+    match normalize_token_symbol(token).as_str() {
+        "BTC" | "WBTC" => 8,
+        "USDT" | "USDC" => 6,
+        _ => 18,
+    }
+}
+
+// Internal helper that supports `format_base_units_as_token_amount` operations.
+fn format_base_units_as_token_amount(units: u128, token: &str) -> String {
+    let decimals = bridge_token_decimals(token);
+    if decimals == 0 {
+        return units.to_string();
+    }
+    let scale = 10u128.pow(decimals);
+    let whole = units / scale;
+    let frac = units % scale;
+    if frac == 0 {
+        return whole.to_string();
+    }
+    let mut frac_text = format!("{:0width$}", frac, width = decimals as usize);
+    while frac_text.ends_with('0') {
+        frac_text.pop();
+    }
+    format!("{}.{}", whole, frac_text)
+}
+
+// Internal helper that supports `parse_garden_amount_range` operations.
+fn parse_garden_amount_range(raw_lower: &str) -> Option<(u128, u128)> {
+    let marker = "within the range of ";
+    let start = raw_lower.find(marker)?;
+    let tail = &raw_lower[start + marker.len()..];
+    let mut numbers = tail
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|segment| !segment.is_empty())
+        .take(2)
+        .filter_map(|segment| segment.parse::<u128>().ok());
+    let min = numbers.next()?;
+    let max = numbers.next()?;
+    Some((min, max))
 }
 
 // Internal helper that supports `humanize_bridge_provider_error` operations.
@@ -187,11 +236,47 @@ fn humanize_bridge_provider_error(
             );
         }
 
+        if lower.contains("within the range of") {
+            let symbol = normalize_token_symbol(from_token);
+            if let Some((min_units, max_units)) = parse_garden_amount_range(&lower) {
+                return format!(
+                    "{}: amount is outside provider range for {} on {} -> {} (min {} {}, max {} {}).",
+                    provider,
+                    symbol,
+                    from_chain,
+                    to_chain,
+                    format_base_units_as_token_amount(min_units, from_token),
+                    symbol,
+                    format_base_units_as_token_amount(max_units, from_token),
+                    symbol
+                );
+            }
+            return format!(
+                "{}: amount is outside provider range for this pair. Try a higher amount.",
+                provider
+            );
+        }
+
+        if lower.contains("insufficient liquidity") {
+            return format!(
+                "{}: insufficient liquidity for {} -> {} ({} -> {}) right now. Try a different amount or retry later.",
+                provider,
+                normalize_token_symbol(from_token),
+                to_token,
+                from_chain,
+                to_chain
+            );
+        }
+
         if lower.contains("garden quote returned 400") {
             return format!(
-                "{}: route {} -> {} is currently unsupported by provider API.",
-                provider, from_chain, to_chain
+                "{}: provider rejected this quote request. Check amount limits and route liquidity.",
+                provider
             );
+        }
+
+        if lower.starts_with("garden ") {
+            return raw;
         }
     }
 
@@ -708,6 +793,48 @@ mod tests {
         assert_eq!(
             msg,
             "Garden: destination token STRK is not available on starknet for this route."
+        );
+    }
+
+    #[test]
+    // Internal helper that supports `humanize_garden_amount_range_error` operations.
+    fn humanize_garden_amount_range_error() {
+        let err = AppError::ExternalAPI(
+            "Garden quote returned 400 Bad Request: {\"status\":\"Error\",\"error\":\"Exact output quote error : expected amount to be within the range of 50000 to 1000000\"}"
+                .to_string(),
+        );
+        let msg = humanize_bridge_provider_error(
+            BRIDGE_GARDEN,
+            &err,
+            "starknet",
+            "ethereum",
+            "WBTC",
+            Some("ETH"),
+        );
+        assert_eq!(
+            msg,
+            "Garden: amount is outside provider range for WBTC on starknet -> ethereum (min 0.0005 WBTC, max 0.01 WBTC)."
+        );
+    }
+
+    #[test]
+    // Internal helper that supports `humanize_garden_insufficient_liquidity_error` operations.
+    fn humanize_garden_insufficient_liquidity_error() {
+        let err = AppError::ExternalAPI(
+            "Garden quote returned 400 Bad Request: {\"status\":\"Error\",\"error\":\"insufficient liquidity\"}"
+                .to_string(),
+        );
+        let msg = humanize_bridge_provider_error(
+            BRIDGE_GARDEN,
+            &err,
+            "starknet",
+            "ethereum",
+            "WBTC",
+            Some("ETH"),
+        );
+        assert_eq!(
+            msg,
+            "Garden: insufficient liquidity for WBTC -> ETH (starknet -> ethereum) right now. Try a different amount or retry later."
         );
     }
 

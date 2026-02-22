@@ -36,6 +36,7 @@ import {
   decimalToU256Parts,
   invokeStarknetCallFromWallet,
   invokeStarknetCallsFromWallet,
+  sendEvmTransactionFromWallet,
   toHexFelt,
 } from "@/lib/onchain-trade"
 
@@ -431,19 +432,31 @@ interface BridgeAddressContext {
 }
 
 // Internal helper that parses or transforms values for `parseBridgeTokensFromCommand`.
-function parseBridgeTokensFromCommand(command: string): { fromToken: string; toToken: string } | null {
+function parseBridgeTokensFromCommand(
+  command: string
+): { fromToken: string; toToken: string; amountText: string } | null {
   const normalized = normalizeMessageText(command).replace(/[,()]/g, " ")
-  const patterns = [
-    /\b(?:bridge|brigde|jembatan)\b\s+([a-z0-9]{2,12})\s+[0-9]+(?:\.[0-9]+)?\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i,
-    /\b(?:bridge|brigde|jembatan)\b\s+([a-z0-9]{2,12})\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i,
-  ]
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern)
-    if (!match) continue
-    const fromToken = (match[1] || "").trim().toUpperCase()
-    const toToken = (match[2] || "").trim().toUpperCase()
-    if (!fromToken || !toToken) continue
-    return { fromToken, toToken }
+  const withAmount = normalized.match(
+    /\b(?:bridge|brigde|jembatan)\b\s+([a-z0-9]{2,12})\s+([0-9]+(?:\.[0-9]+)?)\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i
+  )
+  if (withAmount) {
+    const fromToken = (withAmount[1] || "").trim().toUpperCase()
+    const amountText = (withAmount[2] || "").trim()
+    const toToken = (withAmount[3] || "").trim().toUpperCase()
+    if (fromToken && toToken) {
+      return { fromToken, toToken, amountText }
+    }
+  }
+
+  const withoutAmount = normalized.match(
+    /\b(?:bridge|brigde|jembatan)\b\s+([a-z0-9]{2,12})\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i
+  )
+  if (withoutAmount) {
+    const fromToken = (withoutAmount[1] || "").trim().toUpperCase()
+    const toToken = (withoutAmount[2] || "").trim().toUpperCase()
+    if (fromToken && toToken) {
+      return { fromToken, toToken, amountText: "" }
+    }
   }
   return null
 }
@@ -1382,6 +1395,26 @@ export function FloatingAIAssistant() {
     const hasPendingConfirmation = !!pendingForTier
     const userMessageTimestamp = nowTimestampLabel()
 
+    if (!hasPendingConfirmation && (isAffirmativeConfirmation(command) || isNegativeConfirmation(command))) {
+      appendMessagesForTier(activeTier, [
+        {
+          role: "user",
+          content: command,
+          timestamp: userMessageTimestamp,
+        },
+      ])
+      setInput("")
+      appendMessagesForTier(activeTier, [
+        {
+          role: "assistant",
+          content:
+            "No pending confirmation right now. Send a new command first (example: `bridge eth 0.005 to btc`).",
+          timestamp: nowTimestampLabel(),
+        },
+      ])
+      return
+    }
+
     if (hasPendingConfirmation) {
       appendMessagesForTier(activeTier, [
         {
@@ -1520,6 +1553,101 @@ export function FloatingAIAssistant() {
           ])
           return
         }
+      }
+    }
+
+    if (commandNeedsOnchainAction && isBridgeCommand) {
+      const parsedBridge = parseBridgeTokensFromCommand(command)
+      if (!parsedBridge) {
+        const formatMessage =
+          "Bridge pre-check needs explicit format: `bridge <from_token> <amount> to <to_token>`."
+        notifications.addNotification({
+          type: "warning",
+          title: "Bridge pre-check failed",
+          message: formatMessage,
+        })
+        appendMessagesForTier(activeTier, [
+          {
+            role: "assistant",
+            content: `${formatMessage} No CAREL was burned.`,
+            timestamp: nowTimestampLabel(),
+          },
+        ])
+        return
+      }
+
+      const { fromToken, toToken, amountText } = parsedBridge
+      const parsedAmount = Number.parseFloat(amountText)
+      if (!amountText || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        const invalidAmountMessage =
+          "Bridge pre-check failed: amount must be a positive number before on-chain execution."
+        notifications.addNotification({
+          type: "warning",
+          title: "Bridge pre-check failed",
+          message: invalidAmountMessage,
+        })
+        appendMessagesForTier(activeTier, [
+          {
+            role: "assistant",
+            content: `${invalidAmountMessage} No CAREL was burned.`,
+            timestamp: nowTimestampLabel(),
+          },
+        ])
+        return
+      }
+
+      const fromChain = bridgeTargetChainForToken(fromToken)
+      const toChain = bridgeTargetChainForToken(toToken)
+      if (!isSupportedBridgePair(fromChain, toChain, fromToken, toToken)) {
+        const unsupportedMessage =
+          `Bridge pair ${fromToken} (${fromChain}) -> ${toToken} (${toChain}) is not supported. ` +
+          "Supported: ETH↔BTC, BTC↔WBTC, ETH↔WBTC."
+        notifications.addNotification({
+          type: "warning",
+          title: "Bridge pre-check failed",
+          message: unsupportedMessage,
+        })
+        appendMessagesForTier(activeTier, [
+          {
+            role: "assistant",
+            content: `${unsupportedMessage} No CAREL was burned.`,
+            timestamp: nowTimestampLabel(),
+          },
+        ])
+        return
+      }
+
+      notifications.addNotification({
+        type: "info",
+        title: "Pre-checking bridge liquidity",
+        message: `Checking route/liquidity for ${amountText} ${fromToken} -> ${toToken} before CAREL burn.`,
+      })
+      try {
+        await getBridgeQuote({
+          from_chain: fromChain,
+          to_chain: toChain,
+          token: fromToken,
+          to_token: toToken,
+          amount: amountText,
+        })
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Bridge route/liquidity pre-check failed."
+        notifications.addNotification({
+          type: "warning",
+          title: "Bridge pre-check failed",
+          message,
+        })
+        appendMessagesForTier(activeTier, [
+          {
+            role: "assistant",
+            content:
+              `Bridge pre-check failed before on-chain setup: ${message}\n` +
+              "No CAREL was burned. Adjust pair/amount and retry.",
+            timestamp: nowTimestampLabel(),
+          },
+        ])
+        return
       }
     }
 
@@ -1872,7 +2000,54 @@ export function FloatingAIAssistant() {
             } as const
 
             let bridgeResult = await executeBridge(bridgeBasePayload)
-            if (bridgeResult.starknet_approval_transaction || bridgeResult.starknet_initiate_transaction) {
+            if (bridgeResult.evm_approval_transaction || bridgeResult.evm_initiate_transaction) {
+              const orderId = (bridgeResult.bridge_id || "").trim()
+              if (!orderId) {
+                throw new Error("Garden order id is missing for Ethereum source flow.")
+              }
+              const submitBridgeWithOnchainHash = async (txHash: string) => {
+                return executeBridge({
+                  ...bridgeBasePayload,
+                  existing_bridge_id: orderId,
+                  onchain_tx_hash: txHash,
+                })
+              }
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: "Confirm Garden source transaction in MetaMask.",
+              })
+              if (bridgeResult.evm_approval_transaction) {
+                notifications.addNotification({
+                  type: "info",
+                  title: "Wallet signature required",
+                  message: `Confirm bridge approval for ${amountText} ${fromToken} in MetaMask.`,
+                })
+                await sendEvmTransactionFromWallet(bridgeResult.evm_approval_transaction)
+              }
+              if (!bridgeResult.evm_initiate_transaction) {
+                throw new Error("Garden initiate transaction is missing for Ethereum source flow.")
+              }
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm bridge initiate ${amountText} ${fromToken} -> ${toToken} in MetaMask.`,
+              })
+              const onchainTxHash = await sendEvmTransactionFromWallet(
+                bridgeResult.evm_initiate_transaction
+              )
+              notifications.addNotification({
+                type: "info",
+                title: "Bridge pending",
+                message: `Bridge ${amountText} ${fromToken} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+                txHash: onchainTxHash,
+                txNetwork: "evm",
+              })
+              bridgeResult = await submitBridgeWithOnchainHash(onchainTxHash)
+            } else if (
+              bridgeResult.starknet_approval_transaction ||
+              bridgeResult.starknet_initiate_transaction
+            ) {
               let approvalWasLimited = false
               let approvalCall: { contractAddress: string; entrypoint: string; calldata: string[] } | null =
                 null

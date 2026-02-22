@@ -74,8 +74,16 @@ impl GardenClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(crate::error::AppError::ExternalAPI(format!(
-                "Garden quote returned {}: {}",
-                status, body
+                "{}",
+                humanize_garden_api_error(
+                    "quote",
+                    status,
+                    &body,
+                    Some(from_chain),
+                    Some(to_chain),
+                    Some(from_token),
+                    Some(to_token),
+                )
             )));
         }
 
@@ -189,8 +197,16 @@ impl GardenClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(crate::error::AppError::ExternalAPI(format!(
-                "Garden execute returned {}: {}",
-                status, body
+                "{}",
+                humanize_garden_api_error(
+                    "order",
+                    status,
+                    &body,
+                    Some(&quote.from_chain),
+                    Some(&quote.to_chain),
+                    Some(&quote.from_token),
+                    Some(&quote.to_token),
+                )
             )));
         }
 
@@ -286,8 +302,8 @@ impl GardenClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(crate::error::AppError::ExternalAPI(format!(
-                "Garden order status returned {}: {}",
-                status, body
+                "{}",
+                humanize_garden_api_error("order status", status, &body, None, None, None, None)
             )));
         }
 
@@ -666,8 +682,8 @@ impl GardenClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(crate::error::AppError::ExternalAPI(format!(
-                "Garden request returned {}: {}",
-                status, body
+                "{}",
+                humanize_garden_api_error("request", status, &body, None, None, None, None)
             )));
         }
 
@@ -859,6 +875,136 @@ fn from_base_units(amount: u128, decimals: u32) -> f64 {
     (amount as f64) / scale
 }
 
+// Internal helper that supports `compact_error_message` operations.
+fn compact_error_message(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// Internal helper that supports `format_units_as_token_amount` operations.
+fn format_units_as_token_amount(units: u128, token: &str) -> String {
+    let decimals = garden_decimals(token);
+    if decimals == 0 {
+        return units.to_string();
+    }
+    let scale = 10u128.pow(decimals);
+    let whole = units / scale;
+    let frac = units % scale;
+    if frac == 0 {
+        return whole.to_string();
+    }
+    let mut frac_text = format!("{:0width$}", frac, width = decimals as usize);
+    while frac_text.ends_with('0') {
+        frac_text.pop();
+    }
+    format!("{}.{}", whole, frac_text)
+}
+
+// Internal helper that supports `parse_garden_amount_range` operations.
+fn parse_garden_amount_range(raw_lower: &str) -> Option<(u128, u128)> {
+    let marker = "within the range of ";
+    let start = raw_lower.find(marker)?;
+    let tail = &raw_lower[start + marker.len()..];
+    let mut numbers = tail
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|segment| !segment.is_empty())
+        .take(2)
+        .filter_map(|segment| segment.parse::<u128>().ok());
+    let min = numbers.next()?;
+    let max = numbers.next()?;
+    Some((min, max))
+}
+
+// Internal helper that supports `extract_garden_error_message` operations.
+fn extract_garden_error_message(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(message) = pick_string(
+            &json,
+            &[
+                &["error"],
+                &["message"],
+                &["result", "error"],
+                &["result", "message"],
+                &["data", "error"],
+                &["data", "message"],
+            ],
+        ) {
+            return compact_error_message(&message);
+        }
+    }
+    let first_line = trimmed.split('\n').next().unwrap_or(trimmed);
+    compact_error_message(first_line)
+}
+
+// Internal helper that supports `humanize_garden_api_error` operations.
+fn humanize_garden_api_error(
+    operation: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+    from_chain: Option<&str>,
+    to_chain: Option<&str>,
+    from_token: Option<&str>,
+    to_token: Option<&str>,
+) -> String {
+    let detail = extract_garden_error_message(body);
+    let lower = detail.to_ascii_lowercase();
+    let from_chain_label = from_chain.unwrap_or("source");
+    let to_chain_label = to_chain.unwrap_or("destination");
+    let from_symbol = from_token.unwrap_or("TOKEN").trim().to_ascii_uppercase();
+    let to_symbol = to_token.unwrap_or("TOKEN").trim().to_ascii_uppercase();
+
+    if lower.contains("within the range of") {
+        if let Some((min_units, max_units)) = parse_garden_amount_range(&lower) {
+            return format!(
+                "Garden {} amount is outside allowed range for {} -> {} ({} -> {}). Allowed: min {} {}, max {} {}.",
+                operation,
+                from_symbol,
+                to_symbol,
+                from_chain_label,
+                to_chain_label,
+                format_units_as_token_amount(min_units, &from_symbol),
+                from_symbol,
+                format_units_as_token_amount(max_units, &from_symbol),
+                from_symbol
+            );
+        }
+        return format!(
+            "Garden {} amount is outside provider range for this pair. Try higher/lower amount.",
+            operation
+        );
+    }
+
+    if lower.contains("insufficient liquidity") {
+        return format!(
+            "Garden {} has insufficient liquidity for {} -> {} ({} -> {}). Try a different amount or retry later.",
+            operation, from_symbol, to_symbol, from_chain_label, to_chain_label
+        );
+    }
+
+    if lower.contains("invalid to_asset") {
+        return format!(
+            "Garden {} destination asset {} on {} is not available for this route.",
+            operation, to_symbol, to_chain_label
+        );
+    }
+
+    if lower.contains("invalid from_asset") {
+        return format!(
+            "Garden {} source asset {} on {} is not available for this route.",
+            operation, from_symbol, from_chain_label
+        );
+    }
+
+    if detail.is_empty() {
+        return format!("Garden {} returned {}.", operation, status);
+    }
+
+    format!("Garden {} returned {}: {}", operation, status, detail)
+}
+
 // Internal helper that supports `pick_value_by_path` operations.
 fn pick_value_by_path<'a>(body: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = body;
@@ -1034,5 +1180,43 @@ mod tests {
         assert_eq!(quote.from_token, "BTC");
         assert_eq!(quote.to_token, "STRK");
         assert!(GardenQuote::simulated_id("0xabc").starts_with("GD_"));
+    }
+
+    #[test]
+    // Internal helper that supports `humanize_garden_api_error_with_amount_range` operations.
+    fn humanize_garden_api_error_with_amount_range() {
+        let body = "{\"status\":\"Error\",\"error\":\"Exact output quote error : expected amount to be within the range of 50000 to 1000000\"}";
+        let message = humanize_garden_api_error(
+            "quote",
+            reqwest::StatusCode::BAD_REQUEST,
+            body,
+            Some("starknet"),
+            Some("ethereum"),
+            Some("WBTC"),
+            Some("ETH"),
+        );
+        assert_eq!(
+            message,
+            "Garden quote amount is outside allowed range for WBTC -> ETH (starknet -> ethereum). Allowed: min 0.0005 WBTC, max 0.01 WBTC."
+        );
+    }
+
+    #[test]
+    // Internal helper that supports `humanize_garden_api_error_with_insufficient_liquidity` operations.
+    fn humanize_garden_api_error_with_insufficient_liquidity() {
+        let body = "{\"status\":\"Error\",\"error\":\"insufficient liquidity\"}";
+        let message = humanize_garden_api_error(
+            "order",
+            reqwest::StatusCode::BAD_REQUEST,
+            body,
+            Some("starknet"),
+            Some("ethereum"),
+            Some("WBTC"),
+            Some("ETH"),
+        );
+        assert_eq!(
+            message,
+            "Garden order has insufficient liquidity for WBTC -> ETH (starknet -> ethereum). Try a different amount or retry later."
+        );
     }
 }
