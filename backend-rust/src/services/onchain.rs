@@ -1,7 +1,8 @@
 use crate::{config::Config, error::Result};
 use starknet_accounts::{Account, ExecutionEncoding, SingleOwnerAccount};
 use starknet_core::types::{
-    BlockId, BlockTag, Call, Felt, FunctionCall, Transaction, TransactionReceiptWithBlockInfo,
+    BlockId, BlockTag, Call, ContractClass, Felt, FunctionCall, Transaction,
+    TransactionReceiptWithBlockInfo,
 };
 use starknet_providers::jsonrpc::{HttpTransport, JsonRpcClient};
 use starknet_providers::Provider;
@@ -419,6 +420,62 @@ impl OnchainReader {
             Ok(_) => rpc_record_success().await,
             Err(crate::error::AppError::BlockchainRPC(err_text)) => {
                 rpc_record_failure("starknet_getTransactionByHash", err_text).await;
+            }
+            Err(_) => {}
+        }
+        response
+    }
+
+    /// Fetches data for `get_class_at`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub async fn get_class_at(&self, contract_address: Felt) -> Result<ContractClass> {
+        let _permit = rpc_preflight("starknet_getClassAt").await?;
+        let response = self
+            .provider
+            .get_class_at(BlockId::Tag(BlockTag::Latest), contract_address)
+            .await
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+        match &response {
+            Ok(_) => rpc_record_success().await,
+            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                rpc_record_failure("starknet_getClassAt", err_text).await;
+            }
+            Err(_) => {}
+        }
+        response
+    }
+
+    /// Fetches data for `get_class_hash_at`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub async fn get_class_hash_at(&self, contract_address: Felt) -> Result<Felt> {
+        let _permit = rpc_preflight("starknet_getClassHashAt").await?;
+        let response = self
+            .provider
+            .get_class_hash_at(BlockId::Tag(BlockTag::Latest), contract_address)
+            .await
+            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+        match &response {
+            Ok(_) => rpc_record_success().await,
+            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                rpc_record_failure("starknet_getClassHashAt", err_text).await;
             }
             Err(_) => {}
         }

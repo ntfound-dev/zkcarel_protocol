@@ -80,6 +80,7 @@ pub struct Config {
     pub gemini_api_key: Option<String>,
     pub gemini_api_url: String,
     pub gemini_model: String,
+    pub ai_llm_rewrite_timeout_ms: u64,
     pub twitter_bearer_token: Option<String>,
     pub telegram_bot_token: Option<String>,
     pub discord_bot_token: Option<String>,
@@ -271,6 +272,9 @@ impl Config {
                 .unwrap_or_else(|_| "https://generativelanguage.googleapis.com/v1beta".to_string()),
             gemini_model: env::var("GEMINI_MODEL")
                 .unwrap_or_else(|_| "gemini-2.0-flash".to_string()),
+            ai_llm_rewrite_timeout_ms: env::var("AI_LLM_REWRITE_TIMEOUT_MS")
+                .unwrap_or_else(|_| "8000".to_string())
+                .parse()?,
             twitter_bearer_token: env::var("TWITTER_BEARER_TOKEN").ok(),
             telegram_bot_token: env::var("TELEGRAM_BOT_TOKEN").ok(),
             discord_bot_token: env::var("DISCORD_BOT_TOKEN").ok(),
@@ -469,6 +473,9 @@ impl Config {
         {
             tracing::warn!("AI rate limit values should be > 0");
         }
+        if self.ai_llm_rewrite_timeout_ms == 0 {
+            tracing::warn!("AI_LLM_REWRITE_TIMEOUT_MS is 0; fallback default will be used");
+        }
 
         if self.cors_allowed_origins.trim().is_empty() {
             tracing::warn!("CORS_ALLOWED_ORIGINS is empty; requests may be blocked");
@@ -481,6 +488,7 @@ impl Config {
         let _ = &self.gemini_api_key;
         let _ = &self.gemini_api_url;
         let _ = &self.gemini_model;
+        let _ = &self.ai_llm_rewrite_timeout_ms;
         let _ = &self.twitter_bearer_token;
         let _ = &self.telegram_bot_token;
         let _ = &self.discord_bot_token;

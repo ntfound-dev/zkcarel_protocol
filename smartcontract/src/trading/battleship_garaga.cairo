@@ -18,6 +18,7 @@ pub trait IBattleshipGaraga<TContractState> {
     fn set_timeout_blocks(ref self: TContractState, timeout_blocks: u64);
 
     // Creates a new battleship game and commits player A board hash.
+    // `opponent` may be zero to open the game for first-come join.
     fn create_game(
         ref self: TContractState,
         opponent: ContractAddress,
@@ -25,7 +26,8 @@ pub trait IBattleshipGaraga<TContractState> {
         proof: Span<felt252>,
         public_inputs: Span<felt252>,
     ) -> u64;
-    // Joins invited game and commits player B board hash.
+    // Joins game and commits player B board hash.
+    // If player B is zero on-chain, first non-creator joiner claims it.
     fn join_game(
         ref self: TContractState,
         game_id: u64,
@@ -34,11 +36,20 @@ pub trait IBattleshipGaraga<TContractState> {
         public_inputs: Span<felt252>,
     );
     // Fires a shot for current turn and stores pending shot coordinates.
-    fn fire_shot(ref self: TContractState, game_id: u64, x: u64, y: u64);
+    fn fire_shot(
+        ref self: TContractState,
+        game_id: u64,
+        x: u64,
+        y: u64,
+        proof: Span<felt252>,
+        public_inputs: Span<felt252>,
+    );
     // Resolves pending shot with proof-backed hit or miss response.
     fn respond_shot(
         ref self: TContractState,
         game_id: u64,
+        defend_x: u64,
+        defend_y: u64,
         is_hit: bool,
         proof: Span<felt252>,
         public_inputs: Span<felt252>,
@@ -84,6 +95,7 @@ pub mod BattleshipGaraga {
     const STATUS_FINISHED: u64 = 2;
     const WIN_HITS: u64 = 9;
     const BOARD_SIZE: u64 = 5;
+    const TAG_FIRE: felt252 = 'FIRE';
     const TAG_RESPONSE: felt252 = 'RESPONSE';
     const TAG_SUNK: felt252 = 'SUNK';
 
@@ -224,6 +236,7 @@ pub mod BattleshipGaraga {
         }
 
         // Creates a new battleship game and commits player A board hash.
+        // `opponent` can be zero for open challenge mode.
         fn create_game(
             ref self: ContractState,
             opponent: ContractAddress,
@@ -232,7 +245,6 @@ pub mod BattleshipGaraga {
             public_inputs: Span<felt252>,
         ) -> u64 {
             let caller = get_caller_address();
-            assert!(!opponent.is_zero(), "Opponent required");
             assert!(caller != opponent, "Cannot play yourself");
 
             self._verify_action_proof(board_commitment, proof, public_inputs);
@@ -263,7 +275,9 @@ pub mod BattleshipGaraga {
             game_id
         }
 
-        // Joins invited game and commits player B board hash.
+        // Joins game and commits player B board hash.
+        // Invited mode: only predefined opponent can join.
+        // Open challenge mode: first non-creator joiner claims player B.
         fn join_game(
             ref self: ContractState,
             game_id: u64,
@@ -274,13 +288,21 @@ pub mod BattleshipGaraga {
             let caller = get_caller_address();
             self._assert_game_exists(game_id);
             assert!(self.status.read(game_id) == STATUS_WAITING, "Game not joinable");
-            assert!(self.player_b.read(game_id) == caller, "Only invited opponent");
+            let player_a = self.player_a.read(game_id);
+            let invited = self.player_b.read(game_id);
+            assert!(caller != player_a, "Creator cannot join own game");
+            if !invited.is_zero() {
+                assert!(invited == caller, "Only invited opponent");
+            }
 
             self._verify_action_proof(board_commitment, proof, public_inputs);
+            if invited.is_zero() {
+                self.player_b.write(game_id, caller);
+            }
 
             self.board_commitment_b.write(game_id, board_commitment);
             self.status.write(game_id, STATUS_PLAYING);
-            self.turn.write(game_id, self.player_a.read(game_id));
+            self.turn.write(game_id, player_a);
             self.last_action_block.write(game_id, get_block_number());
 
             self.emit(Event::GameJoined(GameJoined { game_id, player_b: caller }));
@@ -292,12 +314,22 @@ pub mod BattleshipGaraga {
         }
 
         // Fires a shot for current turn and stores pending shot coordinates.
-        fn fire_shot(ref self: ContractState, game_id: u64, x: u64, y: u64) {
+        fn fire_shot(
+            ref self: ContractState,
+            game_id: u64,
+            x: u64,
+            y: u64,
+            proof: Span<felt252>,
+            public_inputs: Span<felt252>,
+        ) {
             let caller = get_caller_address();
             self._assert_game_playing(game_id);
             self._assert_participant(game_id, caller);
             assert!(self.turn.read(game_id) == caller, "Not your turn");
             assert!(x < BOARD_SIZE && y < BOARD_SIZE, "Shot out of bounds");
+
+            let fire_binding = self._fire_binding(game_id, caller, x, y);
+            self._verify_action_proof(fire_binding, proof, public_inputs);
 
             let pending = self.pending_shooter.read(game_id);
             assert!(pending.is_zero(), "Pending shot not resolved");
@@ -318,6 +350,8 @@ pub mod BattleshipGaraga {
         fn respond_shot(
             ref self: ContractState,
             game_id: u64,
+            defend_x: u64,
+            defend_y: u64,
             is_hit: bool,
             proof: Span<felt252>,
             public_inputs: Span<felt252>,
@@ -325,6 +359,7 @@ pub mod BattleshipGaraga {
             let caller = get_caller_address();
             self._assert_game_playing(game_id);
             self._assert_participant(game_id, caller);
+            assert!(defend_x < BOARD_SIZE && defend_y < BOARD_SIZE, "Defend out of bounds");
 
             let shooter = self.pending_shooter.read(game_id);
             assert!(!shooter.is_zero(), "No pending shot");
@@ -332,7 +367,9 @@ pub mod BattleshipGaraga {
 
             let x = self.pending_shot_x.read(game_id);
             let y = self.pending_shot_y.read(game_id);
-            let binding = self._response_binding(game_id, shooter, caller, x, y, is_hit);
+            let binding = self._response_binding(
+                game_id, shooter, caller, x, y, defend_x, defend_y, is_hit,
+            );
             self._verify_action_proof(binding, proof, public_inputs);
 
             if is_hit {
@@ -518,23 +555,46 @@ pub mod BattleshipGaraga {
             game_id: u64,
             shooter: ContractAddress,
             responder: ContractAddress,
-            x: u64,
-            y: u64,
+            shot_x: u64,
+            shot_y: u64,
+            defend_x: u64,
+            defend_y: u64,
             is_hit: bool,
         ) -> felt252 {
             let mut data: Array<felt252> = array![];
             let game_felt: felt252 = game_id.into();
             let shooter_felt: felt252 = shooter.into();
             let responder_felt: felt252 = responder.into();
-            let x_felt: felt252 = x.into();
-            let y_felt: felt252 = y.into();
+            let shot_x_felt: felt252 = shot_x.into();
+            let shot_y_felt: felt252 = shot_y.into();
+            let defend_x_felt: felt252 = defend_x.into();
+            let defend_y_felt: felt252 = defend_y.into();
             data.append(TAG_RESPONSE);
             data.append(game_felt);
             data.append(shooter_felt);
             data.append(responder_felt);
+            data.append(shot_x_felt);
+            data.append(shot_y_felt);
+            data.append(defend_x_felt);
+            data.append(defend_y_felt);
+            data.append(if is_hit { 1 } else { 0 });
+            poseidon_hash_span(data.span())
+        }
+
+        // Builds shot binding hash for proof checks.
+        fn _fire_binding(
+            self: @ContractState, game_id: u64, shooter: ContractAddress, x: u64, y: u64,
+        ) -> felt252 {
+            let mut data: Array<felt252> = array![];
+            let game_felt: felt252 = game_id.into();
+            let shooter_felt: felt252 = shooter.into();
+            let x_felt: felt252 = x.into();
+            let y_felt: felt252 = y.into();
+            data.append(TAG_FIRE);
+            data.append(game_felt);
+            data.append(shooter_felt);
             data.append(x_felt);
             data.append(y_felt);
-            data.append(if is_hit { 1 } else { 0 });
             poseidon_hash_span(data.span())
         }
 

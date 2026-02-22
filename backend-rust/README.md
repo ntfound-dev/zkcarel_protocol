@@ -163,6 +163,7 @@ GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 | `GOOGLE_GEMINI_API_KEY` | No | Empty | Alias for Gemini key |
 | `GEMINI_API_URL` | No | `https://generativelanguage.googleapis.com/v1beta` | Gemini base URL |
 | `GEMINI_MODEL` | No | `gemini-2.0-flash` | Gemini model name |
+| `AI_LLM_REWRITE_TIMEOUT_MS` | No | `8000` | Timeout for fallback LLM rewrite on unknown commands |
 | `AI_LEVEL_BURN_ADDRESS` | Recommended | Empty | Burn destination used to verify L2/L3 upgrade payments |
 | `TWITTER_BEARER_TOKEN` | No | Empty | Optional token for social verification features |
 | `TELEGRAM_BOT_TOKEN` | No | Empty | Optional token for social verification features |
@@ -213,9 +214,7 @@ GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 | `ADMIN_MANUAL_KEY` | No | Empty | Protects `/api/v1/admin/points/reset` |
 | `DEV_WALLET_ADDRESS` | No | Empty | Dev wallet for paid rename verification |
 | `DEV_WALLET` | No | Empty | Legacy alias for `DEV_WALLET_ADDRESS` |
-| `FAUCET_BTC_AMOUNT` | No | Contract constant fallback | BTC faucet amount override |
-| `FAUCET_STRK_AMOUNT` | No | Contract constant fallback | STRK faucet amount override |
-| `FAUCET_CAREL_AMOUNT` | No | Contract constant fallback | CAREL faucet amount override |
+| `FAUCET_CAREL_AMOUNT` | No | `25` | Internal CAREL faucet amount override |
 | `FAUCET_COOLDOWN_HOURS` | No | Contract constant fallback | Faucet cooldown override |
 | `FAUCET_CAREL_UNLIMITED` | No | `false` | Disables CAREL cooldown limits |
 | `STRIPE_SECRET_KEY` | No | Empty | Fiat on-ramp provider key |
@@ -264,7 +263,7 @@ Active wiring currently used in this repo:
 | `ZK_PRIVACY_ROUTER_ADDRESS` | `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f` |
 | `STARKNET_SWAP_CONTRACT_ADDRESS` | `0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28` |
 | `LIMIT_ORDER_BOOK_ADDRESS` | `0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a` |
-| `BATTLESHIP_GARAGA_ADDRESS` | `0x04ea26d455d6d79f185a728ac59cac029a6a5bf2a3ca3b4b75f04b4e8c267dd2` |
+| `BATTLESHIP_GARAGA_ADDRESS` | `0x0102fb7ec16af1e8918ac2c4dbdd4473fec2c638fa54bfed0dc2edd2dca4fc97` |
 | `STAKING_CAREL_ADDRESS` | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` |
 | `STAKING_STABLECOIN_ADDRESS` | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` |
 | `STAKING_BTC_ADDRESS` | `0x030098330968d105bf0a0068011b3f166e595582828dbbfaf8e5e204420b1f3b` |
@@ -376,6 +375,7 @@ Active wiring currently used in this repo:
 
 ### Other API Domains
 - Faucet: `POST /api/v1/faucet/claim`, `GET /api/v1/faucet/status`, `GET /api/v1/faucet/stats`
+- Faucet internal tokens: `CAREL`, `USDT`, `USDC` (default 25 each per 24h per Starknet user address on testnet).
 - Deposit: `POST /api/v1/deposit/bank-transfer`, `POST /api/v1/deposit/qris`, `POST /api/v1/deposit/card`, `GET /api/v1/deposit/status/{id}`
 - Notifications: `GET /api/v1/notifications/list`, `POST /api/v1/notifications/mark-read`, `PUT /api/v1/notifications/preferences`, `GET /api/v1/notifications/stats`
 - Transactions: `GET /api/v1/transactions/history`, `GET /api/v1/transactions/{tx_hash}`, `POST /api/v1/transactions/export`

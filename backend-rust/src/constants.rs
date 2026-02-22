@@ -70,7 +70,9 @@ pub const FAUCET_COOLDOWN_HOURS: i64 = 24;
 pub const FAUCET_AMOUNT_BTC: f64 = 0.001;
 pub const FAUCET_AMOUNT_ETH: f64 = 0.1;
 pub const FAUCET_AMOUNT_STRK: f64 = 10.0;
-pub const FAUCET_AMOUNT_CAREL: f64 = 100.0;
+pub const FAUCET_AMOUNT_CAREL: f64 = 25.0;
+pub const FAUCET_AMOUNT_USDT: f64 = 25.0;
+pub const FAUCET_AMOUNT_USDC: f64 = 25.0;
 
 // Rate limits
 pub const RATE_LIMIT_REQUESTS_PER_MINUTE: u32 = 60;

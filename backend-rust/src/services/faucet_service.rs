@@ -1,8 +1,8 @@
 use crate::{
     config::Config,
     constants::{
-        FAUCET_AMOUNT_BTC, FAUCET_AMOUNT_CAREL, FAUCET_AMOUNT_ETH, FAUCET_AMOUNT_STRK,
-        FAUCET_COOLDOWN_HOURS,
+        FAUCET_AMOUNT_CAREL, FAUCET_AMOUNT_USDC, FAUCET_AMOUNT_USDT, FAUCET_COOLDOWN_HOURS,
+        TOKEN_USDC, TOKEN_USDT,
     },
     db::Database,
     error::{AppError, Result},
@@ -15,7 +15,7 @@ use crate::{
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::Row;
-use starknet_core::types::{Call, Felt, FunctionCall};
+use starknet_core::types::{Call, ExecutionResult, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
 use std::sync::Arc;
 
@@ -31,6 +31,32 @@ fn is_carel_token(token: &str) -> bool {
     token.trim().eq_ignore_ascii_case("CAREL")
 }
 
+// Internal helper that parses or transforms values for `normalize_token_symbol`.
+fn normalize_token_symbol(token: &str) -> String {
+    token.trim().to_ascii_uppercase()
+}
+
+// Internal helper that checks conditions for `is_internal_faucet_token`.
+fn is_internal_faucet_token(token: &str) -> bool {
+    matches!(
+        normalize_token_symbol(token).as_str(),
+        "CAREL" | "USDT" | "USDC"
+    )
+}
+
+// Internal helper that checks conditions for `is_transaction_hash_missing_error`.
+fn is_transaction_hash_missing_error(error: &AppError) -> bool {
+    match error {
+        AppError::BlockchainRPC(message) => {
+            let lower = message.to_ascii_lowercase();
+            (lower.contains("transaction") && lower.contains("not found"))
+                || lower.contains("txn hash not found")
+                || lower.contains("unknown transaction")
+        }
+        _ => false,
+    }
+}
+
 // Internal helper that checks conditions for `is_faucet_carel_unlimited`.
 fn is_faucet_carel_unlimited() -> bool {
     std::env::var("FAUCET_CAREL_UNLIMITED")
@@ -44,13 +70,24 @@ fn is_faucet_carel_unlimited() -> bool {
         .unwrap_or(false)
 }
 
+// Internal helper that supports `faucet_policy_reset_at` operations.
+fn faucet_policy_reset_at() -> Option<DateTime<Utc>> {
+    let raw = std::env::var("FAUCET_POLICY_RESET_AT").ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(trimmed)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
 // Internal helper that supports `amount_for_token` operations.
 fn amount_for_token(token: &str, config: &Config) -> Result<f64> {
-    let amount = match token {
-        "BTC" => config.faucet_btc_amount.unwrap_or(FAUCET_AMOUNT_BTC),
-        "ETH" => FAUCET_AMOUNT_ETH,
-        "STRK" => config.faucet_strk_amount.unwrap_or(FAUCET_AMOUNT_STRK),
+    let amount = match normalize_token_symbol(token).as_str() {
         "CAREL" => config.faucet_carel_amount.unwrap_or(FAUCET_AMOUNT_CAREL),
+        "USDT" => FAUCET_AMOUNT_USDT,
+        "USDC" => FAUCET_AMOUNT_USDC,
         _ => return Err(AppError::InvalidToken),
     };
     Ok(amount)
@@ -96,23 +133,10 @@ impl FaucetService {
 
     // Internal helper that fetches data for `resolve_token_address`.
     fn resolve_token_address(&self, token: &str) -> Result<String> {
-        match token.to_ascii_uppercase().as_str() {
+        match normalize_token_symbol(token).as_str() {
             "CAREL" => Ok(self.config.carel_token_address.clone()),
-            "STRK" => self
-                .config
-                .token_strk_address
-                .clone()
-                .ok_or_else(|| AppError::BadRequest("STRK token address not configured".into())),
-            "ETH" => self
-                .config
-                .token_eth_address
-                .clone()
-                .ok_or_else(|| AppError::BadRequest("ETH token address not configured".into())),
-            "BTC" => self
-                .config
-                .token_btc_address
-                .clone()
-                .ok_or_else(|| AppError::BadRequest("BTC token address not configured".into())),
+            "USDT" => Ok(TOKEN_USDT.to_string()),
+            "USDC" => Ok(TOKEN_USDC.to_string()),
             _ => Err(AppError::InvalidToken),
         }
     }
@@ -161,6 +185,55 @@ impl FaucetService {
         u256_from_felts(low, high)
     }
 
+    // Internal helper that fetches data for `should_bypass_cooldown_for_failed_claim`.
+    async fn should_bypass_cooldown_for_failed_claim(
+        &self,
+        user_address: &str,
+        token: &str,
+    ) -> bool {
+        let last_claim = match self.get_last_claim(user_address, token).await {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        let Some(last_claim) = last_claim else {
+            return false;
+        };
+        let tx_hash = last_claim.tx_hash.trim();
+        if tx_hash.is_empty() {
+            return false;
+        }
+        let tx_hash_felt = match parse_felt(tx_hash) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        match self.reader.get_transaction_receipt(&tx_hash_felt).await {
+            Ok(receipt) => matches!(
+                receipt.receipt.execution_result(),
+                ExecutionResult::Reverted { .. }
+            ),
+            Err(error) => is_transaction_hash_missing_error(&error),
+        }
+    }
+
+    // Internal helper that fetches data for `should_bypass_cooldown_for_policy_reset`.
+    async fn should_bypass_cooldown_for_policy_reset(
+        &self,
+        user_address: &str,
+        token: &str,
+    ) -> bool {
+        let Some(reset_at) = faucet_policy_reset_at() else {
+            return false;
+        };
+        let last_claim = match self.get_last_claim(user_address, token).await {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        let Some(last_claim) = last_claim else {
+            return false;
+        };
+        last_claim.claimed_at < reset_at
+    }
+
     /// Checks conditions for `can_claim`.
     ///
     /// # Arguments
@@ -176,16 +249,50 @@ impl FaucetService {
         if !self.config.is_testnet() {
             return Err(AppError::BadRequest("Faucet only on testnet".to_string()));
         }
-        if self.resolve_token_address(token).is_err() {
+        let token_symbol = normalize_token_symbol(token);
+        if !is_internal_faucet_token(&token_symbol) {
             return Ok(false);
         }
-        if is_carel_token(token) && is_faucet_carel_unlimited() {
+        if self.resolve_token_address(&token_symbol).is_err() {
+            return Ok(false);
+        }
+        if is_carel_token(&token_symbol) && is_faucet_carel_unlimited() {
             return Ok(true);
         }
         let cooldown_hours = cooldown_hours_from_config(&self.config);
-        self.db
-            .can_claim_faucet(user_address, token, cooldown_hours)
+        let can_claim = self
+            .db
+            .can_claim_faucet(user_address, &token_symbol, cooldown_hours)
+            .await?;
+        if can_claim {
+            return Ok(true);
+        }
+
+        if self
+            .should_bypass_cooldown_for_policy_reset(user_address, &token_symbol)
             .await
+        {
+            tracing::warn!(
+                "Bypassing faucet cooldown due policy reset timestamp: user={} token={}",
+                user_address,
+                token_symbol
+            );
+            return Ok(true);
+        }
+
+        if self
+            .should_bypass_cooldown_for_failed_claim(user_address, &token_symbol)
+            .await
+        {
+            tracing::warn!(
+                "Bypassing faucet cooldown because last claim tx failed or missing: user={} token={}",
+                user_address,
+                token_symbol
+            );
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     /// Fetches data for `get_next_claim_time`.
@@ -204,20 +311,29 @@ impl FaucetService {
         user_address: &str,
         token: &str,
     ) -> Result<Option<DateTime<Utc>>> {
-        if is_carel_token(token) && is_faucet_carel_unlimited() {
+        let token_symbol = normalize_token_symbol(token);
+        if !is_internal_faucet_token(&token_symbol) {
+            return Err(AppError::InvalidToken);
+        }
+        if is_carel_token(&token_symbol) && is_faucet_carel_unlimited() {
             return Ok(None);
         }
         let last_claim = sqlx::query(
             "SELECT claimed_at FROM faucet_claims WHERE user_address = $1 AND token = $2 ORDER BY claimed_at DESC LIMIT 1"
         )
         .bind(user_address)
-        .bind(token)
+        .bind(&token_symbol)
         .fetch_optional(self.db.pool())
         .await?;
 
         match last_claim {
             Some(row) => {
                 let claimed_at: DateTime<Utc> = row.get("claimed_at");
+                if let Some(reset_at) = faucet_policy_reset_at() {
+                    if claimed_at < reset_at {
+                        return Ok(None);
+                    }
+                }
                 let cooldown_hours = cooldown_hours_from_config(&self.config);
                 Ok(Some(claimed_at + Duration::hours(cooldown_hours)))
             }
@@ -241,6 +357,10 @@ impl FaucetService {
         user_address: &str,
         token: &str,
     ) -> Result<Option<FaucetClaim>> {
+        let token_symbol = normalize_token_symbol(token);
+        if !is_internal_faucet_token(&token_symbol) {
+            return Ok(None);
+        }
         let row = sqlx::query(
             "SELECT user_address, token, amount, tx_hash, claimed_at
              FROM faucet_claims
@@ -248,7 +368,7 @@ impl FaucetService {
              ORDER BY claimed_at DESC LIMIT 1",
         )
         .bind(user_address)
-        .bind(token)
+        .bind(&token_symbol)
         .fetch_optional(self.db.pool())
         .await?;
 
@@ -280,7 +400,14 @@ impl FaucetService {
             return Err(AppError::BadRequest("Faucet only on testnet".into()));
         }
 
-        let token_address = self.resolve_token_address(token)?;
+        let token_symbol = normalize_token_symbol(token);
+        if !is_internal_faucet_token(&token_symbol) {
+            return Err(AppError::BadRequest(
+                "Token not supported by internal faucet".into(),
+            ));
+        }
+
+        let token_address = self.resolve_token_address(&token_symbol)?;
         let token_address = token_address.trim();
         if token_address.is_empty() {
             return Err(AppError::BadRequest("Token address not configured".into()));
@@ -289,11 +416,11 @@ impl FaucetService {
         // Cek saldo token faucet sebelum kirim
         let balance = self.get_token_balance(token_address).await?;
 
-        if !self.can_claim(user_address, token).await? {
+        if !self.can_claim(user_address, &token_symbol).await? {
             return Err(AppError::FaucetCooldown);
         }
 
-        let amount = amount_for_token(token, &self.config)?;
+        let amount = amount_for_token(&token_symbol, &self.config)?;
         let decimals = self.get_token_decimals(token_address).await?;
         let scale = 10f64.powi(decimals as i32);
         let amount_u128 = (amount * scale).round() as u128;
@@ -308,7 +435,7 @@ impl FaucetService {
             .send_tokens(user_address, token_address, amount_u128)
             .await?;
         self.db
-            .record_faucet_claim(user_address, token, amount, &tx_hash)
+            .record_faucet_claim(user_address, &token_symbol, amount, &tx_hash)
             .await?;
 
         let _ = self
@@ -316,9 +443,12 @@ impl FaucetService {
             .create_notification(
                 user_address,
                 "faucet.claim",
-                "Faucet claimed",
-                &format!("Claimed {} {}", amount, token),
-                Some(serde_json::json!({ "tx_hash": tx_hash })),
+                "Token faucet masuk",
+                &format!("Berhasil claim {} {}", amount, token_symbol),
+                Some(serde_json::json!({
+                    "tx_hash": tx_hash,
+                    "tx_network": "starknet"
+                })),
             )
             .await;
 
@@ -359,9 +489,9 @@ impl FaucetService {
             "SELECT 
                 COUNT(DISTINCT user_address) as total_users,
                 COUNT(*) as total_claims,
-                COALESCE(SUM(CASE WHEN token = 'BTC' THEN amount ELSE 0 END), 0) as total_btc,
-                COALESCE(SUM(CASE WHEN token = 'STRK' THEN amount ELSE 0 END), 0) as total_strk,
-                COALESCE(SUM(CASE WHEN token = 'CAREL' THEN amount ELSE 0 END), 0) as total_carel
+                COALESCE(SUM(CASE WHEN token = 'CAREL' THEN amount ELSE 0 END), 0) as total_carel,
+                COALESCE(SUM(CASE WHEN token = 'USDT' THEN amount ELSE 0 END), 0) as total_usdt,
+                COALESCE(SUM(CASE WHEN token = 'USDC' THEN amount ELSE 0 END), 0) as total_usdc
              FROM faucet_claims",
         )
         .fetch_one(self.db.pool())
@@ -370,9 +500,9 @@ impl FaucetService {
         Ok(FaucetStats {
             total_users: row.get::<i64, _>("total_users"),
             total_claims: row.get::<i64, _>("total_claims"),
-            total_btc_distributed: row.get::<rust_decimal::Decimal, _>("total_btc"),
-            total_strk_distributed: row.get::<rust_decimal::Decimal, _>("total_strk"),
             total_carel_distributed: row.get::<rust_decimal::Decimal, _>("total_carel"),
+            total_usdt_distributed: row.get::<rust_decimal::Decimal, _>("total_usdt"),
+            total_usdc_distributed: row.get::<rust_decimal::Decimal, _>("total_usdc"),
         })
     }
 }
@@ -381,9 +511,9 @@ impl FaucetService {
 pub struct FaucetStats {
     pub total_users: i64,
     pub total_claims: i64,
-    pub total_btc_distributed: rust_decimal::Decimal,
-    pub total_strk_distributed: rust_decimal::Decimal,
     pub total_carel_distributed: rust_decimal::Decimal,
+    pub total_usdt_distributed: rust_decimal::Decimal,
+    pub total_usdc_distributed: rust_decimal::Decimal,
 }
 
 #[cfg(test)]
@@ -448,6 +578,7 @@ mod tests {
             gemini_api_key: None,
             gemini_api_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
             gemini_model: "gemini-2.0-flash".to_string(),
+            ai_llm_rewrite_timeout_ms: 8_000,
             twitter_bearer_token: None,
             telegram_bot_token: None,
             discord_bot_token: None,
@@ -497,8 +628,9 @@ mod tests {
     // Internal helper that supports `amount_for_token_uses_override` operations.
     fn amount_for_token_uses_override() {
         // Memastikan amount token menggunakan override config
-        let cfg = sample_config();
-        let amount = amount_for_token("BTC", &cfg).expect("token valid");
-        assert!((amount - 0.02).abs() < f64::EPSILON);
+        let mut cfg = sample_config();
+        cfg.faucet_carel_amount = Some(30.0);
+        let amount = amount_for_token("CAREL", &cfg).expect("token valid");
+        assert!((amount - 30.0).abs() < f64::EPSILON);
     }
 }

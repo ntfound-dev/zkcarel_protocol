@@ -15,8 +15,11 @@ import {
 } from "@/lib/api"
 import { invokeStarknetCallFromWallet } from "@/lib/onchain-trade"
 import {
+  BTC_TESTNET_FAUCET_URL,
   BTC_TESTNET_EXPLORER_BASE_URL,
+  ETH_SEPOLIA_FAUCET_URL,
   ETHERSCAN_SEPOLIA_BASE_URL,
+  STRK_FAUCET_URL,
   STARKSCAN_SEPOLIA_BASE_URL,
   formatNetworkLabel,
 } from "@/lib/network-config"
@@ -51,7 +54,6 @@ import {
   Smartphone, ChevronRight, Clock, XCircle, CheckCircle, Loader2, Mail
 } from "lucide-react"
 
-const STARKNET_FAUCET_URL = "https://starknet-faucet.vercel.app/"
 const CAREL_TOKEN_ADDRESS =
   process.env.NEXT_PUBLIC_TOKEN_CAREL_ADDRESS ||
   "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545"
@@ -73,11 +75,16 @@ const btcWalletProviders = BTC_WALLET_PROVIDERS as {
   icon: string
 }[]
 
-const faucetTokens = [
-  { symbol: "BTC", name: "Bitcoin", amount: "0.001" },
-  { symbol: "ETH", name: "Ethereum", amount: "0.01" },
-  { symbol: "STRK", name: "StarkNet", amount: "10" },
-  { symbol: "CAREL", name: "Carel Protocol", amount: "100" },
+const internalFaucetTokens = [
+  { symbol: "CAREL", name: "Carel Protocol", amount: "25" },
+  { symbol: "USDT", name: "Tether USD", amount: "25" },
+  { symbol: "USDC", name: "USD Coin", amount: "25" },
+]
+
+const externalFaucetLinks = [
+  { symbol: "ETH", name: "Ethereum Sepolia", action: "Google Faucet", url: ETH_SEPOLIA_FAUCET_URL },
+  { symbol: "STRK", name: "Starknet Sepolia", action: "Official Faucet", url: STRK_FAUCET_URL },
+  { symbol: "BTC", name: "Bitcoin Testnet4", action: "Testnet4 Faucet", url: BTC_TESTNET_FAUCET_URL },
 ]
 
 // Transaction history filter options
@@ -258,10 +265,7 @@ export function EnhancedNavigation() {
       const btcHash = txHash.startsWith("0x") ? txHash.slice(2) : txHash
       return [{ label: "Mempool", url: `${BTC_TESTNET_EXPLORER_BASE_URL}/tx/${btcHash}` }]
     }
-    return [
-      { label: "Explorer", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` },
-      { label: "Etherscan", url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` },
-    ]
+    return [{ label: "Explorer", url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}` }]
   }
 
   const effectiveStarknetAddress =
@@ -359,14 +363,16 @@ export function EnhancedNavigation() {
   }, [])
 
   React.useEffect(() => {
-    if (!wallet.isConnected || wallet.network !== "starknet") {
+    if (!wallet.isConnected || !effectiveStarknetAddress) {
       setFaucetStatus({})
       return
     }
     let active = true
     ;(async () => {
       try {
-        const response = await getFaucetStatus()
+        const response = await getFaucetStatus({
+          starknetAddress: effectiveStarknetAddress,
+        })
         if (!active) return
         const mapped: FaucetStatusMap = {}
         response.tokens.forEach((token) => {
@@ -386,7 +392,7 @@ export function EnhancedNavigation() {
     return () => {
       active = false
     }
-  }, [wallet.isConnected, wallet.token, wallet.network])
+  }, [wallet.isConnected, wallet.token, effectiveStarknetAddress])
 
   React.useEffect(() => {
     if (!txHistoryOpen || !wallet.isConnected) return
@@ -655,6 +661,12 @@ export function EnhancedNavigation() {
     }
   }
 
+  const openExternalFaucet = React.useCallback((url: string) => {
+    if (typeof window !== "undefined") {
+      window.open(url, "_blank", "noopener,noreferrer")
+    }
+  }, [])
+
   /**
    * Handles `handleClaimFaucet` logic.
    *
@@ -672,25 +684,12 @@ export function EnhancedNavigation() {
       })
       return
     }
-    if (wallet.network !== "starknet") {
+    if (!effectiveStarknetAddress) {
       notifications.addNotification({
         type: "warning",
         title: "Starknet wallet required",
-        message: "Faucet is available for Starknet wallet only.",
+        message: "Connect or link your Starknet wallet first.",
       })
-      return
-    }
-
-    const strkBalance = wallet.onchainBalance?.STRK_L2 ?? null
-    if (typeof strkBalance === "number" && strkBalance <= 0) {
-      notifications.addNotification({
-        type: "warning",
-        title: "STRK required for gas",
-        message: "STRK balance is empty. Open Starknet faucet to top up.",
-      })
-      if (typeof window !== "undefined") {
-        window.open(STARKNET_FAUCET_URL, "_blank", "noopener,noreferrer")
-      }
       return
     }
 
@@ -699,7 +698,9 @@ export function EnhancedNavigation() {
 
     setFaucetLoading((prev) => ({ ...prev, [symbol]: true }))
     try {
-      const result = await claimFaucet(symbol)
+      const result = await claimFaucet(symbol, {
+        starknetAddress: effectiveStarknetAddress,
+      })
       const txHash = result.tx_hash
       if (txHash) {
         setFaucetTx((prev) => ({ ...prev, [symbol]: txHash }))
@@ -710,8 +711,10 @@ export function EnhancedNavigation() {
           : txHash
       notifications.addNotification({
         type: "success",
-        title: "Faucet claimed",
-        message: `Claimed ${result.amount} ${result.token}. Tx: ${shortTx || "N/A"}.`,
+        title: "Token faucet masuk",
+        message: `Berhasil claim ${result.amount} ${result.token}. Tx: ${shortTx || "N/A"}.`,
+        txHash,
+        txNetwork: txHash ? "starknet" : undefined,
       })
 
       // Update local faucet status with cooldown info
@@ -790,30 +793,38 @@ export function EnhancedNavigation() {
                 <DropdownMenuLabel>
                   <div>
                     <p className="text-sm font-medium text-foreground">Testnet Faucet</p>
-                    <p className="text-xs text-muted-foreground">Claim free testnet tokens</p>
-                    {wallet.isConnected && wallet.network !== "starknet" && (
-                      <p className="text-xs text-warning mt-1">EVM connected – faucet Starknet only</p>
-                    )}
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {faucetTokens.map((token) => {
-                  const walletReady = wallet.isConnected && wallet.network === "starknet"
+                <div className="px-2 pb-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Internal (25/day)
+                  </p>
+                </div>
+                {internalFaucetTokens.map((token) => {
+                  const walletReady = wallet.isConnected && Boolean(effectiveStarknetAddress)
                   const status = walletReady ? faucetStatus[token.symbol] : undefined
                   const canClaim = walletReady && (status?.can_claim ?? false)
                   const isLoading = faucetLoading[token.symbol]
+                  const nextClaimAtMs = status?.next_claim_at
+                    ? new Date(status.next_claim_at).getTime()
+                    : NaN
+                  const isCooldown =
+                    Number.isFinite(nextClaimAtMs) && nextClaimAtMs > Date.now()
                   const isDisabled = !canClaim || isLoading
                   const label = isLoading
                     ? "Claiming..."
                     : !wallet.isConnected
                     ? "Connect"
-                    : wallet.network !== "starknet"
-                    ? "Starknet only"
+                    : !effectiveStarknetAddress
+                    ? "Link Starknet"
                     : !status
                     ? "Unavailable"
                     : canClaim
                     ? `+${token.amount}`
-                    : "Cooldown"
+                    : isCooldown
+                    ? "Cooldown"
+                    : "Unavailable"
 
                   return (
                     <DropdownMenuItem
@@ -849,16 +860,26 @@ export function EnhancedNavigation() {
                   )
                 })}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onClick={() => {
-                    if (typeof window !== "undefined") {
-                      window.open(STARKNET_FAUCET_URL, "_blank", "noopener,noreferrer")
-                    }
-                  }}
-                >
-                  Buka Starknet Faucet
-                </DropdownMenuItem>
+                <div className="px-2 pb-1 pt-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    External
+                  </p>
+                </div>
+                {externalFaucetLinks.map((token) => (
+                  <DropdownMenuItem
+                    key={token.symbol}
+                    className="flex items-center justify-between cursor-pointer py-3"
+                    onClick={() => openExternalFaucet(token.url)}
+                  >
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-foreground">{token.symbol}</p>
+                      <p className="text-xs text-muted-foreground">{token.name}</p>
+                    </div>
+                    <span className="text-xs font-medium px-2 py-1 rounded bg-primary/15 text-primary">
+                      {token.action}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
               </DropdownMenuContent>
             </DropdownMenu>
 

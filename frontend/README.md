@@ -100,7 +100,9 @@ Create `frontend/.env.local` and set values as needed.
 | `NEXT_PUBLIC_STARKSCAN_SEPOLIA_URL` | No | Used as fallback for Starknet explorer | Secondary Starknet explorer base URL |
 | `NEXT_PUBLIC_ETHERSCAN_SEPOLIA_URL` | No | `https://sepolia.etherscan.io` | Ethereum Sepolia explorer base URL |
 | `NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL` | No | `https://mempool.space/testnet4` | BTC testnet explorer base URL |
-| `NEXT_PUBLIC_BTC_TESTNET_FAUCET_URL` | No | `https://testnet4.info/` | BTC testnet faucet URL shown in UI |
+| `NEXT_PUBLIC_ETH_SEPOLIA_FAUCET_URL` | No | `https://cloud.google.com/application/web3/faucet/ethereum/sepolia` | External ETH Sepolia faucet URL |
+| `NEXT_PUBLIC_STRK_FAUCET_URL` | No | `https://faucet.starknet.io/` | External official STRK faucet URL |
+| `NEXT_PUBLIC_BTC_TESTNET_FAUCET_URL` | No | `https://testnet4.info/` | External BTC testnet4 faucet URL shown in UI |
 | `NEXT_PUBLIC_EVM_SEPOLIA_RPC_URL` | No | `https://rpc.sepolia.org` | EVM RPC used for MetaMask chain setup |
 | `NEXT_PUBLIC_BTC_VAULT_ADDRESS` | Required for BTC bridge execution | Empty | Deposit vault shown for BTC order flow |
 | `NEXT_PUBLIC_STARKGATE_ETH_BRIDGE_ADDRESS` | No | Empty | Direct StarkGate bridge contract (ETH Sepolia) |

@@ -74,7 +74,7 @@ pub struct FaucetClaim {
 
 #[derive(Debug, Deserialize)]
 pub struct FaucetClaimRequest {
-    pub token: String, // BTC, STRK, CAREL
+    pub token: String, // CAREL, USDT, USDC
 }
 
 #[derive(Debug, Serialize)]

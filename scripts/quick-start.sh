@@ -52,19 +52,33 @@ if [[ ! -f "$FRONTEND_DIR/.env.local" && ! -f "$FRONTEND_DIR/.env" ]]; then
   exit 1
 fi
 
-if [[ -f "$BACKEND_PID_FILE" ]]; then
-  old_pid="$(cat "$BACKEND_PID_FILE" || true)"
-  if [[ -n "${old_pid:-}" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
-    echo "[quick-start] Backend already running (pid=$old_pid)"
+stop_if_running() {
+  local pid_file="$1"
+  local name="$2"
+  if [[ ! -f "$pid_file" ]]; then
+    return
   fi
-fi
 
-if [[ -f "$FRONTEND_PID_FILE" ]]; then
-  old_pid="$(cat "$FRONTEND_PID_FILE" || true)"
-  if [[ -n "${old_pid:-}" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
-    echo "[quick-start] Frontend already running (pid=$old_pid)"
+  local pid
+  pid="$(cat "$pid_file" || true)"
+  if [[ -z "${pid:-}" ]]; then
+    rm -f "$pid_file"
+    return
   fi
-fi
+
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    echo "[quick-start] Restarting existing $name process (pid=$pid)"
+    kill "$pid" >/dev/null 2>&1 || true
+    sleep 1
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      kill -9 "$pid" >/dev/null 2>&1 || true
+    fi
+  fi
+  rm -f "$pid_file"
+}
+
+stop_if_running "$BACKEND_PID_FILE" "backend"
+stop_if_running "$FRONTEND_PID_FILE" "frontend"
 
 if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   echo "[quick-start] Installing frontend dependencies..."
@@ -88,6 +102,24 @@ FRONTEND_PID=$!
 echo "$FRONTEND_PID" >"$FRONTEND_PID_FILE"
 
 sleep 5
+
+if ! kill -0 "$BACKEND_PID" >/dev/null 2>&1; then
+  echo "[quick-start] Backend failed to start. See log: $BACKEND_LOG"
+  tail -n 50 "$BACKEND_LOG" || true
+  exit 1
+fi
+
+if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
+  echo "[quick-start] Frontend failed to start. See log: $FRONTEND_LOG"
+  tail -n 50 "$FRONTEND_LOG" || true
+  exit 1
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  if ! curl -fsS "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
+    echo "[quick-start] Warning: backend /health is not reachable yet (check $BACKEND_LOG)."
+  fi
+fi
 
 echo "[quick-start] Done."
 echo "  Frontend: http://localhost:3000"

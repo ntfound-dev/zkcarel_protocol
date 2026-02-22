@@ -418,7 +418,7 @@ fn parse_intent_from_command(command: &str) -> Intent {
                 locale,
             ),
         }
-    } else if contains_any_keyword(&command_lower, &["bridge", "jembatan"]) {
+    } else if contains_any_keyword(&command_lower, &["bridge", "brigde", "jembatan"]) {
         let (from, to, amount) = parse_swap_parameters(&command_lower);
         Intent {
             action: "bridge".to_string(),
@@ -628,7 +628,7 @@ struct GeminiResponsePart {
 
 const OPENAI_CHAT_COMPLETIONS_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_DEFAULT_MODEL: &str = "gpt-4o-mini";
-const LLM_REWRITE_TIMEOUT_MS: u64 = 8_000;
+const LLM_REWRITE_TIMEOUT_MS_DEFAULT: u64 = 8_000;
 
 #[derive(Debug, Serialize)]
 struct CairoCoderChatRequest {
@@ -713,12 +713,8 @@ pub fn classify_command_scope(command: &str) -> AIGuardScope {
         | "stake"
         | "claim_staking_rewards"
         | "limit_order_create"
-        | "limit_order_cancel" => {
-            AIGuardScope::SwapBridge
-        }
-        "unstake" | "portfolio_management" | "alerts" => {
-            AIGuardScope::PortfolioAlert
-        }
+        | "limit_order_cancel" => AIGuardScope::SwapBridge,
+        "unstake" | "portfolio_management" | "alerts" => AIGuardScope::PortfolioAlert,
         _ => AIGuardScope::Unknown,
     }
 }
@@ -787,8 +783,13 @@ impl AIService {
 
         let should_try_llm_rewrite = matches!(intent.action.as_str(), "unknown");
         if should_try_llm_rewrite {
+            let llm_rewrite_timeout_ms = if self.config.ai_llm_rewrite_timeout_ms == 0 {
+                LLM_REWRITE_TIMEOUT_MS_DEFAULT
+            } else {
+                self.config.ai_llm_rewrite_timeout_ms
+            };
             match tokio::time::timeout(
-                std::time::Duration::from_millis(LLM_REWRITE_TIMEOUT_MS),
+                std::time::Duration::from_millis(llm_rewrite_timeout_ms),
                 self.generate_with_llm(user_address, command, level, &intent, &response),
             )
             .await
@@ -798,7 +799,7 @@ impl AIService {
                 }
                 Ok(None) => {}
                 Err(_) => {
-                    tracing::warn!("LLM rewrite timed out after {}ms", LLM_REWRITE_TIMEOUT_MS);
+                    tracing::warn!("LLM rewrite timed out after {}ms", llm_rewrite_timeout_ms);
                 }
             }
         }
@@ -1759,13 +1760,17 @@ impl AIService {
             .unwrap_or("")
             .to_ascii_lowercase();
 
-        let is_thanks = contains_any_keyword(
-            &query,
-            &["thanks", "thank you", "makasih", "terima kasih"],
-        );
+        let is_thanks =
+            contains_any_keyword(&query, &["thanks", "thank you", "makasih", "terima kasih"]);
         let asks_identity = contains_any_keyword(
             &query,
-            &["who are you", "kamu siapa", "siapa kamu", "what can you do", "bisa bantu"],
+            &[
+                "who are you",
+                "kamu siapa",
+                "siapa kamu",
+                "what can you do",
+                "bisa bantu",
+            ],
         );
 
         let message = if is_thanks {
@@ -1794,8 +1799,7 @@ impl AIService {
                 }
             }
         } else if is_id {
-            "Bisa. Ceritakan tujuanmu singkat, nanti saya bantu langkah paling cepat."
-                .to_string()
+            "Bisa. Ceritakan tujuanmu singkat, nanti saya bantu langkah paling cepat.".to_string()
         } else {
             "Sure. Tell me your goal in one short sentence and I'll guide the fastest path."
                 .to_string()
@@ -2021,6 +2025,28 @@ mod tests {
     }
 
     #[test]
+    // Internal helper that supports `parse_intent_handles_bridge_typo` operations.
+    fn parse_intent_handles_bridge_typo() {
+        let intent = parse_intent_from_command("please brigde 0.0005 btc to wbtc");
+        assert_eq!(intent.action, "bridge");
+        assert_eq!(
+            intent.parameters.get("from").and_then(|value| value.as_str()),
+            Some("BTC")
+        );
+        assert_eq!(
+            intent.parameters.get("to").and_then(|value| value.as_str()),
+            Some("WBTC")
+        );
+    }
+
+    #[test]
+    // Internal helper that supports `classify_command_scope_bridge_typo_is_onchain_scope` operations.
+    fn classify_command_scope_bridge_typo_is_onchain_scope() {
+        let scope = classify_command_scope("brigde 0.0005 btc to wbtc");
+        assert_eq!(scope, AIGuardScope::SwapBridge);
+    }
+
+    #[test]
     // Internal helper that supports `classify_command_scope_limit_order_is_onchain_scope` operations.
     fn classify_command_scope_limit_order_is_onchain_scope() {
         let scope = classify_command_scope("create limit order 10 strk to usdc at 1.2");
@@ -2084,7 +2110,10 @@ mod tests {
     // Internal helper that parses or transforms values for `detect_locale_defaults_to_english_without_explicit_switch`.
     fn detect_locale_defaults_to_english_without_explicit_switch() {
         assert_eq!(detect_locale_from_command("kamu siapa"), "en");
-        assert_eq!(detect_locale_from_command("how many points do I have"), "en");
+        assert_eq!(
+            detect_locale_from_command("how many points do I have"),
+            "en"
+        );
         assert_eq!(detect_locale_from_command("pakai bahasa indonesia"), "id");
     }
 

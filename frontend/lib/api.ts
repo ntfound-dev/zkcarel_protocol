@@ -643,6 +643,10 @@ type ApiFetchOptions = RequestInit & {
   _authRetry?: boolean
 }
 
+type BattleshipRequestOptions = {
+  starknetAddress?: string
+}
+
 const DEFAULT_TIMEOUT_MS = 15000
 const AUTH_TOKEN_STORAGE_KEY = "auth_token"
 const WALLET_ADDRESS_STORAGE_KEY = "wallet_address"
@@ -690,6 +694,13 @@ function getStoredActiveStarknetAddress() {
   if (network !== "starknet") return null
   const fallback = (window.localStorage.getItem(WALLET_ADDRESS_STORAGE_KEY) || "").trim()
   return fallback || null
+}
+
+// Internal helper that supports `buildStarknetAddressHeader` operations.
+function buildStarknetAddressHeader(starknetAddress?: string) {
+  const explicit = (starknetAddress || "").trim()
+  if (!explicit) return undefined
+  return { [STARKNET_ADDRESS_HEADER]: explicit }
 }
 
 /**
@@ -836,10 +847,11 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
     timeoutMs = DEFAULT_TIMEOUT_MS,
     context,
     suppressErrorNotification,
+    headers: requestHeaders,
     _authRetry = false,
     ...requestInit
   } = init
-  const headers = new Headers(requestInit?.headers || {})
+  const headers = new Headers(requestHeaders || {})
   headers.set("Content-Type", "application/json")
   headers.set("Accept", "application/json")
   if (typeof window !== "undefined" && !headers.has(STARKNET_ADDRESS_HEADER)) {
@@ -862,8 +874,8 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
   try {
     const response = await fetch(joinUrl(path), {
       cache: "no-store",
-      headers,
       ...requestInit,
+      headers,
       signal: controller.signal,
     })
 
@@ -876,7 +888,18 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
     }
 
     if (!response.ok) {
-      const message = json?.error?.message || json?.message || "Request failed"
+      const plainTextMessage = (() => {
+        const trimmed = (text || "").trim()
+        if (!trimmed) return null
+        const firstLine = trimmed.split(/\r?\n/, 1)[0]?.trim() || ""
+        if (!firstLine) return null
+        return firstLine.length > 260 ? `${firstLine.slice(0, 257)}...` : firstLine
+      })()
+      const message =
+        json?.error?.message ||
+        json?.message ||
+        plainTextMessage ||
+        `Request failed (HTTP ${response.status})`
       const isMissingAuthHeader =
         response.status === 401 &&
         (!hasAuthorizationHeader || /missing authorization header/i.test(message))
@@ -1220,7 +1243,9 @@ export async function getReferralCode() {
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
 export async function getReferralStats() {
-  return apiFetch<ReferralStatsResponse>("/api/v1/referral/stats")
+  return apiFetch<ReferralStatsResponse>("/api/v1/referral/stats", {
+    suppressErrorNotification: true,
+  })
 }
 
 /**
@@ -2102,10 +2127,11 @@ export async function createBattleshipGame(payload: {
   cells: BattleshipCell[]
   privacy?: PrivacyVerificationPayload
   onchain_tx_hash?: string
-}) {
+}, options: BattleshipRequestOptions = {}) {
   return apiFetch<BattleshipGameActionResponse>("/api/v1/battleship/create", {
     method: "POST",
     body: JSON.stringify(payload),
+    headers: buildStarknetAddressHeader(options.starknetAddress),
     context: "Create battleship game",
     suppressErrorNotification: true,
     timeoutMs: 120000,
@@ -2125,10 +2151,11 @@ export async function joinBattleshipGame(payload: {
   cells: BattleshipCell[]
   privacy?: PrivacyVerificationPayload
   onchain_tx_hash?: string
-}) {
+}, options: BattleshipRequestOptions = {}) {
   return apiFetch<BattleshipGameActionResponse>("/api/v1/battleship/join", {
     method: "POST",
     body: JSON.stringify(payload),
+    headers: buildStarknetAddressHeader(options.starknetAddress),
     context: "Join battleship game",
     suppressErrorNotification: true,
     timeoutMs: 120000,
@@ -2148,10 +2175,11 @@ export async function placeBattleshipShips(payload: {
   cells: BattleshipCell[]
   privacy?: PrivacyVerificationPayload
   onchain_tx_hash?: string
-}) {
+}, options: BattleshipRequestOptions = {}) {
   return apiFetch<BattleshipGameActionResponse>("/api/v1/battleship/place-ships", {
     method: "POST",
     body: JSON.stringify(payload),
+    headers: buildStarknetAddressHeader(options.starknetAddress),
     context: "Place battleship ships",
     suppressErrorNotification: true,
     timeoutMs: 120000,
@@ -2170,11 +2198,13 @@ export async function fireBattleshipShot(payload: {
   game_id: string
   x: number
   y: number
+  privacy?: PrivacyVerificationPayload
   onchain_tx_hash?: string
-}) {
+}, options: BattleshipRequestOptions = {}) {
   return apiFetch<BattleshipFireShotResponse>("/api/v1/battleship/fire", {
     method: "POST",
     body: JSON.stringify(payload),
+    headers: buildStarknetAddressHeader(options.starknetAddress),
     context: "Fire battleship shot",
     suppressErrorNotification: true,
     timeoutMs: 120000,
@@ -2191,13 +2221,15 @@ export async function fireBattleshipShot(payload: {
  */
 export async function respondBattleshipShot(payload: {
   game_id: string
-  is_hit?: boolean
+  defend_x: number
+  defend_y: number
   privacy?: PrivacyVerificationPayload
   onchain_tx_hash?: string
-}) {
+}, options: BattleshipRequestOptions = {}) {
   return apiFetch<BattleshipFireShotResponse>("/api/v1/battleship/respond", {
     method: "POST",
     body: JSON.stringify(payload),
+    headers: buildStarknetAddressHeader(options.starknetAddress),
     context: "Respond battleship shot",
     suppressErrorNotification: true,
     timeoutMs: 120000,
@@ -2215,10 +2247,11 @@ export async function respondBattleshipShot(payload: {
 export async function claimBattleshipTimeout(payload: {
   game_id: string
   onchain_tx_hash?: string
-}) {
+}, options: BattleshipRequestOptions = {}) {
   return apiFetch<BattleshipGameActionResponse>("/api/v1/battleship/claim-timeout", {
     method: "POST",
     body: JSON.stringify(payload),
+    headers: buildStarknetAddressHeader(options.starknetAddress),
     context: "Claim battleship timeout",
     suppressErrorNotification: true,
     timeoutMs: 120000,
@@ -2233,10 +2266,11 @@ export async function claimBattleshipTimeout(payload: {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function getBattleshipState(gameId: string) {
+export async function getBattleshipState(gameId: string, options: BattleshipRequestOptions = {}) {
   return apiFetch<BattleshipGameStateResponse>(
     `/api/v1/battleship/state/${encodeURIComponent(gameId)}`,
     {
+      headers: buildStarknetAddressHeader(options.starknetAddress),
       context: "Get battleship state",
       suppressErrorNotification: true,
     }
@@ -2249,8 +2283,12 @@ export async function getBattleshipState(gameId: string) {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function getFaucetStatus() {
-  return apiFetch<FaucetStatusResponse>("/api/v1/faucet/status")
+export async function getFaucetStatus(options?: { starknetAddress?: string }) {
+  return apiFetch<FaucetStatusResponse>("/api/v1/faucet/status", {
+    headers: buildStarknetAddressHeader(options?.starknetAddress),
+    context: "Get faucet status",
+    suppressErrorNotification: true,
+  })
 }
 
 /**
@@ -2261,10 +2299,11 @@ export async function getFaucetStatus() {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function claimFaucet(token: string) {
+export async function claimFaucet(token: string, options?: { starknetAddress?: string }) {
   return apiFetch<FaucetClaimResponse>("/api/v1/faucet/claim", {
     method: "POST",
     body: JSON.stringify({ token }),
+    headers: buildStarknetAddressHeader(options?.starknetAddress),
     context: "Claim faucet",
     suppressErrorNotification: true,
   })

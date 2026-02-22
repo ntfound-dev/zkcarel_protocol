@@ -50,6 +50,22 @@ const BIGINT_ONE = BigInt(1)
 const TWO_POW_128 = powBigInt(2, 128)
 const MAX_U128 = TWO_POW_128 - BIGINT_ONE
 
+function isHexSelector(value: string) {
+  return /^0x[0-9a-fA-F]+$/.test((value || "").trim())
+}
+
+function normalizeSelectorLikeValue(value: string): string {
+  const trimmed = (value || "").trim()
+  if (!trimmed) return trimmed
+  if (isHexSelector(trimmed)) {
+    return `0x${trimmed.slice(2).toLowerCase()}`
+  }
+  if (/^\d+$/.test(trimmed)) {
+    return `0x${BigInt(trimmed).toString(16)}`
+  }
+  return trimmed
+}
+
 /**
  * Runs `invokeStarknetCallsFromWallet` and handles related side effects.
  *
@@ -82,36 +98,116 @@ export async function invokeStarknetCallsFromWallet(
 
   const normalizedCalls = calls.map((call) => ({
     contractAddress: call.contractAddress,
-    entrypoint: call.entrypoint,
+    entrypoint: normalizeSelectorLikeValue(call.entrypoint),
     calldata: call.calldata.map((item) => toHexFelt(item)),
   }))
+  const isSelectorCall = (entrypoint: string) => isHexSelector(entrypoint)
+  const toMixedCallShape = (
+    call: { contractAddress: string; entrypoint: string; calldata: string[] },
+    style: "snake" | "camel" | "to",
+    preferEntryPointSelector = false
+  ): Record<string, unknown> => {
+    if (style === "snake") {
+      if (isSelectorCall(call.entrypoint)) {
+        return preferEntryPointSelector
+          ? {
+              contract_address: call.contractAddress,
+              entry_point_selector: call.entrypoint,
+              calldata: call.calldata,
+            }
+          : {
+              contract_address: call.contractAddress,
+              selector: call.entrypoint,
+              calldata: call.calldata,
+            }
+      }
+      return {
+        contract_address: call.contractAddress,
+        entry_point: call.entrypoint,
+        calldata: call.calldata,
+      }
+    }
+    if (style === "camel") {
+      if (isSelectorCall(call.entrypoint)) {
+        return preferEntryPointSelector
+          ? {
+              contractAddress: call.contractAddress,
+              entryPointSelector: call.entrypoint,
+              calldata: call.calldata,
+            }
+          : {
+              contractAddress: call.contractAddress,
+              selector: call.entrypoint,
+              calldata: call.calldata,
+            }
+      }
+      return {
+        contractAddress: call.contractAddress,
+        entrypoint: call.entrypoint,
+        calldata: call.calldata,
+      }
+    }
+    if (isSelectorCall(call.entrypoint)) {
+      return preferEntryPointSelector
+        ? {
+            to: call.contractAddress,
+            entry_point_selector: call.entrypoint,
+            calldata: call.calldata,
+          }
+        : {
+            to: call.contractAddress,
+            selector: call.entrypoint,
+            calldata: call.calldata,
+          }
+    }
+    return {
+      to: call.contractAddress,
+      entrypoint: call.entrypoint,
+      calldata: call.calldata,
+    }
+  }
+  const executeCallsMixedTo = normalizedCalls.map((call) => toMixedCallShape(call, "to"))
+  const executeCallsMixedCamel = normalizedCalls.map((call) => toMixedCallShape(call, "camel"))
+  const executeCallsMixedSnake = normalizedCalls.map((call) => toMixedCallShape(call, "snake"))
+  const executeCallsMixedEntryPointSelectorSnake = normalizedCalls.map((call) =>
+    toMixedCallShape(call, "snake", true)
+  )
+  const executeCallsMixedEntryPointSelectorTo = normalizedCalls.map((call) =>
+    toMixedCallShape(call, "to", true)
+  )
+  const executeCallsEntrypointCamel = normalizedCalls.map((call) => ({
+    contractAddress: call.contractAddress,
+    entrypoint: call.entrypoint,
+    calldata: call.calldata,
+  }))
+  const executeCallsEntrypointSnake = normalizedCalls.map((call) => ({
+    contract_address: call.contractAddress,
+    entry_point: call.entrypoint,
+    calldata: call.calldata,
+  }))
+  const invokeCallsMixedEntryPointSelectorSnake = executeCallsMixedEntryPointSelectorSnake
+  const invokeCallsMixedEntryPointSelectorCamel = normalizedCalls.map((call) =>
+    toMixedCallShape(call, "camel", true)
+  )
+  const invokeCallsMixedSnake = executeCallsMixedSnake
+  const invokeCallsMixedCamel = executeCallsMixedCamel
+  const invokeCallsMixedTo = executeCallsMixedTo
+  const invokeCallsEntrypointCamel = executeCallsEntrypointCamel
+  const invokeCallsEntrypointSnake = executeCallsEntrypointSnake
   const attemptErrors: string[] = []
   const requiresStrictWalletInvoke =
     normalizedCalls.length > 2 ||
     normalizedCalls.some((call) => call.entrypoint === "submit_private_action")
   const account = injected.account as InjectedStarknet["account"] | undefined
   if (account?.execute && !requiresStrictWalletInvoke) {
-    const attempts = [
-      normalizedCalls.map((call) => ({
-        contractAddress: call.contractAddress,
-        entrypoint: call.entrypoint,
-        calldata: call.calldata,
-      })),
-      normalizedCalls.map((call) => ({
-        contract_address: call.contractAddress,
-        entry_point: call.entrypoint,
-        calldata: call.calldata,
-      })),
-      normalizedCalls.map((call) => ({
-        contractAddress: call.contractAddress,
-        selector: call.entrypoint,
-        calldata: call.calldata,
-      })),
-      normalizedCalls.map((call) => ({
-        contract_address: call.contractAddress,
-        selector: call.entrypoint,
-        calldata: call.calldata,
-      })),
+    const attempts: Array<Array<Record<string, unknown>>> = [
+      executeCallsEntrypointCamel,
+      executeCallsEntrypointSnake,
+      executeCallsMixedTo,
+      executeCallsMixedCamel,
+      executeCallsMixedSnake,
+      executeCallsMixedEntryPointSelectorSnake,
+      executeCallsMixedEntryPointSelectorTo,
     ]
     for (const payload of attempts) {
       try {
@@ -132,37 +228,17 @@ export async function invokeStarknetCallsFromWallet(
     throw new Error("Injected Starknet wallet does not support transaction request.")
   }
 
-  const invokeCallsSnake = normalizedCalls.map((call) => ({
-    contract_address: call.contractAddress,
-    entry_point: call.entrypoint,
-    calldata: call.calldata,
-  }))
-  const invokeCallsCamel = normalizedCalls.map((call) => ({
-    contractAddress: call.contractAddress,
-    entrypoint: call.entrypoint,
-    calldata: call.calldata,
-  }))
-  const invokeCallsSelectorSnake = normalizedCalls.map((call) => ({
-    contract_address: call.contractAddress,
-    selector: call.entrypoint,
-    calldata: call.calldata,
-  }))
-  const invokeCallsSelectorCamel = normalizedCalls.map((call) => ({
-    contractAddress: call.contractAddress,
-    selector: call.entrypoint,
-    calldata: call.calldata,
-  }))
-
   const requestPayloads: Array<{ type: string; params: unknown }> = [
-    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsSnake } },
-    { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsSnake }] },
-    { type: "starknet_addInvokeTransaction", params: [{ calls: invokeCallsSnake }] },
-    { type: "starknet_addInvokeTransaction", params: { calls: invokeCallsSnake } },
-    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsCamel } },
-    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsSelectorSnake } },
-    { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsSelectorSnake }] },
-    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsSelectorCamel } },
-    { type: "starknet_addInvokeTransaction", params: [{ calls: invokeCallsSelectorSnake }] },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsEntrypointSnake } },
+    { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsEntrypointSnake }] },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsEntrypointCamel } },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsMixedEntryPointSelectorSnake } },
+    { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsMixedEntryPointSelectorSnake }] },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsMixedEntryPointSelectorCamel } },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsMixedSnake } },
+    { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsMixedSnake }] },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsMixedCamel } },
+    { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsMixedTo } },
   ]
 
   for (const payload of requestPayloads) {
@@ -179,7 +255,12 @@ export async function invokeStarknetCallsFromWallet(
     }
   }
 
-  const detail = attemptErrors.length > 0 ? attemptErrors[attemptErrors.length - 1] : null
+  const meaningfulErrors = attemptErrors.filter(
+    (item) => !/unknown request type|unsupported request type|method not found/i.test(item)
+  )
+  const detail =
+    meaningfulErrors[meaningfulErrors.length - 1] ||
+    (attemptErrors.length > 0 ? attemptErrors[attemptErrors.length - 1] : null)
   if (detail) {
     throw new Error(`Failed to submit Starknet transaction from wallet. ${detail}`)
   }

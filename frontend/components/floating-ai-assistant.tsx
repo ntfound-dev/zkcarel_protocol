@@ -4,7 +4,6 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { X, Minus, ChevronUp, ArrowUpRight, Zap, CheckCircle2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { DM_Sans, Space_Mono } from "next/font/google"
 import {
   autoSubmitPrivacyAction,
   createLimitOrder,
@@ -40,17 +39,8 @@ import {
   toHexFelt,
 } from "@/lib/onchain-trade"
 
-const dmSans = DM_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-  display: "swap",
-})
-
-const spaceMono = Space_Mono({
-  subsets: ["latin"],
-  weight: ["400", "700"],
-  display: "swap",
-})
+const dmSans = { className: "font-sans" }
+const spaceMono = { className: "font-mono" }
 
 const aiTiers = [
   {
@@ -136,13 +126,16 @@ const HIDE_BALANCE_SHIELDED_POOL_V2 =
   HIDE_BALANCE_EXECUTOR_KIND === "shielded_pool_v2" ||
   HIDE_BALANCE_EXECUTOR_KIND === "shielded-v2" ||
   HIDE_BALANCE_EXECUTOR_KIND === "v2"
+const GARDEN_STARKNET_APPROVE_SELECTOR = "0x219209e083275171774dab1df80982e9df2096516f06319c5c6d71ae0a8480c"
+const GARDEN_STARKNET_INITIATE_SELECTOR = "0x2aed25fcd0101fcece997d93f9d0643dfa3fbd4118cae16bf7d6cd533577c28"
 
 const AI_ACTION_TYPE_SWAP = 0
 const AI_ACTION_TYPE_MULTI_STEP = 5
+const BRIDGE_COMMAND_REGEX = /\b(bridge|brigde|jembatan)\b/i
 const TIER2_ONCHAIN_COMMAND_REGEX =
-  /\b(swap|bridge|stake|claim|limit(?:\s|-)?order|cancel\s+order)\b/i
+  /\b(swap|bridge|brigde|stake|claim|limit(?:\s|-)?order|cancel\s+order)\b/i
 const TIER3_ONCHAIN_COMMAND_REGEX =
-  /\b(swap|bridge|stake|unstake|claim|limit(?:\s|-)?order|cancel\s+order|portfolio|rebalance|alert|price alert)\b/i
+  /\b(swap|bridge|brigde|stake|unstake|claim|limit(?:\s|-)?order|cancel\s+order|portfolio|rebalance|alert|price alert)\b/i
 const LIVE_DATA_PRIORITY_ACTIONS = new Set([
   "get_swap_quote",
   "get_bridge_quote",
@@ -201,17 +194,43 @@ const AI_TOKEN_DECIMALS: Record<string, number> = {
   WBTC: 8,
   BTC: 8,
 }
+const U256_MAX_WORD_HEX = "0xffffffffffffffffffffffffffffffff"
 const SUPPORTED_SWAP_TOKENS = new Set(["USDT", "USDC", "STRK", "WBTC", "CAREL"])
 const SUPPORTED_LIMIT_ORDER_TOKENS = new Set(["USDT", "USDC", "STRK", "CAREL"])
 const SUPPORTED_STAKE_TOKENS = new Set(["CAREL", "USDC", "USDT", "STRK", "WBTC"])
 const L3_GARAGA_BRIDGE_ENABLED =
   (process.env.NEXT_PUBLIC_L3_GARAGA_BRIDGE_ENABLED || "false").toLowerCase() === "true"
+const GARDEN_ORDER_EXPLORER_BASE_URL =
+  process.env.NEXT_PUBLIC_GARDEN_ORDER_EXPLORER_URL || "https://testnet-explorer.garden.finance/order"
 const AI_SETUP_SUBMIT_COOLDOWN_MS = 20_000
 const AI_SETUP_PENDING_POLL_ATTEMPTS = 10
 const AI_SETUP_PENDING_POLL_INTERVAL_MS = 1_200
+const AI_SETUP_PRE_WALLET_DELAY_MS = readMsEnv(process.env.NEXT_PUBLIC_AI_SETUP_PRE_WALLET_DELAY_MS, 350)
+const AI_SETUP_NONCE_RETRY_DELAY_MS = readMsEnv(
+  process.env.NEXT_PUBLIC_AI_SETUP_NONCE_RETRY_DELAY_MS,
+  1_500
+)
+const AI_EXECUTOR_PREFLIGHT_CACHE_MS = readMsEnv(
+  process.env.NEXT_PUBLIC_AI_EXECUTOR_PREFLIGHT_CACHE_MS,
+  90_000
+)
 const AI_REQUIRE_FRESH_SETUP_PER_EXECUTION =
   (process.env.NEXT_PUBLIC_AI_REQUIRE_FRESH_SETUP_PER_EXECUTION || "true").toLowerCase() !==
   "false"
+
+// Internal helper that supports ms env parsing for AI setup timing.
+function readMsEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback
+  return parsed
+}
+
+// Internal helper that supports controlled setup timing without hard-coded sleeps.
+async function waitMs(delayMs: number): Promise<void> {
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return
+  await new Promise((resolve) => setTimeout(resolve, delayMs))
+}
 
 /**
  * Parses or transforms values for `encodeShortByteArray`.
@@ -278,6 +297,14 @@ function requiresOnchainActionForCommand(tier: number, command: string): boolean
 function isInvalidUserSignatureError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? "")
   return /invalid user signature/i.test(message)
+}
+
+// Internal helper that supports `isStarknetEntrypointMissingError` operations.
+function isStarknetEntrypointMissingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "")
+  return /(requested entrypoint does not exist|entrypoint does not exist|entry point .* not found|entrypoint .* not found|entry_point_not_found)/i.test(
+    message
+  )
 }
 
 /**
@@ -394,6 +421,88 @@ function isSupportedBridgePair(fromChain: string, toChain: string, fromToken: st
     (fromChain === "ethereum" && toChain === "starknet" && from === "ETH" && to === "WBTC") ||
     (fromChain === "starknet" && toChain === "ethereum" && from === "WBTC" && to === "ETH")
   )
+}
+
+interface BridgeAddressContext {
+  address?: string | null
+  starknetAddress?: string | null
+  evmAddress?: string | null
+  btcAddress?: string | null
+}
+
+// Internal helper that parses or transforms values for `parseBridgeTokensFromCommand`.
+function parseBridgeTokensFromCommand(command: string): { fromToken: string; toToken: string } | null {
+  const normalized = normalizeMessageText(command).replace(/[,()]/g, " ")
+  const patterns = [
+    /\b(?:bridge|brigde|jembatan)\b\s+([a-z0-9]{2,12})\s+[0-9]+(?:\.[0-9]+)?\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i,
+    /\b(?:bridge|brigde|jembatan)\b\s+([a-z0-9]{2,12})\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i,
+  ]
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern)
+    if (!match) continue
+    const fromToken = (match[1] || "").trim().toUpperCase()
+    const toToken = (match[2] || "").trim().toUpperCase()
+    if (!fromToken || !toToken) continue
+    return { fromToken, toToken }
+  }
+  return null
+}
+
+// Internal helper that supports `missingSourceAddressMessage` operations.
+function missingSourceAddressMessage(chain: string): string {
+  if (chain === "bitcoin") {
+    return "BTC source address is missing. Connect UniSat/Xverse first."
+  }
+  if (chain === "ethereum") {
+    return "Ethereum source address is missing. Connect MetaMask first."
+  }
+  return "Starknet source address is missing. Connect ArgentX/Braavos first."
+}
+
+// Internal helper that supports `missingDestinationAddressMessage` operations.
+function missingDestinationAddressMessage(chain: string): string {
+  if (chain === "bitcoin") {
+    return "BTC destination address is missing. Connect UniSat/Xverse first."
+  }
+  if (chain === "ethereum") {
+    return "Ethereum destination address is missing. Connect MetaMask first."
+  }
+  return "Starknet destination address is missing. Connect ArgentX/Braavos first."
+}
+
+// Internal helper that supports `bridgeAddressRequirementError` operations.
+function bridgeAddressRequirementError(
+  fromToken: string,
+  toToken: string,
+  walletContext: BridgeAddressContext
+): string | null {
+  const fromChain = bridgeTargetChainForToken(fromToken)
+  const toChain = bridgeTargetChainForToken(toToken)
+  const sourceOwner =
+    fromChain === "bitcoin"
+      ? walletContext.btcAddress || ""
+      : fromChain === "ethereum"
+      ? walletContext.evmAddress || ""
+      : walletContext.starknetAddress || walletContext.address || ""
+  const recipient =
+    toChain === "bitcoin"
+      ? walletContext.btcAddress || ""
+      : toChain === "ethereum"
+      ? walletContext.evmAddress || ""
+      : walletContext.starknetAddress || walletContext.address || ""
+
+  if (!sourceOwner) return missingSourceAddressMessage(fromChain)
+  if (!recipient) return missingDestinationAddressMessage(toChain)
+  return null
+}
+
+// Internal helper that supports `normalizeGardenStarknetEntrypoint` operations.
+function normalizeGardenStarknetEntrypoint(rawSelectorOrEntrypoint: string): string {
+  const normalized = (rawSelectorOrEntrypoint || "").trim().toLowerCase()
+  if (!normalized) return rawSelectorOrEntrypoint
+  if (normalized === GARDEN_STARKNET_APPROVE_SELECTOR) return "approve"
+  if (normalized === GARDEN_STARKNET_INITIATE_SELECTOR) return "initiate"
+  return rawSelectorOrEntrypoint
 }
 
 // Internal helper that parses or transforms values for `buildHideBalancePrivacyCall`.
@@ -566,6 +675,13 @@ interface PendingExecutionConfirmation {
   createdAt: number
 }
 
+interface ExecutorPreflightCache {
+  ready: boolean
+  burnerRoleGranted: boolean
+  message: string
+  expiresAt: number
+}
+
 type AIData = Record<string, unknown> | null | undefined
 
 // Internal helper that supports `readString` operations.
@@ -597,6 +713,62 @@ function parseNumberish(value: unknown): number {
   return 0
 }
 
+// Internal helper that supports `normalizeHexNumberish` operations.
+function normalizeHexNumberish(value: string): string {
+  const raw = (value || "").trim()
+  if (!raw) return "0x0"
+  if (raw.startsWith("0x") || raw.startsWith("0X")) {
+    const compact = raw.slice(2).replace(/^0+/, "")
+    return `0x${(compact || "0").toLowerCase()}`
+  }
+  if (/^\d+$/.test(raw)) {
+    return `0x${BigInt(raw).toString(16)}`
+  }
+  return raw.toLowerCase()
+}
+
+// Internal helper that supports `limitBridgeApprovalToExactAmount` operations.
+function limitBridgeApprovalToExactAmount(
+  calldata: string[],
+  amountText: string,
+  tokenSymbol: string
+): { calldata: string[]; limited: boolean } {
+  if (!Array.isArray(calldata) || calldata.length < 3) {
+    return { calldata, limited: false }
+  }
+  const low = normalizeHexNumberish(calldata[1] || "")
+  const high = normalizeHexNumberish(calldata[2] || "")
+  if (low !== U256_MAX_WORD_HEX || high !== U256_MAX_WORD_HEX) {
+    return { calldata, limited: false }
+  }
+
+  const decimals = AI_TOKEN_DECIMALS[tokenSymbol.toUpperCase()] ?? 18
+  let exactLow = "0x0"
+  let exactHigh = "0x0"
+  try {
+    ;[exactLow, exactHigh] = decimalToU256Parts(amountText, decimals)
+  } catch {
+    return { calldata, limited: false }
+  }
+
+  const exactLowNorm = normalizeHexNumberish(exactLow)
+  const exactHighNorm = normalizeHexNumberish(exactHigh)
+  if (exactLowNorm === "0x0" && exactHighNorm === "0x0") {
+    return { calldata, limited: false }
+  }
+
+  const next = [...calldata]
+  next[1] = exactLow
+  next[2] = exactHigh
+  return { calldata: next, limited: true }
+}
+
+// Internal helper that supports `formatBtcFromSats` operations.
+function formatBtcFromSats(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0.00000000 BTC"
+  return `${(value / 100_000_000).toFixed(8)} BTC`
+}
+
 // Internal helper that supports `bridgeTargetChainForToken` operations.
 function bridgeTargetChainForToken(token: string): string {
   const normalized = token.toUpperCase()
@@ -604,6 +776,15 @@ function bridgeTargetChainForToken(token: string): string {
   if (normalized === "WBTC") return "starknet"
   if (normalized === "ETH" || normalized === "WETH") return "ethereum"
   return "starknet"
+}
+
+// Internal helper that supports `buildGardenOrderExplorerUrl` operations.
+function buildGardenOrderExplorerUrl(orderId: string): string {
+  const normalizedOrderId = orderId.trim()
+  if (!normalizedOrderId) return ""
+  const base = GARDEN_ORDER_EXPLORER_BASE_URL.trim().replace(/\/$/, "")
+  if (!base) return ""
+  return `${base}/${encodeURIComponent(normalizedOrderId)}`
 }
 
 // Internal helper that supports `nowTimestampLabel` operations.
@@ -619,6 +800,73 @@ function normalizeMessageText(value: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim()
+}
+
+// Internal helper that supports compact address display in notifications.
+function shortAddress(value: string, head = 6, tail = 4): string {
+  const normalized = (value || "").trim()
+  if (!normalized) return "-"
+  if (normalized.length <= head + tail + 3) return normalized
+  return `${normalized.slice(0, head)}...${normalized.slice(-tail)}`
+}
+
+const TRAILING_URL_PUNCTUATION = new Set([".", ",", "!", "?", ";", ":", ")", "]", "}"])
+
+// Internal helper that supports `splitUrlWithTrailingPunctuation` operations.
+function splitUrlWithTrailingPunctuation(rawUrl: string): { url: string; trailing: string } {
+  if (!rawUrl) return { url: "", trailing: "" }
+  let end = rawUrl.length
+  while (end > 0 && TRAILING_URL_PUNCTUATION.has(rawUrl[end - 1])) {
+    end -= 1
+  }
+  return {
+    url: rawUrl.slice(0, end),
+    trailing: rawUrl.slice(end),
+  }
+}
+
+// Internal helper that supports `renderMessageContentWithLinks` operations.
+function renderMessageContentWithLinks(content: string): React.ReactNode {
+  const urlPattern = /https?:\/\/[^\s<>()]+/g
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  let match: RegExpExecArray | null
+
+  while ((match = urlPattern.exec(content)) !== null) {
+    const start = match.index
+    const rawMatch = match[0] || ""
+    const { url, trailing } = splitUrlWithTrailingPunctuation(rawMatch)
+    if (start > cursor) {
+      nodes.push(
+        <React.Fragment key={`text-${cursor}`}>{content.slice(cursor, start)}</React.Fragment>
+      )
+    }
+    if (url) {
+      nodes.push(
+        <a
+          key={`url-${start}-${url}`}
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="break-all text-[#67e8f9] underline underline-offset-2 hover:text-[#a5f3fc]"
+        >
+          {url}
+        </a>
+      )
+    } else {
+      nodes.push(<React.Fragment key={`url-raw-${start}`}>{rawMatch}</React.Fragment>)
+    }
+    if (trailing) {
+      nodes.push(<React.Fragment key={`trail-${start}`}>{trailing}</React.Fragment>)
+    }
+    cursor = start + rawMatch.length
+  }
+
+  if (cursor < content.length) {
+    nodes.push(<React.Fragment key={`text-${cursor}`}>{content.slice(cursor)}</React.Fragment>)
+  }
+
+  return nodes.length > 0 ? nodes : content
 }
 
 // Internal helper that supports `isAffirmativeConfirmation` operations.
@@ -685,6 +933,12 @@ export function FloatingAIAssistant() {
   const [isResolvingExecutor, setIsResolvingExecutor] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
   const setupSubmitCooldownUntilRef = React.useRef(0)
+  const executorPreflightCacheRef = React.useRef<ExecutorPreflightCache>({
+    ready: false,
+    burnerRoleGranted: false,
+    message: "",
+    expiresAt: 0,
+  })
   const parsedActionId = Number(actionId)
   const hasValidActionId = Number.isFinite(parsedActionId) && parsedActionId > 0
   const commandNeedsAction = requiresOnchainActionForCommand(selectedTier, input)
@@ -1167,7 +1421,7 @@ export function FloatingAIAssistant() {
       confirmedPendingExecution = true
     }
 
-    const isBridgeCommand = /\b(bridge|jembatan)\b/i.test(command)
+    const isBridgeCommand = BRIDGE_COMMAND_REGEX.test(command)
     if (activeTier >= 3 && isBridgeCommand && !L3_GARAGA_BRIDGE_ENABLED) {
       if (!hasPendingConfirmation) {
         appendMessagesForTier(activeTier, [
@@ -1236,6 +1490,37 @@ export function FloatingAIAssistant() {
           timestamp: nowTimestampLabel(),
         },
       ])
+    }
+
+    if (confirmedPendingExecution && isBridgeCommand) {
+      const parsedBridge = parseBridgeTokensFromCommand(command)
+      if (parsedBridge) {
+        const bridgeAddressError = bridgeAddressRequirementError(
+          parsedBridge.fromToken,
+          parsedBridge.toToken,
+          {
+            address: wallet.address,
+            starknetAddress: wallet.starknetAddress,
+            evmAddress: wallet.evmAddress,
+            btcAddress: wallet.btcAddress,
+          }
+        )
+        if (bridgeAddressError) {
+          notifications.addNotification({
+            type: "error",
+            title: "Bridge wallet missing",
+            message: bridgeAddressError,
+          })
+          appendMessagesForTier(activeTier, [
+            {
+              role: "assistant",
+              content: `${bridgeAddressError} Connect the required wallet, then retry the same command.`,
+              timestamp: nowTimestampLabel(),
+            },
+          ])
+          return
+        }
+      }
     }
 
     if (commandNeedsOnchainAction) {
@@ -1542,7 +1827,7 @@ export function FloatingAIAssistant() {
         !directExecutionMessage &&
         activeTier >= 2 &&
         !(tierUsesGaraga && !L3_GARAGA_BRIDGE_ENABLED) &&
-        /\b(bridge|jembatan)\b/i.test(command) &&
+        BRIDGE_COMMAND_REGEX.test(command) &&
         (response.actions || []).includes("get_bridge_quote")
       if (canAutoExecuteBridge) {
         const fromToken = readString(response.data, "from_token").toUpperCase()
@@ -1569,9 +1854,10 @@ export function FloatingAIAssistant() {
                 ? wallet.evmAddress || ""
                 : wallet.starknetAddress || wallet.address || ""
             if (!recipient || !sourceOwner) {
-              throw new Error(
-                `Missing wallet address. Source(${fromChain}) and destination(${toChain}) addresses are required.`
-              )
+              if (!sourceOwner) {
+                throw new Error(missingSourceAddressMessage(fromChain))
+              }
+              throw new Error(missingDestinationAddressMessage(toChain))
             }
             const bridgeBasePayload = {
               from_chain: fromChain,
@@ -1587,25 +1873,37 @@ export function FloatingAIAssistant() {
 
             let bridgeResult = await executeBridge(bridgeBasePayload)
             if (bridgeResult.starknet_approval_transaction || bridgeResult.starknet_initiate_transaction) {
-              const bridgeCalls: Array<{ contractAddress: string; entrypoint: string; calldata: string[] }> = []
+              let approvalWasLimited = false
+              let approvalCall: { contractAddress: string; entrypoint: string; calldata: string[] } | null =
+                null
+              let initiateCall: { contractAddress: string; entrypoint: string; calldata: string[] } | null =
+                null
               if (bridgeResult.starknet_approval_transaction) {
-                bridgeCalls.push({
-                  contractAddress: bridgeResult.starknet_approval_transaction.to,
-                  entrypoint: bridgeResult.starknet_approval_transaction.selector,
-                  calldata: bridgeResult.starknet_approval_transaction.calldata || [],
-                })
+                const approvalTx = bridgeResult.starknet_approval_transaction
+                const safeApproval = limitBridgeApprovalToExactAmount(
+                  approvalTx.calldata || [],
+                  amountText,
+                  fromToken
+                )
+                approvalWasLimited = safeApproval.limited
+                approvalCall = {
+                  contractAddress: approvalTx.to,
+                  entrypoint: normalizeGardenStarknetEntrypoint(approvalTx.selector),
+                  calldata: safeApproval.calldata,
+                }
               }
               if (bridgeResult.starknet_initiate_transaction) {
-                bridgeCalls.push({
+                initiateCall = {
                   contractAddress: bridgeResult.starknet_initiate_transaction.to,
-                  entrypoint: bridgeResult.starknet_initiate_transaction.selector,
+                  entrypoint: normalizeGardenStarknetEntrypoint(
+                    bridgeResult.starknet_initiate_transaction.selector
+                  ),
                   calldata: bridgeResult.starknet_initiate_transaction.calldata || [],
-                })
+                }
               }
-              if (!bridgeCalls.length) {
+              if (!approvalCall && !initiateCall) {
                 throw new Error("Bridge source transactions are missing.")
               }
-              const callsToSign = [...bridgeCalls]
               let bridgePrivacyPayload: PrivacyVerificationPayload | undefined
               if (tierUsesGaraga) {
                 bridgePrivacyPayload = await requestGaragaPayload(
@@ -1614,27 +1912,185 @@ export function FloatingAIAssistant() {
                   toToken,
                   amountText
                 )
-                callsToSign.unshift(buildHideBalancePrivacyCall(bridgePrivacyPayload))
               }
-              notifications.addNotification({
-                type: "info",
-                title: "Wallet signature required",
-                message: tierUsesGaraga
-                  ? `Confirm Garaga private bridge ${amountText} ${fromToken} -> ${toToken}.`
-                  : `Confirm bridge ${amountText} ${fromToken} -> ${toToken}.`,
-              })
-              const onchainTxHash = await invokeStarknetCallsFromWallet(callsToSign, providerHint)
-              bridgeResult = await executeBridge({
-                ...bridgeBasePayload,
-                existing_bridge_id: bridgeResult.bridge_id,
-                onchain_tx_hash: onchainTxHash,
-                privacy: tierUsesGaraga ? bridgePrivacyPayload : undefined,
-              })
+              if (approvalWasLimited) {
+                notifications.addNotification({
+                  type: "info",
+                  title: "Approval safety enabled",
+                  message: `Approval limited to exact ${amountText} ${fromToken} (not unlimited).`,
+                })
+              }
+              const submitBridgeWithOnchainHash = async (txHash: string) => {
+                return executeBridge({
+                  ...bridgeBasePayload,
+                  existing_bridge_id: bridgeResult.bridge_id,
+                  onchain_tx_hash: txHash,
+                  privacy: tierUsesGaraga ? bridgePrivacyPayload : undefined,
+                })
+              }
+              let onchainTxHash = ""
+              if (tierUsesGaraga) {
+                const callsToSign: Array<{ contractAddress: string; entrypoint: string; calldata: string[] }> = []
+                callsToSign.push(buildHideBalancePrivacyCall(bridgePrivacyPayload!))
+                if (approvalCall) callsToSign.push(approvalCall)
+                if (initiateCall) callsToSign.push(initiateCall)
+                notifications.addNotification({
+                  type: "info",
+                  title: "Wallet signature required",
+                  message: `Confirm Garaga private bridge ${amountText} ${fromToken} -> ${toToken}.`,
+                })
+                onchainTxHash = await invokeStarknetCallsFromWallet(callsToSign, providerHint)
+              } else {
+                if (approvalCall) {
+                  const approvalSpender = String(approvalCall.calldata?.[0] || "").trim()
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Wallet warning may appear",
+                    message:
+                      `Some wallets flag any approve call as high risk. This approval is limited to exact ${amountText} ${fromToken} ` +
+                      `(spender ${shortAddress(approvalSpender)}).`,
+                  })
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Wallet signature required",
+                    message: `Confirm bridge approval for ${amountText} ${fromToken}.`,
+                  })
+                  await invokeStarknetCallsFromWallet([approvalCall], providerHint)
+                }
+                if (initiateCall) {
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Wallet signature required",
+                    message: `Confirm bridge initiate ${amountText} ${fromToken} -> ${toToken}.`,
+                  })
+                  onchainTxHash = await invokeStarknetCallsFromWallet([initiateCall], providerHint)
+                } else if (approvalCall) {
+                  // Fallback when only approval transaction exists from provider.
+                  onchainTxHash = await invokeStarknetCallsFromWallet([approvalCall], providerHint)
+                }
+              }
+              try {
+                bridgeResult = await submitBridgeWithOnchainHash(onchainTxHash)
+              } catch (finalizeError) {
+                if (!tierUsesGaraga && approvalCall && initiateCall && isStarknetEntrypointMissingError(finalizeError)) {
+                  notifications.addNotification({
+                    type: "warning",
+                    title: "Retrying bridge submit",
+                    message:
+                      "Bridge multicall hit ENTRYPOINT_NOT_FOUND. Retrying with split signatures (approve then initiate).",
+                  })
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Wallet signature required",
+                    message: `Confirm bridge approval for ${amountText} ${fromToken}.`,
+                  })
+                  await invokeStarknetCallsFromWallet([approvalCall], providerHint)
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Wallet signature required",
+                    message: `Confirm bridge initiate ${amountText} ${fromToken} -> ${toToken}.`,
+                  })
+                  const retryOnchainTxHash = await invokeStarknetCallsFromWallet(
+                    [initiateCall],
+                    providerHint
+                  )
+                  bridgeResult = await submitBridgeWithOnchainHash(retryOnchainTxHash)
+                } else {
+                  throw finalizeError
+                }
+              }
+            }
+            const bridgeExplorerUrl = buildGardenOrderExplorerUrl(bridgeResult.bridge_id)
+            const bridgeExplorerLinks = bridgeExplorerUrl
+              ? [{ label: "Open Garden Explorer", url: bridgeExplorerUrl }]
+              : undefined
+            const shortBridgeId = bridgeResult.bridge_id.slice(0, 10)
+            let btcDepositStateMessage = ""
+            if (fromChain === "bitcoin" && bridgeResult.deposit_address) {
+              const parsedAmountSats = Number.parseInt(String(bridgeResult.deposit_amount || "0"), 10)
+              const amountSats =
+                Number.isFinite(parsedAmountSats) && parsedAmountSats > 0 ? parsedAmountSats : 0
+              const btcAmountDisplay =
+                amountSats > 0 ? formatBtcFromSats(amountSats) : "required BTC amount"
+
+              if (wallet.btcAddress && amountSats > 0) {
+                try {
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Wallet signature required",
+                    message: "Approve BTC transfer in UniSat/Xverse popup.",
+                  })
+                  const btcDepositTxHash = await wallet.sendBtcTransaction(
+                    bridgeResult.deposit_address,
+                    amountSats
+                  )
+                  notifications.addNotification({
+                    type: "success",
+                    title: "BTC deposit submitted",
+                    message: `Deposit tx ${btcDepositTxHash.slice(0, 12)}... sent to Garden address.`,
+                    txHash: btcDepositTxHash,
+                    txNetwork: "btc",
+                    txExplorerUrls: bridgeExplorerLinks,
+                  })
+                  await wallet.refreshOnchainBalances()
+                  btcDepositStateMessage =
+                    `\nBTC deposit submitted (${btcAmountDisplay}): ${btcDepositTxHash.slice(0, 12)}...`
+                } catch (depositError) {
+                  const detail =
+                    depositError instanceof Error
+                      ? depositError.message
+                      : "Popup wallet canceled/failed."
+                  notifications.addNotification({
+                    type: "warning",
+                    title: "BTC auto-send skipped",
+                    message: `${detail} Send ${btcAmountDisplay} manually to ${bridgeResult.deposit_address}.`,
+                  })
+                  btcDepositStateMessage =
+                    `\nBTC deposit not sent automatically. Send ${btcAmountDisplay} manually to ${bridgeResult.deposit_address}.`
+                }
+              } else if (!wallet.btcAddress) {
+                notifications.addNotification({
+                  type: "warning",
+                  title: "BTC wallet not connected",
+                  message: "Connect UniSat/Xverse first to send BTC deposit on-chain.",
+                })
+                btcDepositStateMessage =
+                  `\nBTC wallet not connected. Send ${btcAmountDisplay} manually to ${bridgeResult.deposit_address}.`
+              } else {
+                btcDepositStateMessage =
+                  `\nSend ${btcAmountDisplay} manually to ${bridgeResult.deposit_address}.`
+              }
             }
             if (bridgeResult.deposit_address) {
-              directExecutionMessage = `✅ Bridge order created: ${bridgeResult.bridge_id}. Send deposit to ${bridgeResult.deposit_address} to continue settlement.\nIf you have an active discount NFT, fee discount is applied automatically.`
+              notifications.addNotification({
+                type: "success",
+                title: "Bridge order created",
+                message: `Order ${shortBridgeId}... created for ${amountText} ${fromToken} -> ${toToken}.`,
+                txExplorerUrls: bridgeExplorerLinks,
+              })
+              const explorerHint = bridgeExplorerUrl
+                ? `\nTrack order: ${bridgeExplorerUrl}\nIf search is delayed, open the direct order link above.`
+                : ""
+              directExecutionMessage =
+                `✅ Bridge order created: ${bridgeResult.bridge_id}. ` +
+                `Send deposit to ${bridgeResult.deposit_address} to continue settlement.` +
+                `${btcDepositStateMessage}${explorerHint}\n` +
+                "If you have an active discount NFT, fee discount is applied automatically."
             } else {
-              directExecutionMessage = `✅ Bridge submitted: ${amountText} ${fromToken} -> ${toToken}. Order: ${bridgeResult.bridge_id}.\nIf you have an active discount NFT, fee discount is applied automatically.`
+              notifications.addNotification({
+                type: "success",
+                title: "Bridge submitted",
+                message: `Bridge ${amountText} ${fromToken} -> ${toToken}. Order ${shortBridgeId}...`,
+                txExplorerUrls: bridgeExplorerLinks,
+              })
+              const explorerHint = bridgeExplorerUrl
+                ? `\nTrack order: ${bridgeExplorerUrl}`
+                : ""
+              directExecutionMessage =
+                `✅ Bridge submitted: ${amountText} ${fromToken} -> ${toToken}. ` +
+                `Order: ${bridgeResult.bridge_id}.` +
+                `${explorerHint}\n` +
+                "If you have an active discount NFT, fee discount is applied automatically."
             }
           }
         }
@@ -2048,7 +2504,30 @@ export function FloatingAIAssistant() {
         return null
       }
 
-      const preflight = await ensureAiExecutorReady()
+      const cachedPreflight = executorPreflightCacheRef.current
+      const nowMs = Date.now()
+      const useCachedPreflight = cachedPreflight.expiresAt > nowMs
+      const preflight = useCachedPreflight
+        ? {
+            ready: cachedPreflight.ready,
+            burner_role_granted: cachedPreflight.burnerRoleGranted,
+            updated_onchain: false,
+            tx_hash: null,
+            message: cachedPreflight.message,
+          }
+        : await ensureAiExecutorReady()
+      if (!useCachedPreflight) {
+        const preflightTtlMs =
+          preflight.ready && preflight.burner_role_granted
+            ? AI_EXECUTOR_PREFLIGHT_CACHE_MS
+            : Math.min(5_000, AI_EXECUTOR_PREFLIGHT_CACHE_MS)
+        executorPreflightCacheRef.current = {
+          ready: preflight.ready,
+          burnerRoleGranted: preflight.burner_role_granted,
+          message: preflight.message || "",
+          expiresAt: Date.now() + preflightTtlMs,
+        }
+      }
       if (preflight.tx_hash) {
         notifications.addNotification({
           type: preflight.ready ? "success" : "info",
@@ -2084,7 +2563,7 @@ export function FloatingAIAssistant() {
         txNetwork: "starknet",
       })
 
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      await waitMs(AI_SETUP_PRE_WALLET_DELAY_MS)
 
       /**
        * Runs `submitOnchainAction` and handles related side effects.
@@ -2146,7 +2625,7 @@ export function FloatingAIAssistant() {
             txHash: retryPrepared.tx_hash,
             txNetwork: "starknet",
           })
-          await new Promise((resolve) => setTimeout(resolve, 2000))
+          await waitMs(AI_SETUP_PRE_WALLET_DELAY_MS)
           onchainTxHash = await submitOnchainAction()
         } else if (isWalletNonceError(firstError)) {
           notifications.addNotification({
@@ -2155,7 +2634,7 @@ export function FloatingAIAssistant() {
             message:
               "Previous wallet nonce is still pending. Waiting briefly, then retrying setup once.",
           })
-          await new Promise((resolve) => setTimeout(resolve, 3000))
+          await waitMs(AI_SETUP_NONCE_RETRY_DELAY_MS)
           onchainTxHash = await submitOnchainAction()
         } else {
           throw firstError
@@ -2173,7 +2652,7 @@ export function FloatingAIAssistant() {
 
       let latestPending: number[] = pendingBefore
       for (let attempt = 0; attempt < AI_SETUP_PENDING_POLL_ATTEMPTS; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, AI_SETUP_PENDING_POLL_INTERVAL_MS))
+        await waitMs(AI_SETUP_PENDING_POLL_INTERVAL_MS)
         try {
           const after = requireFresh
             ? await getAiPendingActions(pendingBeforeMax, 50)
@@ -2621,7 +3100,7 @@ export function FloatingAIAssistant() {
                               : "border-l-2 border-l-[#7c3aed] border-r border-y border-[#243247] bg-[#0d1b2e] text-[#e2e8f0]"
                           )}
                         >
-                          {message.content}
+                          {renderMessageContentWithLinks(message.content)}
                         </div>
                         <p
                           className={cn(

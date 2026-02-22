@@ -179,6 +179,10 @@ const STARKGATE_ETH_BRIDGE_ADDRESS =
 const STARKGATE_ETH_TOKEN_ADDRESS =
   process.env.NEXT_PUBLIC_STARKGATE_ETH_TOKEN_ADDRESS ||
   "0x0000000000000000000000000000000000455448"
+const GARDEN_STARKNET_APPROVE_SELECTOR =
+  "0x219209e083275171774dab1df80982e9df2096516f06319c5c6d71ae0a8480c"
+const GARDEN_STARKNET_INITIATE_SELECTOR =
+  "0x2aed25fcd0101fcece997d93f9d0643dfa3fbd4118cae16bf7d6cd533577c28"
 const BTC_TESTNET_EXPLORER_BASE_URL =
   process.env.NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL || "https://mempool.space/testnet4"
 const GARDEN_ORDER_EXPLORER_BASE_URL =
@@ -465,6 +469,68 @@ const resolveTokenAddress = (symbol: string): string => {
 const resolveTokenDecimals = (symbol: string): number => {
   const key = symbol.toUpperCase()
   return TOKEN_DECIMALS[key] ?? 18
+}
+
+const normalizeHexNumberish = (value: string): string => {
+  const raw = (value || "").trim()
+  if (!raw) return "0x0"
+  if (raw.startsWith("0x") || raw.startsWith("0X")) {
+    const compact = raw.slice(2).replace(/^0+/, "")
+    return `0x${(compact || "0").toLowerCase()}`
+  }
+  if (/^\d+$/.test(raw)) {
+    return `0x${BigInt(raw).toString(16)}`
+  }
+  return raw.toLowerCase()
+}
+
+const limitBridgeApprovalToExactAmount = (
+  calldata: string[],
+  amountText: string,
+  tokenSymbol: string
+): { calldata: string[]; limited: boolean } => {
+  if (!Array.isArray(calldata) || calldata.length < 3) {
+    return { calldata, limited: false }
+  }
+  const low = normalizeHexNumberish(calldata[1] || "")
+  const high = normalizeHexNumberish(calldata[2] || "")
+  if (low !== U256_MAX_LOW_HEX || high !== U256_MAX_HIGH_HEX) {
+    return { calldata, limited: false }
+  }
+
+  let exactLow = "0x0"
+  let exactHigh = "0x0"
+  try {
+    ;[exactLow, exactHigh] = decimalToU256Parts(amountText, resolveTokenDecimals(tokenSymbol))
+  } catch {
+    return { calldata, limited: false }
+  }
+
+  const exactLowNorm = normalizeHexNumberish(exactLow)
+  const exactHighNorm = normalizeHexNumberish(exactHigh)
+  if (exactLowNorm === "0x0" && exactHighNorm === "0x0") {
+    return { calldata, limited: false }
+  }
+
+  const next = [...calldata]
+  next[1] = exactLow
+  next[2] = exactHigh
+  return { calldata: next, limited: true }
+}
+
+const isStarknetEntrypointMissingError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error ?? "")
+  return /(requested entrypoint does not exist|entrypoint does not exist|entry point .* not found|entrypoint .* not found|entry_point_not_found)/i.test(
+    message
+  )
+}
+
+const normalizeGardenStarknetEntrypoint = (rawSelectorOrEntrypoint: string): string => {
+  const normalized = (rawSelectorOrEntrypoint || "").trim().toLowerCase()
+  if (!normalized) return rawSelectorOrEntrypoint
+  if (normalized === GARDEN_STARKNET_APPROVE_SELECTOR) return "approve"
+  if (normalized === GARDEN_STARKNET_INITIATE_SELECTOR) return "initiate"
+  return rawSelectorOrEntrypoint
 }
 
 /**
@@ -781,6 +847,14 @@ const buildGardenOrderExplorerLinks = (
   const url = buildGardenOrderExplorerUrl(orderId)
   if (!url) return undefined
   return [{ label: "Open Garden Explorer", url }]
+}
+
+// Internal helper that supports compact address display in notifications.
+function shortAddress(value: string, head = 6, tail = 4): string {
+  const normalized = (value || "").trim()
+  if (!normalized) return "-"
+  if (normalized.length <= head + tail + 3) return normalized
+  return `${normalized.slice(0, head)}...${normalized.slice(-tail)}`
 }
 
 interface TokenSelectorProps {
@@ -2912,6 +2986,11 @@ export function TradingInterface() {
         let btcDepositTxHash: string | null = null
         let btcAutoSendAttempted = false
         let btcAutoSendSucceeded = false
+        let gardenStarknetCalls: Array<{
+          contractAddress: string
+          entrypoint: string
+          calldata: string[]
+        }> | null = null
         let response: Awaited<ReturnType<typeof executeBridge>>
 
         if (isSourceBitcoin) {
@@ -2966,24 +3045,67 @@ export function TradingInterface() {
               entrypoint: string
               calldata: string[]
             }> = []
+            let approvalWasLimited = false
             if (createOrderResponse.starknet_approval_transaction) {
+              const approvalTx = createOrderResponse.starknet_approval_transaction
+              const safeApproval = limitBridgeApprovalToExactAmount(
+                approvalTx.calldata || [],
+                fromAmount,
+                fromToken.symbol
+              )
+              approvalWasLimited = safeApproval.limited
               starknetCalls.push({
-                contractAddress: createOrderResponse.starknet_approval_transaction.to,
-                entrypoint: createOrderResponse.starknet_approval_transaction.selector,
-                calldata: createOrderResponse.starknet_approval_transaction.calldata || [],
+                contractAddress: approvalTx.to,
+                entrypoint: normalizeGardenStarknetEntrypoint(approvalTx.selector),
+                calldata: safeApproval.calldata,
               })
             }
             if (createOrderResponse.starknet_initiate_transaction) {
               starknetCalls.push({
                 contractAddress: createOrderResponse.starknet_initiate_transaction.to,
-                entrypoint: createOrderResponse.starknet_initiate_transaction.selector,
+                entrypoint: normalizeGardenStarknetEntrypoint(
+                  createOrderResponse.starknet_initiate_transaction.selector
+                ),
                 calldata: createOrderResponse.starknet_initiate_transaction.calldata || [],
               })
             }
             if (!starknetCalls.length) {
               throw new Error("Garden initiate transaction is missing for Starknet source flow.")
             }
-            onchainTxHash = await invokeStarknetCallsFromWallet(starknetCalls, starknetProviderHint)
+            if (approvalWasLimited) {
+              notifications.addNotification({
+                type: "info",
+                title: "Approval safety enabled",
+                message: `Approval limited to exact ${fromAmount} ${fromToken.symbol} (not unlimited).`,
+              })
+            }
+            gardenStarknetCalls = starknetCalls
+            if (starknetCalls.length > 1) {
+              const approvalCall = starknetCalls[0]
+              const initiateCall = starknetCalls[starknetCalls.length - 1]
+              const approvalSpender = String(approvalCall?.calldata?.[0] || "").trim()
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet warning may appear",
+                message:
+                  `Some wallets flag any approve call as high risk. This approval is limited to exact ${fromAmount} ${fromToken.symbol} ` +
+                  `(spender ${shortAddress(approvalSpender)}).`,
+              })
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm bridge approval for ${fromAmount} ${fromToken.symbol}.`,
+              })
+              await invokeStarknetCallsFromWallet([approvalCall], starknetProviderHint)
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm bridge initiate ${fromAmount} ${fromToken.symbol} -> ${toToken.symbol}.`,
+              })
+              onchainTxHash = await invokeStarknetCallsFromWallet([initiateCall], starknetProviderHint)
+            } else {
+              onchainTxHash = await invokeStarknetCallsFromWallet(starknetCalls, starknetProviderHint)
+            }
           }
 
           notifications.addNotification({
@@ -2993,12 +3115,61 @@ export function TradingInterface() {
             txHash: onchainTxHash,
             txNetwork,
           })
+          if (!onchainTxHash) {
+            throw new Error("Bridge on-chain tx hash is missing after wallet signature.")
+          }
 
-          response = await executeBridge({
-            ...bridgePayloadBase,
-            existing_bridge_id: orderId,
-            onchain_tx_hash: onchainTxHash || undefined,
-          })
+          const submitGardenFinalize = async (txHash: string) => {
+            return executeBridge({
+              ...bridgePayloadBase,
+              existing_bridge_id: orderId,
+              onchain_tx_hash: txHash,
+            })
+          }
+          try {
+            response = await submitGardenFinalize(onchainTxHash)
+          } catch (finalizeError) {
+            if (
+              sourceChain === "starknet" &&
+              gardenStarknetCalls &&
+              gardenStarknetCalls.length >= 2 &&
+              isStarknetEntrypointMissingError(finalizeError)
+            ) {
+              notifications.addNotification({
+                type: "warning",
+                title: "Retrying bridge submit",
+                message:
+                  "Bridge multicall hit ENTRYPOINT_NOT_FOUND. Retrying with split signatures (approve then initiate).",
+              })
+              const approvalCall = gardenStarknetCalls[0]
+              const initiateCall = gardenStarknetCalls[gardenStarknetCalls.length - 1]
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm bridge approval for ${fromAmount} ${fromToken.symbol}.`,
+              })
+              await invokeStarknetCallsFromWallet([approvalCall], starknetProviderHint)
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm bridge initiate ${fromAmount} ${fromToken.symbol} -> ${toToken.symbol}.`,
+              })
+              const retryOnchainTxHash = await invokeStarknetCallsFromWallet(
+                [initiateCall],
+                starknetProviderHint
+              )
+              notifications.addNotification({
+                type: "info",
+                title: "Bridge pending",
+                message: `Bridge ${fromAmount} ${fromToken.symbol} retry submitted (${retryOnchainTxHash.slice(0, 10)}...).`,
+                txHash: retryOnchainTxHash,
+                txNetwork,
+              })
+              response = await submitGardenFinalize(retryOnchainTxHash)
+            } else {
+              throw finalizeError
+            }
+          }
         } else {
           notifications.addNotification({
             type: "info",

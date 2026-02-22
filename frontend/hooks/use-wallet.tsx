@@ -116,6 +116,7 @@ const STORAGE_KEYS = {
 
 const XVERSE_PROVIDER_ID = "XverseProviders.BitcoinProvider"
 const XVERSE_CONNECT_MESSAGE = "Carel Protocol wants to connect your Bitcoin testnet wallet."
+const UNISAT_NETWORK_VALIDATION_CACHE_MS = 45_000
 
 /**
  * Handles `normalizeReferralCode` in the wallet client flow.
@@ -218,6 +219,7 @@ function clearWalletStorage() {
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<WalletState>(() => createInitialWalletState())
   const onchainRefreshInFlightRef = useRef(false)
+  const unisatNetworkValidatedUntilRef = useRef(0)
 
   const resetWalletSession = useCallback(() => {
     clearWalletStorage()
@@ -686,7 +688,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw new Error("Wallet signature was not produced.")
     }
 
-    if (wallet.isConnected && wallet.token && wallet.address) {
+    const normalizeSessionAddress = (value?: string | null) => (value || "").trim().toLowerCase()
+    const previousSameChainAddress =
+      network === "starknet"
+        ? wallet.starknetAddress || (wallet.network === "starknet" ? wallet.address : null)
+        : wallet.evmAddress || (wallet.network === "evm" ? wallet.address : null)
+    const switchingSameChainIdentity =
+      !!previousSameChainAddress &&
+      normalizeSessionAddress(previousSameChainAddress) !== normalizeSessionAddress(address)
+
+    if (wallet.isConnected && wallet.token && wallet.address && !switchingSameChainIdentity) {
       const chain = network === "evm" ? "evm" : "starknet"
       try {
         await linkWalletAddress({
@@ -1111,7 +1122,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         throw new Error("BTC wallet extension not detected. Install UniSat or Xverse.")
       }
       if (activeProvider === "unisat") {
-        await ensureUniSatTestnet4(injected)
+        const now = Date.now()
+        if (now > unisatNetworkValidatedUntilRef.current) {
+          await ensureUniSatTestnet4(injected)
+          unisatNetworkValidatedUntilRef.current = now + UNISAT_NETWORK_VALIDATION_CACHE_MS
+        }
       }
       try {
         const txHash = await sendBtcTransferWithInjectedWallet(injected, destination, roundedSats)
@@ -1141,6 +1156,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         }
         return txHash
       } catch (error) {
+        if (activeProvider === "unisat") {
+          unisatNetworkValidatedUntilRef.current = 0
+        }
         if (xverseError) {
           throw normalizeWalletError(xverseError, "Failed to send BTC from Xverse wallet.")
         }

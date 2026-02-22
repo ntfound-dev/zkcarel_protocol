@@ -24,6 +24,26 @@ export class ApiError extends Error {
   }
 }
 
+// Internal helper that supports `normalizeKnownErrorMessage` operations.
+function normalizeKnownErrorMessage(message: string) {
+  const raw = (message || "").trim()
+  if (!raw) return raw
+
+  if (
+    /(entrypoint_not_found|entrypoint not found|requested entrypoint does not exist|entrypoint does not exist)/i.test(
+      raw
+    )
+  ) {
+    return "Kontrak on-chain tidak cocok (entrypoint tidak ditemukan). Restart backend/frontend dan pastikan BATTLESHIP_GARAGA_ADDRESS mengarah ke kontrak Battleship terbaru."
+  }
+
+  if (/onchain_tx_hash sender mismatch/i.test(raw)) {
+    return "Wallet yang sign tx berbeda dengan wallet yang terhubung saat request. Refresh halaman, reconnect wallet yang benar, lalu coba lagi."
+  }
+
+  return raw
+}
+
 /**
  * Handles `toApiError` logic.
  *
@@ -53,9 +73,12 @@ export function toApiError(error: unknown, fallback = "Request failed"): ApiErro
  */
 export function getErrorMessage(error: unknown, fallback = "Request failed") {
   if (!error) return fallback
-  if (typeof error === "string") return error
-  if (error instanceof Error) return error.message || fallback
-  return fallback
+  if (typeof error === "string") return normalizeKnownErrorMessage(error)
+  if (error instanceof Error) {
+    const msg = error.message || fallback
+    return normalizeKnownErrorMessage(msg)
+  }
+  return normalizeKnownErrorMessage(fallback)
 }
 
 /**

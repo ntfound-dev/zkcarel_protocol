@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useWallet } from "@/hooks/use-wallet"
 import { invokeStarknetCallsFromWallet } from "@/lib/onchain-trade"
+import { getErrorMessage } from "@/lib/errors"
 import {
   claimBattleshipTimeout,
   createBattleshipGame,
@@ -24,6 +25,7 @@ import {
 const BOARD_SIZE = 5
 const REQUIRED_SHIP_CELLS = 9
 const EXPECTED_FLEET_GROUPS = [1, 1, 2, 2, 3]
+const FLEET_SHIP_LENGTHS = [3, 2, 2, 1, 1]
 const POLL_INTERVAL_MS = 4000
 const LAST_OPPONENT_STORAGE_KEY = "battleship_last_opponent"
 
@@ -64,7 +66,32 @@ function parseCellKey(key: string): BattleshipCell | null {
  * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
  */
 function normalizeAddress(value?: string | null) {
-  return (value || "").trim().toLowerCase()
+  const raw = (value || "").trim().toLowerCase()
+  if (!raw) return ""
+  try {
+    const parsed =
+      raw.startsWith("0x")
+        ? BigInt(raw)
+        : /^[0-9]+$/.test(raw)
+        ? BigInt(raw)
+        : null
+    if (parsed !== null) {
+      return `0x${parsed.toString(16)}`
+    }
+  } catch {
+    // fallback to raw string when parsing fails
+  }
+  return raw
+}
+
+/**
+ * Handles `isZeroAddress` logic.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
+function isZeroAddress(value?: string | null) {
+  return normalizeAddress(value) === "0x0"
 }
 
 /**
@@ -212,6 +239,93 @@ function validateFleetCells(keys: Set<string>): FleetValidation {
   }
 }
 
+// Internal helper that supports `randomInt` operations.
+function randomInt(maxExclusive: number) {
+  if (maxExclusive <= 0) return 0
+  if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+    const values = new Uint32Array(1)
+    window.crypto.getRandomValues(values)
+    return values[0] % maxExclusive
+  }
+  return Math.floor(Math.random() * maxExclusive)
+}
+
+// Internal helper that checks conditions for `canPlaceShip`.
+function canPlaceShip(
+  occupied: Set<string>,
+  cells: BattleshipCell[]
+) {
+  const current = new Set(cells.map((cell) => cellKey(cell.x, cell.y)))
+  for (const cell of cells) {
+    const key = cellKey(cell.x, cell.y)
+    if (occupied.has(key)) return false
+    for (const [nx, ny] of orthogonalNeighbors(cell.x, cell.y)) {
+      if (nx < 0 || ny < 0 || nx >= BOARD_SIZE || ny >= BOARD_SIZE) continue
+      const neighborKey = cellKey(nx, ny)
+      if (occupied.has(neighborKey) && !current.has(neighborKey)) return false
+    }
+  }
+  return true
+}
+
+// Internal helper that supports `generateRandomFleet` operations.
+function generateRandomFleet(): Set<string> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const occupied = new Set<string>()
+    let failed = false
+
+    for (const length of FLEET_SHIP_LENGTHS) {
+      let placed = false
+      for (let placeAttempt = 0; placeAttempt < 200; placeAttempt += 1) {
+        const horizontal = randomInt(2) === 0
+        const maxStartX = horizontal ? BOARD_SIZE - length + 1 : BOARD_SIZE
+        const maxStartY = horizontal ? BOARD_SIZE : BOARD_SIZE - length + 1
+        const startX = randomInt(maxStartX)
+        const startY = randomInt(maxStartY)
+        const cells: BattleshipCell[] = []
+
+        for (let i = 0; i < length; i += 1) {
+          cells.push({
+            x: horizontal ? startX + i : startX,
+            y: horizontal ? startY : startY + i,
+          })
+        }
+
+        if (!canPlaceShip(occupied, cells)) continue
+        for (const cell of cells) {
+          occupied.add(cellKey(cell.x, cell.y))
+        }
+        placed = true
+        break
+      }
+
+      if (!placed) {
+        failed = true
+        break
+      }
+    }
+
+    if (failed) continue
+    const validation = validateFleetCells(occupied)
+    if (validation.valid) return occupied
+  }
+
+  // Last-resort fallback keeps UX moving even if RNG placement fails repeatedly.
+  return new Set(
+    [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 2, y: 0 },
+      { x: 4, y: 0 },
+      { x: 4, y: 1 },
+      { x: 0, y: 3 },
+      { x: 1, y: 3 },
+      { x: 3, y: 2 },
+      { x: 4, y: 4 },
+    ].map((cell) => cellKey(cell.x, cell.y))
+  )
+}
+
 /**
  * Handles `DefiFuturesBattleship` logic.
  *
@@ -221,6 +335,7 @@ function validateFleetCells(keys: Set<string>): FleetValidation {
 export function DefiFuturesBattleship() {
   const wallet = useWallet()
   const notifications = useNotifications()
+  const lastWalletRef = React.useRef<string>("")
 
   const [gameId, setGameId] = React.useState("")
   const [joinGameId, setJoinGameId] = React.useState("")
@@ -229,10 +344,15 @@ export function DefiFuturesBattleship() {
   const [setupCells, setSetupCells] = React.useState<Set<string>>(new Set())
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
   const [selectedTarget, setSelectedTarget] = React.useState<string | null>(null)
+  const [selectedDefense, setSelectedDefense] = React.useState<string | null>(null)
   const defaultOpponentFromEnv = (process.env.NEXT_PUBLIC_DEV_WALLET_ADDRESS || "").trim()
 
   const activeGameId = gameId.trim()
   const normalizedUser = normalizeAddress(state?.your_address || wallet.address)
+  const activeStarknetAddress = React.useMemo(
+    () => (wallet.starknetAddress || wallet.address || "").trim(),
+    [wallet.address, wallet.starknetAddress]
+  )
   const starknetProviderHint = React.useMemo(
     () => (wallet.provider === "argentx" || wallet.provider === "braavos" ? wallet.provider : "starknet"),
     [wallet.provider]
@@ -292,6 +412,7 @@ export function DefiFuturesBattleship() {
 
   const hasPendingShot = Boolean(state?.pending_shot)
   const canRespond = Boolean(state?.can_respond)
+  const setupLocked = Boolean(activeGameId && state?.your_ready)
 
   const selectedTargetCell = React.useMemo(
     () => (selectedTarget ? parseCellKey(selectedTarget) : null),
@@ -303,14 +424,16 @@ export function DefiFuturesBattleship() {
     async (id?: string) => {
       const target = (id || activeGameId).trim()
       if (!target || !wallet.isConnected) return
-      const next = await getBattleshipState(target)
+      const next = await getBattleshipState(target, {
+        starknetAddress: activeStarknetAddress,
+      })
       setState(next)
       if (next.your_board.length > 0) {
         const nextCells = new Set(next.your_board.map((cell) => cellKey(cell.x, cell.y)))
         setSetupCells(nextCells)
       }
     },
-    [activeGameId, wallet.isConnected]
+    [activeGameId, activeStarknetAddress, wallet.isConnected]
   )
 
   React.useEffect(() => {
@@ -325,7 +448,9 @@ export function DefiFuturesBattleship() {
      */
     const tick = async () => {
       try {
-        const next = await getBattleshipState(activeGameId)
+        const next = await getBattleshipState(activeGameId, {
+          starknetAddress: activeStarknetAddress,
+        })
         if (cancelled) return
         setState(next)
       } catch {
@@ -342,7 +467,22 @@ export function DefiFuturesBattleship() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [activeGameId, wallet.isConnected])
+  }, [activeGameId, activeStarknetAddress, wallet.isConnected])
+
+  React.useEffect(() => {
+    const normalized = normalizeAddress(activeStarknetAddress)
+    if (!normalized) {
+      lastWalletRef.current = ""
+      return
+    }
+    if (lastWalletRef.current && lastWalletRef.current !== normalized) {
+      setState(null)
+      setSetupCells(new Set())
+      setSelectedTarget(null)
+      setSelectedDefense(null)
+    }
+    lastWalletRef.current = normalized
+  }, [activeStarknetAddress])
 
   React.useEffect(() => {
     if (state?.status !== "PLAYING") {
@@ -353,6 +493,17 @@ export function DefiFuturesBattleship() {
       setSelectedTarget(null)
     }
   }, [hasPendingShot, isYourTurn, state?.status])
+
+  React.useEffect(() => {
+    if (activeGameId) return
+    setState(null)
+  }, [activeGameId])
+
+  React.useEffect(() => {
+    if (!canRespond || !state?.pending_shot) {
+      setSelectedDefense(null)
+    }
+  }, [canRespond, state?.pending_shot])
 
   React.useEffect(() => {
     if (opponentAddress.trim()) return
@@ -366,7 +517,10 @@ export function DefiFuturesBattleship() {
 
     if (!resolved && state) {
       const candidate = [state.player_a, state.player_b || ""].find(
-        (value) => !!value && normalizeAddress(value) !== normalizedUser
+        (value) =>
+          !!value &&
+          !isZeroAddress(value) &&
+          normalizeAddress(value) !== normalizedUser
       )
       if (candidate) resolved = candidate
     }
@@ -376,6 +530,7 @@ export function DefiFuturesBattleship() {
     }
 
     if (!resolved) return
+    if (isZeroAddress(resolved)) return
     if (normalizeAddress(resolved) === normalizedUser) return
     setOpponentAddress(resolved)
   }, [defaultOpponentFromEnv, normalizedUser, opponentAddress, state])
@@ -404,6 +559,15 @@ export function DefiFuturesBattleship() {
     return cells
   }, [setupCells])
 
+  const handleResetForNewGame = React.useCallback(() => {
+    setGameId("")
+    setJoinGameId("")
+    setState(null)
+    setSelectedTarget(null)
+    setSelectedDefense(null)
+    setSetupCells(new Set())
+  }, [])
+
   const handleCreateGame = React.useCallback(async () => {
     if (!wallet.isConnected) {
       notifications.addNotification({
@@ -414,11 +578,12 @@ export function DefiFuturesBattleship() {
       return
     }
     const opponent = opponentAddress.trim()
-    if (!opponent) {
+    const normalizedSelf = normalizeAddress(wallet.starknetAddress || wallet.address)
+    if (opponent && normalizeAddress(opponent) === normalizedSelf) {
       notifications.addNotification({
         type: "warning",
-        title: "Opponent required",
-        message: "Input opponent Starknet address first.",
+        title: "Invalid opponent",
+        message: "Opponent address cannot be your connected wallet.",
       })
       return
     }
@@ -434,7 +599,9 @@ export function DefiFuturesBattleship() {
     const cells = collectSetupCells()
     setBusyAction("create")
     try {
-      const prepared = await createBattleshipGame({ opponent, cells })
+      const prepared = await createBattleshipGame({ opponent, cells }, {
+        starknetAddress: activeStarknetAddress,
+      })
       const txHash = await signPreparedCalls(
         prepared.onchain_calls || [],
         "Confirm create_game transaction in your Starknet wallet."
@@ -444,33 +611,54 @@ export function DefiFuturesBattleship() {
         opponent,
         cells,
         onchain_tx_hash: txHash,
+      }, {
+        starknetAddress: activeStarknetAddress,
       })
 
       setGameId(finalized.game_id)
-      setJoinGameId(finalized.game_id)
-      try {
-        window.localStorage.setItem(LAST_OPPONENT_STORAGE_KEY, opponent)
-      } catch {
-        // noop
+      if (opponent && !isZeroAddress(opponent)) {
+        try {
+          window.localStorage.setItem(LAST_OPPONENT_STORAGE_KEY, opponent)
+        } catch {
+          // noop
+        }
       }
-      await refreshState(finalized.game_id)
+      let refreshWarning: string | null = null
+      try {
+        await refreshState(finalized.game_id)
+      } catch (refreshError) {
+        refreshWarning = getErrorMessage(
+          refreshError,
+          "Game created, but state refresh failed. Open game ID manually."
+        )
+      }
 
       notifications.addNotification({
         type: "success",
         title: "Game created on-chain",
-        message: `Game ${finalized.game_id} ready.`,
+        message: opponent && !isZeroAddress(opponent)
+          ? `Game ${finalized.game_id} ready. Share this game ID with invited opponent wallet to join.`
+          : `Open challenge ${finalized.game_id} ready. Any non-creator wallet can join first.`,
         txHash,
+        txNetwork: "starknet",
       })
+      if (refreshWarning) {
+        notifications.addNotification({
+          type: "warning",
+          title: "State refresh delayed",
+          message: refreshWarning,
+        })
+      }
     } catch (error: any) {
       notifications.addNotification({
         type: "error",
         title: "Create game failed",
-        message: error?.message || "Unable to create game on-chain.",
+        message: getErrorMessage(error, "Unable to create game on-chain."),
       })
     } finally {
       setBusyAction(null)
     }
-  }, [collectSetupCells, fleetValidation, notifications, opponentAddress, refreshState, signPreparedCalls, wallet.isConnected])
+  }, [activeStarknetAddress, collectSetupCells, fleetValidation, notifications, opponentAddress, refreshState, signPreparedCalls, wallet.address, wallet.isConnected, wallet.starknetAddress])
 
   const handleJoinGame = React.useCallback(async () => {
     if (!wallet.isConnected) {
@@ -502,7 +690,9 @@ export function DefiFuturesBattleship() {
     const cells = collectSetupCells()
     setBusyAction("join")
     try {
-      const prepared = await joinBattleshipGame({ game_id: target, cells })
+      const prepared = await joinBattleshipGame({ game_id: target, cells }, {
+        starknetAddress: activeStarknetAddress,
+      })
       const txHash = await signPreparedCalls(
         prepared.onchain_calls || [],
         "Confirm join_game transaction in your Starknet wallet."
@@ -512,29 +702,47 @@ export function DefiFuturesBattleship() {
         game_id: target,
         cells,
         onchain_tx_hash: txHash,
+      }, {
+        starknetAddress: activeStarknetAddress,
       })
 
       setGameId(finalized.game_id)
-      await refreshState(finalized.game_id)
+      let refreshWarning: string | null = null
+      try {
+        await refreshState(finalized.game_id)
+      } catch (refreshError) {
+        refreshWarning = getErrorMessage(
+          refreshError,
+          "Joined game, but state refresh failed. Open game ID manually."
+        )
+      }
       notifications.addNotification({
         type: "success",
         title: "Joined game",
         message: `Joined game ${finalized.game_id} on-chain.`,
         txHash,
+        txNetwork: "starknet",
       })
+      if (refreshWarning) {
+        notifications.addNotification({
+          type: "warning",
+          title: "State refresh delayed",
+          message: refreshWarning,
+        })
+      }
     } catch (error: any) {
       notifications.addNotification({
         type: "error",
         title: "Join failed",
-        message: error?.message || "Unable to join game on-chain.",
+        message: getErrorMessage(error, "Unable to join game on-chain."),
       })
     } finally {
       setBusyAction(null)
     }
-  }, [collectSetupCells, fleetValidation, joinGameId, notifications, refreshState, signPreparedCalls, wallet.isConnected])
+  }, [activeStarknetAddress, collectSetupCells, fleetValidation, joinGameId, notifications, refreshState, signPreparedCalls, wallet.isConnected])
 
   const toggleSetupCell = React.useCallback((x: number, y: number) => {
-    if (state?.your_ready) return
+    if (setupLocked) return
     setSetupCells((prev) => {
       const next = new Set(prev)
       const key = cellKey(x, y)
@@ -546,29 +754,26 @@ export function DefiFuturesBattleship() {
       next.add(key)
       return next
     })
-  }, [state?.your_ready])
+  }, [setupLocked])
+
+  const handleSelectOwnCell = React.useCallback((x: number, y: number) => {
+    if (canRespond && state?.pending_shot) {
+      const key = cellKey(x, y)
+      setSelectedDefense((prev) => (prev === key ? null : key))
+      return
+    }
+    toggleSetupCell(x, y)
+  }, [canRespond, state?.pending_shot, toggleSetupCell])
 
   const handleAutoFleet = React.useCallback(() => {
-    if (state?.your_ready) return
-    // 5 ships: [3,2,2,1,1], all orthogonally separated
-    const preset: BattleshipCell[] = [
-      { x: 0, y: 0 },
-      { x: 1, y: 0 },
-      { x: 2, y: 0 },
-      { x: 4, y: 0 },
-      { x: 4, y: 1 },
-      { x: 0, y: 3 },
-      { x: 1, y: 3 },
-      { x: 3, y: 2 },
-      { x: 4, y: 4 },
-    ]
-    setSetupCells(new Set(preset.map((cell) => cellKey(cell.x, cell.y))))
-  }, [state?.your_ready])
+    if (setupLocked) return
+    setSetupCells(generateRandomFleet())
+  }, [setupLocked])
 
   const handleClearFleet = React.useCallback(() => {
-    if (state?.your_ready) return
+    if (setupLocked) return
     setSetupCells(new Set())
-  }, [state?.your_ready])
+  }, [setupLocked])
 
   const handleFire = React.useCallback(
     async (x: number, y: number) => {
@@ -585,6 +790,8 @@ export function DefiFuturesBattleship() {
           game_id: activeGameId,
           x,
           y,
+        }, {
+          starknetAddress: activeStarknetAddress,
         })
         const txHash = await signPreparedCalls(
           prepared.onchain_calls || [],
@@ -596,6 +803,8 @@ export function DefiFuturesBattleship() {
           x,
           y,
           onchain_tx_hash: txHash,
+        }, {
+          starknetAddress: activeStarknetAddress,
         })
 
         setSelectedTarget(null)
@@ -605,32 +814,43 @@ export function DefiFuturesBattleship() {
           title: "Shot submitted",
           message: finalized.message,
           txHash,
+          txNetwork: "starknet",
         })
       } catch (error: any) {
         notifications.addNotification({
           type: "error",
           title: "Fire failed",
-          message: error?.message || "Unable to fire shot.",
+          message: getErrorMessage(error, "Unable to fire shot."),
         })
       } finally {
         setBusyAction(null)
       }
     },
-    [activeGameId, hasPendingShot, isYourTurn, notifications, refreshState, signPreparedCalls, state, yourShotsSet]
+    [activeGameId, activeStarknetAddress, hasPendingShot, isYourTurn, notifications, refreshState, signPreparedCalls, state, yourShotsSet]
   )
 
   const handleRespond = React.useCallback(async () => {
     if (!activeGameId || !state || !state.pending_shot) return
     if (!canRespond) return
-
-    const pendingKey = cellKey(state.pending_shot.x, state.pending_shot.y)
-    const inferredHit = yourBoardSet.has(pendingKey)
+    if (!selectedDefense) {
+      notifications.addNotification({
+        type: "warning",
+        title: "Defense cell required",
+        message: "Klik 1 sel di board kamu untuk defend sebelum respond.",
+      })
+      return
+    }
+    const selected = parseCellKey(selectedDefense)
+    if (!selected) return
 
     setBusyAction("respond")
     try {
       const prepared = await respondBattleshipShot({
         game_id: activeGameId,
-        is_hit: inferredHit,
+        defend_x: selected.x,
+        defend_y: selected.y,
+      }, {
+        starknetAddress: activeStarknetAddress,
       })
       const txHash = await signPreparedCalls(
         prepared.onchain_calls || [],
@@ -639,33 +859,40 @@ export function DefiFuturesBattleship() {
 
       const finalized = await respondBattleshipShot({
         game_id: activeGameId,
-        is_hit: inferredHit,
+        defend_x: selected.x,
+        defend_y: selected.y,
         onchain_tx_hash: txHash,
+      }, {
+        starknetAddress: activeStarknetAddress,
       })
 
+      setSelectedDefense(null)
       await refreshState()
       notifications.addNotification({
         type: "success",
         title: finalized.is_hit ? "Hit confirmed" : "Miss confirmed",
         message: finalized.message,
         txHash,
+        txNetwork: "starknet",
       })
     } catch (error: any) {
       notifications.addNotification({
         type: "error",
         title: "Respond failed",
-        message: error?.message || "Unable to submit shot response.",
+        message: getErrorMessage(error, "Unable to submit shot response."),
       })
     } finally {
       setBusyAction(null)
     }
-  }, [activeGameId, canRespond, notifications, refreshState, signPreparedCalls, state, yourBoardSet])
+  }, [activeGameId, activeStarknetAddress, canRespond, notifications, refreshState, selectedDefense, signPreparedCalls, state])
 
   const handleClaimTimeout = React.useCallback(async () => {
     if (!activeGameId) return
     setBusyAction("timeout")
     try {
-      const prepared = await claimBattleshipTimeout({ game_id: activeGameId })
+      const prepared = await claimBattleshipTimeout({ game_id: activeGameId }, {
+        starknetAddress: activeStarknetAddress,
+      })
       const txHash = await signPreparedCalls(
         prepared.onchain_calls || [],
         "Confirm claim_timeout transaction in your Starknet wallet."
@@ -674,6 +901,8 @@ export function DefiFuturesBattleship() {
       const finalized = await claimBattleshipTimeout({
         game_id: activeGameId,
         onchain_tx_hash: txHash,
+      }, {
+        starknetAddress: activeStarknetAddress,
       })
 
       await refreshState()
@@ -682,6 +911,7 @@ export function DefiFuturesBattleship() {
         title: "Timeout claimed",
         message: finalized.message,
         txHash,
+        txNetwork: "starknet",
       })
     } catch (error: any) {
       notifications.addNotification({
@@ -692,7 +922,7 @@ export function DefiFuturesBattleship() {
     } finally {
       setBusyAction(null)
     }
-  }, [activeGameId, notifications, refreshState, signPreparedCalls])
+  }, [activeGameId, activeStarknetAddress, notifications, refreshState, signPreparedCalls])
 
   const canClaimTimeout = busyAction !== "timeout" && state?.status === "PLAYING"
   const canCommitShot =
@@ -719,7 +949,7 @@ export function DefiFuturesBattleship() {
           </Badge>
         </div>
         <CardDescription className="text-[#c6b3ff]">
-          Commit board, fire, respond, and timeout are all signed and executed on Starknet.
+          Commit board, fire, defend, respond, and timeout are all signed on Starknet with Garaga payload per action.
         </CardDescription>
       </CardHeader>
 
@@ -729,9 +959,12 @@ export function DefiFuturesBattleship() {
             <Input
               value={opponentAddress}
               onChange={(event) => setOpponentAddress(event.target.value)}
-              placeholder="Opponent Starknet address (0x...)"
+              placeholder="Opponent Starknet address (0x...) - optional for open challenge"
               className="border-[#7c3aed]/60 bg-[#130d2a]/85 text-[#e7dcff] placeholder:text-[#9274c9]"
             />
+            <p className="text-[11px] text-[#bba7f2]">
+              Leave blank to create open challenge. Fill address to create invited match.
+            </p>
             <Button
               onClick={handleCreateGame}
               disabled={busyAction === "create"}
@@ -745,7 +978,7 @@ export function DefiFuturesBattleship() {
             <Input
               value={joinGameId}
               onChange={(event) => setJoinGameId(event.target.value)}
-              placeholder="Paste game_id to join"
+              placeholder="Paste game_id (invited wallet or first-come open challenge)"
               className="border-[#7c3aed]/60 bg-[#130d2a]/85 text-[#e7dcff] placeholder:text-[#9274c9]"
             />
             <Button
@@ -756,6 +989,16 @@ export function DefiFuturesBattleship() {
               Join Game + Commit Fleet
             </Button>
           </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            onClick={handleResetForNewGame}
+            className="border-[#7c3aed]/70 bg-[#120a2b] text-[#d6c6ff] hover:bg-[#1f1140]"
+          >
+            Reset Setup / New Match
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
@@ -809,12 +1052,13 @@ export function DefiFuturesBattleship() {
                   state.pending_shot.x === x &&
                   state.pending_shot.y === y &&
                   !opponentShotResolvedMap.has(key)
+                const isDefenseSelected = selectedDefense === key
 
                 return (
                   <button
                     key={`your-${key}`}
                     type="button"
-                    onClick={() => toggleSetupCell(x, y)}
+                    onClick={() => handleSelectOwnCell(x, y)}
                     className={cn(
                       "relative flex h-12 items-center justify-center overflow-hidden rounded-md border text-[10px] font-semibold tracking-[0.14em] transition-all",
                       "border-[#7e3af2]/50 bg-[#170e34]",
@@ -824,12 +1068,16 @@ export function DefiFuturesBattleship() {
                       wasShotByOpponent && resolvedHit === false &&
                         "border-sky-400/90 bg-[#0b1f3a] text-sky-200 shadow-[0_0_16px_rgba(56,189,248,0.7)]",
                       isPendingShot &&
-                        "border-amber-300/90 bg-amber-500/20 text-amber-100 shadow-[0_0_16px_rgba(251,191,36,0.55)]"
+                        "border-amber-300/90 bg-amber-500/20 text-amber-100 shadow-[0_0_16px_rgba(251,191,36,0.55)]",
+                      isDefenseSelected &&
+                        "border-cyan-300/90 ring-2 ring-cyan-300/80 shadow-[0_0_18px_rgba(34,211,238,0.65)]"
                     )}
                     aria-label={`your-cell-${x}-${y}`}
                   >
                     <span className="relative">
-                      {isPendingShot
+                      {isDefenseSelected
+                        ? "DEF"
+                        : isPendingShot
                         ? "PEND"
                         : wasShotByOpponent
                         ? resolvedHit
@@ -848,7 +1096,7 @@ export function DefiFuturesBattleship() {
               <Button
                 variant="outline"
                 onClick={handleAutoFleet}
-                disabled={Boolean(state?.your_ready)}
+                disabled={setupLocked}
                 className="border-emerald-400/70 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20"
               >
                 Auto Fleet
@@ -856,7 +1104,7 @@ export function DefiFuturesBattleship() {
               <Button
                 variant="outline"
                 onClick={handleClearFleet}
-                disabled={Boolean(state?.your_ready)}
+                disabled={setupLocked}
                 className="border-[#a855f7]/70 bg-[#1c1037]/80 text-[#dacaff] hover:bg-[#261349]"
               >
                 Clear Fleet
@@ -871,12 +1119,19 @@ export function DefiFuturesBattleship() {
               </Button>
               <Button
                 onClick={handleRespond}
-                disabled={!canRespond || busyAction === "respond"}
+                disabled={!canRespond || busyAction === "respond" || !selectedDefense}
                 className="border border-amber-400/70 bg-amber-500/20 text-amber-100 hover:bg-amber-500/30"
               >
-                Respond Pending Shot
+                Defend + Respond
               </Button>
             </div>
+            {canRespond && (
+              <p className="mt-2 text-[11px] text-cyan-200">
+                {selectedDefense
+                  ? `Defense lock: ${selectedDefense} (jika salah, ship bisa terbakar)`
+                  : "Klik 1 sel di board kamu untuk defense lock."}
+              </p>
+            )}
           </section>
 
           <section className="flex min-w-[210px] flex-col items-center justify-center gap-4 rounded-xl border border-cyan-400/45 bg-[#0d1b2d]/55 p-4 text-center backdrop-blur-sm">
@@ -984,9 +1239,9 @@ export function DefiFuturesBattleship() {
           <h4 className="mb-2 text-sm font-semibold tracking-[0.15em] text-cyan-300">How It Works</h4>
           <ol className="space-y-1 text-xs text-[#d7c6ff]">
             <li>1. Creator commits fleet on-chain in `create_game`.</li>
-            <li>2. Opponent commits fleet on-chain in `join_game`.</li>
-            <li>3. Shooter fires coordinate on-chain with `fire_shot`.</li>
-            <li>4. Defender responds on-chain with Garaga proof in `respond_shot`.</li>
+            <li>2. `join_game` is invited-only or first-come for open challenge.</li>
+            <li>3. Shooter fires coordinate on-chain with Garaga payload in `fire_shot`.</li>
+            <li>4. Defender clicks defense cell, then submits Garaga-backed `respond_shot`.</li>
             <li>5. Timeout and winner are resolved on-chain.</li>
           </ol>
         </section>

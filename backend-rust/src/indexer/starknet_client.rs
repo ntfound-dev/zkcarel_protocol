@@ -294,7 +294,11 @@ impl StarknetClient {
     }
 
     /// Read raw storage value at key
-    pub async fn get_storage_at(&self, contract_address: &str, storage_key: &str) -> Result<String> {
+    pub async fn get_storage_at(
+        &self,
+        contract_address: &str,
+        storage_key: &str,
+    ) -> Result<String> {
         self.rpc_call(
             "starknet_getStorageAt",
             serde_json::json!([contract_address, storage_key, "latest"]),

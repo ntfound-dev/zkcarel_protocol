@@ -7,8 +7,8 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use starknet_core::types::{
-    ExecutionResult, Felt, FunctionCall, InvokeTransaction, Transaction as StarknetTransaction,
-    TransactionReceiptWithBlockInfo,
+    ContractClass, ExecutionResult, Felt, FunctionCall, InvokeTransaction,
+    Transaction as StarknetTransaction, TransactionReceiptWithBlockInfo,
 };
 use starknet_core::utils::get_selector_from_name;
 use starknet_crypto::poseidon_hash_many;
@@ -50,6 +50,16 @@ const TX_BATTLE_TIMEOUT_WIN: &str = "battle_tmo_win";
 
 const STATUS_PLAYING: u64 = 1;
 const STATUS_FINISHED: u64 = 2;
+const BATTLESHIP_ABI_CACHE_TTL_SECS: i64 = 300;
+const REQUIRED_BATTLESHIP_ENTRYPOINTS: [&str; 7] = [
+    "create_game",
+    "join_game",
+    "fire_shot",
+    "respond_shot",
+    "claim_timeout",
+    "get_game_state",
+    "get_pending_shot",
+];
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct GaragaPayloadInput {
@@ -95,13 +105,15 @@ pub struct FireShotRequest {
     pub game_id: String,
     pub x: u8,
     pub y: u8,
+    pub privacy: Option<GaragaPayloadInput>,
     pub onchain_tx_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RespondShotRequest {
     pub game_id: String,
-    pub is_hit: Option<bool>,
+    pub defend_x: u8,
+    pub defend_y: u8,
     pub privacy: Option<GaragaPayloadInput>,
     pub onchain_tx_hash: Option<String>,
 }
@@ -267,10 +279,16 @@ struct OnchainGameState {
 }
 
 static BATTLESHIP_STORE: OnceLock<RwLock<BattleshipStore>> = OnceLock::new();
+static BATTLESHIP_ABI_CACHE: OnceLock<RwLock<HashMap<String, i64>>> = OnceLock::new();
 
 // Internal helper that supports `battleship_store` operations.
 fn battleship_store() -> &'static RwLock<BattleshipStore> {
     BATTLESHIP_STORE.get_or_init(|| RwLock::new(BattleshipStore::default()))
+}
+
+// Internal helper that supports `battleship_abi_cache` operations.
+fn battleship_abi_cache() -> &'static RwLock<HashMap<String, i64>> {
+    BATTLESHIP_ABI_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 // Internal helper that supports `now_unix` operations.
@@ -368,12 +386,83 @@ fn felt_to_u8(value: &Felt, field: &str) -> Result<u8> {
 
 // Internal helper that supports `addr_eq` operations.
 fn addr_eq(a: &str, b: &str) -> bool {
-    a.trim().eq_ignore_ascii_case(b.trim())
+    let a_trimmed = a.trim();
+    let b_trimmed = b.trim();
+    if a_trimmed.eq_ignore_ascii_case(b_trimmed) {
+        return true;
+    }
+
+    match (parse_felt(a_trimmed), parse_felt(b_trimmed)) {
+        (Ok(a_felt), Ok(b_felt)) => a_felt == b_felt,
+        _ => false,
+    }
 }
 
 // Internal helper that supports `map_status_label` operations.
 fn map_status_label(status: GameStatus) -> String {
     status.as_str().to_string()
+}
+
+// Internal helper that supports `external_selectors_from_class` operations.
+fn external_selectors_from_class(class: &ContractClass) -> HashSet<Felt> {
+    match class {
+        ContractClass::Sierra(sierra) => sierra
+            .entry_points_by_type
+            .external
+            .iter()
+            .map(|entry| entry.selector)
+            .collect(),
+        ContractClass::Legacy(legacy) => legacy
+            .entry_points_by_type
+            .external
+            .iter()
+            .map(|entry| entry.selector)
+            .collect(),
+    }
+}
+
+// Internal helper that supports `ensure_battleship_contract_abi` operations.
+async fn ensure_battleship_contract_abi(state: &AppState, contract: Felt) -> Result<()> {
+    let cache_key = contract.to_string();
+    let now = now_unix();
+    {
+        let cache = battleship_abi_cache().read().await;
+        if let Some(last_checked) = cache.get(&cache_key) {
+            if now - *last_checked <= BATTLESHIP_ABI_CACHE_TTL_SECS {
+                return Ok(());
+            }
+        }
+    }
+
+    let reader = OnchainReader::from_config(&state.config)?;
+    let class = reader.get_class_at(contract).await?;
+    let class_hash = reader
+        .get_class_hash_at(contract)
+        .await
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let available = external_selectors_from_class(&class);
+    let mut missing: Vec<&str> = Vec::new();
+    for name in REQUIRED_BATTLESHIP_ENTRYPOINTS {
+        let selector = parse_selector(name)?;
+        if !available.contains(&selector) {
+            missing.push(name);
+        }
+    }
+
+    if !missing.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "Configured BATTLESHIP_GARAGA_ADDRESS ({}) class {} is missing entrypoints: {}. Update contract address/class and restart backend.",
+            cache_key,
+            class_hash,
+            missing.join(", ")
+        )));
+    }
+
+    let mut cache = battleship_abi_cache().write().await;
+    cache.insert(cache_key, now);
+    Ok(())
 }
 
 // Internal helper that supports `timeout_remaining` operations.
@@ -563,8 +652,10 @@ fn response_binding(
     game_id: u64,
     shooter: &str,
     responder: &str,
-    x: u8,
-    y: u8,
+    shot_x: u8,
+    shot_y: u8,
+    defend_x: u8,
+    defend_y: u8,
     is_hit: bool,
 ) -> Result<Felt> {
     let values = vec![
@@ -572,9 +663,23 @@ fn response_binding(
         Felt::from(game_id),
         parse_felt(shooter)?,
         parse_felt(responder)?,
+        Felt::from(shot_x),
+        Felt::from(shot_y),
+        Felt::from(defend_x),
+        Felt::from(defend_y),
+        if is_hit { Felt::ONE } else { Felt::ZERO },
+    ];
+    Ok(poseidon_hash_many(&values))
+}
+
+// Internal helper that supports `fire_binding` operations.
+fn fire_binding(game_id: u64, shooter: &str, x: u8, y: u8) -> Result<Felt> {
+    let values = vec![
+        short_string_to_felt("FIRE")?,
+        Felt::from(game_id),
+        parse_felt(shooter)?,
         Felt::from(x),
         Felt::from(y),
-        if is_hit { Felt::ONE } else { Felt::ZERO },
     ];
     Ok(poseidon_hash_many(&values))
 }
@@ -783,22 +888,46 @@ fn build_join_game_wallet_call(
 }
 
 // Internal helper that builds inputs for `build_fire_wallet_call`.
-fn build_fire_wallet_call(contract: Felt, game_id: u64, x: u8, y: u8) -> StarknetWalletCall {
-    StarknetWalletCall {
+fn build_fire_wallet_call(
+    contract: Felt,
+    game_id: u64,
+    x: u8,
+    y: u8,
+    payload: &AutoPrivacyPayloadResponse,
+) -> Result<StarknetWalletCall> {
+    let proof: Vec<Felt> = payload
+        .proof
+        .iter()
+        .map(|value| parse_felt(value))
+        .collect::<Result<Vec<_>>>()?;
+    let public_inputs: Vec<Felt> = payload
+        .public_inputs
+        .iter()
+        .map(|value| parse_felt(value))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut calldata = Vec::with_capacity(6 + proof.len() + public_inputs.len());
+    calldata.push(Felt::from(game_id));
+    calldata.push(Felt::from(x));
+    calldata.push(Felt::from(y));
+    calldata.push(Felt::from(proof.len() as u64));
+    calldata.extend(proof);
+    calldata.push(Felt::from(public_inputs.len() as u64));
+    calldata.extend(public_inputs);
+
+    Ok(StarknetWalletCall {
         contract_address: contract.to_string(),
         entrypoint: "fire_shot".to_string(),
-        calldata: vec![
-            Felt::from(game_id).to_string(),
-            Felt::from(x).to_string(),
-            Felt::from(y).to_string(),
-        ],
-    }
+        calldata: calldata.iter().map(ToString::to_string).collect(),
+    })
 }
 
 // Internal helper that builds inputs for `build_respond_wallet_call`.
 fn build_respond_wallet_call(
     contract: Felt,
     game_id: u64,
+    defend_x: u8,
+    defend_y: u8,
     is_hit: bool,
     payload: &AutoPrivacyPayloadResponse,
 ) -> Result<StarknetWalletCall> {
@@ -813,8 +942,10 @@ fn build_respond_wallet_call(
         .map(|value| parse_felt(value))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut calldata = Vec::with_capacity(5 + proof.len() + public_inputs.len());
+    let mut calldata = Vec::with_capacity(7 + proof.len() + public_inputs.len());
     calldata.push(Felt::from(game_id));
+    calldata.push(Felt::from(defend_x));
+    calldata.push(Felt::from(defend_y));
     calldata.push(if is_hit { Felt::ONE } else { Felt::ZERO });
     calldata.push(Felt::from(proof.len() as u64));
     calldata.extend(proof);
@@ -1178,6 +1309,7 @@ fn extract_shot_result_event(
 async fn read_onchain_game_state(state: &AppState, game_id: u64) -> Result<OnchainGameState> {
     let reader = OnchainReader::from_config(&state.config)?;
     let contract = battleship_contract_address(state)?;
+    ensure_battleship_contract_abi(state, contract).await?;
 
     let state_selector = parse_selector("get_game_state")?;
     let output = reader
@@ -1349,7 +1481,11 @@ fn build_state_response(game: &BattleshipGame, user: &str) -> Result<BattleshipG
         status: map_status_label(game.status),
         creator: game.creator.clone(),
         player_a: game.player_a.clone(),
-        player_b: Some(game.player_b.clone()),
+        player_b: if addr_eq(&game.player_b, "0x0") {
+            None
+        } else {
+            Some(game.player_b.clone())
+        },
         current_turn: game.current_turn.clone(),
         winner: game.winner.clone(),
         your_address: user.to_string(),
@@ -1429,13 +1565,14 @@ fn resolve_pending_shot_for_user(game: &BattleshipGame, user: &str) -> Result<Pe
     Ok(shot.clone())
 }
 
-// Internal helper that fetches data for `resolve_is_hit_for_response`.
-fn resolve_is_hit_for_response(
+// Internal helper that fetches data for `resolve_defense_outcome`.
+fn resolve_defense_outcome(
     game: &BattleshipGame,
     responder: &str,
     pending_shot: &PendingShot,
-    requested: Option<bool>,
-) -> Result<bool> {
+    defend_x: u8,
+    defend_y: u8,
+) -> Result<(bool, bool, bool)> {
     let board = if addr_eq(&game.player_a, responder) {
         game.board_a.as_ref()
     } else if addr_eq(&game.player_b, responder) {
@@ -1444,23 +1581,18 @@ fn resolve_is_hit_for_response(
         None
     };
 
-    let computed = board.map(|board| board.cells.contains(&(pending_shot.x, pending_shot.y)));
-    match (computed, requested) {
-        (Some(value), Some(requested_value)) => {
-            if value != requested_value {
-                return Err(AppError::BadRequest(
-                    "is_hit does not match your committed board".to_string(),
-                ));
-            }
-            Ok(value)
-        }
-        (Some(value), None) => Ok(value),
-        (None, Some(requested_value)) => Ok(requested_value),
-        (None, None) => Err(AppError::BadRequest(
-            "Cannot infer is_hit because your board is not cached. Provide is_hit explicitly."
+    let Some(board) = board else {
+        return Err(AppError::BadRequest(
+            "Your committed board is not cached on backend. Re-open game state first and retry."
                 .to_string(),
-        )),
-    }
+        ));
+    };
+
+    let shot_has_ship = board.cells.contains(&(pending_shot.x, pending_shot.y));
+    let defended_exact = defend_x == pending_shot.x && defend_y == pending_shot.y;
+    let defense_success = shot_has_ship && defended_exact;
+    let is_hit = shot_has_ship && !defended_exact;
+    Ok((is_hit, shot_has_ship, defense_success))
 }
 
 /// POST /api/v1/battleship/create
@@ -1470,11 +1602,14 @@ pub async fn create_game(
     Json(req): Json<CreateGameRequest>,
 ) -> Result<Json<ApiResponse<GameActionResponse>>> {
     let user = require_starknet_user(&headers, &state).await?;
-    let opponent = req.opponent.trim();
-    if opponent.is_empty() {
-        return Err(AppError::BadRequest("opponent is required".to_string()));
-    }
-    if addr_eq(opponent, &user) {
+    let opponent_raw = req.opponent.trim();
+    let opponent = if opponent_raw.is_empty() {
+        Felt::ZERO
+    } else {
+        parse_felt(opponent_raw)?
+    };
+    let user_felt = parse_felt(&user)?;
+    if opponent != Felt::ZERO && opponent == user_felt {
         return Err(AppError::BadRequest(
             "Cannot create game with your own address".to_string(),
         ));
@@ -1483,6 +1618,7 @@ pub async fn create_game(
     let fleet = validate_fleet(&req.cells)?;
     let board_commitment = board_commitment_for_cells(&user, &fleet)?;
     let contract = battleship_contract_address(&state)?;
+    ensure_battleship_contract_abi(&state, contract).await?;
 
     if req
         .onchain_tx_hash
@@ -1499,12 +1635,7 @@ pub async fn create_game(
             board_commitment,
         )
         .await?;
-        let call = build_create_game_wallet_call(
-            contract,
-            parse_felt(opponent)?,
-            board_commitment,
-            &payload,
-        )?;
+        let call = build_create_game_wallet_call(contract, opponent, board_commitment, &payload)?;
         let response = prepared_action_response(
             "-".to_string(),
             "Sign create_game transaction in wallet.",
@@ -1523,8 +1654,7 @@ pub async fn create_game(
                     "create_game calldata is too short".to_string(),
                 ));
             }
-            let expected_opponent = parse_felt(opponent)?;
-            if call.calldata[0] != expected_opponent {
+            if call.calldata[0] != opponent {
                 return Err(AppError::BadRequest(
                     "create_game opponent does not match request".to_string(),
                 ));
@@ -1585,6 +1715,7 @@ pub async fn join_game(
     let fleet = validate_fleet(&req.cells)?;
     let board_commitment = board_commitment_for_cells(&user, &fleet)?;
     let contract = battleship_contract_address(&state)?;
+    ensure_battleship_contract_abi(&state, contract).await?;
 
     if req
         .onchain_tx_hash
@@ -1593,6 +1724,24 @@ pub async fn join_game(
         .unwrap_or("")
         .is_empty()
     {
+        let onchain = read_onchain_game_state(&state, game_id).await?;
+        if onchain.status != GameStatus::Waiting {
+            return Err(AppError::BadRequest(
+                "Game is not joinable (status must be WAITING).".to_string(),
+            ));
+        }
+        if addr_eq(&onchain.player_a, &user) {
+            return Err(AppError::BadRequest(
+                "Creator wallet cannot join the same game.".to_string(),
+            ));
+        }
+        let is_open_challenge = addr_eq(&onchain.player_b, "0x0");
+        if !is_open_challenge && !addr_eq(&onchain.player_b, &user) {
+            return Err(AppError::BadRequest(
+                "Connected wallet is not the invited opponent for this game.".to_string(),
+            ));
+        }
+
         let payload = resolve_battleship_payload(
             &state,
             &user,
@@ -1697,7 +1846,9 @@ pub async fn fire_shot(
     let user = require_starknet_user(&headers, &state).await?;
     let game_id = parse_game_id(&req.game_id)?;
     verify_bounds(req.x, req.y)?;
+    let fire_bind = fire_binding(game_id, &user, req.x, req.y)?;
     let contract = battleship_contract_address(&state)?;
+    ensure_battleship_contract_abi(&state, contract).await?;
 
     if req
         .onchain_tx_hash
@@ -1706,7 +1857,10 @@ pub async fn fire_shot(
         .unwrap_or("")
         .is_empty()
     {
-        let call = build_fire_wallet_call(contract, game_id, req.x, req.y);
+        let payload =
+            resolve_battleship_payload(&state, &user, req.privacy.as_ref(), "fire", fire_bind)
+                .await?;
+        let call = build_fire_wallet_call(contract, game_id, req.x, req.y, &payload)?;
         let response = prepared_fire_response(
             game_id_string(game_id),
             "Sign fire_shot transaction in wallet.",
@@ -1720,7 +1874,7 @@ pub async fn fire_shot(
 
     let (_block_number, call, receipt) =
         verify_battleship_tx_call(&state, &tx_hash, &user, "fire_shot", |call| {
-            if call.calldata.len() < 3 {
+            if call.calldata.len() < 4 {
                 return Err(AppError::BadRequest(
                     "fire_shot calldata is too short".to_string(),
                 ));
@@ -1735,6 +1889,17 @@ pub async fn fire_shot(
             {
                 return Err(AppError::BadRequest(
                     "fire_shot coordinates do not match request".to_string(),
+                ));
+            }
+            let (_proof, public_inputs) = parse_proof_and_public_inputs(&call.calldata, 3)?;
+            if public_inputs.len() < 2 {
+                return Err(AppError::BadRequest(
+                    "fire_shot public_inputs too short".to_string(),
+                ));
+            }
+            if public_inputs[1] != fire_bind {
+                return Err(AppError::BadRequest(
+                    "fire_shot binding mismatch with expected shot binding".to_string(),
                 ));
             }
             Ok(())
@@ -1789,7 +1954,9 @@ pub async fn respond_shot(
 ) -> Result<Json<ApiResponse<FireShotResponse>>> {
     let user = require_starknet_user(&headers, &state).await?;
     let game_id = parse_game_id(&req.game_id)?;
+    verify_bounds(req.defend_x, req.defend_y)?;
     let contract = battleship_contract_address(&state)?;
+    ensure_battleship_contract_abi(&state, contract).await?;
 
     // Make sure we have latest pending shot in cache before prepare/finalize.
     {
@@ -1798,13 +1965,14 @@ pub async fn respond_shot(
         upsert_game_from_chain(&mut store, game_id, &onchain);
     }
 
-    let (pending_shot, is_hit) = {
+    let (pending_shot, is_hit, shot_has_ship, defense_success) = {
         let mut store = battleship_store().write().await;
         let game = game_from_store_mut(&mut store, game_id)?;
         let pending = resolve_pending_shot_for_user(game, &user)?;
-        let is_hit = resolve_is_hit_for_response(game, &user, &pending, req.is_hit)?;
+        let (is_hit, shot_has_ship, defense_success) =
+            resolve_defense_outcome(game, &user, &pending, req.defend_x, req.defend_y)?;
         game.pending_shot = Some(pending.clone());
-        (pending, is_hit)
+        (pending, is_hit, shot_has_ship, defense_success)
     };
 
     let binding = response_binding(
@@ -1813,6 +1981,8 @@ pub async fn respond_shot(
         &user,
         pending_shot.x,
         pending_shot.y,
+        req.defend_x,
+        req.defend_y,
         is_hit,
     )?;
 
@@ -1826,7 +1996,14 @@ pub async fn respond_shot(
         let payload =
             resolve_battleship_payload(&state, &user, req.privacy.as_ref(), "respond", binding)
                 .await?;
-        let call = build_respond_wallet_call(contract, game_id, is_hit, &payload)?;
+        let call = build_respond_wallet_call(
+            contract,
+            game_id,
+            req.defend_x,
+            req.defend_y,
+            is_hit,
+            &payload,
+        )?;
         let response = prepared_fire_response(
             game_id_string(game_id),
             "Sign respond_shot transaction in wallet.",
@@ -1840,7 +2017,7 @@ pub async fn respond_shot(
 
     let (_block_number, call, receipt) =
         verify_battleship_tx_call(&state, &tx_hash, &user, "respond_shot", |call| {
-            if call.calldata.len() < 2 {
+            if call.calldata.len() < 4 {
                 return Err(AppError::BadRequest(
                     "respond_shot calldata is too short".to_string(),
                 ));
@@ -1850,13 +2027,20 @@ pub async fn respond_shot(
                     "respond_shot game_id does not match request".to_string(),
                 ));
             }
-            let onchain_is_hit = felt_to_u64(&call.calldata[1], "is_hit")? != 0;
+            if felt_to_u8(&call.calldata[1], "defend_x")? != req.defend_x
+                || felt_to_u8(&call.calldata[2], "defend_y")? != req.defend_y
+            {
+                return Err(AppError::BadRequest(
+                    "respond_shot defense coordinates do not match request".to_string(),
+                ));
+            }
+            let onchain_is_hit = felt_to_u64(&call.calldata[3], "is_hit")? != 0;
             if onchain_is_hit != is_hit {
                 return Err(AppError::BadRequest(
                     "respond_shot is_hit does not match resolved board outcome".to_string(),
                 ));
             }
-            let (_proof, public_inputs) = parse_proof_and_public_inputs(&call.calldata, 2)?;
+            let (_proof, public_inputs) = parse_proof_and_public_inputs(&call.calldata, 4)?;
             if public_inputs.len() < 2 {
                 return Err(AppError::BadRequest(
                     "respond_shot public_inputs too short".to_string(),
@@ -1941,8 +2125,12 @@ pub async fn respond_shot(
         status: game.status.as_str().to_string(),
         message: if game.status == GameStatus::Finished {
             "Shot resolved and game finished.".to_string()
+        } else if final_is_hit {
+            "Wrong defense. Your ship was burned.".to_string()
+        } else if shot_has_ship && defense_success {
+            "Defense success. Incoming shot was blocked.".to_string()
         } else {
-            "Shot resolved on-chain.".to_string()
+            "Shot missed. No ship burned.".to_string()
         },
         is_hit: Some(final_is_hit),
         pending_response: game.pending_shot.is_some(),
@@ -1965,6 +2153,7 @@ pub async fn claim_timeout(
     let user = require_starknet_user(&headers, &state).await?;
     let game_id = parse_game_id(&req.game_id)?;
     let contract = battleship_contract_address(&state)?;
+    ensure_battleship_contract_abi(&state, contract).await?;
 
     if req
         .onchain_tx_hash
@@ -2067,4 +2256,24 @@ pub async fn get_state(
         .ok_or_else(|| AppError::BadRequest("Game not found".to_string()))?;
     let response = build_state_response(game, &user)?;
     Ok(Json(ApiResponse::success(response)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::addr_eq;
+
+    #[test]
+    fn addr_eq_matches_same_value_in_hex_and_decimal() {
+        assert!(addr_eq("0x1234", "4660"));
+    }
+
+    #[test]
+    fn addr_eq_matches_when_hex_has_leading_zeroes() {
+        assert!(addr_eq("0x000abc", "0xabc"));
+    }
+
+    #[test]
+    fn addr_eq_rejects_different_values() {
+        assert!(!addr_eq("0xabc", "0xabd"));
+    }
 }

@@ -402,8 +402,7 @@ async fn consume_onchain_action_via_backend(state: &AppState, action_id: u64) ->
             if lower.contains("invalid backend signature")
                 && ai_executor_auto_disable_signature_verification()
             {
-                let disable_tx =
-                    backend_disable_ai_executor_signature_verification(state).await?;
+                let disable_tx = backend_disable_ai_executor_signature_verification(state).await?;
                 tracing::warn!(
                     "AI executor signature verification disabled on-chain: tx={:#x}",
                     disable_tx
@@ -630,8 +629,7 @@ pub async fn execute_command(
                 .await?
                 .ok_or_else(|| {
                     crate::error::AppError::BadRequest(
-                        "Please click Auto Setup On-Chain first, then retry your command."
-                            .into(),
+                        "Please click Auto Setup On-Chain first, then retry your command.".into(),
                     )
                 })?
         };
@@ -1037,9 +1035,8 @@ async fn read_ai_executor_rate_limit(state: &AppState, executor_address: &str) -
             "rate_limit returned empty payload".to_string(),
         ));
     };
-    felt_to_u128(raw).map_err(|_| {
-        AppError::BlockchainRPC("rate_limit response is not a valid u128".to_string())
-    })
+    felt_to_u128(raw)
+        .map_err(|_| AppError::BlockchainRPC("rate_limit response is not a valid u128".to_string()))
 }
 
 // Internal helper that runs side-effecting logic for `backend_set_ai_executor_rate_limit`.
@@ -1083,44 +1080,48 @@ async fn ensure_ai_executor_rate_limit(
     executor_address: &str,
 ) -> RateLimitEnsureResult {
     let target_limit = desired_ai_executor_rate_limit();
-    let apply_target_limit = async || {
-        match backend_set_ai_executor_rate_limit(state, executor_address, target_limit).await {
-            Ok(tx_hash) => RateLimitEnsureResult {
-                ready: true,
-                message: format!(
-                    "AI executor rate limit raised to {}. Tx: {:#x}",
-                    target_limit, tx_hash
-                ),
-            },
-            Err(err) if is_entrypoint_not_found_error(&err) => {
-                tracing::warn!(
+    let apply_target_limit = async || match backend_set_ai_executor_rate_limit(
+        state,
+        executor_address,
+        target_limit,
+    )
+    .await
+    {
+        Ok(tx_hash) => RateLimitEnsureResult {
+            ready: true,
+            message: format!(
+                "AI executor rate limit raised to {}. Tx: {:#x}",
+                target_limit, tx_hash
+            ),
+        },
+        Err(err) if is_entrypoint_not_found_error(&err) => {
+            tracing::warn!(
                     "AI executor rate-limit auto-tune skipped: set_rate_limit entrypoint not found (executor={})",
                     executor_address
                 );
-                RateLimitEnsureResult {
-                    ready: false,
-                    message:
-                        "AI executor class mismatch: set_rate_limit entrypoint not found.".to_string(),
-                }
+            RateLimitEnsureResult {
+                ready: false,
+                message: "AI executor class mismatch: set_rate_limit entrypoint not found."
+                    .to_string(),
             }
-            Err(err) => {
-                tracing::warn!(
+        }
+        Err(err) => {
+            tracing::warn!(
                     "AI executor rate-limit auto-tune skipped: failed setting target limit (executor={} err={})",
                     executor_address,
                     err
                 );
-                let reason = err.to_string().to_ascii_lowercase();
-                let message =
-                    if reason.contains("unauthorized admin") || reason.contains("missing role") {
-                        "Backend signer is not AI executor admin, cannot raise on-chain rate limit."
-                            .to_string()
-                    } else {
-                        format!("Failed to raise AI executor rate limit: {}", err)
-                    };
-                RateLimitEnsureResult {
-                    ready: false,
-                    message,
-                }
+            let reason = err.to_string().to_ascii_lowercase();
+            let message =
+                if reason.contains("unauthorized admin") || reason.contains("missing role") {
+                    "Backend signer is not AI executor admin, cannot raise on-chain rate limit."
+                        .to_string()
+                } else {
+                    format!("Failed to raise AI executor rate limit: {}", err)
+                };
+            RateLimitEnsureResult {
+                ready: false,
+                message,
             }
         }
     };
@@ -1179,7 +1180,8 @@ async fn ensure_ai_executor_rate_limit(
             );
             RateLimitEnsureResult {
                 ready: false,
-                message: "AI executor class mismatch: set_rate_limit entrypoint not found.".to_string(),
+                message: "AI executor class mismatch: set_rate_limit entrypoint not found."
+                    .to_string(),
             }
         }
         Err(err) => {
@@ -1189,13 +1191,13 @@ async fn ensure_ai_executor_rate_limit(
                 err
             );
             let reason = err.to_string().to_ascii_lowercase();
-            let message = if reason.contains("unauthorized admin") || reason.contains("missing role")
-            {
-                "Backend signer is not AI executor admin, cannot raise on-chain rate limit."
-                    .to_string()
-            } else {
-                format!("Failed to raise AI executor rate limit: {}", err)
-            };
+            let message =
+                if reason.contains("unauthorized admin") || reason.contains("missing role") {
+                    "Backend signer is not AI executor admin, cannot raise on-chain rate limit."
+                        .to_string()
+                } else {
+                    format!("Failed to raise AI executor rate limit: {}", err)
+                };
             RateLimitEnsureResult {
                 ready: false,
                 message,
@@ -1333,7 +1335,10 @@ pub async fn ensure_executor_ready(
             let message = if status_notes.is_empty() {
                 "AI executor burner role granted.".to_string()
             } else {
-                format!("AI executor burner role granted. {}", status_notes.join(" "))
+                format!(
+                    "AI executor burner role granted. {}",
+                    status_notes.join(" ")
+                )
             };
             return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
                 ready: true,
@@ -1960,10 +1965,7 @@ fn parse_felt_u64(value: &str) -> Option<u64> {
 }
 
 // Internal helper that fetches data for `fetch_ai_executor_action_count`.
-async fn fetch_ai_executor_action_count(
-    state: &AppState,
-    contract: &str,
-) -> Option<u64> {
+async fn fetch_ai_executor_action_count(state: &AppState, contract: &str) -> Option<u64> {
     let client = StarknetClient::new(state.config.starknet_rpc_url.clone());
     let storage_key = get_storage_var_address("action_count", &[]).ok()?;
     let storage_key_hex = format!("{:#x}", storage_key);

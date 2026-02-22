@@ -2640,8 +2640,11 @@ pub async fn execute_swap(
         amount_in * from_price,
         expected_out * to_price,
     ));
-    let estimated_points_earned =
-        estimate_swap_points_for_response(volume_usd, state.config.is_testnet(), nft_discount_percent);
+    let estimated_points_earned = estimate_swap_points_for_response(
+        volume_usd,
+        state.config.is_testnet(),
+        nft_discount_percent,
+    );
 
     // Simpan ke database
     let tx = crate::models::Transaction {

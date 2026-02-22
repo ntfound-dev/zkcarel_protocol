@@ -16,6 +16,13 @@ export const STARKNET_EXPLORER_SEPOLIA_BASE_URL =
 export const STARKSCAN_SEPOLIA_BASE_URL = STARKNET_EXPLORER_SEPOLIA_BASE_URL
 export const BTC_TESTNET_EXPLORER_BASE_URL =
   process.env.NEXT_PUBLIC_BTC_TESTNET_EXPLORER_URL || "https://mempool.space/testnet4"
+export const ETH_SEPOLIA_FAUCET_URL =
+  process.env.NEXT_PUBLIC_ETH_SEPOLIA_FAUCET_URL ||
+  "https://cloud.google.com/application/web3/faucet/ethereum/sepolia"
+export const STRK_FAUCET_URL =
+  process.env.NEXT_PUBLIC_STRK_FAUCET_URL || "https://faucet.starknet.io/"
+export const BTC_TESTNET_FAUCET_URL =
+  process.env.NEXT_PUBLIC_BTC_TESTNET_FAUCET_URL || "https://testnet4.info/"
 
 /**
  * Parses or transforms values for `normalizeStarknetChainValue`.

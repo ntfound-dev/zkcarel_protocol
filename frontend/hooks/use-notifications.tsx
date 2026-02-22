@@ -116,10 +116,6 @@ function buildTxExplorerUrls(txHash?: string, txNetwork?: TxNetwork): TxExplorer
       label: "Open Explorer",
       url: `${STARKSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
     },
-    {
-      label: "Open Etherscan",
-      url: `${ETHERSCAN_SEPOLIA_BASE_URL}/tx/${txHash}`,
-    },
   ]
 }
 

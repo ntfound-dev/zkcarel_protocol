@@ -72,6 +72,7 @@ mod tests {
             gemini_api_key: None,
             gemini_api_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
             gemini_model: "gemini-2.0-flash".to_string(),
+            ai_llm_rewrite_timeout_ms: 8_000,
             twitter_bearer_token: None,
             telegram_bot_token: None,
             discord_bot_token: None,
