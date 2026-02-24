@@ -588,6 +588,11 @@ fn load_env_override(paths: &[&str]) {
             if key.is_empty() {
                 continue;
             }
+            // Environment provided by platform (e.g. Leapcell, Railway) must win.
+            // This keeps `.env` as fallback defaults and prevents accidental override.
+            if env::var_os(key).is_some() {
+                continue;
+            }
             let mut value = raw_value.trim().to_string();
             if (value.starts_with('"') && value.ends_with('"'))
                 || (value.starts_with('\'') && value.ends_with('\''))
