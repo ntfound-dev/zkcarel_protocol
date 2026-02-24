@@ -139,7 +139,12 @@ impl Config {
     /// # Notes
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn from_env() -> anyhow::Result<Self> {
-        load_env_override(&[".env", "backend-rust/.env"]);
+        load_env_override(&[
+            ".env",
+            "backend-rust/.env",
+            "deploy.env",
+            "backend-rust/deploy.env",
+        ]);
 
         let privacy_auto_garaga_payload_file = env::var("PRIVACY_AUTO_GARAGA_PAYLOAD_FILE")
             .ok()
