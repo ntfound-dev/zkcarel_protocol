@@ -76,6 +76,22 @@ function DialogOverlay({
   )
 }
 
+function hasDialogTitle(node: React.ReactNode): boolean {
+  return React.Children.toArray(node).some((child) => {
+    if (!React.isValidElement(child)) return false
+
+    const element = child as React.ReactElement<{
+      children?: React.ReactNode
+      'data-slot'?: string
+    }>
+
+    if (element.props['data-slot'] === 'dialog-title') return true
+    if (element.type === DialogPrimitive.Title) return true
+
+    return hasDialogTitle(element.props.children)
+  })
+}
+
 /**
  * Handles `DialogContent` logic.
  *
@@ -90,6 +106,8 @@ function DialogContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
 }) {
+  const includesTitle = hasDialogTitle(children)
+
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
@@ -101,6 +119,11 @@ function DialogContent({
         )}
         {...props}
       >
+        {!includesTitle && (
+          <DialogPrimitive.Title data-slot="dialog-title" className="sr-only">
+            Dialog
+          </DialogPrimitive.Title>
+        )}
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close

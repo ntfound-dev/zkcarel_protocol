@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input"
 import { CarelBrandLogo } from "@/components/carel-logo"
 import { PrivacyRouterPanel } from "@/components/privacy-router-panel"
 import { ReferralLog } from "@/components/referral-log"
+import { SettingsPage } from "@/components/settings-page"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,6 +125,9 @@ type UiTx = {
   txNetwork?: "starknet" | "evm" | "btc"
 }
 
+type DeFiFeatureTarget = "swap-bridge" | "limit-order" | "stake-earn"
+type ReceiveNetworkTarget = "starknet" | "evm" | "btc"
+
 /**
  * Handles `EnhancedNavigation` logic.
  *
@@ -140,11 +144,14 @@ export function EnhancedNavigation() {
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [topUpOpen, setTopUpOpen] = React.useState(false)
   const [privacyOpen, setPrivacyOpen] = React.useState(false)
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [referralLogOpen, setReferralLogOpen] = React.useState(false)
   const [faucetStatus, setFaucetStatus] = React.useState<FaucetStatusMap>({})
   const [faucetLoading, setFaucetLoading] = React.useState<Record<string, boolean>>({})
   const [faucetTx, setFaucetTx] = React.useState<Record<string, string>>({})
   const [copiedAddress, setCopiedAddress] = React.useState(false)
+  const [copiedReceiveNetwork, setCopiedReceiveNetwork] = React.useState<ReceiveNetworkTarget | null>(null)
+  const [activeReceiveNetwork, setActiveReceiveNetwork] = React.useState<ReceiveNetworkTarget>("starknet")
   const [txFilter, setTxFilter] = React.useState("all")
   const [txHistory, setTxHistory] = React.useState<UiTx[]>([])
   const [txHistoryLoading, setTxHistoryLoading] = React.useState(false)
@@ -274,6 +281,47 @@ export function EnhancedNavigation() {
   const effectiveStarknetAddress =
     wallet.starknetAddress || (wallet.network === "starknet" ? wallet.address : null)
 
+  const receiveTargets = React.useMemo(
+    () => [
+      {
+        key: "starknet" as const,
+        label: "Starknet Sepolia",
+        chainHint: "STRK / CAREL / USDC / USDT / WBTC",
+        address: effectiveStarknetAddress || "",
+        explorerLabel: "Starkscan",
+        explorerUrl: effectiveStarknetAddress
+          ? `${STARKSCAN_SEPOLIA_BASE_URL}/contract/${effectiveStarknetAddress}`
+          : "",
+      },
+      {
+        key: "evm" as const,
+        label: "ETH Sepolia",
+        chainHint: "ETH",
+        address: wallet.evmAddress || "",
+        explorerLabel: "Etherscan",
+        explorerUrl: wallet.evmAddress ? `${ETHERSCAN_SEPOLIA_BASE_URL}/address/${wallet.evmAddress}` : "",
+      },
+      {
+        key: "btc" as const,
+        label: "BTC Testnet4",
+        chainHint: "BTC",
+        address: wallet.btcAddress || "",
+        explorerLabel: "Mempool",
+        explorerUrl: wallet.btcAddress ? `${BTC_TESTNET_EXPLORER_BASE_URL}/address/${wallet.btcAddress}` : "",
+      },
+    ],
+    [effectiveStarknetAddress, wallet.btcAddress, wallet.evmAddress]
+  )
+
+  const selectedReceiveTarget =
+    receiveTargets.find((target) => target.key === activeReceiveNetwork) || receiveTargets[0]
+  const selectedReceiveFaucetUrl =
+    selectedReceiveTarget.key === "starknet"
+      ? STRK_FAUCET_URL
+      : selectedReceiveTarget.key === "evm"
+      ? ETH_SEPOLIA_FAUCET_URL
+      : BTC_TESTNET_FAUCET_URL
+
   const connectedTestnets = React.useMemo(() => {
     const labels: string[] = []
     if (effectiveStarknetAddress) labels.push(formatNetworkLabel("starknet"))
@@ -298,6 +346,16 @@ export function EnhancedNavigation() {
     }
     return `Connected to ${primaryConnectedTestnet}`
   }, [primaryConnectedTestnet])
+
+  React.useEffect(() => {
+    if (!topUpOpen) return
+    const currentTarget = receiveTargets.find((target) => target.key === activeReceiveNetwork)
+    if (currentTarget?.address) return
+    const firstReadyTarget = receiveTargets.find((target) => Boolean(target.address))
+    if (firstReadyTarget) {
+      setActiveReceiveNetwork(firstReadyTarget.key)
+    }
+  }, [topUpOpen, activeReceiveNetwork, receiveTargets])
 
   const hasStarknetBalanceSource = Boolean(effectiveStarknetAddress)
   const preferOnchainOrBackend = React.useCallback(
@@ -769,6 +827,37 @@ export function EnhancedNavigation() {
     }
   }
 
+  const copyReceiveAddress = (target: ReceiveNetworkTarget) => {
+    const selected = receiveTargets.find((item) => item.key === target)
+    if (!selected?.address) return
+    navigator.clipboard.writeText(selected.address)
+    setCopiedReceiveNetwork(target)
+    setTimeout(() => setCopiedReceiveNetwork(null), 2000)
+  }
+
+  const openDeFiFeature = (feature: DeFiFeatureTarget) => {
+    if (typeof window === "undefined") return
+    const hashByFeature: Record<DeFiFeatureTarget, string> = {
+      "swap-bridge": "#trade",
+      "limit-order": "#limit-order",
+      "stake-earn": "#stake",
+    }
+    const targetHash = hashByFeature[feature]
+    window.dispatchEvent(new CustomEvent("carel:open-feature", { detail: feature }))
+    if (window.location.pathname !== "/") {
+      window.location.href = `/${targetHash}`
+      return
+    }
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash
+    }
+    setTimeout(() => {
+      const section = document.querySelector(targetHash) as HTMLElement | null
+      const panel = document.getElementById("feature-panel")
+      ;(section || panel)?.scrollIntoView({ behavior: "smooth", block: "start" })
+    }, 120)
+  }
+
   // Filter transactions
   const filteredTxHistory = txHistory.filter(tx => {
     if (txFilter === "all") return true
@@ -1208,7 +1297,7 @@ export function EnhancedNavigation() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* Profile / Airdrop */}
+            {/* Profile */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon">
@@ -1234,13 +1323,13 @@ export function EnhancedNavigation() {
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>
-                  <Link href="#portfolio" className="flex items-center gap-2">
+                  <Link href="/#portfolio" className="flex items-center gap-2">
                     <PieChart className="h-4 w-4" />
                     Portfolio
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="#leaderboard" className="flex items-center gap-2">
+                  <Link href="/#leaderboard" className="flex items-center gap-2">
                     <Trophy className="h-4 w-4" />
                     Leaderboard
                   </Link>
@@ -1259,13 +1348,6 @@ export function EnhancedNavigation() {
                   <Gift className="h-4 w-4 mr-2" />
                   Loyalty Hub
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="#airdrop" className="flex items-center gap-2">
-                    <Zap className="h-4 w-4 text-accent" />
-                    <span>Airdrop</span>
-                    <span className="ml-auto text-xs bg-accent/20 text-accent px-1.5 py-0.5 rounded">New</span>
-                  </Link>
-                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={handleSetDisplayName}
@@ -1275,11 +1357,9 @@ export function EnhancedNavigation() {
                   <User className="h-4 w-4 mr-2" />
                   {displayName ? "Change Display Name" : "Set Display Name"}
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="#settings" className="flex items-center gap-2">
-                    <Settings className="h-4 w-4" />
-                    Settings
-                  </Link>
+                <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                  <Settings className="h-4 w-4 mr-2" />
+                  Settings
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1291,34 +1371,40 @@ export function EnhancedNavigation() {
                   <Menu className="h-5 w-5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64 glass-strong border-border">
+                <DropdownMenuContent align="end" className="w-64 glass-strong border-border">
                 <DropdownMenuLabel>DeFi</DropdownMenuLabel>
-                <DropdownMenuItem asChild>
-                  <Link href="#trade" className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <ArrowRightLeft className="h-4 w-4" />
-                      Swap & Bridge
-                    </div>
-                    <ChevronRight className="h-4 w-4" />
-                  </Link>
+                <DropdownMenuItem
+                  onClick={() => openDeFiFeature("swap-bridge")}
+                  onSelect={() => openDeFiFeature("swap-bridge")}
+                  className="flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2">
+                    <ArrowRightLeft className="h-4 w-4" />
+                    Swap & Bridge
+                  </div>
+                  <ChevronRight className="h-4 w-4" />
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="#limit-order" className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <TrendingUp className="h-4 w-4" />
-                      Limit Order
-                    </div>
-                    <span className="text-xs text-secondary">Soon</span>
-                  </Link>
+                <DropdownMenuItem
+                  onClick={() => openDeFiFeature("limit-order")}
+                  onSelect={() => openDeFiFeature("limit-order")}
+                  className="flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4" />
+                    Limit Order
+                  </div>
+                  <ChevronRight className="h-4 w-4" />
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="#stake" className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Coins className="h-4 w-4" />
-                      Stake & Earn
-                    </div>
-                    <span className="text-xs text-secondary">Soon</span>
-                  </Link>
+                <DropdownMenuItem
+                  onClick={() => openDeFiFeature("stake-earn")}
+                  onSelect={() => openDeFiFeature("stake-earn")}
+                  className="flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2">
+                    <Coins className="h-4 w-4" />
+                    Stake & Earn
+                  </div>
+                  <ChevronRight className="h-4 w-4" />
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel>Top Up</DropdownMenuLabel>
@@ -1395,19 +1481,49 @@ export function EnhancedNavigation() {
                 <Lock className="h-4 w-4 mr-2" />
                 Privacy Router
               </Button>
-              <Link href="#trade" className="block px-4 py-3 rounded-lg hover:bg-surface transition-colors">
+              <button
+                onClick={() => {
+                  openDeFiFeature("swap-bridge")
+                  setMobileMenuOpen(false)
+                }}
+                className="w-full text-left px-4 py-3 rounded-lg hover:bg-surface transition-colors"
+              >
                 <div className="flex items-center gap-2">
                   <ArrowRightLeft className="h-5 w-5 text-primary" />
                   <span className="font-medium">Swap & Bridge</span>
                 </div>
-              </Link>
-              <Link href="#portfolio" className="block px-4 py-3 rounded-lg hover:bg-surface transition-colors">
+              </button>
+              <button
+                onClick={() => {
+                  openDeFiFeature("limit-order")
+                  setMobileMenuOpen(false)
+                }}
+                className="w-full text-left px-4 py-3 rounded-lg hover:bg-surface transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5 text-primary" />
+                  <span className="font-medium">Limit Order</span>
+                </div>
+              </button>
+              <button
+                onClick={() => {
+                  openDeFiFeature("stake-earn")
+                  setMobileMenuOpen(false)
+                }}
+                className="w-full text-left px-4 py-3 rounded-lg hover:bg-surface transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Coins className="h-5 w-5 text-primary" />
+                  <span className="font-medium">Stake & Earn</span>
+                </div>
+              </button>
+              <Link href="/#portfolio" className="block px-4 py-3 rounded-lg hover:bg-surface transition-colors">
                 <div className="flex items-center gap-2">
                   <PieChart className="h-5 w-5 text-primary" />
                   <span className="font-medium">Portfolio</span>
                 </div>
               </Link>
-              <Link href="#leaderboard" className="block px-4 py-3 rounded-lg hover:bg-surface transition-colors">
+              <Link href="/#leaderboard" className="block px-4 py-3 rounded-lg hover:bg-surface transition-colors">
                 <div className="flex items-center gap-2">
                   <Trophy className="h-5 w-5 text-primary" />
                   <span className="font-medium">Leaderboard</span>
@@ -1562,35 +1678,155 @@ export function EnhancedNavigation() {
             </TabsList>
             
             <TabsContent value="receive" className="space-y-4 pt-4">
-              {/* QR Code Placeholder */}
-              <div className="flex flex-col items-center p-6 rounded-xl bg-surface/50 border border-border">
-                <div className="w-48 h-48 bg-background rounded-xl flex items-center justify-center border-2 border-dashed border-border mb-4">
-                  <QrCode className="h-24 w-24 text-muted-foreground" />
-                </div>
-                <p className="text-xs text-muted-foreground mb-2">Your Wallet Address</p>
-                <div className="flex items-center gap-2">
-                  <code className="text-sm font-mono text-foreground bg-surface px-3 py-1.5 rounded">
-                    {wallet?.isConnected ? wallet.address : "Connect wallet first"}
-                  </code>
-                  {wallet?.isConnected && (
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={copyAddress}>
-                      {copiedAddress ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
-                    </Button>
-                  )}
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Select Network
+                </p>
+                <div className="grid grid-cols-1 gap-2">
+                  {receiveTargets.map((target) => {
+                    const isActive = target.key === activeReceiveNetwork
+                    const hasAddress = Boolean(target.address)
+                    return (
+                      <button
+                        key={target.key}
+                        type="button"
+                        onClick={() => setActiveReceiveNetwork(target.key)}
+                        className={cn(
+                          "w-full rounded-lg border px-3 py-2 text-left transition-colors",
+                          isActive
+                            ? "border-primary bg-primary/10"
+                            : "border-border bg-surface/40 hover:bg-surface/70"
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-foreground">{target.label}</p>
+                            <p className="text-xs text-muted-foreground">{target.chainHint}</p>
+                          </div>
+                          <span className={cn("text-[10px] font-semibold", hasAddress ? "text-success" : "text-muted-foreground")}>
+                            {hasAddress ? "READY" : "NOT LINKED"}
+                          </span>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
-              
-              {/* CEX Deposit Info */}
-              <div className="p-4 rounded-lg bg-secondary/10 border border-secondary/20">
-                <div className="flex items-start gap-3">
-                  <Lock className="h-5 w-5 text-secondary flex-shrink-0 mt-0.5" />
+
+              <div className="rounded-xl border border-border bg-surface/40 p-4 space-y-3">
+                <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-medium text-foreground">CEX Deposit - Coming Soon</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Direct deposit from centralized exchanges will be available in mainnet.
+                    <p className="text-sm font-medium text-foreground">Receive on {selectedReceiveTarget.label}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Supported asset: {selectedReceiveTarget.chainHint}
                     </p>
                   </div>
+                  <div className="h-10 w-10 rounded-lg border border-border bg-background flex items-center justify-center">
+                    <QrCode className="h-5 w-5 text-muted-foreground" />
+                  </div>
                 </div>
+
+                {selectedReceiveTarget.address ? (
+                  <>
+                    <code className="block break-all rounded-lg bg-background px-3 py-2 text-xs font-mono text-foreground">
+                      {selectedReceiveTarget.address}
+                    </code>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => copyReceiveAddress(selectedReceiveTarget.key)}
+                      >
+                        {copiedReceiveNetwork === selectedReceiveTarget.key ? (
+                          <Check className="h-4 w-4 mr-2 text-success" />
+                        ) : (
+                          <Copy className="h-4 w-4 mr-2" />
+                        )}
+                        Copy address
+                      </Button>
+                      {selectedReceiveTarget.explorerUrl && (
+                        <Button type="button" variant="outline" size="sm" asChild>
+                          <a
+                            href={selectedReceiveTarget.explorerUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            View on {selectedReceiveTarget.explorerLabel}
+                          </a>
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Send funds only from the same network to avoid losing assets.
+                    </p>
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      No address linked for {selectedReceiveTarget.label}. Connect wallet first before receiving funds.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setTopUpOpen(false)
+                          setWalletDialogOpen(true)
+                        }}
+                      >
+                        <Wallet className="h-4 w-4 mr-2" />
+                        Connect Wallet
+                      </Button>
+                    </div>
+                    {selectedReceiveTarget.key === "btc" && (
+                      <div className="space-y-2">
+                        <p className="text-[11px] text-muted-foreground">
+                          Or link BTC Testnet4 address manually:
+                        </p>
+                        <div className="flex gap-2">
+                          <Input
+                            value={manualBtcAddress}
+                            onChange={(event) => setManualBtcAddress(event.target.value)}
+                            placeholder="tb1... or m..."
+                            className="h-9"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleManualBtcLink}
+                            disabled={btcManualLinkPending || !manualBtcAddress.trim()}
+                          >
+                            {btcManualLinkPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              "Link"
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 rounded-lg bg-secondary/10 border border-secondary/20">
+                <p className="text-xs font-semibold uppercase tracking-wide text-secondary">
+                  Transfer Guide
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  1) Select the target network. 2) Copy your receive address. 3) Send testnet funds from external wallet/exchange on the same network.
+                </p>
+                <a
+                  href={selectedReceiveFaucetUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex mt-2 text-xs text-primary hover:underline"
+                >
+                  Get testnet funds
+                </a>
               </div>
             </TabsContent>
             
@@ -1628,6 +1864,15 @@ export function EnhancedNavigation() {
               </div>
             </TabsContent>
           </Tabs>
+        </DialogContent>
+      </Dialog>
+
+      {/* Settings Dialog */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="glass-strong border-border max-w-5xl max-h-[85vh] overflow-hidden p-0">
+          <div className="max-h-[85vh] overflow-y-auto p-6">
+            <SettingsPage />
+          </div>
         </DialogContent>
       </Dialog>
 

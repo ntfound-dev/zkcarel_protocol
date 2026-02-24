@@ -50,6 +50,39 @@ export default function CarelProtocolApp() {
     }
   }, [])
 
+  React.useEffect(() => {
+    const handleOpenFeature = (event: Event) => {
+      const custom = event as CustomEvent<SelectableFeatureId>
+      const requestedFeature = custom.detail
+      if (!requestedFeature) return
+      setActiveFeature(requestedFeature)
+    }
+
+    window.addEventListener("carel:open-feature", handleOpenFeature as EventListener)
+    return () => {
+      window.removeEventListener("carel:open-feature", handleOpenFeature as EventListener)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    const syncFeatureFromHash = () => {
+      const hash = window.location.hash.toLowerCase()
+      if (hash === "#trade") {
+        setActiveFeature("swap-bridge")
+      } else if (hash === "#limit-order") {
+        setActiveFeature("limit-order")
+      } else if (hash === "#stake") {
+        setActiveFeature("stake-earn")
+      }
+    }
+
+    syncFeatureFromHash()
+    window.addEventListener("hashchange", syncFeatureFromHash)
+    return () => {
+      window.removeEventListener("hashchange", syncFeatureFromHash)
+    }
+  }, [])
+
   return (
     <ThemeProvider defaultTheme="dark">
       <WalletProvider>
@@ -109,10 +142,14 @@ export default function CarelProtocolApp() {
                   )}
 
                   {/* Portfolio Dashboard */}
-                  <PortfolioDashboard />
+                  <section id="portfolio">
+                    <PortfolioDashboard />
+                  </section>
 
                   {/* Leaderboard */}
-                  <Leaderboard />
+                  <section id="leaderboard">
+                    <Leaderboard />
+                  </section>
 
                   {/* Footer */}
                   <footer className="py-8 border-t border-border">
