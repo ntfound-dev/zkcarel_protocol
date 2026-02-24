@@ -31,3 +31,4 @@ Thumbs.db
 !readme.md
 ../bak/
 Secrets.toml
+deploy.env
