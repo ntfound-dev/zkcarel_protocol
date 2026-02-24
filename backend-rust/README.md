@@ -155,6 +155,12 @@ GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 ### AI and Rate Limiting
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
+| `LLM_API_URL` | No | Empty | OpenAI-compatible chat completion URL (recommended for Groq) |
+| `LLM_API_KEY` | No | Empty | Bearer token for `LLM_API_URL` |
+| `LLM_MODEL` | No | `llama-3.3-70b-versatile` | Model used for `LLM_API_URL` |
+| `GROQ_API_URL` | No | Empty | Alias for `LLM_API_URL` |
+| `GROQ_API_KEY` | No | Empty | Alias for `LLM_API_KEY` |
+| `GROQ_MODEL` | No | Empty | Alias for `LLM_MODEL` |
 | `OPENAI_API_KEY` | No | Empty | Optional LLM provider key |
 | `CAIRO_CODER_API_KEY` | No | Empty | Cairo Coder API key (`x-api-key`) |
 | `CAIRO_CODER_API_URL` | No | `https://api.cairo-coder.com/v1/chat/completions` | Cairo Coder chat completion URL |
@@ -164,7 +170,7 @@ GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 | `GEMINI_API_URL` | No | `https://generativelanguage.googleapis.com/v1beta` | Gemini base URL |
 | `GEMINI_MODEL` | No | `gemini-2.0-flash` | Gemini model name |
 | `AI_LLM_REWRITE_TIMEOUT_MS` | No | `8000` | Timeout for fallback LLM rewrite on unknown commands |
-| `AI_LEVEL_BURN_ADDRESS` | Recommended | Empty | Burn destination used to verify L2/L3 upgrade payments |
+| `AI_LEVEL_BURN_ADDRESS` | No | Empty | Legacy AI upgrade target (deprecated). AI L2/L3 payment verification now uses `TREASURY_ADDRESS`. |
 | `TWITTER_BEARER_TOKEN` | No | Empty | Optional token for social verification features |
 | `TELEGRAM_BOT_TOKEN` | No | Empty | Optional token for social verification features |
 | `DISCORD_BOT_TOKEN` | No | Empty | Optional token for social verification features |
@@ -226,7 +232,12 @@ GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX=2
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `STARKNET_API_RPC_URL` | No | Fallback to `STARKNET_RPC_URL` | API call RPC override |
+| `STARKNET_API_RPC_POOL` | No | Empty | Comma/space separated API RPC pool (used with failover rotation) |
 | `STARKNET_INDEXER_RPC_URL` | No | Fallback to `STARKNET_RPC_URL` | Indexer RPC override |
+| `STARKNET_INDEXER_RPC_POOL` | No | Empty | Comma/space separated indexer RPC pool (isolates indexer quota) |
+| `STARKNET_WALLET_RPC_URL` | No | Fallback to API/base RPC | Wallet/portfolio RPC override |
+| `STARKNET_WALLET_RPC_POOL` | No | Empty | Comma/space separated wallet/portfolio RPC pool (used by balance fetch + batch reads) |
+| `STARKNET_RPC_POOL` | No | Empty | Global Starknet RPC pool fallback when service-specific pool is not set |
 | `STARKNET_RPC_MAX_INFLIGHT` | No | `6` | Max concurrent Starknet RPC requests |
 | `EVM_RPC_MAX_INFLIGHT` | No | `8` | Max concurrent EVM RPC requests |
 | `ENABLE_EVENT_INDEXER` | No | `true` | Enable/disable event indexer worker |

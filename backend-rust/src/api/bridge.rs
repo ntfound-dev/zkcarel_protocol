@@ -17,6 +17,9 @@ use crate::services::privacy_verifier::{
 use crate::{
     constants::{
         token_address_for, BRIDGE_ATOMIQ, BRIDGE_GARDEN, BRIDGE_LAYERSWAP, BRIDGE_STARKGATE,
+        EPOCH_DURATION_SECONDS, POINTS_MIN_USD_BRIDGE_BTC, POINTS_MIN_USD_BRIDGE_BTC_TESTNET,
+        POINTS_MIN_USD_BRIDGE_ETH, POINTS_MIN_USD_BRIDGE_ETH_TESTNET, POINTS_PER_USD_BRIDGE_BTC,
+        POINTS_PER_USD_BRIDGE_ETH,
     },
     // Mengimpor hasher untuk menghilangkan warning unused di crypto/hash.rs
     crypto::hash,
@@ -26,9 +29,10 @@ use crate::{
         GardenStarknetTransaction, LayerSwapClient, LayerSwapQuote,
     },
     models::{ApiResponse, BridgeQuoteRequest, BridgeQuoteResponse, LinkedWalletAddress},
-    services::nft_discount::consume_nft_usage_if_active,
+    services::nft_discount::consume_nft_usage,
     services::price_guard::{
-        fallback_price_for, first_sane_price, sanitize_usd_notional, symbol_candidates_for,
+        fallback_price_for, first_sane_price, sanitize_points_usd_base, sanitize_usd_notional,
+        symbol_candidates_for,
     },
     services::RouteOptimizer,
 };
@@ -36,7 +40,7 @@ use starknet_core::types::{Call, ExecutionResult, Felt, FunctionCall, Transactio
 use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
 use tokio::time::{sleep, timeout, Duration};
 
-use super::{require_user, AppState};
+use super::{require_starknet_user, require_user, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyVerificationPayload {
@@ -74,6 +78,12 @@ pub struct ExecuteBridgeResponse {
     pub amount: String,
     pub estimated_receive: String,
     pub estimated_time: String,
+    pub fee_before_discount: String,
+    pub fee_discount_saved: String,
+    pub nft_discount_percent: String,
+    pub estimated_points_earned: String,
+    pub points_pending: bool,
+    pub ai_level_points_bonus_percent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy_tx_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,10 +118,12 @@ pub struct BridgeStatusResponse {
 }
 
 const ONCHAIN_DISCOUNT_TIMEOUT_MS: u64 = 2_500;
-const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 30;
-const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 600;
+const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 300;
+const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 1_800;
 const NFT_DISCOUNT_CACHE_MAX_ENTRIES: usize = 100_000;
 const BRIDGE_MEV_FEE_RATE: f64 = 0.01;
+const BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
+const BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
 
 // Internal helper that supports `canonical_bridge_chain` operations in the bridge flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
@@ -193,20 +205,44 @@ async fn invalidate_cached_nft_discount(contract: &str, user: &str) {
     guard.remove(&key);
 }
 
-// Internal helper that checks conditions for `has_remaining_nft_usage` in the bridge flow.
+#[derive(Clone, Copy, Debug, Default)]
+struct NftUsageSnapshot {
+    tier: i32,
+    discount_percent: f64,
+    max_usage: u128,
+    used_in_period: u128,
+}
+
+// Internal helper that supports `current_nft_period_epoch` operations in the bridge flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-async fn has_remaining_nft_usage(
+fn current_nft_period_epoch() -> i64 {
+    chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS
+}
+
+// Internal helper that supports `u128_to_i64_saturating` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn u128_to_i64_saturating(value: u128) -> i64 {
+    if value > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        value as i64
+    }
+}
+
+// Internal helper that fetches data for `read_nft_usage_snapshot` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn read_nft_usage_snapshot(
     reader: &OnchainReader,
     contract_address: Felt,
     user_felt: Felt,
-) -> Result<bool> {
+) -> Result<Option<NftUsageSnapshot>> {
     let storage_key = get_storage_var_address("user_nft", &[user_felt]).map_err(|e| {
         crate::error::AppError::Internal(format!("Storage key resolution error: {}", e))
     })?;
     let token_raw = reader.get_storage_at(contract_address, storage_key).await?;
     let token_id = felt_to_u128(&token_raw).unwrap_or(0);
     if token_id == 0 {
-        return Ok(false);
+        return Ok(None);
     }
 
     let info_call = FunctionCall {
@@ -217,12 +253,19 @@ async fn has_remaining_nft_usage(
     };
     let info = reader.call(info_call).await?;
     if info.len() < 7 {
-        return Ok(false);
+        return Ok(None);
     }
 
+    let tier = felt_to_u128(&info[0]).unwrap_or(0) as i32;
+    let discount = u256_from_felts(&info[1], &info[2]).unwrap_or(0) as f64;
     let max_usage = u256_from_felts(&info[3], &info[4]).unwrap_or(0);
     let used_in_period = u256_from_felts(&info[5], &info[6]).unwrap_or(0);
-    Ok(max_usage > 0 && used_in_period < max_usage)
+    Ok(Some(NftUsageSnapshot {
+        tier: tier.max(0),
+        discount_percent: discount.clamp(0.0, 100.0),
+        max_usage,
+        used_in_period,
+    }))
 }
 
 // Internal helper that supports `estimate_time` operations in the bridge flow.
@@ -237,6 +280,53 @@ fn estimate_time(provider: &str) -> &'static str {
     }
 }
 
+// Internal helper that supports `bridge_ai_level_points_bonus_percent` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn bridge_ai_level_points_bonus_percent(level: u8) -> f64 {
+    match level {
+        2 => BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT,
+        3 => BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT,
+        _ => 0.0,
+    }
+}
+
+// Internal helper that supports `estimate_bridge_points_for_response` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn estimate_bridge_points_for_response(
+    volume_usd: f64,
+    is_btc_bridge: bool,
+    nft_discount_percent: f64,
+    ai_level: u8,
+    is_testnet: bool,
+) -> f64 {
+    let sanitized = sanitize_points_usd_base(volume_usd);
+    let (min_threshold, per_usd_rate) = if is_btc_bridge {
+        (
+            if is_testnet {
+                POINTS_MIN_USD_BRIDGE_BTC_TESTNET
+            } else {
+                POINTS_MIN_USD_BRIDGE_BTC
+            },
+            POINTS_PER_USD_BRIDGE_BTC,
+        )
+    } else {
+        (
+            if is_testnet {
+                POINTS_MIN_USD_BRIDGE_ETH_TESTNET
+            } else {
+                POINTS_MIN_USD_BRIDGE_ETH
+            },
+            POINTS_PER_USD_BRIDGE_ETH,
+        )
+    };
+    if sanitized < min_threshold {
+        return 0.0;
+    }
+    let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
+    let ai_factor = 1.0 + (bridge_ai_level_points_bonus_percent(ai_level) / 100.0);
+    (sanitized * per_usd_rate * nft_factor * ai_factor).max(0.0)
+}
+
 // Internal helper that supports `discount_contract_address` operations in the bridge flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn discount_contract_address(state: &AppState) -> Option<&str> {
@@ -249,7 +339,7 @@ fn discount_contract_address(state: &AppState) -> Option<&str> {
 
 // Internal helper that supports `active_nft_discount_percent` operations in the bridge flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f64 {
+async fn cached_nft_discount_from_local_state(state: &AppState, user_address: &str) -> f64 {
     let Some(contract) = discount_contract_address(state) else {
         return 0.0;
     };
@@ -257,24 +347,62 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
     if let Some(cached) =
         get_cached_nft_discount(&cache_key, Duration::from_secs(NFT_DISCOUNT_CACHE_TTL_SECS)).await
     {
-        if cached <= 0.0 {
-            return 0.0;
-        }
-        tracing::debug!(
-            "Ignoring positive NFT discount cache in bridge for strict usage revalidation user={} cached={}",
-            user_address,
-            cached
-        );
+        return cached.max(0.0);
     }
+
+    let period_epoch = current_nft_period_epoch();
+    match state
+        .db
+        .get_nft_discount_state(contract, user_address, period_epoch)
+        .await
+    {
+        Ok(Some(row)) => {
+            let age_secs = chrono::Utc::now()
+                .signed_duration_since(row.updated_at)
+                .num_seconds()
+                .max(0) as u64;
+            if age_secs > NFT_DISCOUNT_CACHE_STALE_SECS {
+                return 0.0;
+            }
+            let effective_used = row.local_used_in_period.max(row.chain_used_in_period);
+            let has_remaining_usage = row.max_usage > 0 && effective_used < row.max_usage;
+            let discount = if row.is_active && has_remaining_usage {
+                row.discount_percent.clamp(0.0, 100.0)
+            } else {
+                0.0
+            };
+            cache_nft_discount(&cache_key, discount).await;
+            discount
+        }
+        Ok(None) => 0.0,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to read local NFT discount state in bridge for user={}: {}",
+                user_address,
+                err
+            );
+            0.0
+        }
+    }
+}
+
+// Internal helper that supports `refresh_nft_discount_for_submit` operations in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -> f64 {
+    let Some(contract) = discount_contract_address(state) else {
+        return 0.0;
+    };
+    let cache_key = nft_discount_cache_key(contract, user_address);
+    let period_epoch = current_nft_period_epoch();
 
     let reader = match OnchainReader::from_config(&state.config) {
         Ok(reader) => reader,
         Err(err) => {
             tracing::warn!(
-                "Failed to initialize on-chain reader for NFT discount in bridge: {}",
+                "Failed to initialize on-chain reader for NFT discount submit validation in bridge: {}",
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
 
@@ -282,7 +410,7 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(
-                "Invalid discount contract address while calculating bridge fee discount: {}",
+                "Invalid discount contract address while validating bridge fee discount: {}",
                 err
             );
             return 0.0;
@@ -292,7 +420,7 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(
-                "Invalid user address while calculating bridge fee discount: user={}, err={}",
+                "Invalid user address while validating bridge fee discount: user={}, err={}",
                 user_address,
                 err
             );
@@ -304,7 +432,7 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(
-                "Selector resolution failed for has_active_discount in bridge: {}",
+                "Selector resolution failed for has_active_discount in bridge submit validation: {}",
                 err
             );
             return 0.0;
@@ -326,67 +454,137 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
             tracing::warn!(
-                "Failed on-chain NFT discount check in bridge for user={}: {}",
+                "Failed on-chain NFT discount submit validation in bridge for user={}: {}. Falling back to local NFT discount state.",
                 user_address,
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
         Err(_) => {
             tracing::warn!(
-                "Timeout on-chain NFT discount check in bridge for user={}",
+                "Timeout on-chain NFT discount submit validation in bridge for user={}. Falling back to local NFT discount state.",
                 user_address
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
-
     if result.len() < 3 {
-        return 0.0;
+        tracing::warn!(
+            "NFT discount submit validation returned malformed payload for user={}. Falling back to local NFT discount state.",
+            user_address
+        );
+        return cached_nft_discount_from_local_state(state, user_address).await;
     }
 
-    let is_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
-    if !is_active {
-        cache_nft_discount(&cache_key, 0.0).await;
-        return 0.0;
-    }
+    let chain_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
+    let chain_discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
 
-    let has_remaining_usage = match timeout(
+    let usage_snapshot = match timeout(
         Duration::from_millis(ONCHAIN_DISCOUNT_TIMEOUT_MS),
-        has_remaining_nft_usage(&reader, contract_address, user_felt),
+        read_nft_usage_snapshot(&reader, contract_address, user_felt),
     )
     .await
     {
-        Ok(Ok(value)) => value,
+        Ok(Ok(value)) => value.unwrap_or_default(),
         Ok(Err(err)) => {
             tracing::warn!(
-                "Failed to validate NFT usage window in bridge for user={}: {}",
+                "Failed to read NFT usage snapshot in bridge submit validation for user={}: {}. Falling back to local NFT discount state.",
                 user_address,
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
         Err(_) => {
             tracing::warn!(
-                "Timeout while validating NFT usage window in bridge for user={}",
+                "Timeout reading NFT usage snapshot in bridge submit validation for user={}. Falling back to local NFT discount state.",
                 user_address
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
-    if !has_remaining_usage {
-        tracing::info!(
-            "NFT discount exhausted or unavailable in bridge for user={}",
-            user_address
-        );
-        cache_nft_discount(&cache_key, 0.0).await;
-        return 0.0;
-    }
 
-    let discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
-    let normalized = discount.clamp(0.0, 100.0);
-    cache_nft_discount(&cache_key, normalized).await;
-    normalized
+    let discount_percent = if chain_discount > 0.0 {
+        chain_discount
+    } else {
+        usage_snapshot.discount_percent
+    }
+    .clamp(0.0, 100.0);
+    let max_usage_i64 = u128_to_i64_saturating(usage_snapshot.max_usage);
+    let chain_used_i64 = u128_to_i64_saturating(usage_snapshot.used_in_period);
+
+    let db_row = state
+        .db
+        .upsert_nft_discount_state_from_chain(
+            contract,
+            user_address,
+            period_epoch,
+            usage_snapshot.tier.max(0),
+            discount_percent,
+            chain_active,
+            max_usage_i64,
+            chain_used_i64,
+        )
+        .await;
+
+    let resolved_discount = match db_row {
+        Ok(row) => {
+            let effective_used = row.local_used_in_period.max(row.chain_used_in_period);
+            let has_remaining_usage = row.max_usage > 0 && effective_used < row.max_usage;
+            if row.is_active && has_remaining_usage {
+                row.discount_percent.clamp(0.0, 100.0)
+            } else {
+                0.0
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Failed to persist NFT discount state in bridge for user={}: {}",
+                user_address,
+                err
+            );
+            let has_remaining_usage = usage_snapshot.max_usage > 0
+                && usage_snapshot.used_in_period < usage_snapshot.max_usage;
+            if chain_active && has_remaining_usage {
+                discount_percent
+            } else {
+                0.0
+            }
+        }
+    };
+
+    cache_nft_discount(&cache_key, resolved_discount).await;
+    resolved_discount
+}
+
+// Internal helper that runs side-effecting logic for `record_nft_discount_usage_after_submit` in the bridge flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn record_nft_discount_usage_after_submit(state: &AppState, user_address: &str) {
+    let Some(contract) = discount_contract_address(state) else {
+        return;
+    };
+    let period_epoch = current_nft_period_epoch();
+    match state
+        .db
+        .increment_nft_discount_local_usage(contract, user_address, period_epoch, 1)
+        .await
+    {
+        Ok(updated_usage) => {
+            tracing::debug!(
+                "Recorded local NFT usage after bridge submit user={} period={} local_used={}",
+                user_address,
+                period_epoch,
+                updated_usage
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Failed recording local NFT usage after bridge submit for user={}: {}",
+                user_address,
+                err
+            );
+        }
+    }
+    invalidate_cached_nft_discount(contract, user_address).await;
 }
 
 // Internal helper that supports `latest_price_usd` operations in the bridge flow.
@@ -990,16 +1188,21 @@ pub async fn execute_bridge(
         .await
         .unwrap_or_default();
 
-    let discount_usage_user = if parse_felt(&user_address).is_ok() {
-        Some(user_address.clone())
-    } else {
-        linked_wallets
-            .iter()
-            .find(|wallet| {
-                wallet.chain.eq_ignore_ascii_case("starknet")
-                    && parse_felt(wallet.wallet_address.trim()).is_ok()
-            })
-            .map(|wallet| wallet.wallet_address.clone())
+    let discount_usage_user = match require_starknet_user(&headers, &state).await {
+        Ok(starknet_user) => Some(starknet_user),
+        Err(_) => {
+            if parse_felt(&user_address).is_ok() {
+                Some(user_address.clone())
+            } else {
+                linked_wallets
+                    .iter()
+                    .find(|wallet| {
+                        wallet.chain.eq_ignore_ascii_case("starknet")
+                            && parse_felt(wallet.wallet_address.trim()).is_ok()
+                    })
+                    .map(|wallet| wallet.wallet_address.clone())
+            }
+        }
     };
     let from_chain_normalized = canonical_bridge_chain(&req.from_chain);
     let to_chain_normalized = canonical_bridge_chain(&req.to_chain);
@@ -1104,7 +1307,7 @@ pub async fn execute_bridge(
         && (from_chain_normalized == "ethereum" || from_chain_normalized == "starknet");
 
     let applied_nft_discount_percent = if let Some(discount_user) = discount_usage_user.as_deref() {
-        active_nft_discount_percent(&state, discount_user).await
+        refresh_nft_discount_for_submit(&state, discount_user).await
     } else {
         0.0
     };
@@ -1136,6 +1339,25 @@ pub async fn execute_bridge(
         .trim()
         .to_ascii_uppercase();
     let from_token = req.token.trim().to_ascii_uppercase();
+    let user_ai_level = match state.db.get_user_ai_level(&user_address).await {
+        Ok(level) => level,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to resolve user AI level for bridge points bonus (user={}): {}",
+                user_address,
+                err
+            );
+            1
+        }
+    };
+    let ai_level_points_bonus_percent = bridge_ai_level_points_bonus_percent(user_ai_level);
+    let mut estimated_points_earned = estimate_bridge_points_for_response(
+        sanitize_usd_notional(amount * fallback_price_for(&from_token)),
+        is_from_btc,
+        applied_nft_discount_percent,
+        user_ai_level,
+        state.config.is_testnet(),
+    );
 
     if req.existing_bridge_id.is_some() && !is_garden_provider {
         return Err(crate::error::AppError::BadRequest(
@@ -1179,6 +1401,14 @@ pub async fn execute_bridge(
             amount: req.amount,
             estimated_receive: estimated_receive.to_string(),
             estimated_time: estimate_time(best_route.provider.as_str()).to_string(),
+            fee_before_discount: route_fee_with_mev.to_string(),
+            fee_discount_saved: (route_fee_with_mev - effective_bridge_fee)
+                .max(0.0)
+                .to_string(),
+            nft_discount_percent: applied_nft_discount_percent.to_string(),
+            estimated_points_earned: estimated_points_earned.to_string(),
+            points_pending: true,
+            ai_level_points_bonus_percent: ai_level_points_bonus_percent.to_string(),
             privacy_tx_hash: None,
             deposit_address: submission.deposit_address,
             deposit_amount: submission.deposit_amount,
@@ -1248,6 +1478,13 @@ pub async fn execute_bridge(
 
     let token_price = latest_price_usd(&state, &from_token).await?;
     let volume_usd = sanitize_usd_notional(amount * token_price);
+    estimated_points_earned = estimate_bridge_points_for_response(
+        volume_usd,
+        is_from_btc,
+        applied_nft_discount_percent,
+        user_ai_level,
+        state.config.is_testnet(),
+    );
 
     let tx = crate::models::Transaction {
         tx_hash: tx_hash.clone(),
@@ -1270,18 +1507,20 @@ pub async fn execute_bridge(
         state.db.mark_transaction_private(&tx_hash).await?;
     }
     if let Some(discount_user) = discount_usage_user.as_deref() {
-        let consume_result =
-            consume_nft_usage_if_active(&state.config, discount_user, "bridge").await;
-        if let Some(contract) = discount_contract_address(&state) {
+        if applied_nft_discount_percent > 0.0 {
+            record_nft_discount_usage_after_submit(&state, discount_user).await;
+            let consume_result = consume_nft_usage(&state.config, discount_user, "bridge").await;
+            if let Err(err) = consume_result {
+                tracing::warn!(
+                    "Failed to consume NFT discount usage after bridge success: user={} tx_hash={} err={}",
+                    discount_user,
+                    tx_hash,
+                    err
+                );
+            }
+        } else if let Some(contract) = discount_contract_address(&state) {
+            // Keep in-memory cache aligned with latest submit-time chain validation.
             invalidate_cached_nft_discount(contract, discount_user).await;
-        }
-        if let Err(err) = consume_result {
-            tracing::warn!(
-                "Failed to consume NFT discount usage after bridge success: user={} tx_hash={} err={}",
-                discount_user,
-                tx_hash,
-                err
-            );
         }
     }
 
@@ -1313,6 +1552,14 @@ pub async fn execute_bridge(
             amount: req.amount,
             estimated_receive: estimated_receive.to_string(),
             estimated_time: estimate_time(response_provider).to_string(),
+            fee_before_discount: route_fee_with_mev.to_string(),
+            fee_discount_saved: (route_fee_with_mev - effective_bridge_fee)
+                .max(0.0)
+                .to_string(),
+            nft_discount_percent: applied_nft_discount_percent.to_string(),
+            estimated_points_earned: estimated_points_earned.to_string(),
+            points_pending: true,
+            ai_level_points_bonus_percent: ai_level_points_bonus_percent.to_string(),
             privacy_tx_hash: privacy_verification_tx.clone(),
             deposit_address: None,
             deposit_amount: None,
@@ -1424,6 +1671,14 @@ pub async fn execute_bridge(
         amount: req.amount,
         estimated_receive: estimated_receive.to_string(),
         estimated_time: estimate_time(best_route.provider.as_str()).to_string(),
+        fee_before_discount: route_fee_with_mev.to_string(),
+        fee_discount_saved: (route_fee_with_mev - effective_bridge_fee)
+            .max(0.0)
+            .to_string(),
+        nft_discount_percent: applied_nft_discount_percent.to_string(),
+        estimated_points_earned: estimated_points_earned.to_string(),
+        points_pending: true,
+        ai_level_points_bonus_percent: ai_level_points_bonus_percent.to_string(),
         privacy_tx_hash: privacy_verification_tx.clone(),
         deposit_address: garden_deposit_address,
         deposit_amount: garden_deposit_amount,
@@ -1653,6 +1908,27 @@ mod tests {
     fn privacy_verification_depends_on_hide_balance_only() {
         assert!(should_run_privacy_verification(true));
         assert!(!should_run_privacy_verification(false));
+    }
+
+    #[test]
+    // Internal helper that supports `estimate_bridge_points_applies_testnet_thresholds` operations in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
+    fn estimate_bridge_points_applies_testnet_thresholds() {
+        let mainnet_points = estimate_bridge_points_for_response(9.5, false, 0.0, 1, false);
+        let testnet_points = estimate_bridge_points_for_response(9.5, false, 0.0, 1, true);
+        assert_eq!(mainnet_points, 0.0);
+        assert!(testnet_points > 0.0);
+    }
+
+    #[test]
+    // Internal helper that supports `estimate_bridge_points_includes_ai_level_bonus` operations in the bridge flow.
+    // Keeps validation, normalization, and intent-binding logic centralized.
+    fn estimate_bridge_points_includes_ai_level_bonus() {
+        let base = estimate_bridge_points_for_response(100.0, false, 0.0, 1, false);
+        let l2 = estimate_bridge_points_for_response(100.0, false, 0.0, 2, false);
+        let l3 = estimate_bridge_points_for_response(100.0, false, 0.0, 3, false);
+        assert!(l2 > base);
+        assert!(l3 > l2);
     }
 
     #[test]

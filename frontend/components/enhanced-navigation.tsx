@@ -30,7 +30,9 @@ import {
 } from "@/lib/wallet-provider-config"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { CarelBrandLogo } from "@/components/carel-logo"
 import { PrivacyRouterPanel } from "@/components/privacy-router-panel"
+import { ReferralLog } from "@/components/referral-log"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,7 +50,7 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
-  Shield, Wallet, Bell, User, Menu, X, ArrowRightLeft, PieChart, Trophy, Gift, 
+  Wallet, Bell, User, Menu, X, ArrowRightLeft, PieChart, Trophy, Gift, 
   History, Users, Settings, Droplets, ChevronDown, HelpCircle, Zap,
   Copy, Check, TrendingUp, Coins, QrCode, Lock,
   Smartphone, ChevronRight, Clock, XCircle, CheckCircle, Loader2, Mail
@@ -138,6 +140,7 @@ export function EnhancedNavigation() {
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [topUpOpen, setTopUpOpen] = React.useState(false)
   const [privacyOpen, setPrivacyOpen] = React.useState(false)
+  const [referralLogOpen, setReferralLogOpen] = React.useState(false)
   const [faucetStatus, setFaucetStatus] = React.useState<FaucetStatusMap>({})
   const [faucetLoading, setFaucetLoading] = React.useState<Record<string, boolean>>({})
   const [faucetTx, setFaucetTx] = React.useState<Record<string, string>>({})
@@ -297,6 +300,15 @@ export function EnhancedNavigation() {
   }, [primaryConnectedTestnet])
 
   const hasStarknetBalanceSource = Boolean(effectiveStarknetAddress)
+  const preferOnchainOrBackend = React.useCallback(
+    (onchainValue: number | null | undefined, backendValue: number | undefined) => {
+      if (typeof onchainValue === "number" && Number.isFinite(onchainValue) && onchainValue > 0) {
+        return onchainValue
+      }
+      return backendValue ?? 0
+    },
+    []
+  )
   const effectivePortfolioBalance = React.useMemo(
     () => ({
       BTC:
@@ -309,7 +321,7 @@ export function EnhancedNavigation() {
           : wallet.balance?.ETH ?? 0,
       STRK:
         hasStarknetBalanceSource
-          ? wallet.onchainBalance?.STRK_L2 ?? 0
+          ? preferOnchainOrBackend(wallet.onchainBalance?.STRK_L2, wallet.balance?.STRK)
           : wallet.evmAddress &&
             wallet.onchainBalance?.STRK_L1 !== null &&
             wallet.onchainBalance?.STRK_L1 !== undefined
@@ -317,19 +329,19 @@ export function EnhancedNavigation() {
           : wallet.balance?.STRK ?? 0,
       CAREL:
         hasStarknetBalanceSource
-          ? wallet.onchainBalance?.CAREL ?? 0
+          ? preferOnchainOrBackend(wallet.onchainBalance?.CAREL, wallet.balance?.CAREL)
           : wallet.balance?.CAREL ?? 0,
       USDC:
         hasStarknetBalanceSource
-          ? wallet.onchainBalance?.USDC ?? 0
+          ? preferOnchainOrBackend(wallet.onchainBalance?.USDC, wallet.balance?.USDC)
           : wallet.balance?.USDC ?? 0,
       USDT:
         hasStarknetBalanceSource
-          ? wallet.onchainBalance?.USDT ?? 0
+          ? preferOnchainOrBackend(wallet.onchainBalance?.USDT, wallet.balance?.USDT)
           : wallet.balance?.USDT ?? 0,
       WBTC:
         hasStarknetBalanceSource
-          ? wallet.onchainBalance?.WBTC ?? 0
+          ? preferOnchainOrBackend(wallet.onchainBalance?.WBTC, wallet.balance?.WBTC)
           : wallet.balance?.WBTC ?? 0,
     }),
     [
@@ -351,6 +363,7 @@ export function EnhancedNavigation() {
       wallet.onchainBalance?.USDT,
       wallet.onchainBalance?.WBTC,
       hasStarknetBalanceSource,
+      preferOnchainOrBackend,
     ]
   )
 
@@ -768,15 +781,11 @@ export function EnhancedNavigation() {
         <div className="container flex h-16 items-center justify-between px-4 mx-auto">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2 group">
-            <div className="relative">
-              <Shield className="h-8 w-8 text-primary animate-pulse-glow" />
-              <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-primary-foreground">
-                Z
-              </span>
-            </div>
-            <span className="font-sans text-xl font-bold tracking-wider text-foreground group-hover:text-primary transition-colors">
-              Carel Protocol
-            </span>
+            <CarelBrandLogo
+              iconSize={34}
+              markClassName="transition-transform duration-300 group-hover:scale-[1.04]"
+              labelClassName="text-xl font-bold tracking-wider text-foreground transition-colors group-hover:text-primary carel-tech-title"
+            />
           </Link>
 
           {/* Desktop Actions */}
@@ -1236,11 +1245,19 @@ export function EnhancedNavigation() {
                     Leaderboard
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="#rewards" className="flex items-center gap-2">
-                    <Gift className="h-4 w-4" />
-                    Rewards
-                  </Link>
+                <DropdownMenuItem onClick={() => setReferralLogOpen(true)}>
+                  <Users className="h-4 w-4 mr-2" />
+                  Referral
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new Event("carel:open-loyalty-hub"))
+                    }
+                  }}
+                >
+                  <Gift className="h-4 w-4 mr-2" />
+                  Loyalty Hub
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link href="#airdrop" className="flex items-center gap-2">
@@ -1442,6 +1459,12 @@ export function EnhancedNavigation() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ReferralLog
+        isOpen={referralLogOpen}
+        onOpenChange={setReferralLogOpen}
+        showTrigger={false}
+      />
 
       {/* Transaction History Dialog with Filters */}
       <Dialog open={txHistoryOpen} onOpenChange={setTxHistoryOpen}>

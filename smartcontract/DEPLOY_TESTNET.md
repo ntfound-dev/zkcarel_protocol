@@ -123,6 +123,24 @@ Use this JSON template to populate `backend-rust/.env`:
 }
 ```
 
+## AI Executor Upgrade (rate_limit getter)
+If backend logs show:
+`AI executor rate-limit getter not found ... falling back to set_rate_limit without readback`
+then your deployed `AIExecutor` class is older and does not expose `rate_limit()`.
+
+Use the helper script to redeploy `AIExecutor`, set burner/verifier config, and sync env addresses:
+
+```bash
+bash smartcontract/scripts/10_redeploy_ai_executor.sh
+```
+
+The script updates:
+- `smartcontract/.env` -> `AI_EXECUTOR_ADDRESS`
+- `backend-rust/.env` -> `AI_EXECUTOR_ADDRESS`
+- `frontend/.env` and `frontend/.env.local` -> `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS`, `NEXT_PUBLIC_AI_EXECUTOR_ADDRESS`
+
+Then restart backend and frontend services.
+
 ## V2 Privacy Wiring
 Default script:
 ```bash
@@ -142,6 +160,16 @@ export PRIVACY_WIRE_EXTERNAL=1
 
 bash smartcontract/scripts/07_wire_privacy_router_v2.sh
 ```
+
+## Staking Token Registration
+After deploy, run:
+```bash
+bash smartcontract/scripts/09_register_staking_tokens.sh
+```
+
+Notes:
+- Script registers USDC/USDT/STRK on `StakingStablecoin`, registers WBTC on `StakingBTC`, and verifies allowlist status on-chain.
+- For new deployments, `BTCStaking` constructor also receives default WBTC token (`TOKEN_WBTC_ADDRESS` fallback `TOKEN_BTC_ADDRESS`) from `scripts/06_deploy_remaining.sh`.
 
 ## Notes
 | Topic | Detail |

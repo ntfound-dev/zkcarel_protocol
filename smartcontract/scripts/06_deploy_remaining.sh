@@ -67,6 +67,7 @@ BTC_LIGHT_CLIENT_ADDRESS="${BTC_LIGHT_CLIENT_ADDRESS:-0x0}"
 BTC_MINT_TOKEN_ADDRESS="${BTC_MINT_TOKEN_ADDRESS:-0x0}"
 
 REWARD_TOKEN_DEFAULT="${CAREL_TOKEN_ADDRESS:-0x0}"
+WBTC_STAKING_TOKEN="${TOKEN_WBTC_ADDRESS:-${TOKEN_BTC_ADDRESS:-}}"
 
 needs_deploy() {
   local val="${1:-}"
@@ -207,7 +208,11 @@ fi
 
 # Staking (use CAREL token as default reward token for testnet)
 if ! needs_deploy "$REWARD_TOKEN_DEFAULT" && [ "$REWARD_TOKEN_DEFAULT" != "0x0" ]; then
-  deploy_contract STAKING_BTC_ADDRESS BTCStaking "$REWARD_TOKEN_DEFAULT" "$ADMIN"
+  if [ -z "$WBTC_STAKING_TOKEN" ] || [ "$WBTC_STAKING_TOKEN" = "0x..." ] || [ "$WBTC_STAKING_TOKEN" = "0x0" ] || [ "$WBTC_STAKING_TOKEN" = "0x00" ]; then
+    echo "Missing TOKEN_WBTC_ADDRESS/TOKEN_BTC_ADDRESS for BTCStaking constructor" >&2
+    exit 1
+  fi
+  deploy_contract STAKING_BTC_ADDRESS BTCStaking "$REWARD_TOKEN_DEFAULT" "$ADMIN" "$WBTC_STAKING_TOKEN"
   deploy_contract STAKING_LP_ADDRESS LPStaking "$REWARD_TOKEN_DEFAULT" "$ADMIN"
   deploy_contract STAKING_STABLECOIN_ADDRESS StakingStablecoin "$REWARD_TOKEN_DEFAULT" "$ADMIN"
 else

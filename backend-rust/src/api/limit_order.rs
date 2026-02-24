@@ -15,14 +15,21 @@ use crate::services::onchain::{felt_to_u128, parse_felt, OnchainInvoker, Onchain
 use crate::services::privacy_verifier::parse_privacy_verifier_kind;
 use crate::{
     // 1. Import modul hash agar terpakai
-    constants::token_address_for,
+    constants::{
+        token_address_for, POINTS_MIN_USD_LIMIT_ORDER, POINTS_MIN_USD_LIMIT_ORDER_TESTNET,
+        POINTS_PER_USD_LIMIT_ORDER,
+    },
     crypto::hash,
     error::Result,
     models::{
         user::PrivacyVerificationPayload as ModelPrivacyVerificationPayload, ApiResponse,
         CreateLimitOrderRequest, LimitOrder, PaginatedResponse,
     },
-    services::nft_discount::consume_nft_usage_if_active,
+    services::nft_discount::{consume_nft_usage_if_active, read_active_discount_rate},
+    services::price_guard::{
+        fallback_price_for, first_sane_price, sanitize_points_usd_base, sanitize_usd_notional,
+        symbol_candidates_for,
+    },
 };
 use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
@@ -41,6 +48,12 @@ pub struct CreateOrderResponse {
     pub order_id: String,
     pub status: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nft_discount_percent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_points_earned: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub points_pending: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy_tx_hash: Option<String>,
 }
@@ -68,6 +81,58 @@ fn expiry_duration_for(expiry: &str) -> chrono::Duration {
         "30d" => chrono::Duration::days(30),
         _ => chrono::Duration::days(7),
     }
+}
+
+// Internal helper that supports `estimate_limit_order_points_for_response` operations in the limit-order flow.
+fn estimate_limit_order_points_for_response(
+    usd_value: f64,
+    nft_discount_percent: f64,
+    is_testnet: bool,
+) -> f64 {
+    let sanitized = sanitize_points_usd_base(usd_value);
+    let min_threshold = if is_testnet {
+        POINTS_MIN_USD_LIMIT_ORDER_TESTNET
+    } else {
+        POINTS_MIN_USD_LIMIT_ORDER
+    };
+    if sanitized < min_threshold {
+        return 0.0;
+    }
+    let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
+    (sanitized * POINTS_PER_USD_LIMIT_ORDER * nft_factor).max(0.0)
+}
+
+// Internal helper that supports `active_nft_discount_percent_for_response` operations in the limit-order flow.
+async fn active_nft_discount_percent_for_response(state: &AppState, user_address: &str) -> f64 {
+    match read_active_discount_rate(&state.config, user_address).await {
+        Ok(discount) => discount.clamp(0.0, 100.0),
+        Err(err) => {
+            tracing::warn!(
+                "Limit-order response NFT discount check failed for user={}: {}",
+                user_address,
+                err
+            );
+            0.0
+        }
+    }
+}
+
+// Internal helper that fetches data for `latest_limit_order_price`.
+async fn latest_limit_order_price(state: &AppState, symbol: &str) -> Result<f64> {
+    let token = symbol.to_ascii_uppercase();
+    for candidate in symbol_candidates_for(&token) {
+        let prices: Vec<f64> = sqlx::query_scalar(
+            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
+        )
+        .bind(&candidate)
+        .fetch_all(state.db.pool())
+        .await?;
+
+        if let Some(value) = first_sane_price(&candidate, &prices) {
+            return Ok(value);
+        }
+    }
+    Ok(fallback_price_for(&token))
 }
 
 // Internal helper that builds inputs for `build_order_id` in the limit-order flow.
@@ -595,6 +660,17 @@ pub async fn create_order(
             "Amount and price must be greater than 0".to_string(),
         ));
     }
+    let from_token_symbol = req.from_token.trim().to_ascii_uppercase();
+    let nft_discount_percent =
+        active_nft_discount_percent_for_response(&state, &user_address).await;
+    let from_token_price = latest_limit_order_price(&state, &from_token_symbol).await?;
+    let estimated_usd_value = sanitize_usd_notional(amount * from_token_price);
+    let estimated_points_earned = estimate_limit_order_points_for_response(
+        estimated_usd_value,
+        nft_discount_percent,
+        state.config.is_testnet(),
+    );
+
     ensure_supported_limit_order_pair(&req.from_token, &req.to_token)?;
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
     let expiry_duration = expiry_duration_for(&req.expiry);
@@ -838,6 +914,9 @@ pub async fn create_order(
             "submitted_onchain".to_string()
         },
         created_at: order.created_at,
+        nft_discount_percent: Some(nft_discount_percent.to_string()),
+        estimated_points_earned: Some(estimated_points_earned.to_string()),
+        points_pending: Some(true),
         privacy_tx_hash: if should_hide { Some(tx_hash) } else { None },
     };
 

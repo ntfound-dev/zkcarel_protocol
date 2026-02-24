@@ -7,6 +7,7 @@ use starknet_core::types::{
 use starknet_providers::jsonrpc::{HttpTransport, JsonRpcClient};
 use starknet_providers::Provider;
 use starknet_signers::{LocalWallet, SigningKey};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -19,7 +20,9 @@ pub struct OnchainInvoker {
 }
 
 pub struct OnchainReader {
-    provider: JsonRpcClient<HttpTransport>,
+    providers: Vec<JsonRpcClient<HttpTransport>>,
+    provider_urls: Vec<String>,
+    rr_cursor: AtomicUsize,
 }
 
 const STARKNET_RPC_MAX_INFLIGHT_DEFAULT: usize = 6;
@@ -47,9 +50,69 @@ fn env_non_empty(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+// Internal helper that supports `parse_rpc_url_list` operations.
+fn parse_rpc_url_list(raw: &str) -> Vec<String> {
+    raw.split([',', ';', '\n', '\r', ' '])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+// Internal helper that supports `env_rpc_urls` operations.
+fn env_rpc_urls(name: &str) -> Vec<String> {
+    env_non_empty(name)
+        .map(|raw| parse_rpc_url_list(&raw))
+        .unwrap_or_default()
+}
+
+// Internal helper that supports `dedupe_rpc_urls` operations.
+fn dedupe_rpc_urls(urls: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for url in urls {
+        if !out.iter().any(|existing| existing == &url) {
+            out.push(url);
+        }
+    }
+    out
+}
+
+// Internal helper that supports `resolve_api_rpc_urls` operations.
+fn resolve_api_rpc_urls(config: &Config) -> Vec<String> {
+    let mut urls = env_rpc_urls("STARKNET_API_RPC_POOL");
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_API_RPC_URL"));
+    }
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_RPC_POOL"));
+    }
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_RPC_URL"));
+    }
+    if urls.is_empty() && !config.starknet_rpc_url.trim().is_empty() {
+        urls.extend(parse_rpc_url_list(&config.starknet_rpc_url));
+    }
+    dedupe_rpc_urls(urls)
+}
+
+// Internal helper that supports `resolve_wallet_rpc_urls` operations.
+fn resolve_wallet_rpc_urls(config: &Config) -> Vec<String> {
+    let mut urls = env_rpc_urls("STARKNET_WALLET_RPC_POOL");
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_WALLET_RPC_URL"));
+    }
+    if urls.is_empty() {
+        urls = resolve_api_rpc_urls(config);
+    }
+    dedupe_rpc_urls(urls)
+}
+
 // Internal helper that fetches data for `resolve_api_rpc_url`.
 fn resolve_api_rpc_url(config: &Config) -> String {
-    env_non_empty("STARKNET_API_RPC_URL").unwrap_or_else(|| config.starknet_rpc_url.clone())
+    resolve_api_rpc_urls(config)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| config.starknet_rpc_url.clone())
 }
 
 // Internal helper that supports `configured_max_inflight` operations.
@@ -321,6 +384,37 @@ impl OnchainInvoker {
 }
 
 impl OnchainReader {
+    // Internal helper that supports `from_rpc_urls` operations.
+    fn from_rpc_urls(rpc_urls: Vec<String>) -> Result<Self> {
+        if rpc_urls.is_empty() {
+            return Err(crate::error::AppError::Internal(
+                "No Starknet RPC URL configured for OnchainReader".to_string(),
+            ));
+        }
+        let mut providers = Vec::with_capacity(rpc_urls.len());
+        for rpc in &rpc_urls {
+            let rpc_url = Url::parse(rpc).map_err(|e| {
+                crate::error::AppError::Internal(format!("Invalid RPC URL '{}': {}", rpc, e))
+            })?;
+            providers.push(JsonRpcClient::new(HttpTransport::new(rpc_url)));
+        }
+        Ok(Self {
+            providers,
+            provider_urls: rpc_urls,
+            rr_cursor: AtomicUsize::new(0),
+        })
+    }
+
+    // Internal helper that supports `provider_order` operations.
+    fn provider_order(&self) -> Vec<usize> {
+        let len = self.providers.len();
+        if len <= 1 {
+            return vec![0];
+        }
+        let start = self.rr_cursor.fetch_add(1, Ordering::Relaxed) % len;
+        (0..len).map(|offset| (start + offset) % len).collect()
+    }
+
     /// Handles `from_config` logic.
     ///
     /// # Arguments
@@ -333,10 +427,22 @@ impl OnchainReader {
     /// # Notes
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn from_config(config: &Config) -> Result<Self> {
-        let rpc_url = Url::parse(&resolve_api_rpc_url(config))
-            .map_err(|e| crate::error::AppError::Internal(format!("Invalid RPC URL: {}", e)))?;
-        let provider = JsonRpcClient::new(HttpTransport::new(rpc_url));
-        Ok(Self { provider })
+        Self::from_rpc_urls(resolve_api_rpc_urls(config))
+    }
+
+    /// Handles `from_config_for_wallet` logic.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub fn from_config_for_wallet(config: &Config) -> Result<Self> {
+        Self::from_rpc_urls(resolve_wallet_rpc_urls(config))
     }
 
     /// Handles `call` logic.
@@ -352,19 +458,50 @@ impl OnchainReader {
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn call(&self, call: FunctionCall) -> Result<Vec<Felt>> {
         let _permit = rpc_preflight("starknet_call").await?;
-        let response = self
-            .provider
-            .call(call, BlockId::Tag(BlockTag::Latest))
-            .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-        match &response {
-            Ok(_) => rpc_record_success().await,
-            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                rpc_record_failure("starknet_call", err_text).await;
+        let order = self.provider_order();
+        let mut last_error_text: Option<String> = None;
+
+        for (attempt, provider_index) in order.iter().enumerate() {
+            let response = self.providers[*provider_index]
+                .call(call.clone(), BlockId::Tag(BlockTag::Latest))
+                .await
+                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+            match response {
+                Ok(values) => {
+                    rpc_record_success().await;
+                    return Ok(values);
+                }
+                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                    last_error_text = Some(err_text.clone());
+                    let is_transient = looks_like_transient_rpc_error(&err_text);
+                    let has_next = attempt + 1 < order.len();
+                    if has_next && is_transient {
+                        tracing::warn!(
+                            "starknet_call failed on provider {} ({}), trying next RPC: {}",
+                            provider_index,
+                            self.provider_urls
+                                .get(*provider_index)
+                                .cloned()
+                                .unwrap_or_else(|| "<unknown>".to_string()),
+                            err_text
+                        );
+                        continue;
+                    }
+                    if has_next {
+                        continue;
+                    }
+                }
+                Err(err) => return Err(err),
             }
-            Err(_) => {}
         }
-        response
+
+        if let Some(err_text) = last_error_text {
+            rpc_record_failure("starknet_call", &err_text).await;
+            return Err(crate::error::AppError::BlockchainRPC(err_text));
+        }
+        Err(crate::error::AppError::BlockchainRPC(
+            "starknet_call failed without detailed error".to_string(),
+        ))
     }
 
     /// Fetches data for `get_transaction_receipt`.
@@ -383,19 +520,39 @@ impl OnchainReader {
         tx_hash: &Felt,
     ) -> Result<TransactionReceiptWithBlockInfo> {
         let _permit = rpc_preflight("starknet_getTransactionReceipt").await?;
-        let response = self
-            .provider
-            .get_transaction_receipt(tx_hash)
-            .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-        match &response {
-            Ok(_) => rpc_record_success().await,
-            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                rpc_record_failure("starknet_getTransactionReceipt", err_text).await;
+        let order = self.provider_order();
+        let mut last_error_text: Option<String> = None;
+
+        for (attempt, provider_index) in order.iter().enumerate() {
+            let response = self.providers[*provider_index]
+                .get_transaction_receipt(tx_hash)
+                .await
+                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+            match response {
+                Ok(receipt) => {
+                    rpc_record_success().await;
+                    return Ok(receipt);
+                }
+                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                    last_error_text = Some(err_text.clone());
+                    if attempt + 1 < order.len() && looks_like_transient_rpc_error(&err_text) {
+                        continue;
+                    }
+                    if attempt + 1 < order.len() {
+                        continue;
+                    }
+                }
+                Err(err) => return Err(err),
             }
-            Err(_) => {}
         }
-        response
+
+        if let Some(err_text) = last_error_text {
+            rpc_record_failure("starknet_getTransactionReceipt", &err_text).await;
+            return Err(crate::error::AppError::BlockchainRPC(err_text));
+        }
+        Err(crate::error::AppError::BlockchainRPC(
+            "starknet_getTransactionReceipt failed without detailed error".to_string(),
+        ))
     }
 
     /// Fetches data for `get_transaction`.
@@ -411,19 +568,39 @@ impl OnchainReader {
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_transaction(&self, tx_hash: &Felt) -> Result<Transaction> {
         let _permit = rpc_preflight("starknet_getTransactionByHash").await?;
-        let response = self
-            .provider
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-        match &response {
-            Ok(_) => rpc_record_success().await,
-            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                rpc_record_failure("starknet_getTransactionByHash", err_text).await;
+        let order = self.provider_order();
+        let mut last_error_text: Option<String> = None;
+
+        for (attempt, provider_index) in order.iter().enumerate() {
+            let response = self.providers[*provider_index]
+                .get_transaction_by_hash(tx_hash)
+                .await
+                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+            match response {
+                Ok(tx) => {
+                    rpc_record_success().await;
+                    return Ok(tx);
+                }
+                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                    last_error_text = Some(err_text.clone());
+                    if attempt + 1 < order.len() && looks_like_transient_rpc_error(&err_text) {
+                        continue;
+                    }
+                    if attempt + 1 < order.len() {
+                        continue;
+                    }
+                }
+                Err(err) => return Err(err),
             }
-            Err(_) => {}
         }
-        response
+
+        if let Some(err_text) = last_error_text {
+            rpc_record_failure("starknet_getTransactionByHash", &err_text).await;
+            return Err(crate::error::AppError::BlockchainRPC(err_text));
+        }
+        Err(crate::error::AppError::BlockchainRPC(
+            "starknet_getTransactionByHash failed without detailed error".to_string(),
+        ))
     }
 
     /// Fetches data for `get_class_at`.
@@ -439,19 +616,39 @@ impl OnchainReader {
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_class_at(&self, contract_address: Felt) -> Result<ContractClass> {
         let _permit = rpc_preflight("starknet_getClassAt").await?;
-        let response = self
-            .provider
-            .get_class_at(BlockId::Tag(BlockTag::Latest), contract_address)
-            .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-        match &response {
-            Ok(_) => rpc_record_success().await,
-            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                rpc_record_failure("starknet_getClassAt", err_text).await;
+        let order = self.provider_order();
+        let mut last_error_text: Option<String> = None;
+
+        for (attempt, provider_index) in order.iter().enumerate() {
+            let response = self.providers[*provider_index]
+                .get_class_at(BlockId::Tag(BlockTag::Latest), contract_address)
+                .await
+                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+            match response {
+                Ok(class_data) => {
+                    rpc_record_success().await;
+                    return Ok(class_data);
+                }
+                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                    last_error_text = Some(err_text.clone());
+                    if attempt + 1 < order.len() && looks_like_transient_rpc_error(&err_text) {
+                        continue;
+                    }
+                    if attempt + 1 < order.len() {
+                        continue;
+                    }
+                }
+                Err(err) => return Err(err),
             }
-            Err(_) => {}
         }
-        response
+
+        if let Some(err_text) = last_error_text {
+            rpc_record_failure("starknet_getClassAt", &err_text).await;
+            return Err(crate::error::AppError::BlockchainRPC(err_text));
+        }
+        Err(crate::error::AppError::BlockchainRPC(
+            "starknet_getClassAt failed without detailed error".to_string(),
+        ))
     }
 
     /// Fetches data for `get_class_hash_at`.
@@ -467,19 +664,39 @@ impl OnchainReader {
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_class_hash_at(&self, contract_address: Felt) -> Result<Felt> {
         let _permit = rpc_preflight("starknet_getClassHashAt").await?;
-        let response = self
-            .provider
-            .get_class_hash_at(BlockId::Tag(BlockTag::Latest), contract_address)
-            .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-        match &response {
-            Ok(_) => rpc_record_success().await,
-            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                rpc_record_failure("starknet_getClassHashAt", err_text).await;
+        let order = self.provider_order();
+        let mut last_error_text: Option<String> = None;
+
+        for (attempt, provider_index) in order.iter().enumerate() {
+            let response = self.providers[*provider_index]
+                .get_class_hash_at(BlockId::Tag(BlockTag::Latest), contract_address)
+                .await
+                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+            match response {
+                Ok(class_hash) => {
+                    rpc_record_success().await;
+                    return Ok(class_hash);
+                }
+                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                    last_error_text = Some(err_text.clone());
+                    if attempt + 1 < order.len() && looks_like_transient_rpc_error(&err_text) {
+                        continue;
+                    }
+                    if attempt + 1 < order.len() {
+                        continue;
+                    }
+                }
+                Err(err) => return Err(err),
             }
-            Err(_) => {}
         }
-        response
+
+        if let Some(err_text) = last_error_text {
+            rpc_record_failure("starknet_getClassHashAt", &err_text).await;
+            return Err(crate::error::AppError::BlockchainRPC(err_text));
+        }
+        Err(crate::error::AppError::BlockchainRPC(
+            "starknet_getClassHashAt failed without detailed error".to_string(),
+        ))
     }
 
     /// Fetches data for `get_storage_at`.
@@ -495,19 +712,39 @@ impl OnchainReader {
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn get_storage_at(&self, contract_address: Felt, key: Felt) -> Result<Felt> {
         let _permit = rpc_preflight("starknet_getStorageAt").await?;
-        let response = self
-            .provider
-            .get_storage_at(contract_address, key, BlockId::Tag(BlockTag::Latest))
-            .await
-            .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-        match &response {
-            Ok(_) => rpc_record_success().await,
-            Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                rpc_record_failure("starknet_getStorageAt", err_text).await;
+        let order = self.provider_order();
+        let mut last_error_text: Option<String> = None;
+
+        for (attempt, provider_index) in order.iter().enumerate() {
+            let response = self.providers[*provider_index]
+                .get_storage_at(contract_address, key, BlockId::Tag(BlockTag::Latest))
+                .await
+                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+            match response {
+                Ok(storage) => {
+                    rpc_record_success().await;
+                    return Ok(storage);
+                }
+                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                    last_error_text = Some(err_text.clone());
+                    if attempt + 1 < order.len() && looks_like_transient_rpc_error(&err_text) {
+                        continue;
+                    }
+                    if attempt + 1 < order.len() {
+                        continue;
+                    }
+                }
+                Err(err) => return Err(err),
             }
-            Err(_) => {}
         }
-        response
+
+        if let Some(err_text) = last_error_text {
+            rpc_record_failure("starknet_getStorageAt", &err_text).await;
+            return Err(crate::error::AppError::BlockchainRPC(err_text));
+        }
+        Err(crate::error::AppError::BlockchainRPC(
+            "starknet_getStorageAt failed without detailed error".to_string(),
+        ))
     }
 }
 

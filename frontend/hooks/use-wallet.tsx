@@ -220,6 +220,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<WalletState>(() => createInitialWalletState())
   const onchainRefreshInFlightRef = useRef(false)
   const unisatNetworkValidatedUntilRef = useRef(0)
+  const portfolioBalanceHintRef = useRef<Record<string, number>>({ ...defaultBalance })
 
   const resetWalletSession = useCallback(() => {
     clearWalletStorage()
@@ -243,6 +244,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     })
     return () => unsubscribe()
   }, [resetWalletSession])
+
+  useEffect(() => {
+    portfolioBalanceHintRef.current = { ...wallet.balance }
+  }, [wallet.balance])
 
   const refreshPortfolio = useCallback(async () => {
     try {
@@ -270,14 +275,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     onchainRefreshInFlightRef.current = true
 
     try {
+      const requestPayload = {
+        starknet_address: effectiveStarknetAddress,
+        evm_address: wallet.evmAddress,
+        btc_address: wallet.btcAddress,
+      }
       let response: Awaited<ReturnType<typeof getOnchainBalances>> | null = null
       if (wallet.token) {
         try {
-          response = await getOnchainBalances({
-            starknet_address: effectiveStarknetAddress,
-            evm_address: wallet.evmAddress,
-            btc_address: wallet.btcAddress,
-          })
+          response = await getOnchainBalances(requestPayload)
         } catch {
           // fallback to direct wallet reads
         }
@@ -293,6 +299,39 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         USDT: response?.usdt ?? null,
         WBTC: response?.wbtc ?? null,
       }
+      const portfolioHints = portfolioBalanceHintRef.current
+      const portfolioHint = (tokenSymbol: string) => Number(portfolioHints[tokenSymbol] || 0)
+      const needsForceRefresh = (onchainValue: number | null, tokenSymbol: string) =>
+        portfolioHint(tokenSymbol) > 0 &&
+        (onchainValue === null ||
+          (typeof onchainValue === "number" && Number.isFinite(onchainValue) && onchainValue <= 0))
+      const needsWalletRead = (onchainValue: number | null, tokenSymbol: string) =>
+        onchainValue === null ||
+        (portfolioHint(tokenSymbol) > 0 &&
+          typeof onchainValue === "number" &&
+          Number.isFinite(onchainValue) &&
+          onchainValue <= 0)
+
+      if (
+        wallet.token &&
+        effectiveStarknetAddress &&
+        (needsForceRefresh(resolved.STRK_L2, "STRK") ||
+          needsForceRefresh(resolved.CAREL, "CAREL") ||
+          needsForceRefresh(resolved.USDC, "USDC") ||
+          needsForceRefresh(resolved.USDT, "USDT") ||
+          needsForceRefresh(resolved.WBTC, "WBTC"))
+      ) {
+        try {
+          const forced = await getOnchainBalances(requestPayload, { force: true })
+          resolved.STRK_L2 = forced?.strk_l2 ?? resolved.STRK_L2
+          resolved.CAREL = forced?.carel ?? resolved.CAREL
+          resolved.USDC = forced?.usdc ?? resolved.USDC
+          resolved.USDT = forced?.usdt ?? resolved.USDT
+          resolved.WBTC = forced?.wbtc ?? resolved.WBTC
+        } catch {
+          // continue with existing values + direct wallet reads
+        }
+      }
 
       const starknet =
         effectiveStarknetAddress
@@ -304,7 +343,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           : null
 
       if (effectiveStarknetAddress && starknet) {
-        if (resolved.STRK_L2 === null) {
+        if (needsWalletRead(resolved.STRK_L2, "STRK")) {
           resolved.STRK_L2 = await fetchStarknetTokenBalance(
             starknet,
             effectiveStarknetAddress,
@@ -312,7 +351,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             STRK_DECIMALS
           )
         }
-        if (resolved.CAREL === null) {
+        if (needsWalletRead(resolved.CAREL, "CAREL")) {
           resolved.CAREL = await fetchStarknetTokenBalance(
             starknet,
             effectiveStarknetAddress,
@@ -320,7 +359,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             CAREL_DECIMALS
           )
         }
-        if (resolved.USDC === null) {
+        if (needsWalletRead(resolved.USDC, "USDC")) {
           resolved.USDC = await fetchStarknetTokenBalance(
             starknet,
             effectiveStarknetAddress,
@@ -328,7 +367,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             USDC_DECIMALS
           )
         }
-        if (resolved.USDT === null) {
+        if (needsWalletRead(resolved.USDT, "USDT")) {
           resolved.USDT = await fetchStarknetTokenBalance(
             starknet,
             effectiveStarknetAddress,

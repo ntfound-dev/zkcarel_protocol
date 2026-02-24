@@ -2,10 +2,9 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { ArrowRightLeft, TrendingUp, Coins, ChevronLeft, ChevronRight, Users, ExternalLink, Gamepad2 } from "lucide-react"
+import { ArrowRightLeft, TrendingUp, Coins, ChevronLeft, ChevronRight, Bot, Gamepad2, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { ReferralLog } from "@/components/referral-log"
-import { getPortfolioAnalytics, getReferralStats, getRewardsPoints, getStakePools, listLimitOrders } from "@/lib/api"
+import { getPortfolioAnalytics, getStakePools, listLimitOrders } from "@/lib/api"
 import { useWallet } from "@/hooks/use-wallet"
 
 // Animated counter for dynamic stats - starts at 0 on server, animates on client
@@ -67,8 +66,14 @@ function useAnimatedValue(end: number, duration: number = 1500) {
 
   return { value, ref }
 }
-export type SelectableFeatureId = "swap-bridge" | "limit-order" | "stake-earn" | "defi-futures"
-type FeatureId = SelectableFeatureId | "referral" | "defi-futures"
+export type SelectableFeatureId =
+  | "swap-bridge"
+  | "limit-order"
+  | "stake-earn"
+  | "soulbound-nft"
+  | "ai-assistant"
+  | "defi-futures"
+type FeatureId = SelectableFeatureId
 
 interface FeaturedCardsProps {
   onSelectFeature?: (featureId: SelectableFeatureId) => void
@@ -86,13 +91,15 @@ interface FeaturedCardsProps {
 export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: FeaturedCardsProps = {}) {
   const wallet = useWallet()
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
+  const isDraggingRef = React.useRef(false)
+  const dragStartXRef = React.useRef(0)
+  const dragStartScrollLeftRef = React.useRef(0)
+  const suppressClickRef = React.useRef(false)
   const [canScrollLeft, setCanScrollLeft] = React.useState(false)
   const [canScrollRight, setCanScrollRight] = React.useState(true)
-  const [referralOpen, setReferralOpen] = React.useState(false)
   const [swapStats, setSwapStats] = React.useState<{ volume?: number; trades?: number }>({})
   const [limitStats, setLimitStats] = React.useState<{ activeOrders?: number; successRate?: number }>({})
   const [stakeStats, setStakeStats] = React.useState<{ tvl?: number; maxApy?: number }>({})
-  const [referralStats, setReferralStats] = React.useState<{ totalReferrals?: number; referralPoints?: number }>({})
 
   /**
    * Handles `checkScroll` logic.
@@ -100,18 +107,48 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
    * @returns Result consumed by caller flow, UI state updates, or async chaining.
    * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
    */
-  const checkScroll = () => {
+  const checkScroll = React.useCallback(() => {
     if (scrollContainerRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = scrollContainerRef.current
       setCanScrollLeft(scrollLeft > 0)
       setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 10)
     }
-  }
+  }, [])
 
   React.useEffect(() => {
     checkScroll()
     window.addEventListener('resize', checkScroll)
     return () => window.removeEventListener('resize', checkScroll)
+  }, [checkScroll])
+
+  React.useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      checkScroll()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [
+    checkScroll,
+    swapStats.volume,
+    swapStats.trades,
+    limitStats.activeOrders,
+    limitStats.successRate,
+    stakeStats.tvl,
+    stakeStats.maxApy,
+  ])
+
+  React.useEffect(() => {
+    const handleMouseUp = () => {
+      if (!isDraggingRef.current) return
+      isDraggingRef.current = false
+      const container = scrollContainerRef.current
+      if (container) {
+        container.style.cursor = "grab"
+        container.style.scrollBehavior = "smooth"
+      }
+    }
+
+    window.addEventListener("mouseup", handleMouseUp)
+    return () => window.removeEventListener("mouseup", handleMouseUp)
   }, [])
 
   React.useEffect(() => {
@@ -129,7 +166,6 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
         setSwapStats({})
         setLimitStats({})
         setStakeStats({})
-        setReferralStats({})
         return
       }
 
@@ -139,16 +175,12 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
         filledLimitRes,
         cancelledLimitRes,
         poolsRes,
-        referralRes,
-        pointsRes,
       ] = await Promise.allSettled([
         getPortfolioAnalytics(),
         listLimitOrders(1, 1, "active"),
         listLimitOrders(1, 1, "filled"),
         listLimitOrders(1, 1, "cancelled"),
         getStakePools(),
-        getReferralStats(),
-        getRewardsPoints(),
       ])
 
       if (!active) return
@@ -198,25 +230,6 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
       } else {
         setStakeStats({})
       }
-
-      let totalReferrals: number | undefined
-      let referralPoints: number | undefined
-      if (referralRes.status === "fulfilled") {
-        const total = Number(referralRes.value.total_referrals)
-        const rewards = Number(referralRes.value.total_rewards)
-        totalReferrals = Number.isFinite(total) ? total : undefined
-        referralPoints = Number.isFinite(rewards) ? rewards : undefined
-      }
-      if (pointsRes.status === "fulfilled") {
-        const epochReferralPoints = Number(pointsRes.value.referral_points)
-        if (Number.isFinite(epochReferralPoints)) {
-          referralPoints = Math.max(referralPoints || 0, epochReferralPoints)
-        }
-      }
-      setReferralStats({
-        totalReferrals,
-        referralPoints,
-      })
     }
 
     void fetchStats()
@@ -250,6 +263,45 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
         behavior: 'smooth'
       })
     }
+  }
+
+  const handleMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    const container = scrollContainerRef.current
+    if (!container) return
+    isDraggingRef.current = true
+    suppressClickRef.current = false
+    dragStartXRef.current = event.clientX
+    dragStartScrollLeftRef.current = container.scrollLeft
+    container.style.cursor = "grabbing"
+    container.style.scrollBehavior = "auto"
+  }
+
+  const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current) return
+    const container = scrollContainerRef.current
+    if (!container) return
+    const deltaX = event.clientX - dragStartXRef.current
+    if (Math.abs(deltaX) > 4) {
+      suppressClickRef.current = true
+    }
+    container.scrollLeft = dragStartScrollLeftRef.current - deltaX
+  }
+
+  const handleMouseLeave = () => {
+    if (!isDraggingRef.current) return
+    isDraggingRef.current = false
+    const container = scrollContainerRef.current
+    if (!container) return
+    container.style.cursor = "grab"
+    container.style.scrollBehavior = "smooth"
+  }
+
+  const handleClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!suppressClickRef.current) return
+    suppressClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
   }
 
   const features: Feature[] = React.useMemo(() => [
@@ -290,37 +342,49 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
       cta: "Open",
     },
     {
-      id: "referral",
-      title: "Referral Program",
-      description: "Invite friends and earn bonus points on their trading activity",
-      icon: Users,
+      id: "soulbound-nft",
+      title: "Loyalty Hub",
+      description: "Manage points and non-transferable NFT tiers to unlock fee discounts on supported executions",
+      icon: Sparkles,
+      gradient: "from-secondary via-accent to-success",
+      stats: [
+        { label: "Max Discount", value: "Up to 50%" },
+        { label: "Type", value: "Non-transferable" },
+      ],
+      cta: "Open",
+    },
+    {
+      id: "ai-assistant",
+      title: "AI Execution",
+      description: "Run swap, bridge, stake, and limit commands with guided confirmations",
+      icon: Bot,
       gradient: "from-success via-primary to-accent",
       stats: [
-        { label: "Total Referrals", value: "—", numericValue: referralStats.totalReferrals },
-        { label: "Points Earned", value: "—", numericValue: referralStats.referralPoints },
+        { label: "L2 Cost", value: "1 CAREL / exec" },
+        { label: "L3 Cost", value: "2 CAREL / exec" },
       ],
-      isReferral: true,
-      cta: "View Log",
+      cta: "Open",
     },
     {
       id: "defi-futures",
       title: "Battleship",
       description:
-        "Private strategy game with ZK fairness. Reward points are tuned lower for balanced progression.",
+        "Battleship is temporarily disabled while we fix stability issues. It will return in a later update.",
       icon: Gamepad2,
       gradient: "from-primary via-secondary to-success",
       stats: [
         { label: "Win Reward", value: "+20 pts" },
         { label: "Hit Reward", value: "+3 pts" },
       ],
-      cta: "Open",
+      comingSoon: true,
+      cta: "Soon",
     },
-  ], [swapStats, limitStats, stakeStats, referralStats])
+  ], [swapStats, limitStats, stakeStats])
 
   return (
-    <section className="relative">
+    <section id="featured-services" className="relative">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-foreground">Featured DeFi Services</h2>
+        <h2 className="text-2xl font-bold text-foreground carel-tech-heading">Featured Trading Services</h2>
         <div className="flex gap-2">
           <Button
             variant="outline"
@@ -352,16 +416,20 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
       <div 
         ref={scrollContainerRef}
         onScroll={checkScroll}
-        className="flex gap-6 overflow-x-auto scrollbar-hide snap-x snap-mandatory pb-4"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        onMouseUp={handleMouseLeave}
+        onClickCapture={handleClickCapture}
+        className="flex gap-6 overflow-x-auto scrollbar-hide snap-x snap-mandatory pb-4 cursor-grab select-none"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
         {features.map((feature) => (
           <FeatureCard 
             key={feature.id} 
             feature={feature} 
-            onReferralClick={() => setReferralOpen(true)}
             onSelect={onSelectFeature}
-            isActive={!feature.isReferral && activeFeatureId === feature.id}
+            isActive={activeFeatureId === feature.id}
           />
         ))}
       </div>
@@ -374,13 +442,6 @@ export function FeaturedCards({ onSelectFeature, activeFeatureId = null }: Featu
         <div className="absolute right-0 top-0 bottom-0 w-20 bg-gradient-to-l from-background to-transparent pointer-events-none z-10" />
       )}
 
-      {/* Referral Log Dialog */}
-      <ReferralLog 
-        isOpen={referralOpen} 
-        onOpenChange={setReferralOpen}
-        showTrigger={false}
-        pointsEarned={referralStats.referralPoints || 0}
-      />
     </section>
   )
 }
@@ -399,7 +460,6 @@ interface Feature {
     suffix?: string
   }>
   comingSoon?: boolean
-  isReferral?: boolean
   cta?: string
 }
 
@@ -411,12 +471,10 @@ interface Feature {
  */
 function FeatureCard({ 
   feature, 
-  onReferralClick,
   onSelect,
   isActive = false,
 }: { 
   feature: Feature
-  onReferralClick: () => void
   onSelect?: (featureId: SelectableFeatureId) => void
   isActive?: boolean
 }) {
@@ -487,7 +545,7 @@ function FeatureCard({
 
         {/* Title & Description */}
         <h3 className={cn(
-          "text-xl font-bold mb-2 transition-colors",
+          "text-xl font-bold mb-2 transition-colors carel-tech-title",
           feature.comingSoon ? "text-muted-foreground" : "text-foreground group-hover:text-primary"
         )}>
           {feature.title}
@@ -541,11 +599,7 @@ function FeatureCard({
               className="w-full gap-2 border-primary/30 hover:border-primary hover:bg-primary/10 text-primary"
             >
               <span>{feature.cta || "Explore"}</span>
-              {feature.isReferral ? (
-                <ExternalLink className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-              )}
+              <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
             </Button>
           </div>
         )}
@@ -560,40 +614,23 @@ function FeatureCard({
   )
 
   return (
-    feature.isReferral ? (
-      <div
-        className={wrapperClass}
-        onClick={onReferralClick}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault()
-            onReferralClick()
-          }
-        }}
-      >
-        {cardBody}
-      </div>
-    ) : (
-      <div
-        className={wrapperClass}
-        role="button"
-        tabIndex={0}
-        onClick={() => {
-          if (!feature.comingSoon) {
-            onSelect?.(feature.id as SelectableFeatureId)
-          }
-        }}
-        onKeyDown={(event) => {
-          if ((event.key === "Enter" || event.key === " ") && !feature.comingSoon) {
-            event.preventDefault()
-            onSelect?.(feature.id as SelectableFeatureId)
-          }
-        }}
-      >
-        {cardBody}
-      </div>
-    )
+    <div
+      className={wrapperClass}
+      role="button"
+      tabIndex={0}
+      onClick={() => {
+        if (!feature.comingSoon) {
+          onSelect?.(feature.id as SelectableFeatureId)
+        }
+      }}
+      onKeyDown={(event) => {
+        if ((event.key === "Enter" || event.key === " ") && !feature.comingSoon) {
+          event.preventDefault()
+          onSelect?.(feature.id as SelectableFeatureId)
+        }
+      }}
+    >
+      {cardBody}
+    </div>
   )
 }

@@ -108,19 +108,25 @@ pub mod BTCStaking {
         pub amount: u256
     }
 
-    // Initializes reward token dependency and owner authority.
+    // Initializes reward token dependency, owner authority, and default WBTC allowlist.
     #[constructor]
     // Initializes contract storage during deployment.
-    fn constructor(ref self: ContractState, reward_token: ContractAddress, owner: ContractAddress) {
+    fn constructor(
+        ref self: ContractState,
+        reward_token: ContractAddress,
+        owner: ContractAddress,
+        default_btc_token: ContractAddress
+    ) {
         self.reward_token_address.write(reward_token);
         self.owner.write(owner);
+        self.accepted_btc_tokens.entry(default_btc_token).write(true);
     }
 
     #[abi(embed_v0)]
     impl BTCStakingImpl of IBTCStaking<ContractState> {
         // Stakes allowlisted BTC token, compounds pending rewards, and refreshes tier.
         fn stake(ref self: ContractState, btc_token: ContractAddress, amount: u256) {
-            assert!(self.accepted_btc_tokens.entry(btc_token).read(), "Token BTC tidak didukung");
+            assert!(self.accepted_btc_tokens.entry(btc_token).read(), "Token WBTC Starknet tidak didukung");
             
             let user = get_caller_address();
             let now = get_block_timestamp();

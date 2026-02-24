@@ -652,7 +652,7 @@ export function StakeEarn() {
       notifications.addNotification({
         type: "info",
         title: "Not Available",
-        message: "BTC staking is disabled. Use Bridge via Garden for BTC<->WBTC transfers.",
+        message: "BTC staking is currently unavailable.",
       })
       return
     }
@@ -1006,7 +1006,7 @@ export function StakeEarn() {
       notifications.addNotification({
         type: "info",
         title: "Not Available",
-        message: "BTC staking is disabled. Use Bridge via Garden for BTC<->WBTC transfers.",
+        message: "BTC staking is currently unavailable.",
       })
       return
     }
@@ -1486,11 +1486,8 @@ export function StakeEarn() {
               <p className="text-xs text-muted-foreground mt-1">
                 Staking uses testnet tokens. Rewards follow testnet contracts and may change based on pool conditions.
               </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                BTC staking is disabled. Use Bridge via Garden for BTC↔WBTC transfers.
-              </p>
               <p className="text-xs text-foreground mt-2">
-                Active points multiplier (swap/bridge/limit): <span className="text-primary font-semibold">{pointsMultiplier}x</span>
+                Active points multiplier: <span className="text-primary font-semibold">{pointsMultiplier}x</span>
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Your CAREL stake: {currentCarelStake.toLocaleString(undefined, { maximumFractionDigits: 4 })} CAREL

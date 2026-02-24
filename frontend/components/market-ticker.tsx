@@ -56,22 +56,83 @@ export function MarketTicker() {
   const { prices, changes, sources, status } = useLivePrices(trackedTokens, {
     fallbackPrices: fallback,
   })
+  const stripRef = React.useRef<HTMLDivElement>(null)
+  const dragRef = React.useRef({
+    active: false,
+    moved: false,
+    startX: 0,
+    startScrollLeft: 0,
+  })
+  const [isDragging, setIsDragging] = React.useState(false)
+
+  const beginDrag = React.useCallback((clientX: number) => {
+    const strip = stripRef.current
+    if (!strip) return
+    dragRef.current.active = true
+    dragRef.current.moved = false
+    dragRef.current.startX = clientX
+    dragRef.current.startScrollLeft = strip.scrollLeft
+    setIsDragging(true)
+  }, [])
+
+  const moveDrag = React.useCallback((clientX: number) => {
+    const strip = stripRef.current
+    if (!strip || !dragRef.current.active) return
+    const deltaX = clientX - dragRef.current.startX
+    if (Math.abs(deltaX) > 3) {
+      dragRef.current.moved = true
+    }
+    strip.scrollLeft = dragRef.current.startScrollLeft - deltaX
+  }, [])
+
+  const endDrag = React.useCallback(() => {
+    dragRef.current.active = false
+    setIsDragging(false)
+    window.setTimeout(() => {
+      dragRef.current.moved = false
+    }, 0)
+  }, [])
 
   return (
     <section className="w-full">
       <div className="p-4 rounded-2xl glass border border-border/60">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Live Market</span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary/20 text-secondary">
-              WS: {status.websocket}
+            <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase carel-tech-label">Live Market</span>
+            <span
+              className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-secondary/15"
+              title={`WebSocket ${status.websocket}`}
+              aria-label={`WebSocket ${status.websocket}`}
+            >
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full",
+                  status.websocket === "open"
+                    ? "bg-success animate-pulse"
+                    : "bg-muted-foreground"
+                )}
+              />
             </span>
           </div>
           <span className="text-xs text-muted-foreground">
             Updated {status.lastRefresh ? new Date(status.lastRefresh).toLocaleTimeString() : "—"}
           </span>
         </div>
-        <div className="flex gap-3 overflow-x-auto pb-2">
+        <div
+          ref={stripRef}
+          className={cn(
+            "flex gap-3 overflow-x-auto pb-2 select-none",
+            isDragging ? "cursor-grabbing" : "cursor-grab"
+          )}
+          onMouseDown={(event) => beginDrag(event.clientX)}
+          onMouseMove={(event) => moveDrag(event.clientX)}
+          onMouseUp={endDrag}
+          onMouseLeave={endDrag}
+          onTouchStart={(event) => beginDrag(event.touches[0]?.clientX ?? 0)}
+          onTouchMove={(event) => moveDrag(event.touches[0]?.clientX ?? 0)}
+          onTouchEnd={endDrag}
+          onDragStart={(event) => event.preventDefault()}
+        >
           {tokens.map((token) => {
             const price = prices[token.symbol]
             const change = changes[token.symbol]
@@ -86,7 +147,7 @@ export function MarketTicker() {
                   <div className="flex items-center gap-2">
                     <span className="text-lg">{token.icon}</span>
                     <div>
-                      <p className="text-sm font-semibold text-foreground">{token.symbol}</p>
+                      <p className="text-sm font-semibold text-foreground carel-tech-title">{token.symbol}</p>
                       <p className="text-[10px] text-muted-foreground">{token.name}</p>
                     </div>
                   </div>
@@ -95,7 +156,7 @@ export function MarketTicker() {
                   </span>
                 </div>
                 <div className="mt-3">
-                  <p className="text-lg font-bold text-foreground">{formatPrice(price)}</p>
+                  <p className="text-lg font-bold text-foreground carel-tech-title">{formatPrice(price)}</p>
                   <p className={cn("text-xs", isPositive ? "text-success" : "text-destructive")}>
                     {Number.isFinite(change) ? `${isPositive ? "+" : ""}${change.toFixed(2)}%` : "—"}
                   </p>

@@ -8,14 +8,23 @@ use crate::services::onchain::{
     felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
 };
 use crate::{
-    constants::token_address_for,
+    constants::{
+        token_address_for, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_BTC_TESTNET,
+        POINTS_MIN_STAKE_CAREL, POINTS_MIN_STAKE_LP, POINTS_MIN_STAKE_LP_TESTNET,
+        POINTS_MIN_STAKE_STABLECOIN,
+        POINTS_MIN_STAKE_STABLECOIN_TESTNET, POINTS_MIN_STAKE_STRK, POINTS_MIN_STAKE_STRK_TESTNET,
+        POINTS_MULTIPLIER_STAKE_BTC, POINTS_MULTIPLIER_STAKE_CAREL_TIER_1,
+        POINTS_MULTIPLIER_STAKE_CAREL_TIER_2, POINTS_MULTIPLIER_STAKE_CAREL_TIER_3,
+        POINTS_MULTIPLIER_STAKE_LP, POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_STAKE,
+    },
     // 1. Import hasher agar fungsi di hash.rs terhitung "used"
     crypto::hash,
     error::Result,
     models::{user::PrivacyVerificationPayload as ModelPrivacyVerificationPayload, ApiResponse},
-    services::nft_discount::consume_nft_usage_if_active,
+    services::nft_discount::{consume_nft_usage_if_active, read_active_discount_rate},
     services::price_guard::{
-        fallback_price_for, first_sane_price, sanitize_usd_notional, symbol_candidates_for,
+        fallback_price_for, first_sane_price, sanitize_points_usd_base, sanitize_usd_notional,
+        symbol_candidates_for,
     },
     services::privacy_verifier::parse_privacy_verifier_kind,
 };
@@ -36,7 +45,7 @@ use super::{
     swap::{parse_decimal_to_u256_parts, token_decimals},
     AppState,
 };
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 #[derive(Debug, Serialize)]
 pub struct StakingPool {
@@ -48,6 +57,9 @@ pub struct StakingPool {
     pub rewards_per_day: f64,
     pub min_stake: f64,
     pub lock_period: Option<i64>, // days
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,6 +105,12 @@ pub struct DepositResponse {
     pub tx_hash: String,
     pub amount: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub nft_discount_percent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_points_earned: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub points_pending: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy_tx_hash: Option<String>,
 }
 
@@ -107,6 +125,140 @@ pub struct ClaimResponse {
 
 const STARKNET_ONCHAIN_STAKE_POOLS: &[&str] = &["CAREL", "USDC", "USDT", "WBTC", "STRK"];
 const BTC_GARDEN_POOL: &str = "BTC";
+const WBTC_STAKING_NOT_REGISTERED_MSG: &str =
+    "WBTC staking token is not registered on StakingBTC yet. Admin must call add_btc_token first.";
+
+// Internal helper that supports `min_stake_for_pool_token` operations.
+fn min_stake_for_pool_token(token: &str, is_testnet: bool) -> Option<f64> {
+    let normalized = token.trim().to_ascii_uppercase();
+    let min_carel = POINTS_MIN_STAKE_CAREL;
+    let min_btc = if is_testnet {
+        POINTS_MIN_STAKE_BTC_TESTNET
+    } else {
+        POINTS_MIN_STAKE_BTC
+    };
+    let min_stable = if is_testnet {
+        POINTS_MIN_STAKE_STABLECOIN_TESTNET
+    } else {
+        POINTS_MIN_STAKE_STABLECOIN
+    };
+    let min_strk = if is_testnet {
+        POINTS_MIN_STAKE_STRK_TESTNET
+    } else {
+        POINTS_MIN_STAKE_STRK
+    };
+    let min_lp = if is_testnet {
+        POINTS_MIN_STAKE_LP_TESTNET
+    } else {
+        POINTS_MIN_STAKE_LP
+    };
+
+    match normalized.as_str() {
+        "CAREL" => Some(min_carel),
+        "BTC" | "WBTC" => Some(min_btc),
+        "USDT" | "USDC" => Some(min_stable),
+        "STRK" => Some(min_strk),
+        _ if normalized.starts_with("LP") => Some(min_lp),
+        _ => None,
+    }
+}
+
+// Internal helper that supports `format_stake_amount_for_display` operations.
+fn format_stake_amount_for_display(amount: f64) -> String {
+    format!("{amount:.8}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+// Internal helper that supports `stake_points_multiplier_for_response` operations.
+fn stake_points_multiplier_for_response(token: &str, amount: f64, is_testnet: bool) -> f64 {
+    let normalized = token.trim().to_ascii_uppercase();
+    let min_carel = min_stake_for_pool_token("CAREL", is_testnet).unwrap_or(POINTS_MIN_STAKE_CAREL);
+    let min_btc = min_stake_for_pool_token("WBTC", is_testnet).unwrap_or(POINTS_MIN_STAKE_BTC);
+    let min_stable =
+        min_stake_for_pool_token("USDT", is_testnet).unwrap_or(POINTS_MIN_STAKE_STABLECOIN);
+    let min_strk = min_stake_for_pool_token("STRK", is_testnet).unwrap_or(POINTS_MIN_STAKE_STRK);
+    let min_lp = min_stake_for_pool_token("LP", is_testnet).unwrap_or(POINTS_MIN_STAKE_LP);
+
+    match normalized.as_str() {
+        "CAREL" => {
+            if amount < min_carel {
+                0.0
+            } else if amount < 1_000.0 {
+                POINTS_MULTIPLIER_STAKE_CAREL_TIER_1
+            } else if amount < 10_000.0 {
+                POINTS_MULTIPLIER_STAKE_CAREL_TIER_2
+            } else {
+                POINTS_MULTIPLIER_STAKE_CAREL_TIER_3
+            }
+        }
+        "BTC" | "WBTC" => {
+            if amount < min_btc {
+                0.0
+            } else {
+                POINTS_MULTIPLIER_STAKE_BTC
+            }
+        }
+        "USDT" | "USDC" => {
+            if amount < min_stable {
+                0.0
+            } else {
+                POINTS_MULTIPLIER_STAKE_STABLECOIN
+            }
+        }
+        "STRK" => {
+            if amount < min_strk {
+                0.0
+            } else {
+                POINTS_MULTIPLIER_STAKE_STABLECOIN
+            }
+        }
+        _ if normalized.starts_with("LP") => {
+            if amount < min_lp {
+                0.0
+            } else {
+                POINTS_MULTIPLIER_STAKE_LP
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+// Internal helper that supports `estimate_stake_points_for_response` operations.
+fn estimate_stake_points_for_response(
+    usd_value: f64,
+    token: &str,
+    amount: f64,
+    nft_discount_percent: f64,
+    is_testnet: bool,
+) -> f64 {
+    let sanitized = sanitize_points_usd_base(usd_value);
+    if amount <= 0.0 || sanitized <= 0.0 {
+        return 0.0;
+    }
+    let multiplier = stake_points_multiplier_for_response(token, amount, is_testnet);
+    if multiplier <= 0.0 {
+        return 0.0;
+    }
+    let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
+    (sanitized * POINTS_PER_USD_STAKE * multiplier * nft_factor).max(0.0)
+}
+
+// Internal helper that supports `active_nft_discount_percent_for_response` operations.
+async fn active_nft_discount_percent_for_response(state: &AppState, user_address: &str) -> f64 {
+    match read_active_discount_rate(&state.config, user_address).await {
+        Ok(discount) => discount.clamp(0.0, 100.0),
+        Err(err) => {
+            tracing::warn!(
+                "Stake response NFT discount check failed for user={}: {}",
+                user_address,
+                err
+            );
+            0.0
+        }
+    }
+}
 
 // Internal helper that parses or transforms values for `normalize_pool_id`.
 fn normalize_pool_id(pool_id: &str) -> String {
@@ -341,6 +493,46 @@ fn resolve_staking_target_felt(state: &AppState, pool_token: &str) -> Result<Fel
         "Staking contract address is not configured for pool {}. Set staking target env for hide mode.",
         pool_token
     )))
+}
+
+// Internal helper that fetches data for `resolve_staking_btc_contract_felt`.
+fn resolve_staking_btc_contract_felt() -> Result<Felt> {
+    for raw in [
+        std::env::var("STAKING_BTC_ADDRESS").ok(),
+        std::env::var("NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with("0x0000") {
+            continue;
+        }
+        return parse_felt(trimmed);
+    }
+    Err(crate::error::AppError::BadRequest(
+        "STAKING_BTC_ADDRESS is not configured".to_string(),
+    ))
+}
+
+// Internal helper that checks conditions for `is_wbtc_registered_on_staking_btc`.
+async fn is_wbtc_registered_on_staking_btc(state: &AppState) -> Result<bool> {
+    let contract = resolve_staking_btc_contract_felt()?;
+    let wbtc_token = token_address_for("WBTC")
+        .ok_or(crate::error::AppError::InvalidToken)
+        .and_then(parse_felt)?;
+    let selector = get_selector_from_name("is_token_accepted")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let reader = OnchainReader::from_config(&state.config)?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: contract,
+            entry_point_selector: selector,
+            calldata: vec![wbtc_token],
+        })
+        .await?;
+    let flag = out.first().copied().unwrap_or(Felt::ZERO);
+    Ok(flag != Felt::ZERO)
 }
 
 // Internal helper that runs side-effecting logic for `stake_entrypoint_for_action`.
@@ -933,6 +1125,76 @@ async fn append_shielded_note_registration_calls(
 }
 
 const CAREL_DECIMALS: f64 = 1_000_000_000_000_000_000.0;
+const STAKE_POOLS_WBTC_CHECK_TIMEOUT_SECS: u64 = 8;
+const STAKE_POOLS_WBTC_CHECK_ATTEMPTS: usize = 2;
+const STAKE_POOLS_WBTC_CHECK_RETRY_DELAY_MS: u64 = 350;
+const STAKE_DEPOSIT_WBTC_CHECK_TIMEOUT_SECS: u64 = 10;
+
+// Internal helper that resolves WBTC availability for pool listing with retry fallback.
+async fn resolve_wbtc_pool_availability(state: &AppState) -> (bool, Option<String>) {
+    for attempt in 0..STAKE_POOLS_WBTC_CHECK_ATTEMPTS {
+        match timeout(
+            Duration::from_secs(STAKE_POOLS_WBTC_CHECK_TIMEOUT_SECS),
+            is_wbtc_registered_on_staking_btc(state),
+        )
+        .await
+        {
+            Ok(Ok(true)) => return (true, None),
+            Ok(Ok(false)) => return (false, Some(WBTC_STAKING_NOT_REGISTERED_MSG.to_string())),
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    "Failed to pre-check WBTC staking availability (attempt {}/{}): {}",
+                    attempt + 1,
+                    STAKE_POOLS_WBTC_CHECK_ATTEMPTS,
+                    err
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "WBTC staking pre-check timed out after {}s (attempt {}/{})",
+                    STAKE_POOLS_WBTC_CHECK_TIMEOUT_SECS,
+                    attempt + 1,
+                    STAKE_POOLS_WBTC_CHECK_ATTEMPTS
+                );
+            }
+        }
+
+        if attempt + 1 < STAKE_POOLS_WBTC_CHECK_ATTEMPTS {
+            sleep(Duration::from_millis(STAKE_POOLS_WBTC_CHECK_RETRY_DELAY_MS)).await;
+        }
+    }
+
+    (
+        true,
+        Some(
+            "WBTC staking pre-check is delayed (RPC timeout). Pool remains visible; final validation runs on submit."
+                .to_string(),
+        ),
+    )
+}
+
+// Internal helper that validates WBTC staking registration before deposit submit.
+async fn ensure_wbtc_registered_for_deposit(state: &AppState) -> Result<()> {
+    match timeout(
+        Duration::from_secs(STAKE_DEPOSIT_WBTC_CHECK_TIMEOUT_SECS),
+        is_wbtc_registered_on_staking_btc(state),
+    )
+    .await
+    {
+        Ok(Ok(true)) => Ok(()),
+        Ok(Ok(false)) => Err(crate::error::AppError::BadRequest(
+            WBTC_STAKING_NOT_REGISTERED_MSG.to_string(),
+        )),
+        Ok(Err(err)) => Err(crate::error::AppError::BadRequest(format!(
+            "Unable to verify WBTC staking availability right now: {}. Retry in a few seconds.",
+            err
+        ))),
+        Err(_) => Err(crate::error::AppError::BadRequest(format!(
+            "WBTC staking pre-check timed out after {}s. Retry in a few seconds.",
+            STAKE_DEPOSIT_WBTC_CHECK_TIMEOUT_SECS
+        ))),
+    }
+}
 
 // Internal helper that supports `u128_to_token_amount` operations.
 fn u128_to_token_amount(value: u128) -> f64 {
@@ -977,9 +1239,12 @@ fn staking_contract_or_error(state: &AppState) -> Result<&str> {
 pub async fn get_pools(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<StakingPool>>>> {
+    let (wbtc_available, wbtc_status_message) = resolve_wbtc_pool_availability(&state).await;
+
     // Current staking business model on testnet:
     // CAREL tiered APY (8/12/15), STRK 7, WBTC 6, stablecoin 7.
     // API keeps one CAREL row; tier detail is rendered in frontend text.
+    let is_testnet = state.config.is_testnet();
     let mut pools = vec![
         StakingPool {
             pool_id: "CAREL".to_string(),
@@ -988,8 +1253,11 @@ pub async fn get_pools(
             tvl_usd: 0.0,
             apy: 8.0,
             rewards_per_day: 10958.9,
-            min_stake: 100.0,
+            min_stake: min_stake_for_pool_token("CAREL", is_testnet)
+                .unwrap_or(POINTS_MIN_STAKE_CAREL),
             lock_period: None,
+            available: true,
+            status_message: None,
         },
         StakingPool {
             pool_id: "STRK".to_string(),
@@ -998,8 +1266,11 @@ pub async fn get_pools(
             tvl_usd: 0.0,
             apy: 7.0,
             rewards_per_day: 47.95,
-            min_stake: 10.0,
+            min_stake: min_stake_for_pool_token("STRK", is_testnet)
+                .unwrap_or(POINTS_MIN_STAKE_STRK),
             lock_period: None,
+            available: true,
+            status_message: None,
         },
         StakingPool {
             pool_id: "WBTC".to_string(),
@@ -1008,8 +1279,10 @@ pub async fn get_pools(
             tvl_usd: 0.0,
             apy: 6.0,
             rewards_per_day: 0.017,
-            min_stake: 0.001,
+            min_stake: min_stake_for_pool_token("WBTC", is_testnet).unwrap_or(POINTS_MIN_STAKE_BTC),
             lock_period: Some(14),
+            available: wbtc_available,
+            status_message: wbtc_status_message.clone(),
         },
         StakingPool {
             pool_id: "USDT".to_string(),
@@ -1018,8 +1291,11 @@ pub async fn get_pools(
             tvl_usd: 0.0,
             apy: 7.0,
             rewards_per_day: 460.27,
-            min_stake: 100.0,
+            min_stake: min_stake_for_pool_token("USDT", is_testnet)
+                .unwrap_or(POINTS_MIN_STAKE_STABLECOIN),
             lock_period: None,
+            available: true,
+            status_message: None,
         },
         StakingPool {
             pool_id: "USDC".to_string(),
@@ -1028,8 +1304,11 @@ pub async fn get_pools(
             tvl_usd: 0.0,
             apy: 7.0,
             rewards_per_day: 479.45,
-            min_stake: 100.0,
+            min_stake: min_stake_for_pool_token("USDC", is_testnet)
+                .unwrap_or(POINTS_MIN_STAKE_STABLECOIN),
             lock_period: None,
+            available: true,
+            status_message: None,
         },
     ];
 
@@ -1071,6 +1350,20 @@ pub async fn deposit(
         return Err(crate::error::AppError::BadRequest(
             "Pool belum didukung untuk on-chain staking".to_string(),
         ));
+    }
+    let min_stake =
+        min_stake_for_pool_token(pool_token, state.config.is_testnet()).ok_or_else(|| {
+            crate::error::AppError::BadRequest("Unsupported staking pool".to_string())
+        })?;
+    if amount < min_stake {
+        return Err(crate::error::AppError::BadRequest(format!(
+            "Minimum stake for {} is {}",
+            pool_token,
+            format_stake_amount_for_display(min_stake)
+        )));
+    }
+    if pool_token.eq_ignore_ascii_case("WBTC") {
+        ensure_wbtc_registered_for_deposit(&state).await?;
     }
 
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
@@ -1210,6 +1503,15 @@ pub async fn deposit(
 
     let price = latest_price(&state, pool_token).await?;
     let usd_value = sanitize_usd_notional(amount * price);
+    let nft_discount_percent =
+        active_nft_discount_percent_for_response(&state, &user_address).await;
+    let estimated_points_earned = estimate_stake_points_for_response(
+        usd_value,
+        pool_token,
+        amount,
+        nft_discount_percent,
+        state.config.is_testnet(),
+    );
     let onchain_block_number = resolve_onchain_block_number_best_effort(&state, &tx_hash).await;
     let tx = crate::models::Transaction {
         tx_hash: tx_hash.clone(),
@@ -1245,6 +1547,9 @@ pub async fn deposit(
         position_id,
         tx_hash,
         amount,
+        nft_discount_percent: Some(nft_discount_percent.to_string()),
+        estimated_points_earned: Some(estimated_points_earned.to_string()),
+        points_pending: Some(true),
         privacy_tx_hash: if should_hide {
             Some(tx.tx_hash.clone())
         } else {
@@ -1447,6 +1752,9 @@ pub async fn withdraw(
         position_id: req.position_id,
         tx_hash,
         amount,
+        nft_discount_percent: None,
+        estimated_points_earned: None,
+        points_pending: None,
         privacy_tx_hash: if should_hide {
             Some(tx.tx_hash.clone())
         } else {

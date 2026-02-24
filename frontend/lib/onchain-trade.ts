@@ -195,11 +195,20 @@ export async function invokeStarknetCallsFromWallet(
   const invokeCallsEntrypointCamel = executeCallsEntrypointCamel
   const invokeCallsEntrypointSnake = executeCallsEntrypointSnake
   const attemptErrors: string[] = []
+  const walletIdAlias = normalizeAlias(injected.id)
+  const walletNameAlias = normalizeAlias(injected.name)
+  const isArgentLikeWallet =
+    walletIdAlias.includes("argent") ||
+    walletNameAlias.includes("argent") ||
+    walletIdAlias.includes("ready") ||
+    walletNameAlias.includes("ready")
   const requiresStrictWalletInvoke =
     normalizedCalls.length > 2 ||
     normalizedCalls.some((call) => call.entrypoint === "submit_private_action")
+  const preferWalletRequestPath = normalizedCalls.length >= 2 || isArgentLikeWallet
   const account = injected.account as InjectedStarknet["account"] | undefined
-  if (account?.execute && !requiresStrictWalletInvoke) {
+  const runAccountExecuteAttempts = async (): Promise<string | null> => {
+    if (!account?.execute || requiresStrictWalletInvoke) return null
     const attempts: Array<Array<Record<string, unknown>>> = [
       executeCallsEntrypointCamel,
       executeCallsEntrypointSnake,
@@ -222,13 +231,20 @@ export async function invokeStarknetCallsFromWallet(
         attemptErrors.push(`account.execute failed: ${walletErrorMessage(error)}`)
       }
     }
-  }
-
-  if (!injected.request) {
-    throw new Error("Injected Starknet wallet does not support transaction request.")
+    return null
   }
 
   const requestPayloads: Array<{ type: string; params: unknown }> = [
+    { type: "wallet_addInvokeTransaction", params: invokeCallsEntrypointSnake },
+    { type: "wallet_addInvokeTransaction", params: [invokeCallsEntrypointSnake] },
+    { type: "wallet_addInvokeTransaction", params: invokeCallsEntrypointCamel },
+    { type: "wallet_addInvokeTransaction", params: [invokeCallsEntrypointCamel] },
+    { type: "wallet_addInvokeTransaction", params: invokeCallsMixedSnake },
+    { type: "wallet_addInvokeTransaction", params: [invokeCallsMixedSnake] },
+    { type: "wallet_addInvokeTransaction", params: invokeCallsMixedCamel },
+    { type: "wallet_addInvokeTransaction", params: [invokeCallsMixedCamel] },
+    { type: "wallet_addInvokeTransaction", params: invokeCallsMixedTo },
+    { type: "wallet_addInvokeTransaction", params: [invokeCallsMixedTo] },
     { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsEntrypointSnake } },
     { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsEntrypointSnake }] },
     { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsEntrypointCamel } },
@@ -239,20 +255,46 @@ export async function invokeStarknetCallsFromWallet(
     { type: "wallet_addInvokeTransaction", params: [{ calls: invokeCallsMixedSnake }] },
     { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsMixedCamel } },
     { type: "wallet_addInvokeTransaction", params: { calls: invokeCallsMixedTo } },
+    { type: "starknet_addInvokeTransaction", params: invokeCallsEntrypointSnake },
+    { type: "starknet_addInvokeTransaction", params: [invokeCallsEntrypointSnake] },
+    { type: "starknet_addInvokeTransaction", params: invokeCallsMixedSnake },
+    { type: "starknet_addInvokeTransaction", params: [invokeCallsMixedSnake] },
+    { type: "starknet_addInvokeTransaction", params: { calls: invokeCallsEntrypointSnake } },
+    { type: "starknet_addInvokeTransaction", params: [{ calls: invokeCallsEntrypointSnake }] },
   ]
 
-  for (const payload of requestPayloads) {
-    try {
-      const result = await requestStarknet(injected, payload)
-      const txHash = extractTxHash(result)
-      if (txHash) return txHash
-      attemptErrors.push(`wallet request returned without tx hash (${payload.type})`)
-    } catch (error) {
-      if (isWalletUserRejectedError(error)) {
-        throw new Error("Wallet signature was rejected.")
+  const runWalletRequestAttempts = async (): Promise<string | null> => {
+    if (!injected.request) return null
+    for (const payload of requestPayloads) {
+      try {
+        const result = await requestStarknet(injected, payload)
+        const txHash = extractTxHash(result)
+        if (txHash) return txHash
+        attemptErrors.push(`wallet request returned without tx hash (${payload.type})`)
+      } catch (error) {
+        if (isWalletUserRejectedError(error)) {
+          throw new Error("Wallet signature was rejected.")
+        }
+        attemptErrors.push(`${payload.type} failed: ${walletErrorMessage(error)}`)
       }
-      attemptErrors.push(`${payload.type} failed: ${walletErrorMessage(error)}`)
     }
+    return null
+  }
+
+  if (preferWalletRequestPath) {
+    const requestTxHash = await runWalletRequestAttempts()
+    if (requestTxHash) return requestTxHash
+    const accountTxHash = await runAccountExecuteAttempts()
+    if (accountTxHash) return accountTxHash
+  } else {
+    const accountTxHash = await runAccountExecuteAttempts()
+    if (accountTxHash) return accountTxHash
+    const requestTxHash = await runWalletRequestAttempts()
+    if (requestTxHash) return requestTxHash
+  }
+
+  if (!injected.request && !account?.execute) {
+    throw new Error("Injected Starknet wallet does not support transaction requests or account execution.")
   }
 
   const meaningfulErrors = attemptErrors.filter(

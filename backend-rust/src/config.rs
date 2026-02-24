@@ -73,6 +73,9 @@ pub struct Config {
     pub jwt_expiry_hours: u64,
 
     // External APIs
+    pub llm_api_key: Option<String>,
+    pub llm_api_url: Option<String>,
+    pub llm_model: Option<String>,
     pub openai_api_key: Option<String>,
     pub cairo_coder_api_key: Option<String>,
     pub cairo_coder_api_url: String,
@@ -257,6 +260,19 @@ impl Config {
                 .unwrap_or_else(|_| "24".to_string())
                 .parse()?,
 
+            llm_api_key: env::var("LLM_API_KEY")
+                .ok()
+                .or_else(|| env::var("GROQ_API_KEY").ok()),
+            llm_api_url: env::var("LLM_API_URL")
+                .ok()
+                .or_else(|| env::var("GROQ_API_URL").ok())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            llm_model: env::var("LLM_MODEL")
+                .ok()
+                .or_else(|| env::var("GROQ_MODEL").ok())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             openai_api_key: env::var("OPENAI_API_KEY").ok(),
             cairo_coder_api_key: env::var("CAIRO_CODER_API_KEY").ok(),
             cairo_coder_api_url: env::var("CAIRO_CODER_API_URL")
@@ -411,18 +427,24 @@ impl Config {
             if is_placeholder_address(addr) {
                 tracing::warn!("Using placeholder DEV wallet address");
             }
-        } else if let Some(addr) = &self.ai_level_burn_address {
-            if is_placeholder_address(addr) {
-                tracing::warn!("Using placeholder AI level burn address");
-            } else {
+        }
+        if self
+            .treasury_address
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !is_placeholder_address(value))
+            .is_none()
+        {
+            tracing::warn!(
+                "TREASURY_ADDRESS is not configured; AI level upgrade payment verification will fail"
+            );
+        }
+        if let Some(addr) = &self.ai_level_burn_address {
+            if !addr.trim().is_empty() {
                 tracing::warn!(
-                    "DEV_WALLET_ADDRESS is not configured; using legacy AI_LEVEL_BURN_ADDRESS as AI level payment target"
+                    "AI_LEVEL_BURN_ADDRESS is legacy for AI upgrades. Upgrade payment verification now uses TREASURY_ADDRESS."
                 );
             }
-        } else {
-            tracing::warn!(
-                "DEV_WALLET_ADDRESS is not configured; AI level upgrade payment verification will fail"
-            );
         }
         if is_placeholder_address(&self.bridge_aggregator_address) {
             tracing::warn!("Using placeholder bridge aggregator address");
@@ -481,6 +503,9 @@ impl Config {
             tracing::warn!("CORS_ALLOWED_ORIGINS is empty; requests may be blocked");
         }
 
+        let _ = &self.llm_api_key;
+        let _ = &self.llm_api_url;
+        let _ = &self.llm_model;
         let _ = &self.openai_api_key;
         let _ = &self.cairo_coder_api_key;
         let _ = &self.cairo_coder_api_url;

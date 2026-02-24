@@ -50,6 +50,8 @@ const assetMeta: Record<string, { name: string; icon: string }> = {
 }
 
 const MAX_ASSET_VALUE_USD = 1_000_000
+const MAX_PNL_RATIO_TO_PORTFOLIO = 50
+const MAX_ABS_PNL_WITHOUT_PORTFOLIO = 1_000_000
 type AssetChain = "starknet" | "evm" | "bitcoin" | "other"
 
 const resolveAssetChain = (symbol: string): AssetChain => {
@@ -85,6 +87,24 @@ const sanitizePercent = (value: number) => {
   if (!Number.isFinite(value)) return 0
   const capped = Math.max(-9999, Math.min(9999, value))
   return Number(capped.toFixed(2))
+}
+
+// Internal helper that supports `deriveChartPnlFallback` operations.
+const deriveChartPnlFallback = (data: ChartPoint[]) => {
+  if (data.length < 2) return 0
+  const first = Number(data[0]?.value)
+  const last = Number(data[data.length - 1]?.value)
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return 0
+  return last - first
+}
+
+// Internal helper that supports `isPnlOutlier` operations.
+const isPnlOutlier = (pnlValue: number, portfolioValue: number) => {
+  if (!Number.isFinite(pnlValue)) return true
+  if (portfolioValue > 0) {
+    return Math.abs(pnlValue) > portfolioValue * MAX_PNL_RATIO_TO_PORTFOLIO
+  }
+  return Math.abs(pnlValue) > MAX_ABS_PNL_WITHOUT_PORTFOLIO
 }
 
 /**
@@ -150,9 +170,6 @@ const formatTokenAmount = (value: number) => {
   return value.toLocaleString(undefined, { maximumFractionDigits: 8 })
 }
 
-
-type ChartPoint = { label: string; value: number }
-
 /**
  * Handles `MiniChart` logic.
  *
@@ -161,91 +178,212 @@ type ChartPoint = { label: string; value: number }
  * @returns Result consumed by caller flow, UI state updates, or async chaining.
  * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
  */
-function MiniChart({ data }: { data: ChartPoint[] }) {
+type ChartPoint = { label: string; value: number; tooltipLabel?: string }
+
+const formatExactUsd = (value: number) => {
+  if (!Number.isFinite(value)) return "$0.00"
+  const abs = Math.abs(value)
+  const formatted = abs.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  return `${value < 0 ? "-" : ""}$${formatted}`
+}
+
+function MiniChart({ data, className }: { data: ChartPoint[]; className?: string }) {
+  const chartUid = React.useId().replace(/:/g, "")
+  const chartRef = React.useRef<HTMLDivElement>(null)
+  const [hoveredIndex, setHoveredIndex] = React.useState<number | null>(null)
   const safeData = data.length > 1 ? data : data.length === 1 ? [data[0], data[0]] : []
+
+  React.useEffect(() => {
+    if (hoveredIndex === null) return
+    if (hoveredIndex >= safeData.length) {
+      setHoveredIndex(null)
+    }
+  }, [hoveredIndex, safeData.length])
+
   if (safeData.length === 0) {
-    return <div className="h-40 w-full rounded-xl bg-surface/30" />
+    return <div className={cn("h-full min-h-[220px] w-full rounded-xl bg-surface/30", className)} />
   }
 
-  const maxValue = Math.max(...safeData.map(d => d.value))
-  const minValue = Math.min(...safeData.map(d => d.value))
-  const range = maxValue - minValue || 1
-  
-  const points = safeData.map((d, i) => {
-    const x = (i / (safeData.length - 1)) * 100
-    const y = 100 - ((d.value - minValue) / range) * 80
-    return `${x},${y}`
-  }).join(" ")
+  const chartTop = 8
+  const chartBottom = 92
+  const chartHeight = chartBottom - chartTop
+  const maxValue = Math.max(...safeData.map((d) => d.value))
+  const minValue = Math.min(...safeData.map((d) => d.value))
+  const baseRange = maxValue - minValue || 1
+  const padding = baseRange * 0.12
+  const yMin = minValue - padding
+  const yMax = maxValue + padding
+  const yRange = yMax - yMin || 1
 
-  const areaPoints = `0,100 ${points} 100,100`
+  const xAt = (index: number) => (index / Math.max(1, safeData.length - 1)) * 100
+  const yAt = (value: number) => chartBottom - ((value - yMin) / yRange) * chartHeight
+
+  const movingAverage = safeData.map((_, index) => {
+    const from = Math.max(0, index - 2)
+    const segment = safeData.slice(from, index + 1)
+    const avg = segment.reduce((sum, point) => sum + point.value, 0) / segment.length
+    return avg
+  })
+
+  const linePoints = safeData.map((point, index) => `${xAt(index)},${yAt(point.value)}`).join(" ")
+  const maPoints = movingAverage.map((value, index) => `${xAt(index)},${yAt(value)}`).join(" ")
+  const areaPoints = `0,${chartBottom} ${linePoints} 100,${chartBottom}`
+
+  const gridY = [chartTop, chartTop + chartHeight * 0.25, chartTop + chartHeight * 0.5, chartTop + chartHeight * 0.75, chartBottom]
+  const gridX = safeData.map((_, index) => xAt(index))
+
+  const hoveredPoint = hoveredIndex !== null ? safeData[hoveredIndex] : null
+  const hoveredX = hoveredIndex !== null ? xAt(hoveredIndex) : null
+  const hoveredY = hoveredIndex !== null ? yAt(safeData[hoveredIndex].value) : null
+
+  const handlePointerMove = (clientX: number) => {
+    const container = chartRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0) return
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+    const index = Math.round(ratio * Math.max(0, safeData.length - 1))
+    setHoveredIndex(index)
+  }
 
   return (
-    <div className="relative h-40 w-full">
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
-        {/* Gradient Area */}
+    <div
+      ref={chartRef}
+      className={cn("relative h-full min-h-[220px] w-full", className)}
+      onMouseLeave={() => setHoveredIndex(null)}
+      onMouseMove={(event) => handlePointerMove(event.clientX)}
+    >
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
         <defs>
-          <linearGradient id="chartGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="var(--neon-purple)" stopOpacity="0.3" />
-            <stop offset="100%" stopColor="var(--neon-purple)" stopOpacity="0" />
+          <linearGradient id={`chartArea-${chartUid}`} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#a855f7" stopOpacity="0.42" />
+            <stop offset="58%" stopColor="#7c3aed" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#7c3aed" stopOpacity="0" />
           </linearGradient>
-          <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="var(--neon-purple)" />
-            <stop offset="50%" stopColor="var(--neon-cyan)" />
-            <stop offset="100%" stopColor="var(--neon-purple)" />
+          <linearGradient id={`chartLine-${chartUid}`} x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#9333ea" />
+            <stop offset="50%" stopColor="#22d3ee" />
+            <stop offset="100%" stopColor="#7c3aed" />
           </linearGradient>
+          <filter id={`chartGlow-${chartUid}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1.3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
-        
-        {/* Grid lines */}
-        {[0, 25, 50, 75, 100].map((y) => (
+
+        {gridY.map((y, index) => (
           <line
-            key={y}
+            key={`gy-${index}`}
             x1="0"
             y1={y}
             x2="100"
             y2={y}
             stroke="var(--border)"
             strokeWidth="0.5"
-            strokeDasharray="2,2"
+            strokeDasharray="1.2 2.8"
+            opacity="0.85"
           />
         ))}
-        
-        {/* Area fill */}
-        <polygon
-          points={areaPoints}
-          fill="url(#chartGradient)"
-        />
-        
-        {/* Line */}
+        {gridX.map((x, index) => (
+          <line
+            key={`gx-${index}`}
+            x1={x}
+            y1={chartTop}
+            x2={x}
+            y2={chartBottom}
+            stroke="var(--border)"
+            strokeWidth="0.45"
+            strokeDasharray="1.2 3.2"
+            opacity="0.45"
+          />
+        ))}
+
+        <polygon points={areaPoints} fill={`url(#chartArea-${chartUid})`} />
+        <polygon points={areaPoints} fill="#8b5cf6" opacity="0.08" filter={`url(#chartGlow-${chartUid})`} />
+
         <polyline
-          points={points}
+          points={maPoints}
           fill="none"
-          stroke="url(#lineGradient)"
-          strokeWidth="2"
+          stroke="#a78bfa"
+          strokeOpacity="0.5"
+          strokeWidth="1.35"
+          strokeDasharray="2 2.6"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        
-        {/* Data points */}
-        {safeData.map((d, i) => {
-          const x = (i / (safeData.length - 1)) * 100
-          const y = 100 - ((d.value - minValue) / range) * 80
+
+        <polyline
+          points={linePoints}
+          fill="none"
+          stroke={`url(#chartLine-${chartUid})`}
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          filter={`url(#chartGlow-${chartUid})`}
+        />
+
+        {hoveredX !== null && (
+          <line
+            x1={hoveredX}
+            y1={chartTop}
+            x2={hoveredX}
+            y2={chartBottom}
+            stroke="#22d3ee"
+            strokeWidth="0.9"
+            strokeDasharray="1.5 2"
+            opacity="0.7"
+          />
+        )}
+
+        {safeData.map((point, index) => {
+          const x = xAt(index)
+          const y = yAt(point.value)
+          const isHovered = hoveredIndex === index
           return (
-            <circle
-              key={i}
-              cx={x}
-              cy={y}
-              r="2"
-              fill="var(--neon-cyan)"
-              className="animate-pulse-glow"
-            />
+            <g key={`node-${index}`}>
+              <circle
+                cx={x}
+                cy={y}
+                r={isHovered ? 4.8 : 3.8}
+                fill="#22d3ee"
+                opacity={isHovered ? 0.32 : 0.18}
+                filter={`url(#chartGlow-${chartUid})`}
+              />
+              <circle
+                cx={x}
+                cy={y}
+                r={isHovered ? 2.5 : 2.2}
+                fill="#67e8f9"
+                stroke="#a855f7"
+                strokeWidth="0.6"
+              />
+            </g>
           )
         })}
       </svg>
-      
-      {/* X-axis labels */}
-      <div className="absolute bottom-0 left-0 right-0 flex justify-between text-xs text-muted-foreground px-1">
-        {safeData.map((d, i) => (
-          <span key={`${d.label}-${i}`}>{d.label}</span>
+
+      {hoveredPoint && hoveredX !== null && hoveredY !== null && (
+        <div
+          className="pointer-events-none absolute z-20 -translate-x-1/2 rounded-lg border border-primary/40 bg-[#070d16e6] px-3 py-2 shadow-[0_8px_28px_rgba(2,6,23,0.65)]"
+          style={{
+            left: `${hoveredX}%`,
+            top: `calc(${hoveredY}% - 58px)`,
+          }}
+        >
+          <p className="text-[10px] text-muted-foreground">{hoveredPoint.tooltipLabel || hoveredPoint.label}</p>
+          <p className="text-xs font-semibold text-foreground">{formatExactUsd(hoveredPoint.value)}</p>
+        </div>
+      )}
+
+      <div className="pointer-events-none absolute bottom-0 left-0 right-0 flex justify-between px-1 text-xs text-muted-foreground">
+        {safeData.map((point, index) => (
+          <span key={`${point.label}-${index}`}>{point.label}</span>
         ))}
       </div>
     </div>
@@ -382,7 +520,20 @@ export function PortfolioDashboard() {
           const label = selectedPeriod === "24H"
             ? date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
             : date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-          return { label, value: point.close }
+          const tooltipLabel = selectedPeriod === "24H"
+            ? date.toLocaleString("en-US", {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : date.toLocaleDateString("en-US", {
+                weekday: "short",
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })
+          return { label, tooltipLabel, value: point.close }
         })
         setChartData(mapped)
       } catch {
@@ -536,7 +687,7 @@ export function PortfolioDashboard() {
     BTC: wallet.btcAddress ? wallet.onchainBalance.BTC : null,
   }
 
-  const pnlValue = analytics
+  const rawPnlValue = analytics
     ? safeNumber(analytics.portfolio[periodKey], 0)
     : 0
   const hasStarknetWallet = Boolean(effectiveStarknetAddress)
@@ -589,8 +740,12 @@ export function PortfolioDashboard() {
 
   const totalValueFromAssets = assetsRaw.reduce((sum, asset) => sum + asset.value, 0)
   const resolvedTotalValue = totalValueFromAssets > 0 ? totalValueFromAssets : totalValue
-  const pnlPercent = resolvedTotalValue > 0
-    ? (pnlValue / resolvedTotalValue) * 100
+  const chartPnlFallback = deriveChartPnlFallback(chartData)
+  const pnlOutlier = hasAnalytics && isPnlOutlier(rawPnlValue, resolvedTotalValue)
+  const pnlValue = pnlOutlier ? chartPnlFallback : rawPnlValue
+  const initialValueEstimate = resolvedTotalValue - pnlValue
+  const pnlPercent = initialValueEstimate > 0
+    ? (pnlValue / initialValueEstimate) * 100
     : 0
   const assets = assetsRaw.map((asset) => ({
     ...asset,
@@ -604,8 +759,8 @@ export function PortfolioDashboard() {
 
   const displayData: PortfolioSnapshot = {
     totalValue: sanitizeUsdValue(resolvedTotalValue),
-    pnl: pnlValue,
-    pnlPercent: Number.isFinite(pnlPercent) ? Number(pnlPercent.toFixed(2)) : 0,
+    pnl: Number.isFinite(pnlValue) ? Number(pnlValue.toFixed(2)) : 0,
+    pnlPercent: sanitizePercent(pnlPercent),
     period: selectedPeriod,
     assets,
   }
@@ -623,7 +778,7 @@ export function PortfolioDashboard() {
   return (
     <section id="portfolio" className="py-12">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-foreground">Portfolio Overview</h2>
+        <h2 className="text-2xl font-bold text-foreground carel-tech-heading">Portfolio Overview</h2>
         <Button 
           variant="outline" 
           className="gap-2 border-primary/50 text-foreground hover:bg-primary/10 bg-transparent"
@@ -635,7 +790,7 @@ export function PortfolioDashboard() {
 
       <div className="grid lg:grid-cols-2 gap-6">
         {/* PnL Chart */}
-        <div className="p-6 rounded-2xl glass border border-border hover:border-primary/50 transition-all duration-300">
+        <div className="p-6 rounded-2xl glass border border-border hover:border-primary/50 transition-all duration-300 flex flex-col">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <PieChart className="h-5 w-5 text-primary" />
@@ -681,7 +836,7 @@ export function PortfolioDashboard() {
             </span>
           </div>
 
-          <MiniChart data={chartData} />
+          <MiniChart data={chartData} className="flex-1 min-h-[260px]" />
         </div>
 
         {/* Asset Allocation */}

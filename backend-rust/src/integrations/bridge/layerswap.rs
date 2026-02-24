@@ -1,6 +1,7 @@
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -64,7 +65,21 @@ impl LayerSwapClient {
             .append_pair("destination_asset", destination_asset)
             .append_pair("source_amount", &amount.to_string())
             .append_pair("refuel", "false");
-        let client = reqwest::Client::new();
+        let timeout_secs = std::env::var("BRIDGE_QUOTE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(12);
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .map_err(|e| {
+                crate::error::AppError::Internal(format!(
+                    "LayerSwap HTTP client init failed: {}",
+                    e
+                ))
+            })?;
         let response = client
             .get(url)
             .header("X-LS-APIKEY", self.api_key.trim())

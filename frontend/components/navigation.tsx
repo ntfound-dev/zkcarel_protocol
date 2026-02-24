@@ -3,6 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
+import { CarelBrandLogo } from "@/components/carel-logo"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import {
@@ -12,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Shield, Wallet, Bell, User, Menu, X, ArrowRightLeft, PieChart, Trophy, Gift, Bot, History, Users, Settings, Droplets, CreditCard, ChevronDown } from "lucide-react"
+import { Wallet, Bell, User, Menu, X, ArrowRightLeft, PieChart, Trophy, Gift, Bot, History, Users, Settings, Droplets, CreditCard, ChevronDown } from "lucide-react"
 
 const navItems = [
   { label: "Trade", href: "#trade", icon: ArrowRightLeft },
@@ -82,15 +83,11 @@ export function Navigation() {
       <div className="container flex h-16 items-center justify-between px-4 mx-auto">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 group">
-          <div className="relative">
-            <Shield className="h-8 w-8 text-primary animate-pulse-glow" />
-            <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-primary-foreground">
-              Z
-            </span>
-          </div>
-          <span className="font-sans text-xl font-bold tracking-wider text-foreground group-hover:text-primary transition-colors">
-            Carel Protocol
-          </span>
+          <CarelBrandLogo
+            iconSize={34}
+            markClassName="transition-transform duration-300 group-hover:scale-[1.04]"
+            labelClassName="font-sans text-xl font-bold tracking-wider text-foreground transition-colors group-hover:text-primary"
+          />
         </Link>
 
         {/* Desktop Navigation */}

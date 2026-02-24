@@ -33,9 +33,32 @@ fn env_non_empty(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+// Internal helper that supports `parse_rpc_url_list` operations.
+fn parse_rpc_url_list(raw: &str) -> Vec<String> {
+    raw.split([',', ';', '\n', '\r', ' '])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 // Internal helper that supports `indexer_rpc_url` operations.
 fn indexer_rpc_url(config: &Config) -> String {
     env_non_empty("STARKNET_INDEXER_RPC_URL").unwrap_or_else(|| config.starknet_rpc_url.clone())
+}
+
+// Internal helper that supports `indexer_rpc_urls` operations.
+fn indexer_rpc_urls(config: &Config) -> Vec<String> {
+    let mut urls = env_non_empty("STARKNET_INDEXER_RPC_POOL")
+        .map(|raw| parse_rpc_url_list(&raw))
+        .unwrap_or_default();
+    if urls.is_empty() {
+        urls.extend(parse_rpc_url_list(&indexer_rpc_url(config)));
+    }
+    if urls.is_empty() {
+        urls.push(config.starknet_rpc_url.clone());
+    }
+    urls
 }
 
 // Internal helper that checks conditions for `is_transient_indexer_error`.
@@ -82,9 +105,9 @@ impl EventIndexer {
     /// # Notes
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(db: Database, config: Config) -> Self {
-        let rpc_url = indexer_rpc_url(&config);
+        let rpc_urls = indexer_rpc_urls(&config);
         Self {
-            client: StarknetClient::new(rpc_url),
+            client: StarknetClient::new_with_urls(rpc_urls),
             parser: EventParser::new(),
             db,
             config,
@@ -211,9 +234,9 @@ impl EventIndexer {
         let use_block_processor =
             is_env_flag_enabled("USE_STARKNET_RPC") && is_env_flag_enabled("USE_BLOCK_PROCESSOR");
         let processor = if use_block_processor {
-            let rpc_url = indexer_rpc_url(&self.config);
+            let rpc_urls = indexer_rpc_urls(&self.config);
             Some(BlockProcessor::new(
-                StarknetClient::new(rpc_url),
+                StarknetClient::new_with_urls(rpc_urls),
                 self.db.clone(),
             ))
         } else {

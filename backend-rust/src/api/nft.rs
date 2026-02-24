@@ -19,8 +19,8 @@ use std::time::Instant;
 use tokio::time::{timeout, Duration};
 
 const ONCHAIN_NFT_READ_TIMEOUT_MS: u64 = 3_500;
-const OWNED_NFT_CACHE_TTL_SECS: u64 = 20;
-const OWNED_NFT_CACHE_STALE_SECS: u64 = 300;
+const OWNED_NFT_CACHE_TTL_SECS: u64 = 300;
+const OWNED_NFT_CACHE_STALE_SECS: u64 = 1_200;
 const OWNED_NFT_CACHE_MAX_ENTRIES: usize = 100_000;
 
 #[derive(Debug, Serialize, Clone)]
@@ -121,6 +121,14 @@ async fn cache_owned_nfts(key: String, value: Vec<NFT>) {
         let stale_after = Duration::from_secs(OWNED_NFT_CACHE_STALE_SECS);
         guard.retain(|_, entry| entry.fetched_at.elapsed() <= stale_after);
     }
+}
+
+// Internal helper that supports `invalidate_cached_owned_nfts` operations.
+async fn invalidate_cached_owned_nfts(contract: &str, user: &str) {
+    let key = owned_nft_cache_key(contract, user);
+    let cache = owned_nft_cache();
+    let mut guard = cache.write().await;
+    guard.remove(&key);
 }
 
 #[derive(Debug, Deserialize)]
@@ -432,6 +440,10 @@ pub async fn mint_nft(
         used_in_period: None,
         remaining_usage: None,
     };
+
+    if let Some(contract) = discount_contract(&state) {
+        invalidate_cached_owned_nfts(contract, &user_address).await;
+    }
 
     Ok(Json(ApiResponse::success(nft)))
 }

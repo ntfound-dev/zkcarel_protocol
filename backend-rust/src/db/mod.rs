@@ -10,6 +10,18 @@ pub struct Database {
     pool: PgPool,
 }
 
+#[derive(Debug, Clone)]
+pub struct NftDiscountState {
+    #[allow(dead_code)]
+    pub tier: i32,
+    pub discount_percent: f64,
+    pub is_active: bool,
+    pub max_usage: i64,
+    pub chain_used_in_period: i64,
+    pub local_used_in_period: i64,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,6 +77,9 @@ mod tests {
             backend_account_address: None,
             jwt_secret: "test_secret".to_string(),
             jwt_expiry_hours: 24,
+            llm_api_key: None,
+            llm_api_url: None,
+            llm_model: None,
             openai_api_key: None,
             cairo_coder_api_key: None,
             cairo_coder_api_url: "https://api.cairo-coder.com/v1/chat/completions".to_string(),
@@ -1563,5 +1578,170 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+// ==================== NFT DISCOUNT STATE ====================
+impl Database {
+    /// Fetches data for `get_nft_discount_state`.
+    pub async fn get_nft_discount_state(
+        &self,
+        contract_address: &str,
+        user_address: &str,
+        period_epoch: i64,
+    ) -> Result<Option<NftDiscountState>> {
+        ensure_varchar_max("nft_discount_state.contract_address", contract_address, 66)?;
+        ensure_varchar_max("nft_discount_state.user_address", user_address, 66)?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT
+                tier,
+                discount_percent,
+                is_active,
+                max_usage,
+                chain_used_in_period,
+                local_used_in_period,
+                updated_at
+            FROM nft_discount_state
+            WHERE contract_address = $1
+              AND user_address = $2
+              AND period_epoch = $3
+            LIMIT 1
+            "#,
+        )
+        .bind(contract_address)
+        .bind(user_address)
+        .bind(period_epoch)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|value| NftDiscountState {
+            tier: value.get::<i32, _>("tier"),
+            discount_percent: value.get::<f64, _>("discount_percent"),
+            is_active: value.get::<bool, _>("is_active"),
+            max_usage: value.get::<i64, _>("max_usage"),
+            chain_used_in_period: value.get::<i64, _>("chain_used_in_period"),
+            local_used_in_period: value.get::<i64, _>("local_used_in_period"),
+            updated_at: value.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+        }))
+    }
+
+    /// Updates state for `upsert_nft_discount_state_from_chain`.
+    pub async fn upsert_nft_discount_state_from_chain(
+        &self,
+        contract_address: &str,
+        user_address: &str,
+        period_epoch: i64,
+        tier: i32,
+        discount_percent: f64,
+        is_active: bool,
+        max_usage: i64,
+        chain_used_in_period: i64,
+    ) -> Result<NftDiscountState> {
+        ensure_varchar_max("nft_discount_state.contract_address", contract_address, 66)?;
+        ensure_varchar_max("nft_discount_state.user_address", user_address, 66)?;
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO nft_discount_state (
+                contract_address,
+                user_address,
+                period_epoch,
+                tier,
+                discount_percent,
+                is_active,
+                max_usage,
+                chain_used_in_period,
+                local_used_in_period,
+                last_chain_sync_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, NOW(), NOW())
+            ON CONFLICT (contract_address, user_address, period_epoch)
+            DO UPDATE SET
+                tier = EXCLUDED.tier,
+                discount_percent = EXCLUDED.discount_percent,
+                is_active = EXCLUDED.is_active,
+                max_usage = EXCLUDED.max_usage,
+                chain_used_in_period = EXCLUDED.chain_used_in_period,
+                local_used_in_period = GREATEST(
+                    nft_discount_state.local_used_in_period,
+                    EXCLUDED.chain_used_in_period
+                ),
+                last_chain_sync_at = NOW(),
+                updated_at = NOW()
+            RETURNING
+                tier,
+                discount_percent,
+                is_active,
+                max_usage,
+                chain_used_in_period,
+                local_used_in_period,
+                updated_at
+            "#,
+        )
+        .bind(contract_address)
+        .bind(user_address)
+        .bind(period_epoch)
+        .bind(tier)
+        .bind(discount_percent)
+        .bind(is_active)
+        .bind(max_usage.max(0))
+        .bind(chain_used_in_period.max(0))
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(NftDiscountState {
+            tier: row.get::<i32, _>("tier"),
+            discount_percent: row.get::<f64, _>("discount_percent"),
+            is_active: row.get::<bool, _>("is_active"),
+            max_usage: row.get::<i64, _>("max_usage"),
+            chain_used_in_period: row.get::<i64, _>("chain_used_in_period"),
+            local_used_in_period: row.get::<i64, _>("local_used_in_period"),
+            updated_at: row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+        })
+    }
+
+    /// Updates state for `increment_nft_discount_local_usage`.
+    pub async fn increment_nft_discount_local_usage(
+        &self,
+        contract_address: &str,
+        user_address: &str,
+        period_epoch: i64,
+        delta: i64,
+    ) -> Result<i64> {
+        ensure_varchar_max("nft_discount_state.contract_address", contract_address, 66)?;
+        ensure_varchar_max("nft_discount_state.user_address", user_address, 66)?;
+        if delta <= 0 {
+            return Ok(0);
+        }
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO nft_discount_state (
+                contract_address,
+                user_address,
+                period_epoch,
+                local_used_in_period,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (contract_address, user_address, period_epoch)
+            DO UPDATE SET
+                local_used_in_period =
+                    nft_discount_state.local_used_in_period + EXCLUDED.local_used_in_period,
+                updated_at = NOW()
+            RETURNING local_used_in_period
+            "#,
+        )
+        .bind(contract_address)
+        .bind(user_address)
+        .bind(period_epoch)
+        .bind(delta)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.get::<i64, _>("local_used_in_period"))
     }
 }

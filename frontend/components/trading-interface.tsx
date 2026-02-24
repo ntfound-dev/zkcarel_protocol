@@ -1370,11 +1370,11 @@ export function TradingInterface() {
   const formatSource = (source?: string) => {
     switch (source) {
       case "ws":
-        return { label: "Live", className: "bg-success/20 text-success" }
+        return { label: "Live", className: "bg-success/20 text-success", visible: true }
       case "coingecko":
-        return { label: "CoinGecko", className: "bg-primary/20 text-primary" }
+        return { label: "CoinGecko", className: "bg-primary/20 text-primary", visible: false }
       default:
-        return { label: "Fallback", className: "bg-muted text-muted-foreground" }
+        return { label: "Fallback", className: "bg-muted text-muted-foreground", visible: true }
     }
   }
 
@@ -3329,6 +3329,28 @@ export function TradingInterface() {
             txExplorerUrls: gardenOrderExplorerLinks,
           })
         }
+        const bridgeEstimatedPoints = Number(response.estimated_points_earned || 0)
+        const bridgeDiscountPercent = Number(response.nft_discount_percent || 0)
+        const bridgeDiscountSaved = Number(response.fee_discount_saved || 0)
+        const bridgeAiBonusPercent = Number(response.ai_level_points_bonus_percent || 0)
+        const bridgePointsPending = !!response.points_pending
+        const bridgePointsLabel =
+          Number.isFinite(bridgeEstimatedPoints) && bridgeEstimatedPoints > 0
+            ? `Points +${bridgeEstimatedPoints.toFixed(2)} (estimated${bridgePointsPending ? ", pending settlement" : ""})`
+            : "Points +0 (estimated)"
+        const bridgeDiscountLabel =
+          Number.isFinite(bridgeDiscountPercent) && bridgeDiscountPercent > 0
+            ? `NFT discount ${bridgeDiscountPercent.toFixed(2)}% active (fee saved ${bridgeDiscountSaved.toFixed(8)} ${fromToken.symbol}).`
+            : "NFT discount not active on this bridge."
+        const bridgeAiBonusLabel =
+          Number.isFinite(bridgeAiBonusPercent) && bridgeAiBonusPercent > 0
+            ? `AI level bridge bonus +${bridgeAiBonusPercent.toFixed(2)}% active.`
+            : "AI level bridge bonus not active (Level 1)."
+        notifications.addNotification({
+          type: "info",
+          title: "Points & Discount",
+          message: `${bridgePointsLabel}. ${bridgeDiscountLabel} ${bridgeAiBonusLabel}`,
+        })
       } else {
         const slippageValue = Number(activeSlippage || "0.5")
         const toTokenDecimals = TOKEN_DECIMALS[toToken.symbol.toUpperCase()] ?? 6
@@ -3617,18 +3639,33 @@ export function TradingInterface() {
         <div className="flex items-center justify-between mb-4 sm:mb-6">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-bold text-foreground">Unified Trade</h2>
-            <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide", fromSource.className)}>
-              {fromSource.label}
-            </span>
-            {fromToken.symbol !== toToken.symbol && fromSource.label !== toSource.label && (
-              <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide", toSource.className)}>
-                {toSource.label}
+            {fromSource.visible && (
+              <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide", fromSource.className)}>
+                {fromSource.label}
               </span>
             )}
+            {fromToken.symbol !== toToken.symbol &&
+              toSource.visible &&
+              (fromSource.label !== toSource.label || !fromSource.visible) && (
+                <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide", toSource.className)}>
+                  {toSource.label}
+                </span>
+              )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-muted-foreground">
-              WS: {priceStatus.websocket}
+            <span
+              className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-secondary/15"
+              title={`WebSocket ${priceStatus.websocket}`}
+              aria-label={`WebSocket ${priceStatus.websocket}`}
+            >
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full",
+                  priceStatus.websocket === "open"
+                    ? "bg-success animate-pulse"
+                    : "bg-muted-foreground"
+                )}
+              />
             </span>
             {hideBalanceSupportedForCurrentPair && (
               <button 

@@ -187,6 +187,42 @@
   100% { background-position: 200% 0%; }
 }
 
+@keyframes ambient-drift-a {
+  0% {
+    transform: translate3d(-4%, -2%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(8%, 4%, 0) scale(1.08);
+  }
+  100% {
+    transform: translate3d(-4%, -2%, 0) scale(1);
+  }
+}
+
+@keyframes ambient-drift-b {
+  0% {
+    transform: translate3d(5%, -4%, 0) scale(1.04);
+  }
+  50% {
+    transform: translate3d(-7%, 5%, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(5%, -4%, 0) scale(1.04);
+  }
+}
+
+@keyframes ambient-drift-c {
+  0% {
+    transform: translate3d(0%, 6%, 0) scale(1.02);
+  }
+  50% {
+    transform: translate3d(6%, -6%, 0) scale(1.1);
+  }
+  100% {
+    transform: translate3d(0%, 6%, 0) scale(1.02);
+  }
+}
+
 /* Utility Classes */
 .animate-pulse-glow {
   animation: pulse-glow 2s ease-in-out infinite;
@@ -208,6 +244,104 @@
 .animate-border-flow {
   background-size: 200% 100%;
   animation: border-flow 2s linear infinite;
+}
+
+.carel-tech-heading {
+  font-family: "Michroma", "Orbitron", "Audiowide", "Exo 2", var(--font-sans);
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  line-height: 1.08;
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-ligatures: none;
+  text-rendering: geometricPrecision;
+  text-wrap: balance;
+}
+
+.carel-tech-title {
+  font-family: "Michroma", "Orbitron", "Audiowide", "Exo 2", var(--font-sans);
+  font-weight: 700;
+  letter-spacing: 0.026em;
+  line-height: 1.12;
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-ligatures: none;
+  text-rendering: geometricPrecision;
+}
+
+.carel-tech-label {
+  font-family: "Orbitron", "Michroma", "Audiowide", "Exo 2", var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+
+.carel-tech-copy {
+  font-family: "Exo 2", "Orbitron", var(--font-sans);
+  font-weight: 500;
+  letter-spacing: 0.012em;
+  line-height: 1.6;
+}
+
+.carel-neon-soft {
+  text-shadow: 0 0 12px rgba(168, 85, 247, 0.35), 0 0 24px rgba(6, 182, 212, 0.18);
+}
+
+.ambient-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(120px);
+  will-change: transform, opacity;
+}
+
+.ambient-orb-primary {
+  width: 46vw;
+  height: 46vw;
+  min-width: 320px;
+  min-height: 320px;
+  left: -14vw;
+  top: 6vh;
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.24) 0%, rgba(34, 211, 238, 0.09) 38%, rgba(34, 211, 238, 0) 74%);
+  animation: ambient-drift-a 28s ease-in-out infinite;
+}
+
+.ambient-orb-secondary {
+  width: 42vw;
+  height: 42vw;
+  min-width: 280px;
+  min-height: 280px;
+  right: -12vw;
+  top: 22vh;
+  background: radial-gradient(circle, rgba(0, 243, 255, 0.24) 0%, rgba(0, 243, 255, 0.09) 40%, rgba(0, 243, 255, 0) 76%);
+  animation: ambient-drift-b 32s ease-in-out infinite;
+}
+
+.ambient-orb-accent {
+  width: 38vw;
+  height: 38vw;
+  min-width: 240px;
+  min-height: 240px;
+  left: 22vw;
+  bottom: -14vh;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.16) 0%, rgba(34, 211, 238, 0.08) 42%, rgba(34, 211, 238, 0) 78%);
+  animation: ambient-drift-c 36s ease-in-out infinite;
+}
+
+.ambient-vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 50% 120%, rgba(34, 211, 238, 0.05) 0%, rgba(10, 10, 15, 0) 60%),
+    radial-gradient(120% 90% at 50% -10%, rgba(0, 243, 255, 0.04) 0%, rgba(10, 10, 15, 0) 58%),
+    radial-gradient(140% 95% at 50% 50%, rgba(10, 10, 15, 0) 50%, rgba(3, 3, 8, 0.62) 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-orb-primary,
+  .ambient-orb-secondary,
+  .ambient-orb-accent {
+    animation: none;
+  }
 }
 
 /* Glassmorphism */
@@ -240,8 +374,8 @@
 
 .light .circuit-bg {
   background-image: 
-    linear-gradient(rgba(167, 139, 250, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(167, 139, 250, 0.06) 1px, transparent 1px);
+    linear-gradient(rgba(34, 211, 238, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.06) 1px, transparent 1px);
 }
 
 .light .neon-text {
@@ -270,8 +404,8 @@
 /* Circuit Board Background Pattern */
 .circuit-bg {
   background-image: 
-    linear-gradient(rgba(157, 0, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(157, 0, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(6, 182, 212, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(6, 182, 212, 0.03) 1px, transparent 1px);
   background-size: 50px 50px;
 }
 
@@ -312,6 +446,6 @@
 
 /* Selection */
 ::selection {
-  background: var(--neon-purple);
-  color: white;
+  background: rgba(34, 211, 238, 0.35);
+  color: #04131f;
 }

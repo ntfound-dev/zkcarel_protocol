@@ -144,8 +144,36 @@ Hide Mode troubleshooting:
 | Tier | Cost | Capabilities |
 | --- | --- | --- |
 | Tier 1 | Free | Read-only assistant: basic query, market context, non-transaction guidance |
-| Tier 2 | 1 CAREL | Assisted execution for swap/bridge flows |
-| Tier 3 | 2 CAREL | Portfolio-level actions and advanced automation |
+| Tier 2 | 1 CAREL per execution | Real on-chain execution: swap, bridge, stake, claim rewards, limit order, cancel order |
+| Tier 3 | 2 CAREL per execution | L2 execution in Garaga/private mode (bridge stays on L2) + unstake, portfolio rebalance, alerts |
+
+Current demo rule:
+- Official demo uses Garaga/private path (Level 3) for executable AI commands.
+- Bridge demo stays on Level 2 because Level 3 bridge is intentionally disabled.
+
+AI command examples (current):
+- `swap 25 STRK to WBTC`
+- `bridge ETH 0.005 to WBTC` (Level 2)
+- `stake 100 USDT`
+- `claim rewards USDT`
+- `limit order STRK/USDC amount 10 at 1.25 expiry 1d`
+- `cancel order <id>`
+
+## AI On-chain Setup Behavior (L2/L3)
+Execution flow for on-chain AI commands (example: `stake 100 USDT`):
+1. Send command, then confirm with `yes`.
+2. Frontend resolves on-chain `action_id` setup first.
+3. With default config, setup requires a fresh wallet signature popup (`Sign Execution Setup`) per execution.
+4. Only after setup is confirmed does command execution continue to the action signature.
+
+Important defaults:
+- `NEXT_PUBLIC_AI_REQUIRE_FRESH_SETUP_PER_EXECUTION=true` (default): strict one fresh setup signature per execution.
+- If popup is not confirmed, chat shows:
+  - `On-chain setup signature was not completed: A fresh on-chain signature is required for this execution. Please confirm the wallet popup, then retry.`
+- In that case command is not executed.
+
+Optional behavior:
+- Set `NEXT_PUBLIC_AI_REQUIRE_FRESH_SETUP_PER_EXECUTION=false` to allow reusing latest pending setup (fewer setup prompts, less strict per-execution freshness).
 
 ## AI Bridge L2 Behavior
 Execution flow for AI bridge command:
@@ -161,6 +189,12 @@ Execution flow for AI bridge command:
 Common messages:
 - `No CAREL was burned` means pre-check stopped execution before setup burn.
 - `No pending confirmation right now` appears when user sends `yes/no` without active pending command.
+- `On-chain setup signature was not completed...` means user did not confirm the setup popup (`Sign Execution Setup`) or setup could not be finalized yet.
+- `wallet_addInvokeTransaction ... expected array` means wallet rejected multicall payload shape; frontend now retries with sequential signatures (`approve` then action).
+- WBTC staking uses Starknet `WBTC` token (not native BTC). Frontend pre-checks WBTC pool availability before setup/signature; if unavailable, execution stops early and CAREL is not burned.
+- `Token BTC tidak didukung` on WBTC stake means WBTC token is not registered in `StakingBTC` allowlist yet (`add_btc_token` required by admin, especially on older contract deployments/messages).
+- In L3 hide-mode relayer path, `Shielded note funding failed: insufficient allowance` now triggers auto wallet approval to relayer executor, then automatic retry.
+- Battleship is currently disabled in frontend (`Coming Soon`) due stability hardening work.
 
 Timing interpretation in Garden Explorer:
 - `Created at` / `Created X hours ago` = age of order record since creation.

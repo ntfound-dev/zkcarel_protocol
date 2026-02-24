@@ -232,6 +232,8 @@ const STARKNET_DISCOUNT_SOULBOUND_ADDRESS =
   process.env.NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS ||
   ""
 
+const SOCIAL_TASKS_COMING_SOON = true
+
 /**
  * Handles `TierProgressBar` logic.
  *
@@ -1066,7 +1068,14 @@ export function RewardsHub() {
       <div className="mt-8">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold text-foreground">Social Tasks</h3>
-          <div className="text-sm text-muted-foreground">Earn bonus points</div>
+          <div className="flex items-center gap-2">
+            <div className="text-sm text-muted-foreground">Earn bonus points</div>
+            {SOCIAL_TASKS_COMING_SOON && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide border border-amber-400/40 bg-amber-400/10 text-amber-300">
+                Coming Soon
+              </span>
+            )}
+          </div>
         </div>
         <div className="grid md:grid-cols-2 gap-4">
           {socialTasks.map((task) => {
@@ -1075,27 +1084,40 @@ export function RewardsHub() {
               <div key={task.id} className="p-4 rounded-2xl glass border border-border">
                 <h4 className="font-medium text-foreground mb-1">{task.title}</h4>
                 <p className="text-xs text-muted-foreground mb-3">{task.description}</p>
-                <div className="flex gap-2">
-                  <input
-                    value={taskInputs[task.id] || ""}
-                    onChange={(e) => setTaskInputs((prev) => ({ ...prev, [task.id]: e.target.value }))}
-                    placeholder={task.placeholder}
-                    className="flex-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-xs"
-                  />
-                  <Button
-                    onClick={() => handleVerifyTask(task.id)}
-                    disabled={status === "verifying" || !(taskInputs[task.id] || "").trim()}
-                  >
-                    {status === "verifying" ? "Verifying..." : "Verify"}
-                  </Button>
-                </div>
-                {taskStatus[task.id]?.message && (
-                  <p className={cn(
-                    "text-xs mt-2",
-                    status === "success" ? "text-success" : status === "error" ? "text-destructive" : "text-muted-foreground"
-                  )}>
-                    {taskStatus[task.id]?.message}
-                  </p>
+                {SOCIAL_TASKS_COMING_SOON ? (
+                  <div className="space-y-2">
+                    <div className="px-3 py-2 rounded-lg bg-surface border border-border text-xs text-muted-foreground">
+                      {task.placeholder}
+                    </div>
+                    <Button disabled className="w-full">
+                      Coming Soon
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex gap-2">
+                      <input
+                        value={taskInputs[task.id] || ""}
+                        onChange={(e) => setTaskInputs((prev) => ({ ...prev, [task.id]: e.target.value }))}
+                        placeholder={task.placeholder}
+                        className="flex-1 px-3 py-2 rounded-lg bg-surface border border-border text-foreground text-xs"
+                      />
+                      <Button
+                        onClick={() => handleVerifyTask(task.id)}
+                        disabled={status === "verifying" || !(taskInputs[task.id] || "").trim()}
+                      >
+                        {status === "verifying" ? "Verifying..." : "Verify"}
+                      </Button>
+                    </div>
+                    {taskStatus[task.id]?.message && (
+                      <p className={cn(
+                        "text-xs mt-2",
+                        status === "success" ? "text-success" : status === "error" ? "text-destructive" : "text-muted-foreground"
+                      )}>
+                        {taskStatus[task.id]?.message}
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             )

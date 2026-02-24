@@ -1,0 +1,43 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shieldStroke" x1="96" y1="56" x2="416" y2="456" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22D3EE" />
+      <stop offset="0.5" stop-color="#A855F7" />
+      <stop offset="1" stop-color="#F97316" />
+    </linearGradient>
+    <linearGradient id="shieldFill" x1="256" y1="40" x2="256" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0E132A" />
+      <stop offset="1" stop-color="#060917" />
+    </linearGradient>
+    <radialGradient id="coreFill" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 256) rotate(90) scale(220 190)">
+      <stop stop-color="#111A3B" />
+      <stop offset="1" stop-color="#070C1F" />
+    </radialGradient>
+    <linearGradient id="mono" x1="160" y1="170" x2="352" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E0E7FF" />
+      <stop offset="0.5" stop-color="#A5B4FC" />
+      <stop offset="1" stop-color="#22D3EE" />
+    </linearGradient>
+  </defs>
+
+  <path
+    d="M256 34L421 92V238C421 346 350 432 256 466C162 432 91 346 91 238V92L256 34Z"
+    fill="url(#shieldFill)"
+    stroke="url(#shieldStroke)"
+    stroke-width="16"
+  />
+
+  <path
+    d="M256 86L377 129V241C377 323 325 387 256 414C187 387 135 323 135 241V129L256 86Z"
+    fill="url(#coreFill)"
+    stroke="#7C3AED"
+    stroke-opacity="0.6"
+    stroke-width="8"
+  />
+
+  <g>
+    <path d="M169 177H343" stroke="url(#mono)" stroke-width="30" stroke-linecap="round" />
+    <path d="M343 177L169 335" stroke="url(#mono)" stroke-width="30" stroke-linecap="round" />
+    <path d="M169 335H343" stroke="url(#mono)" stroke-width="30" stroke-linecap="round" />
+  </g>
+</svg>

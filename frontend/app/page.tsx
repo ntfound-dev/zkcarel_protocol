@@ -11,17 +11,24 @@ import { FeaturedCards, type SelectableFeatureId } from "@/components/featured-c
 import { TradingInterface } from "@/components/trading-interface"
 import { LimitOrder } from "@/components/limit-order"
 import { StakeEarn } from "@/components/stake-earn"
-import { DefiFuturesBattleship } from "@/components/defi-futures-battleship"
 import { PortfolioDashboard } from "@/components/portfolio-dashboard"
 import { Leaderboard } from "@/components/leaderboard"
 import { RewardsHub } from "@/components/rewards-hub"
 import { FloatingAIAssistant } from "@/components/floating-ai-assistant"
 import { ParticleBackground } from "@/components/particle-background"
+import { CarelBrandLogo } from "@/components/carel-logo"
 
 export default function CarelProtocolApp() {
   const [activeFeature, setActiveFeature] = React.useState<SelectableFeatureId | null>(null)
 
   const handleSelectFeature = React.useCallback((featureId: SelectableFeatureId) => {
+    if (featureId === "ai-assistant") {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("carel:open-ai-assistant"))
+      }
+      setActiveFeature(null)
+      return
+    }
     setActiveFeature((current) => (current === featureId ? null : featureId))
   }, [])
 
@@ -32,6 +39,16 @@ export default function CarelProtocolApp() {
       panel.scrollIntoView({ behavior: "smooth", block: "start" })
     }
   }, [activeFeature])
+
+  React.useEffect(() => {
+    const handleOpenLoyaltyHub = () => {
+      setActiveFeature("soulbound-nft")
+    }
+    window.addEventListener("carel:open-loyalty-hub", handleOpenLoyaltyHub)
+    return () => {
+      window.removeEventListener("carel:open-loyalty-hub", handleOpenLoyaltyHub)
+    }
+  }, [])
 
   return (
     <ThemeProvider defaultTheme="dark">
@@ -76,9 +93,16 @@ export default function CarelProtocolApp() {
                           <StakeEarn />
                         </section>
                       )}
+                      {activeFeature === "soulbound-nft" && <RewardsHub />}
                       {activeFeature === "defi-futures" && (
                         <section id="defi-futures">
-                          <DefiFuturesBattleship />
+                          <div className="rounded-2xl border border-border glass p-8 text-center">
+                            <h3 className="text-2xl font-bold text-foreground">Battleship Coming Soon</h3>
+                            <p className="mt-3 text-muted-foreground">
+                              We temporarily disabled this game while fixing stability issues. Please use Swap, Bridge,
+                              Stake, and Limit Order features for now.
+                            </p>
+                          </div>
                         </section>
                       )}
                     </section>
@@ -90,22 +114,17 @@ export default function CarelProtocolApp() {
                   {/* Leaderboard */}
                   <Leaderboard />
 
-                  {/* Rewards Hub */}
-                  <RewardsHub />
-
                   {/* Footer */}
                   <footer className="py-8 border-t border-border">
                     <div className="flex flex-col md:flex-row items-center justify-between gap-4">
                       <div className="flex items-center gap-2">
-                        <div className="relative">
-                          <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
-                            <span className="text-primary font-bold">Z</span>
-                          </div>
-                        </div>
-                        <span className="font-bold text-foreground">Carel Protocol</span>
+                        <CarelBrandLogo
+                          iconSize={32}
+                          labelClassName="font-bold text-foreground"
+                        />
                       </div>
                       <div className="flex flex-wrap items-center justify-center gap-6 text-sm text-muted-foreground">
-                        <a href="https://x.com/carelprotocol" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors">X (Twitter)</a>
+                        <a href="https://x.com/carelprotocol" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors">X</a>
                         <a href="https://t.me/carelprotocol" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors">Telegram</a>
                         <a href="https://github.com/carelprotocol" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors">GitHub</a>
                         <a href="#docs" className="hover:text-primary transition-colors">Documentation</a>
@@ -113,7 +132,7 @@ export default function CarelProtocolApp() {
                         <a href="#privacy" className="hover:text-primary transition-colors">Privacy Policy</a>
                       </div>
                       <p className="text-sm text-muted-foreground">
-                        2024 Carel Protocol. All rights reserved.
+                        2026 Carel Protocol. All rights reserved.
                       </p>
                     </div>
                   </footer>

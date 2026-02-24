@@ -268,6 +268,17 @@ fn humanize_bridge_provider_error(
             );
         }
 
+        if lower.contains("timed out") || lower.contains("timeout") {
+            return format!(
+                "{}: quote request timed out for {} -> {} ({} -> {}). Retry in a few seconds.",
+                provider,
+                normalize_token_symbol(from_token),
+                to_token,
+                from_chain,
+                to_chain
+            );
+        }
+
         if lower.contains("garden quote returned 400") {
             return format!(
                 "{}: provider rejected this quote request. Check amount limits and route liquidity.",

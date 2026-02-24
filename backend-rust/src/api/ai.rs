@@ -25,10 +25,12 @@ use starknet_crypto::{poseidon_hash_many, Felt as CryptoFelt};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{sleep, Duration};
 
-const DEFAULT_SIGNATURE_WINDOW_SECONDS: u64 = 30;
-const MIN_SIGNATURE_WINDOW_SECONDS: u64 = 10;
-const MAX_SIGNATURE_WINDOW_SECONDS: u64 = 90;
-const SIGNATURE_PAST_SKEW_SECONDS: u64 = 2;
+const DEFAULT_SIGNATURE_WINDOW_SECONDS: u64 = 180;
+const MIN_SIGNATURE_WINDOW_SECONDS: u64 = 60;
+const MAX_SIGNATURE_WINDOW_SECONDS: u64 = 300;
+const SIGNATURE_PAST_SKEW_SECONDS: u64 = 60;
+const CHAIN_TIMESTAMP_FETCH_TIMEOUT_MS: u64 = 3_500;
+const CHAIN_TIMESTAMP_DRIFT_GUARD_SECONDS: u64 = 300;
 const AI_EXECUTE_TIMEOUT_MS: u64 = 12_000;
 const AI_LEVEL_2_TOTAL_CAREL_WEI: u128 = 5_000_000_000_000_000_000;
 const AI_LEVEL_3_TOTAL_CAREL_WEI: u128 = 10_000_000_000_000_000_000;
@@ -462,7 +464,7 @@ fn ai_executor_auto_disable_signature_verification() -> bool {
                 "1" | "true" | "yes" | "on"
             )
         })
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 // Internal helper that runs side-effecting logic for `backend_disable_ai_executor_signature_verification`.
@@ -661,7 +663,17 @@ pub async fn execute_command(
             }
         }
     };
-    if needs_onchain_action && should_consume_onchain_action(&command) {
+    let should_consume = needs_onchain_action
+        && should_consume_onchain_action(&command)
+        && !ai_response.actions.is_empty();
+    if needs_onchain_action && should_consume_onchain_action(&command) && !should_consume {
+        tracing::warn!(
+            "AI execute skipped on-chain consume: user={} level={} reason=no_executable_actions",
+            auth_subject,
+            level
+        );
+    }
+    if should_consume {
         if let Some(action_id) = resolved_action_id {
             if let Some(action_user) = onchain_action_user.as_deref() {
                 let consumed_tx = consume_onchain_action_via_backend(&state, action_id).await?;
@@ -778,6 +790,54 @@ fn build_set_valid_hash_call(
     })
 }
 
+// Internal helper that resolves a stable timestamp baseline for AI signature-window hashes.
+async fn resolve_signature_reference_timestamp(state: &AppState) -> u64 {
+    let local_now = chrono::Utc::now().timestamp().max(0) as u64;
+    let client = StarknetClient::new(state.config.starknet_rpc_url.clone());
+    let fetch = async {
+        let head = client.get_block_number().await?;
+        let block = client.get_block(head).await?;
+        Ok::<u64, AppError>(block.timestamp)
+    };
+
+    match tokio::time::timeout(
+        Duration::from_millis(CHAIN_TIMESTAMP_FETCH_TIMEOUT_MS),
+        fetch,
+    )
+    .await
+    {
+        Ok(Ok(chain_now)) if chain_now > 0 => {
+            let drift = chain_now.abs_diff(local_now);
+            if drift > CHAIN_TIMESTAMP_DRIFT_GUARD_SECONDS {
+                tracing::warn!(
+                    "AI prepare using local timestamp due large chain/local drift: chain={} local={} drift={}s",
+                    chain_now,
+                    local_now,
+                    drift
+                );
+                local_now
+            } else {
+                chain_now
+            }
+        }
+        Ok(Ok(_)) => local_now,
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "AI prepare falling back to local timestamp (failed fetching chain time): {}",
+                err
+            );
+            local_now
+        }
+        Err(_) => {
+            tracing::warn!(
+                "AI prepare falling back to local timestamp (chain time fetch timeout after {}ms)",
+                CHAIN_TIMESTAMP_FETCH_TIMEOUT_MS
+            );
+            local_now
+        }
+    }
+}
+
 // Internal helper that runs side-effecting logic for `wait_for_prepare_hashes_confirmation`.
 async fn wait_for_prepare_hashes_confirmation(state: &AppState, tx_hash: CoreFelt) -> Result<()> {
     let reader = OnchainReader::from_config(&state.config)?;
@@ -792,17 +852,8 @@ async fn wait_for_prepare_hashes_confirmation(state: &AppState, tx_hash: CoreFel
                         reason
                     )));
                 }
-                if matches!(
-                    receipt.receipt.finality_status(),
-                    TransactionFinalityStatus::PreConfirmed
-                ) {
-                    last_error = "transaction still pre-confirmed".to_string();
-                    if attempt + 1 < AI_PREPARE_READY_POLL_ATTEMPTS {
-                        sleep(Duration::from_millis(AI_PREPARE_READY_POLL_DELAY_MS)).await;
-                        continue;
-                    }
-                    break;
-                }
+                // Pre-confirmed is sufficient for setup usability; waiting for deeper finality
+                // increases stale-signature risk in the frontend confirmation step.
                 return Ok(());
             }
             Err(err) => {
@@ -841,6 +892,7 @@ pub async fn prepare_action_signature(
             "Only AI level 2/3 can prepare on-chain signature.".to_string(),
         )
     })?;
+    enforce_ai_rate_limit(&state, &auth_subject, req.level, true).await?;
 
     let params = req
         .context
@@ -877,19 +929,34 @@ pub async fn prepare_action_signature(
         .window_seconds
         .unwrap_or(DEFAULT_SIGNATURE_WINDOW_SECONDS)
         .clamp(MIN_SIGNATURE_WINDOW_SECONDS, MAX_SIGNATURE_WINDOW_SECONDS);
-    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    let now = resolve_signature_reference_timestamp(&state).await;
     let from_timestamp = now.saturating_sub(SIGNATURE_PAST_SKEW_SECONDS);
-    let to_timestamp = from_timestamp.saturating_add(window_seconds);
+    let to_timestamp = now.saturating_add(window_seconds);
+    tracing::debug!(
+        "AI prepare signature window: now={} from={} to={} level={} user={}",
+        now,
+        from_timestamp,
+        to_timestamp,
+        req.level,
+        user_address
+    );
 
+    let mut signers: Vec<String> = vec![user_address.clone()];
+    if !backend_signer.eq_ignore_ascii_case(&user_address) {
+        signers.push(backend_signer.to_string());
+    }
     let mut calls = Vec::new();
     for ts in from_timestamp..=to_timestamp {
         let hash = compute_action_hash(&user_address, action_type, &params, ts)?;
-        calls.push(build_set_valid_hash_call(
-            verifier_address,
-            backend_signer,
-            &hash,
-        )?);
+        for signer in &signers {
+            calls.push(build_set_valid_hash_call(verifier_address, signer, &hash)?);
+        }
     }
+    tracing::debug!(
+        "AI prepare set_valid_hash calls={} signers={}",
+        calls.len(),
+        signers.len()
+    );
 
     let tx_hash = onchain.invoke_many(calls).await?;
     wait_for_prepare_hashes_confirmation(&state, tx_hash).await?;
@@ -897,7 +964,7 @@ pub async fn prepare_action_signature(
         tx_hash: format!("{:#x}", tx_hash),
         action_type,
         params,
-        hashes_prepared: window_seconds + 1,
+        hashes_prepared: (to_timestamp.saturating_sub(from_timestamp) + 1) * (signers.len() as u64),
         from_timestamp,
         to_timestamp,
     };
@@ -1364,19 +1431,11 @@ pub async fn ensure_executor_ready(
 // Internal helper that supports `configured_ai_upgrade_payment_address` operations.
 fn configured_ai_upgrade_payment_address(config: &crate::config::Config) -> Option<String> {
     config
-        .dev_wallet_address
+        .treasury_address
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty() && !value.starts_with("0x0000"))
         .map(str::to_string)
-        .or_else(|| {
-            config
-                .ai_level_burn_address
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty() && !value.starts_with("0x0000"))
-                .map(str::to_string)
-        })
 }
 
 /// GET /api/v1/ai/level
@@ -1726,7 +1785,7 @@ fn verify_ai_upgrade_fee_invoke_payload(
     }
 
     Err(AppError::BadRequest(format!(
-        "onchain_tx_hash must include CAREL transfer >= {} to configured DEV wallet",
+        "onchain_tx_hash must include CAREL transfer >= {} to configured treasury address",
         wei_to_carel_string(min_amount_wei)
     )))
 }
@@ -1741,7 +1800,7 @@ async fn verify_ai_upgrade_payment_tx_hash(
     let payment_address =
         configured_ai_upgrade_payment_address(&state.config).ok_or_else(|| {
             AppError::BadRequest(
-                "DEV_WALLET_ADDRESS is not configured. Cannot verify AI upgrade payment."
+                "TREASURY_ADDRESS is not configured. Cannot verify AI upgrade payment."
                     .to_string(),
             )
         })?;

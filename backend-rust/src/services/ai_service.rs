@@ -30,6 +30,15 @@ fn normalize_token_symbol(word: &str) -> Option<&'static str> {
     }
 }
 
+// Internal helper that normalizes staking token aliases to supported pool ids.
+fn normalize_staking_pool_token(token: &str) -> String {
+    let normalized = token.trim().to_ascii_uppercase();
+    match normalized.as_str() {
+        "BTC" | "BITCOIN" => "WBTC".to_string(),
+        _ => normalized,
+    }
+}
+
 // Internal helper that supports `tokenize_words` operations.
 fn tokenize_words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
@@ -582,6 +591,67 @@ fn parse_intent_from_command(command: &str) -> Intent {
     }
 }
 
+// Internal helper that checks conditions for `intent_has_missing_execution_parameters`.
+fn intent_has_missing_execution_parameters(intent: &Intent) -> bool {
+    let action = intent.action.as_str();
+    let get_str = |key: &str| {
+        intent
+            .parameters
+            .get(key)
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+    };
+    let get_amount = || {
+        intent
+            .parameters
+            .get("amount")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.0)
+    };
+
+    match action {
+        "swap" | "bridge" => {
+            let from = get_str("from");
+            let to = get_str("to");
+            let amount = get_amount();
+            from.is_empty() || to.is_empty() || amount <= 0.0 || from == to
+        }
+        "limit_order_create" => {
+            let from = get_str("from");
+            let to = get_str("to");
+            let amount = get_amount();
+            from.is_empty() || to.is_empty() || amount <= 0.0 || from == to
+        }
+        "stake" | "unstake" => {
+            let token = get_str("token");
+            let amount = get_amount();
+            token.is_empty() || amount <= 0.0
+        }
+        _ => false,
+    }
+}
+
+// Internal helper that checks conditions for `should_try_llm_intent_assist`.
+fn should_try_llm_intent_assist(intent: &Intent) -> bool {
+    matches!(
+        intent.action.as_str(),
+        "unknown" | "chat_general" | "chat_greeting"
+    ) || intent_has_missing_execution_parameters(intent)
+}
+
+// Internal helper that checks conditions for `intent_is_more_actionable`.
+fn intent_is_more_actionable(current: &Intent, candidate: &Intent) -> bool {
+    if candidate.action == "unknown" {
+        return false;
+    }
+    if current.action == "unknown" {
+        return true;
+    }
+    let current_missing = intent_has_missing_execution_parameters(current);
+    let candidate_missing = intent_has_missing_execution_parameters(candidate);
+    current_missing && !candidate_missing
+}
+
 #[derive(Debug, Serialize)]
 struct GeminiGenerateRequest {
     contents: Vec<GeminiContent>,
@@ -628,6 +698,7 @@ struct GeminiResponsePart {
 
 const OPENAI_CHAT_COMPLETIONS_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_DEFAULT_MODEL: &str = "gpt-4o-mini";
+const OPENAI_COMPAT_DEFAULT_MODEL: &str = "llama-3.3-70b-versatile";
 const LLM_REWRITE_TIMEOUT_MS_DEFAULT: u64 = 8_000;
 
 #[derive(Debug, Serialize)]
@@ -676,13 +747,15 @@ pub enum AIGuardScope {
 
 /// Internal helper that supports `has_llm_provider_configured` operations.
 pub fn has_llm_provider_configured(config: &Config) -> bool {
+    let openai_compat_enabled = has_non_empty_value(config.llm_api_key.as_deref())
+        && has_non_empty_value(config.llm_api_url.as_deref());
     let openai_enabled = has_non_empty_value(config.openai_api_key.as_deref());
     let cairo_enabled = has_non_empty_value(config.cairo_coder_api_key.as_deref())
         && !config.cairo_coder_api_url.trim().is_empty();
     let gemini_enabled = has_non_empty_value(config.gemini_api_key.as_deref())
         && !config.gemini_api_url.trim().is_empty()
         && !config.gemini_model.trim().is_empty();
-    openai_enabled || cairo_enabled || gemini_enabled
+    openai_compat_enabled || openai_enabled || cairo_enabled || gemini_enabled
 }
 
 /// Handles `classify_command_scope` logic.
@@ -752,37 +825,16 @@ impl AIService {
         level: u8,
     ) -> Result<AIResponse> {
         // Parse user intent
-        let intent = self.parse_intent(command).await?;
-        let locale = locale_from_intent(&intent);
+        let mut intent = self.parse_intent(command).await?;
+        let mut response = self
+            .execute_intent_response(user_address, level, &intent)
+            .await?;
 
-        // Execute based on intent
-        let mut response = match intent.action.as_str() {
-            "swap" => self.execute_swap_command(&intent).await?,
-            "bridge" => self.execute_bridge_command(&intent).await?,
-            "limit_order_create" => self.execute_limit_order_create_command(&intent).await?,
-            "limit_order_cancel" => self.execute_limit_order_cancel_command(locale).await?,
-            "check_balance" => self.execute_balance_command(user_address, locale).await?,
-            "check_points" => self.execute_points_command(user_address, locale).await?,
-            "check_price" => self.execute_price_command(&intent).await?,
-            "stake" => self.execute_stake_command(&intent).await?,
-            "unstake" => self.execute_unstake_command(&intent).await?,
-            "claim_staking_rewards" => self.execute_stake_claim_command(&intent).await?,
-            "market_analysis" => self.execute_market_analysis(&intent).await?,
-            "portfolio_management" => {
-                self.execute_portfolio_management_command(user_address, locale)
-                    .await?
-            }
-            "alerts" => self.execute_alerts_command(locale).await?,
-            "tutorial" => self.execute_tutorial_command(level, locale).await?,
-            "chat_greeting" => self.execute_greeting_command(level, &intent).await?,
-            "chat_general" => self.execute_general_chat_command(level, &intent).await?,
-            "set_language_indonesian" => self.execute_set_language_indonesian_command().await?,
-            "set_language_english" => self.execute_set_language_english_command().await?,
-            _ => self.execute_unknown_command(level, locale),
-        };
-
-        let should_try_llm_rewrite = matches!(intent.action.as_str(), "unknown");
-        if should_try_llm_rewrite {
+        // LLM can assist deterministic parser for execution commands when user phrasing is unclear.
+        // We still route final execution through deterministic intent + on-chain confirmations.
+        let should_try_llm_assist =
+            has_llm_provider_configured(&self.config) && should_try_llm_intent_assist(&intent);
+        if should_try_llm_assist {
             let llm_rewrite_timeout_ms = if self.config.ai_llm_rewrite_timeout_ms == 0 {
                 LLM_REWRITE_TIMEOUT_MS_DEFAULT
             } else {
@@ -795,7 +847,22 @@ impl AIService {
             .await
             {
                 Ok(Some(llm_text)) => {
-                    response.message = llm_text;
+                    let candidate_intent = parse_intent_from_command(&llm_text);
+                    if intent_is_more_actionable(&intent, &candidate_intent) {
+                        tracing::info!(
+                            "LLM intent assist improved command parse: {} -> {}",
+                            intent.action,
+                            candidate_intent.action
+                        );
+                        intent = candidate_intent;
+                        response = self
+                            .execute_intent_response(user_address, level, &intent)
+                            .await?;
+                    } else if matches!(intent.action.as_str(), "unknown") {
+                        // Preserve previous behavior for unknown commands:
+                        // if no better executable intent is found, use LLM rewritten reply.
+                        response.message = llm_text;
+                    }
                 }
                 Ok(None) => {}
                 Err(_) => {
@@ -805,6 +872,40 @@ impl AIService {
         }
 
         Ok(response)
+    }
+
+    // Internal helper that runs side-effecting logic for `execute_intent_response`.
+    async fn execute_intent_response(
+        &self,
+        user_address: &str,
+        level: u8,
+        intent: &Intent,
+    ) -> Result<AIResponse> {
+        let locale = locale_from_intent(intent);
+        match intent.action.as_str() {
+            "swap" => self.execute_swap_command(intent).await,
+            "bridge" => self.execute_bridge_command(intent).await,
+            "limit_order_create" => self.execute_limit_order_create_command(intent).await,
+            "limit_order_cancel" => self.execute_limit_order_cancel_command(locale).await,
+            "check_balance" => self.execute_balance_command(user_address, locale).await,
+            "check_points" => self.execute_points_command(user_address, locale).await,
+            "check_price" => self.execute_price_command(intent).await,
+            "stake" => self.execute_stake_command(intent).await,
+            "unstake" => self.execute_unstake_command(intent).await,
+            "claim_staking_rewards" => self.execute_stake_claim_command(intent).await,
+            "market_analysis" => self.execute_market_analysis(intent).await,
+            "portfolio_management" => {
+                self.execute_portfolio_management_command(user_address, locale)
+                    .await
+            }
+            "alerts" => self.execute_alerts_command(locale).await,
+            "tutorial" => self.execute_tutorial_command(level, locale).await,
+            "chat_greeting" => self.execute_greeting_command(level, intent).await,
+            "chat_general" => self.execute_general_chat_command(level, intent).await,
+            "set_language_indonesian" => self.execute_set_language_indonesian_command().await,
+            "set_language_english" => self.execute_set_language_english_command().await,
+            _ => Ok(self.execute_unknown_command(level, locale)),
+        }
     }
 
     /// Parse user intent using OpenAI (placeholder: keyword matching)
@@ -822,6 +923,12 @@ impl AIService {
         fallback: &AIResponse,
     ) -> Option<String> {
         if let Some(text) = self
+            .generate_with_openai_compatible(user_address, command, level, intent, fallback)
+            .await
+        {
+            return Some(text);
+        }
+        if let Some(text) = self
             .generate_with_cairo_coder(user_address, command, level, intent, fallback)
             .await
         {
@@ -835,6 +942,101 @@ impl AIService {
         }
         self.generate_with_openai(user_address, command, level, intent, fallback)
             .await
+    }
+
+    // Internal helper that builds inputs for `generate_with_openai_compatible`.
+    async fn generate_with_openai_compatible(
+        &self,
+        user_address: &str,
+        command: &str,
+        level: u8,
+        intent: &Intent,
+        fallback: &AIResponse,
+    ) -> Option<String> {
+        let api_key = self
+            .config
+            .llm_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let api_url = self
+            .config
+            .llm_api_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let model = self
+            .config
+            .llm_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(OPENAI_COMPAT_DEFAULT_MODEL);
+
+        let locale = locale_from_intent(intent);
+        let system_prompt = build_real_execution_system_prompt(level, locale);
+        let user_prompt =
+            build_real_execution_user_prompt(level, user_address, command, intent, fallback);
+
+        let request = OpenAIChatRequest {
+            model: model.to_string(),
+            messages: vec![
+                OpenAIChatMessage {
+                    role: "system".to_string(),
+                    content: system_prompt.to_string(),
+                },
+                OpenAIChatMessage {
+                    role: "user".to_string(),
+                    content: user_prompt,
+                },
+            ],
+            temperature: 0.2,
+            max_tokens: 256,
+        };
+
+        let client = reqwest::Client::new();
+        let response = match client
+            .post(api_url)
+            .bearer_auth(api_key)
+            .json(&request)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("OpenAI-compatible LLM request failed: {}", err);
+                return None;
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::warn!("OpenAI-compatible LLM returned {}: {}", status, body);
+            return None;
+        }
+
+        let payload: OpenAIChatResponse = match response.json().await {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("OpenAI-compatible LLM response parse failed: {}", err);
+                return None;
+            }
+        };
+
+        payload
+            .choices
+            .into_iter()
+            .filter_map(|choice| {
+                let text = choice.message.content?.trim().to_string();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            })
+            .next()
     }
 
     // Internal helper that builds inputs for `generate_with_gemini`.
@@ -1361,7 +1563,8 @@ impl AIService {
             .parameters
             .get("token")
             .and_then(|v| v.as_str())
-            .unwrap_or("the token");
+            .map(normalize_staking_pool_token)
+            .unwrap_or_else(|| "the token".to_string());
         let amount = intent
             .parameters
             .get("amount")
@@ -1405,7 +1608,8 @@ impl AIService {
             .parameters
             .get("token")
             .and_then(|v| v.as_str())
-            .unwrap_or("the token");
+            .map(normalize_staking_pool_token)
+            .unwrap_or_else(|| "the token".to_string());
         let amount = intent
             .parameters
             .get("amount")
@@ -1455,7 +1659,8 @@ impl AIService {
             .parameters
             .get("token")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .map(normalize_staking_pool_token)
+            .unwrap_or_default();
         let message = if token.is_empty() {
             if is_id {
                 "Saya bisa bantu claim reward staking kamu. Kalau mau pool tertentu, tambahkan token (contoh: claim rewards USDT).".to_string()
@@ -1568,10 +1773,10 @@ impl AIService {
         let is_id = is_indonesian_locale(locale);
         Ok(AIResponse {
             message: if is_id {
-                "Aksi ini REAL on-chain. Kamu akan batalkan limit order aktif. Beri order id kalau mau spesifik, lalu konfirmasi. Lanjutkan? (ya/tidak)"
+                "Siap, mode cancel limit order aktif. Kirim order id spesifik dengan format: `cancel order 0x...`."
                     .to_string()
             } else {
-                "This is a REAL on-chain action. You are about to cancel an active limit order. Provide order id for specific target, then confirm. Proceed? (yes/no)"
+                "Cancel limit order flow is ready. Provide a specific target id using: `cancel order 0x...`."
                     .to_string()
             },
             actions: vec!["prepare_limit_order_cancel".to_string()],
@@ -1843,7 +2048,7 @@ impl AIService {
                 "CAREL Agent is being further developed by the team for this feature. Right now I can help with available commands: price, balance, points, and market data."
                     .to_string()
             } else {
-                "CAREL Agent is being further developed by the team for this feature. Right now I can help with available commands: swap, bridge (Level 2), stake, claim, and limit order."
+                "CAREL Agent is being further developed by the team for this feature. Right now I can help with available commands: swap, bridge (Level 2), stake, claim rewards, limit order, and cancel order. Examples: swap 25 STRK to WBTC; bridge 0.005 ETH to WBTC; stake 50 USDT; claim rewards USDT; limit order STRK/USDC amount 10 at 1.25 expiry 1d; cancel order <id>."
                     .to_string()
             }
         } else {
@@ -2030,7 +2235,10 @@ mod tests {
         let intent = parse_intent_from_command("please brigde 0.0005 btc to wbtc");
         assert_eq!(intent.action, "bridge");
         assert_eq!(
-            intent.parameters.get("from").and_then(|value| value.as_str()),
+            intent
+                .parameters
+                .get("from")
+                .and_then(|value| value.as_str()),
             Some("BTC")
         );
         assert_eq!(

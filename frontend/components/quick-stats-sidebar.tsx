@@ -22,6 +22,7 @@ interface StatCardProps {
   icon: React.ElementType
   label: string
   value: string | number
+  valueTitle?: string
   subValue?: string
   progress?: number
   trend?: {
@@ -29,6 +30,19 @@ interface StatCardProps {
     isPositive: boolean
   }
   className?: string
+}
+
+function formatCompactNumber(value: number, maxFractionDigits = 2): string {
+  if (!Number.isFinite(value)) return "—"
+  const abs = Math.abs(value)
+  if (abs < 1000) {
+    return value.toLocaleString(undefined, { maximumFractionDigits: maxFractionDigits })
+  }
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    compactDisplay: "short",
+    maximumFractionDigits: maxFractionDigits,
+  }).format(value)
 }
 
 /**
@@ -45,7 +59,7 @@ interface StatCardProps {
  * @returns Result consumed by caller flow, UI state updates, or async chaining.
  * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
  */
-function StatCard({ icon: Icon, label, value, subValue, progress, trend, className }: StatCardProps) {
+function StatCard({ icon: Icon, label, value, valueTitle, subValue, progress, trend, className }: StatCardProps) {
   return (
     <div className={cn(
       "p-4 rounded-xl glass border border-border hover:border-primary/50 transition-all duration-300 group",
@@ -53,13 +67,18 @@ function StatCard({ icon: Icon, label, value, subValue, progress, trend, classNa
     )}>
       <div className="flex items-center gap-2 mb-2">
         <Icon className="h-4 w-4 text-primary group-hover:animate-pulse-glow" />
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider carel-tech-label">
           {label}
         </span>
       </div>
       <div className="flex items-end justify-between">
         <div>
-          <p className="text-2xl font-bold text-foreground">{value}</p>
+          <p
+            title={valueTitle}
+            className="text-xl lg:text-2xl font-bold text-foreground leading-tight whitespace-normal [overflow-wrap:anywhere] carel-tech-title"
+          >
+            {value}
+          </p>
           {subValue && (
             <p className="text-xs text-muted-foreground mt-1">{subValue}</p>
           )}
@@ -116,12 +135,12 @@ function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
     <div className="p-4 rounded-xl glass border border-border hover:border-primary/50 transition-all duration-300">
       <div className="flex items-center gap-2 mb-3">
         <Trophy className="h-4 w-4 text-primary" />
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider carel-tech-label">
           Leaderboard Rank
         </span>
       </div>
       <div className="flex items-center gap-3 mb-4">
-        <span className="text-3xl font-bold text-foreground">
+        <span className="text-2xl lg:text-3xl font-bold text-foreground carel-tech-title">
           {rank && rank > 0 ? `#${rank}` : "—"}
         </span>
         <span className={cn(
@@ -166,6 +185,7 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
   const [tierProgress, setTierProgress] = React.useState(0)
   const [tierSubValue, setTierSubValue] = React.useState("—")
   const [volumeLabel, setVolumeLabel] = React.useState("—")
+  const [volumeFullLabel, setVolumeFullLabel] = React.useState<string | undefined>(undefined)
   const [lastKnownActiveTierId, setLastKnownActiveTierId] = React.useState<number | null>(null)
   const [rankData, setRankData] = React.useState<{ rank: number | null; change: number; total: number }>({ rank: null, change: 0, total: 0 })
   const [categoryRanks, setCategoryRanks] = React.useState<Array<{ label: string; rank: number | null }>>([
@@ -173,6 +193,14 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
     { label: "Trading", rank: null },
     { label: "Referral", rank: null },
   ])
+  const stripRef = React.useRef<HTMLDivElement>(null)
+  const dragRef = React.useRef({
+    active: false,
+    moved: false,
+    startX: 0,
+    startScrollLeft: 0,
+  })
+  const [isDragging, setIsDragging] = React.useState(false)
 
   const nftTierConfig = React.useMemo(
     () => [
@@ -224,7 +252,9 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
               const progress = Math.min(100, Math.max(0, (totalPoints / nextTier.mintCost) * 100))
               setTierLabel(cachedTier.name)
               setTierProgress(progress)
-              setTierSubValue(`Upgrade unlock: ${totalPoints.toLocaleString()} / ${nextTier.mintCost.toLocaleString()} (cached)`)
+              setTierSubValue(
+                `Upgrade unlock: ${formatCompactNumber(totalPoints)} / ${formatCompactNumber(nextTier.mintCost)} (cached)`
+              )
               return
             }
           }
@@ -236,7 +266,9 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
           setTierSubValue(
             isMintReady
               ? `Mint ${firstTier.name} NFT to activate tier`
-              : `Progress to ${firstTier?.name ?? "first tier"}: ${totalPoints.toLocaleString()} / ${firstTier?.mintCost.toLocaleString() ?? "—"}`
+              : `Progress to ${firstTier?.name ?? "first tier"}: ${formatCompactNumber(totalPoints)} / ${
+                  firstTier ? formatCompactNumber(firstTier.mintCost) : "—"
+                }`
           )
           return
         }
@@ -254,7 +286,7 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
         const progress = Math.min(100, Math.max(0, (totalPoints / nextTier.mintCost) * 100))
         setTierLabel(activeTier.name)
         setTierProgress(progress)
-        setTierSubValue(`Upgrade unlock: ${totalPoints.toLocaleString()} / ${nextTier.mintCost.toLocaleString()}`)
+        setTierSubValue(`Upgrade unlock: ${formatCompactNumber(totalPoints)} / ${formatCompactNumber(nextTier.mintCost)}`)
       } catch {
         if (!active) return
         setPoints(null)
@@ -282,10 +314,17 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
         const analytics = await getPortfolioAnalytics()
         if (!active) return
         const volume = Number(analytics.trading.total_volume_usd)
-        setVolumeLabel(Number.isFinite(volume) ? `$${volume.toLocaleString()}` : "—")
+        if (Number.isFinite(volume)) {
+          setVolumeLabel(`$${formatCompactNumber(volume)}`)
+          setVolumeFullLabel(`Full: $${volume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`)
+        } else {
+          setVolumeLabel("—")
+          setVolumeFullLabel(undefined)
+        }
       } catch {
         if (!active) return
         setVolumeLabel("—")
+        setVolumeFullLabel(undefined)
       }
     })()
 
@@ -362,14 +401,44 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
     }
   }, [wallet.address, wallet.starknetAddress])
 
+  const beginDrag = React.useCallback((clientX: number) => {
+    const strip = stripRef.current
+    if (!strip) return
+    dragRef.current.active = true
+    dragRef.current.moved = false
+    dragRef.current.startX = clientX
+    dragRef.current.startScrollLeft = strip.scrollLeft
+    setIsDragging(true)
+  }, [])
+
+  const moveDrag = React.useCallback((clientX: number) => {
+    const strip = stripRef.current
+    if (!strip || !dragRef.current.active) return
+    const deltaX = clientX - dragRef.current.startX
+    if (Math.abs(deltaX) > 3) {
+      dragRef.current.moved = true
+    }
+    strip.scrollLeft = dragRef.current.startScrollLeft - deltaX
+  }, [])
+
+  const endDrag = React.useCallback(() => {
+    dragRef.current.active = false
+    setIsDragging(false)
+    window.setTimeout(() => {
+      dragRef.current.moved = false
+    }, 0)
+  }, [])
+
   const statsBlocks = (
     <>
       <StatCard
         icon={Diamond}
         label="Usable Points"
-        value={points !== null ? points.toLocaleString() : "—"}
+        value={points !== null ? formatCompactNumber(points) : "—"}
+        valueTitle={points !== null ? points.toLocaleString() : undefined}
+        subValue={points !== null ? "Current balance" : undefined}
         progress={points !== null ? Math.round(tierProgress) : 0}
-        className={cn(variant === "inline" && "min-w-[230px]")}
+        className={cn(variant === "inline" && "w-[250px] min-w-[250px]")}
       />
 
       <StatCard
@@ -378,17 +447,19 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
         value={tierLabel}
         subValue={tierSubValue}
         progress={points !== null ? Math.round(tierProgress) : 0}
-        className={cn(variant === "inline" && "min-w-[260px]")}
+        className={cn(variant === "inline" && "w-[250px] min-w-[250px]")}
       />
 
       <StatCard
         icon={BarChart3}
         label="Total Volume"
         value={volumeLabel}
-        className={cn(variant === "inline" && "min-w-[230px]")}
+        valueTitle={volumeFullLabel}
+        subValue={volumeFullLabel}
+        className={cn(variant === "inline" && "w-[250px] min-w-[250px]")}
       />
 
-      <div className={cn(variant === "inline" && "min-w-[260px]")}>
+      <div className={cn(variant === "inline" && "w-[250px] min-w-[250px]")}>
         <LeaderboardRank
           rank={rankData.rank}
           change={rankData.change}
@@ -401,10 +472,24 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
   if (variant === "inline") {
     return (
       <section className={cn("w-full", className)}>
-        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-3">
+        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-3 carel-tech-label">
           Quick Stats
         </h2>
-        <div className="flex gap-3 overflow-x-auto pb-2">
+        <div
+          ref={stripRef}
+          className={cn(
+            "flex gap-3 overflow-x-auto pb-2 select-none",
+            isDragging ? "cursor-grabbing" : "cursor-grab"
+          )}
+          onMouseDown={(event) => beginDrag(event.clientX)}
+          onMouseMove={(event) => moveDrag(event.clientX)}
+          onMouseUp={endDrag}
+          onMouseLeave={endDrag}
+          onTouchStart={(event) => beginDrag(event.touches[0]?.clientX ?? 0)}
+          onTouchMove={(event) => moveDrag(event.touches[0]?.clientX ?? 0)}
+          onTouchEnd={endDrag}
+          onDragStart={(event) => event.preventDefault()}
+        >
           {statsBlocks}
         </div>
       </section>
@@ -414,7 +499,7 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
   return (
     <aside className={cn("w-72 shrink-0 hidden xl:block", className)}>
       <div className="sticky top-20 space-y-4">
-        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-4">
+        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-4 carel-tech-label">
           Quick Stats
         </h2>
         {statsBlocks}

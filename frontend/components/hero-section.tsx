@@ -13,78 +13,8 @@ import {
   Activity,
   Lock
 } from "lucide-react"
-import { getPortfolioAnalytics } from "@/lib/api"
 import { MarketTicker } from "@/components/market-ticker"
 import { QuickStatsSidebar } from "@/components/quick-stats-sidebar"
-
-// Animated counter hook - starts at 0 on server, animates on client mount
-function useAnimatedCounter(end: number, duration: number = 2000) {
-  const [count, setCount] = React.useState(0)
-  const [mounted, setMounted] = React.useState(false)
-  
-  React.useEffect(() => {
-    setMounted(true)
-  }, [])
-  
-  React.useEffect(() => {
-    if (!mounted) return
-    
-    let startTime: number | null = null
-    let animationFrame: number
-    
-    /**
-     * Handles `animate` logic.
-     *
-     * @param timestamp - Input used by `animate` to compute state, payload, or request behavior.
-     *
-     * @returns Result consumed by caller flow, UI state updates, or async chaining.
-     * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
-     */
-    const animate = (timestamp: number) => {
-      if (!startTime) startTime = timestamp
-      const progress = Math.min((timestamp - startTime) / duration, 1)
-      
-      // Easing function
-      const easeOutQuart = 1 - Math.pow(1 - progress, 4)
-      setCount(Math.floor(easeOutQuart * end))
-      
-      if (progress < 1) {
-        animationFrame = requestAnimationFrame(animate)
-      }
-    }
-    
-    animationFrame = requestAnimationFrame(animate)
-    return () => cancelAnimationFrame(animationFrame)
-  }, [end, duration, mounted])
-  
-  return count
-}
-
-// Stats display component
-function AnimatedStat({ 
-  label, 
-  value, 
-  prefix = "", 
-  suffix = "",
-  animatedValue 
-}: { 
-  label: string
-  value: string
-  prefix?: string
-  suffix?: string
-  animatedValue?: number
-}) {
-  return (
-    <div className="text-center px-4 sm:px-6 lg:px-8">
-      <p className="text-2xl sm:text-3xl lg:text-4xl font-bold text-foreground mb-1">
-        {prefix}
-        {animatedValue !== undefined ? animatedValue.toLocaleString() : value}
-        {suffix}
-      </p>
-      <p className="text-xs sm:text-sm text-muted-foreground">{label}</p>
-    </div>
-  )
-}
 
 /**
  * Handles `HeroSection` logic.
@@ -93,79 +23,54 @@ function AnimatedStat({
  * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
  */
 export function HeroSection() {
-  const [volumeValue, setVolumeValue] = React.useState<number | null>(null)
-  const [txCountValue, setTxCountValue] = React.useState<number | null>(null)
-
-  React.useEffect(() => {
-    let active = true
-    ;(async () => {
-      try {
-        const analytics = await getPortfolioAnalytics()
-        if (!active) return
-        const volume = Number(analytics.trading.total_volume_usd)
-        const trades = Number(analytics.trading.total_trades)
-        setVolumeValue(Number.isFinite(volume) ? volume : null)
-        setTxCountValue(Number.isFinite(trades) ? trades : null)
-      } catch {
-        if (!active) return
-        setVolumeValue(null)
-        setTxCountValue(null)
-      }
-    })()
-
-    return () => {
-      active = false
+  const handleOpenAiAssistant = React.useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("carel:open-ai-assistant"))
     }
   }, [])
 
-  const volume24h = useAnimatedCounter(volumeValue ?? 0, 2500)
-  const transactions = useAnimatedCounter(txCountValue ?? 0, 2000)
-  
   return (
     <section className="relative py-8 lg:py-16">
-      {/* Background Decorations */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-64 h-64 bg-primary/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-0 right-1/4 w-64 h-64 bg-accent/10 rounded-full blur-3xl" />
-      </div>
-      
       <div className="relative z-10">
         {/* Main Hero Content */}
         <div className="text-center max-w-4xl mx-auto mb-12">
           {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 mb-6">
-            <Lock className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium text-primary">Testnet Mode Active</span>
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-secondary/10 border border-secondary/25 mb-6">
+            <Lock className="h-4 w-4 text-secondary" />
+            <span className="text-sm font-medium text-secondary carel-tech-label">Testnet Mode</span>
           </div>
           
           {/* Main Title */}
-          <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground mb-4 lg:mb-6 leading-tight">
-            <span className="text-balance">Privacy-First</span>
+          <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-foreground mb-4 lg:mb-6 leading-tight carel-tech-heading carel-neon-soft">
+            <span className="text-balance">Invisible Trades,</span>
             <br />
             <span className="bg-gradient-to-r from-primary via-accent to-secondary bg-clip-text text-transparent">
-              DeFi Trading
+              Infinite Freedom.
             </span>
           </h1>
           
           {/* Subtitle */}
-          <p className="text-base sm:text-lg lg:text-xl text-muted-foreground max-w-2xl mx-auto mb-8 text-pretty">
-            Trade cryptocurrencies with zero-knowledge privacy. Swap, bridge, and earn rewards on the most advanced DeFi platform.
+          <p className="text-base sm:text-lg lg:text-xl text-muted-foreground max-w-2xl mx-auto mb-8 text-pretty carel-tech-copy">
+            Experience the freedom of DeFi with zero-knowledge privacy. Seamlessly switch between Public Mode for standard visibility and Hide Mode for secure, anonymous execution powered by Garaga.
           </p>
           
           {/* CTA Buttons */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
-            <Link href="#trade">
+            <Link href="#featured-services">
               <Button size="lg" className="w-full sm:w-auto gap-2 bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-8 py-6 text-lg">
                 <ArrowRightLeft className="h-5 w-5" />
                 Start Trading
               </Button>
             </Link>
-            <Link href="#docs">
-              <Button variant="outline" size="lg" className="w-full sm:w-auto gap-2 border-border hover:border-primary/50 px-8 py-6 text-lg">
-                Learn More
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </Link>
+            <Button
+              variant="outline"
+              size="lg"
+              onClick={handleOpenAiAssistant}
+              className="w-full sm:w-auto gap-2 border-border hover:border-primary/50 px-8 py-6 text-lg"
+            >
+              Open AI Assistant
+              <ChevronRight className="h-4 w-4" />
+            </Button>
           </div>
         </div>
         
@@ -177,59 +82,6 @@ export function HeroSection() {
           <QuickStatsSidebar variant="inline" />
         </div>
 
-        <div className="max-w-4xl mx-auto mb-12">
-          <div className="relative p-6 sm:p-8 rounded-2xl glass-strong border border-primary/30 overflow-hidden">
-            {/* Animated Border Glow */}
-            <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-primary/20 via-accent/20 to-secondary/20 opacity-50" />
-            
-            <div className="relative z-10">
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-                {/* Left Side - Feature Info */}
-                <div className="flex items-start gap-4">
-                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-gradient-to-br from-primary via-accent to-secondary flex items-center justify-center flex-shrink-0">
-                    <ArrowRightLeft className="h-7 w-7 sm:h-8 sm:w-8 text-white" />
-                  </div>
-                  <div>
-                    <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2">
-                      Swap & Bridge
-                    </h2>
-                    <p className="text-sm sm:text-base text-muted-foreground max-w-md">
-                      Trade tokens seamlessly across chains with zero-knowledge privacy
-                    </p>
-                  </div>
-                </div>
-                
-                {/* Right Side - Stats */}
-                <div className="flex items-center justify-center lg:justify-end gap-6 lg:gap-8">
-                  <AnimatedStat 
-                    label="Your Volume" 
-                    value="—" 
-                    prefix={volumeValue !== null ? "$" : ""}
-                    suffix=""
-                    animatedValue={volumeValue !== null ? volume24h : undefined}
-                  />
-                  <div className="w-px h-12 bg-border hidden sm:block" />
-                  <AnimatedStat 
-                    label="Your Trades" 
-                    value="—" 
-                    animatedValue={txCountValue !== null ? transactions : undefined}
-                  />
-                </div>
-              </div>
-              
-              {/* Explore Button */}
-              <div className="mt-6 flex justify-center lg:justify-end">
-                <Link href="#trade">
-                  <Button className="gap-2 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/30 hover:border-primary/50">
-                    <span>Explore Swap & Bridge</span>
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </Link>
-              </div>
-            </div>
-          </div>
-        </div>
-        
         {/* Feature Highlights */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6 max-w-4xl mx-auto">
           <FeatureHighlight 

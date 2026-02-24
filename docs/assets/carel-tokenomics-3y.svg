@@ -1,0 +1,78 @@
+<svg width="1800" height="1040" viewBox="0 0 1800 1040" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="900" y1="0" x2="900" y2="1040" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#070B1A" />
+      <stop offset="1" stop-color="#040713" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1800" height="1040" fill="url(#bg)" />
+
+  <text x="60" y="70" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">CAREL Tokenomics: 3-Year Unlock (Simplified)</text>
+  <text x="60" y="108" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Cumulative unlocked vs locked, based on contract defaults</text>
+
+  <rect x="60" y="150" width="1180" height="820" rx="18" fill="#081226" stroke="#334155" />
+  <text x="100" y="200" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="24">Y-axis: Million CAREL (Total cap = 1,000M)</text>
+
+  <line x1="180" y1="860" x2="1120" y2="860" stroke="#64748B" stroke-width="2" />
+  <line x1="180" y1="240" x2="180" y2="860" stroke="#64748B" stroke-width="2" />
+
+  <line x1="180" y1="736" x2="1120" y2="736" stroke="#1E293B" stroke-width="1" />
+  <line x1="180" y1="612" x2="1120" y2="612" stroke="#1E293B" stroke-width="1" />
+  <line x1="180" y1="488" x2="1120" y2="488" stroke="#1E293B" stroke-width="1" />
+  <line x1="180" y1="364" x2="1120" y2="364" stroke="#1E293B" stroke-width="1" />
+  <line x1="180" y1="240" x2="1120" y2="240" stroke="#1E293B" stroke-width="1" />
+
+  <text x="138" y="866" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">0</text>
+  <text x="118" y="742" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">200</text>
+  <text x="118" y="618" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">400</text>
+  <text x="118" y="494" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">600</text>
+  <text x="118" y="370" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">800</text>
+  <text x="102" y="246" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">1,000</text>
+
+  <rect x="270" y="588.94" width="180" height="271.06" fill="#22C55E" />
+  <rect x="270" y="240" width="180" height="348.94" fill="#334155" />
+  <text x="305" y="910" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Year 1</text>
+  <text x="297" y="560" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700">437M</text>
+  <text x="295" y="320" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">563M</text>
+
+  <rect x="560" y="460.72" width="180" height="399.28" fill="#22C55E" />
+  <rect x="560" y="240" width="180" height="220.72" fill="#334155" />
+  <text x="595" y="910" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Year 2</text>
+  <text x="587" y="432" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700">644M</text>
+  <text x="587" y="320" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">356M</text>
+
+  <rect x="850" y="354.08" width="180" height="505.92" fill="#22C55E" />
+  <rect x="850" y="240" width="180" height="114.08" fill="#334155" />
+  <text x="885" y="910" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Year 3</text>
+  <text x="877" y="326" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700">816M</text>
+  <text x="885" y="304" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">184M</text>
+
+  <text x="280" y="250" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="20">Locked</text>
+  <text x="282" y="854" fill="#DCFCE7" font-family="Inter, Arial, sans-serif" font-size="20">Unlocked</text>
+
+  <rect x="1280" y="150" width="460" height="820" rx="18" fill="#0B1720" stroke="#155E75" />
+  <text x="1310" y="200" fill="#67E8F9" font-family="Inter, Arial, sans-serif" font-size="32" font-weight="700">How to Read</text>
+
+  <rect x="1310" y="230" width="24" height="24" fill="#22C55E" />
+  <text x="1346" y="249" fill="#DCFCE7" font-family="Inter, Arial, sans-serif" font-size="22">Unlocked supply</text>
+  <rect x="1310" y="266" width="24" height="24" fill="#334155" />
+  <text x="1346" y="285" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="22">Still locked</text>
+
+  <text x="1310" y="340" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">Year-end totals</text>
+  <text x="1310" y="378" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Year 1: 437M unlocked / 563M locked</text>
+  <text x="1310" y="412" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Year 2: 644M unlocked / 356M locked</text>
+  <text x="1310" y="446" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Year 3: 816M unlocked / 184M locked</text>
+
+  <text x="1310" y="510" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">Assumptions</text>
+  <text x="1310" y="548" fill="#A5B4FC" font-family="Inter, Arial, sans-serif" font-size="22">- setup_tokenomics(..., release_immediate=true)</text>
+  <text x="1310" y="582" fill="#A5B4FC" font-family="Inter, Arial, sans-serif" font-size="22">- periodic release() calls are executed</text>
+
+  <text x="1310" y="646" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">Allocation model (contracts)</text>
+  <text x="1310" y="684" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Investor 15%, Early Access 3%</text>
+  <text x="1310" y="718" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Team 15%, Marketing 7%</text>
+  <text x="1310" y="752" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Listing 10%, Ecosystem 40%, Treasury 10%</text>
+
+  <text x="1310" y="818" fill="#64748B" font-family="Inter, Arial, sans-serif" font-size="18">Sources: vesting_manager.cairo + token.cairo</text>
+  <text x="1310" y="844" fill="#64748B" font-family="Inter, Arial, sans-serif" font-size="18">(Root guide: TOKENOMICS.md)</text>
+</svg>

@@ -1,5 +1,6 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use chrono::TimeZone;
+use redis::AsyncCommands;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,7 +20,8 @@ use super::{
     resolve_user_scope_addresses,
     wallet::{
         fetch_btc_balance, fetch_evm_erc20_balance, fetch_evm_native_balance,
-        fetch_starknet_erc20_balance, resolve_starknet_token_address,
+        fetch_starknet_erc20_balance, fetch_starknet_erc20_balances_batch,
+        resolve_starknet_token_address,
     },
     AppState,
 };
@@ -96,6 +98,7 @@ const ONCHAIN_BALANCE_TIMEOUT_SECS: u64 = 8;
 const ONCHAIN_HOLDINGS_CACHE_TTL_SECS: u64 = 20;
 const ONCHAIN_HOLDINGS_CACHE_STALE_SECS: u64 = 180;
 const ONCHAIN_HOLDINGS_CACHE_MAX_ENTRIES: usize = 50_000;
+const ONCHAIN_HOLDINGS_REDIS_PREFIX: &str = "portfolio:onchain_holdings:v1";
 const PORTFOLIO_BALANCE_CACHE_TTL_SECS: u64 = 15;
 const PORTFOLIO_BALANCE_CACHE_STALE_SECS: u64 = 180;
 const PORTFOLIO_BALANCE_CACHE_MAX_ENTRIES: usize = 50_000;
@@ -454,6 +457,120 @@ async fn cache_onchain_holdings(key: String, values: HashMap<String, f64>) {
     }
 }
 
+// Internal helper that supports `onchain_holdings_redis_key` operations.
+fn onchain_holdings_redis_key(cache_key: &str) -> String {
+    format!("{}:{}", ONCHAIN_HOLDINGS_REDIS_PREFIX, cache_key)
+}
+
+// Internal helper that supports `cache_onchain_holdings_redis` operations.
+async fn cache_onchain_holdings_redis(
+    state: &AppState,
+    cache_key: &str,
+    values: &HashMap<String, f64>,
+) {
+    let payload = match serde_json::to_string(values) {
+        Ok(payload) => payload,
+        Err(err) => {
+            tracing::warn!("portfolio onchain redis serialize failed: {}", err);
+            return;
+        }
+    };
+    let redis_key = onchain_holdings_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let write: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(&redis_key, payload, ONCHAIN_HOLDINGS_CACHE_STALE_SECS)
+        .await;
+    if let Err(err) = write {
+        tracing::debug!(
+            "portfolio onchain redis write failed key={}: {}",
+            redis_key,
+            err
+        );
+    }
+}
+
+// Internal helper that fetches data for `get_cached_onchain_holdings_redis`.
+async fn get_cached_onchain_holdings_redis(
+    state: &AppState,
+    cache_key: &str,
+) -> Option<HashMap<String, f64>> {
+    let redis_key = onchain_holdings_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = match conn.get(&redis_key).await {
+        Ok(payload) => payload,
+        Err(err) => {
+            tracing::debug!(
+                "portfolio onchain redis read failed key={}: {}",
+                redis_key,
+                err
+            );
+            return None;
+        }
+    };
+    let payload = raw?;
+    match serde_json::from_str::<HashMap<String, f64>>(&payload) {
+        Ok(values) => Some(values),
+        Err(err) => {
+            tracing::debug!(
+                "portfolio onchain redis decode failed key={}: {}",
+                redis_key,
+                err
+            );
+            None
+        }
+    }
+}
+
+// Internal helper that fetches data for `get_cached_onchain_holdings_for_scope`.
+pub(crate) async fn get_cached_onchain_holdings_for_scope(
+    state: &AppState,
+    auth_subject: &str,
+    starknet_address: Option<&str>,
+    evm_address: Option<&str>,
+    btc_address: Option<&str>,
+) -> Option<HashMap<String, f64>> {
+    let cache_key =
+        onchain_holdings_cache_key(auth_subject, starknet_address, evm_address, btc_address);
+    if let Some(cached) = get_cached_onchain_holdings(
+        &cache_key,
+        Duration::from_secs(ONCHAIN_HOLDINGS_CACHE_STALE_SECS),
+    )
+    .await
+    {
+        return Some(cached);
+    }
+
+    let redis_cached = get_cached_onchain_holdings_redis(state, &cache_key).await?;
+    cache_onchain_holdings(cache_key, redis_cached.clone()).await;
+    Some(redis_cached)
+}
+
+// Internal helper that fetches data for `get_cached_portfolio_balance_amounts_for_scope`.
+pub(crate) async fn get_cached_portfolio_balance_amounts_for_scope(
+    auth_subject: &str,
+    user_addresses: &[String],
+) -> Option<HashMap<String, f64>> {
+    let cache_key = portfolio_balance_cache_key(auth_subject, user_addresses);
+    let cached = get_cached_portfolio_balance(
+        &cache_key,
+        Duration::from_secs(PORTFOLIO_BALANCE_CACHE_STALE_SECS),
+    )
+    .await?;
+
+    let mut amounts = HashMap::new();
+    for balance in cached.balances {
+        let symbol = balance.token.trim().to_ascii_uppercase();
+        if symbol.is_empty() {
+            continue;
+        }
+        if !balance.amount.is_finite() || balance.amount <= 0.0 {
+            continue;
+        }
+        amounts.insert(symbol, balance.amount);
+    }
+    Some(amounts)
+}
+
 // Internal helper that supports `apply_onchain_overrides` operations.
 fn apply_onchain_overrides(
     holdings: &mut HashMap<String, f64>,
@@ -741,79 +858,54 @@ async fn merge_onchain_holdings(
         return Ok(());
     }
 
-    let starknet_strk_fut = async {
-        match (
-            starknet_address.as_deref(),
-            state.config.token_strk_address.as_deref(),
-        ) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "starknet STRK",
-                    fetch_starknet_erc20_balance(&state.config, addr, token),
+    let starknet_strk_token = state.config.token_strk_address.clone();
+    let starknet_carel_token = resolve_starknet_token_address(&state.config, "CAREL");
+    let starknet_usdc_token = resolve_starknet_token_address(&state.config, "USDC");
+    let starknet_usdt_token = resolve_starknet_token_address(&state.config, "USDT");
+    let starknet_wbtc_token = resolve_starknet_token_address(&state.config, "WBTC");
+    let starknet_batch_fut = async {
+        match starknet_address.as_deref() {
+            Some(addr) => {
+                let mut pairs: Vec<(String, String)> = Vec::new();
+                if let Some(token) = starknet_strk_token.as_deref() {
+                    pairs.push(("STRK".to_string(), token.to_string()));
+                }
+                if let Some(token) = starknet_carel_token.as_deref() {
+                    pairs.push(("CAREL".to_string(), token.to_string()));
+                }
+                if let Some(token) = starknet_usdc_token.as_deref() {
+                    pairs.push(("USDC".to_string(), token.to_string()));
+                }
+                if let Some(token) = starknet_usdt_token.as_deref() {
+                    pairs.push(("USDT".to_string(), token.to_string()));
+                }
+                if let Some(token) = starknet_wbtc_token.as_deref() {
+                    pairs.push(("WBTC".to_string(), token.to_string()));
+                }
+                if pairs.is_empty() {
+                    return None;
+                }
+                match tokio::time::timeout(
+                    Duration::from_secs(ONCHAIN_BALANCE_TIMEOUT_SECS),
+                    fetch_starknet_erc20_balances_batch(&state.config, addr, &pairs),
                 )
                 .await
+                {
+                    Ok(Ok(map)) => Some(map),
+                    Ok(Err(err)) => {
+                        tracing::warn!("portfolio starknet batch balance failed: {}", err);
+                        None
+                    }
+                    Err(_) => {
+                        tracing::debug!(
+                            "portfolio starknet batch balance timed out after {}s",
+                            ONCHAIN_BALANCE_TIMEOUT_SECS
+                        );
+                        None
+                    }
+                }
             }
-            _ => None,
-        }
-    };
-    let starknet_carel_fut = async {
-        match (
-            starknet_address.as_deref(),
-            resolve_starknet_token_address(&state.config, "CAREL"),
-        ) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "starknet CAREL",
-                    fetch_starknet_erc20_balance(&state.config, addr, &token),
-                )
-                .await
-            }
-            _ => None,
-        }
-    };
-    let starknet_usdc_fut = async {
-        match (
-            starknet_address.as_deref(),
-            resolve_starknet_token_address(&state.config, "USDC"),
-        ) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "starknet USDC",
-                    fetch_starknet_erc20_balance(&state.config, addr, &token),
-                )
-                .await
-            }
-            _ => None,
-        }
-    };
-    let starknet_usdt_fut = async {
-        match (
-            starknet_address.as_deref(),
-            resolve_starknet_token_address(&state.config, "USDT"),
-        ) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "starknet USDT",
-                    fetch_starknet_erc20_balance(&state.config, addr, &token),
-                )
-                .await
-            }
-            _ => None,
-        }
-    };
-    let starknet_wbtc_fut = async {
-        match (
-            starknet_address.as_deref(),
-            resolve_starknet_token_address(&state.config, "WBTC"),
-        ) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "starknet WBTC",
-                    fetch_starknet_erc20_balance(&state.config, addr, &token),
-                )
-                .await
-            }
-            _ => None,
+            None => None,
         }
     };
     let evm_eth_fut = async {
@@ -856,25 +948,80 @@ async fn merge_onchain_holdings(
         }
     };
 
-    let (
-        starknet_strk,
-        starknet_carel,
-        starknet_usdc,
-        starknet_usdt,
-        starknet_wbtc,
-        evm_eth,
-        evm_strk,
-        btc_balance,
-    ) = tokio::join!(
-        starknet_strk_fut,
-        starknet_carel_fut,
-        starknet_usdc_fut,
-        starknet_usdt_fut,
-        starknet_wbtc_fut,
-        evm_eth_fut,
-        evm_strk_fut,
-        btc_fut
-    );
+    let (starknet_batch, evm_eth, evm_strk, btc_balance) =
+        tokio::join!(starknet_batch_fut, evm_eth_fut, evm_strk_fut, btc_fut);
+
+    let mut starknet_strk = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("STRK").copied().flatten());
+    let mut starknet_carel = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("CAREL").copied().flatten());
+    let mut starknet_usdc = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("USDC").copied().flatten());
+    let mut starknet_usdt = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("USDT").copied().flatten());
+    let mut starknet_wbtc = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("WBTC").copied().flatten());
+
+    if starknet_strk.is_none() {
+        if let (Some(addr), Some(token)) =
+            (starknet_address.as_deref(), starknet_strk_token.as_deref())
+        {
+            starknet_strk = fetch_optional_balance_with_timeout(
+                "starknet STRK fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if starknet_carel.is_none() {
+        if let (Some(addr), Some(token)) =
+            (starknet_address.as_deref(), starknet_carel_token.as_deref())
+        {
+            starknet_carel = fetch_optional_balance_with_timeout(
+                "starknet CAREL fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if starknet_usdc.is_none() {
+        if let (Some(addr), Some(token)) =
+            (starknet_address.as_deref(), starknet_usdc_token.as_deref())
+        {
+            starknet_usdc = fetch_optional_balance_with_timeout(
+                "starknet USDC fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if starknet_usdt.is_none() {
+        if let (Some(addr), Some(token)) =
+            (starknet_address.as_deref(), starknet_usdt_token.as_deref())
+        {
+            starknet_usdt = fetch_optional_balance_with_timeout(
+                "starknet USDT fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if starknet_wbtc.is_none() {
+        if let (Some(addr), Some(token)) =
+            (starknet_address.as_deref(), starknet_wbtc_token.as_deref())
+        {
+            starknet_wbtc = fetch_optional_balance_with_timeout(
+                "starknet WBTC fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
 
     let mut resolved_onchain = HashMap::new();
     let has_starknet = starknet_address.is_some();
@@ -940,9 +1087,12 @@ async fn merge_onchain_holdings(
             return Ok(());
         }
         // Negative-cache empty/failed reads to avoid retry storms.
-        cache_onchain_holdings(cache_key, HashMap::new()).await;
+        let empty_holdings = HashMap::new();
+        cache_onchain_holdings(cache_key.clone(), empty_holdings.clone()).await;
+        cache_onchain_holdings_redis(state, &cache_key, &empty_holdings).await;
     } else {
-        cache_onchain_holdings(cache_key, resolved_onchain.clone()).await;
+        cache_onchain_holdings(cache_key.clone(), resolved_onchain.clone()).await;
+        cache_onchain_holdings_redis(state, &cache_key, &resolved_onchain).await;
     }
     apply_onchain_overrides(holdings, &resolved_onchain);
 

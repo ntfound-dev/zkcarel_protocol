@@ -1,2 +1,5 @@
 bak/
 target/
+.env
+backend-rust/.env
+smartcontract/.env

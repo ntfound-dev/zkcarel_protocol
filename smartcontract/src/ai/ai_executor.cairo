@@ -102,6 +102,9 @@ pub trait IAIExecutorAdmin<TContractState> {
     // Updates rate limit configuration after access-control and invariant checks.
     // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_rate_limit(ref self: TContractState, limit: u256);
+    // Returns current rate limit from storage without mutating state.
+    // Exposed as `rate_limit` entrypoint for backend preflight readback compatibility.
+    fn rate_limit(self: @TContractState) -> u256;
     // Updates signature verification configuration after access-control and invariant checks.
     // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_signature_verification(ref self: TContractState, verifier: ContractAddress, enabled: bool);
@@ -576,6 +579,12 @@ pub mod AIExecutor {
         fn set_rate_limit(ref self: ContractState, limit: u256) {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             self.rate_limit.write(limit);
+        }
+
+        // Returns current rate limit from storage without mutating state.
+        // Exposed as `rate_limit` entrypoint for backend preflight readback compatibility.
+        fn rate_limit(self: @ContractState) -> u256 {
+            self.rate_limit.read()
         }
 
         // Updates signature verification configuration after access-control and invariant checks.

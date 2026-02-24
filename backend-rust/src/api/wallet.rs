@@ -17,17 +17,24 @@ use crate::{
     config::Config,
     constants::token_address_for,
     error::{AppError, Result},
+    indexer::starknet_client::{ContractBatchCall, StarknetClient},
     models::ApiResponse,
     services::onchain::{parse_felt, u256_from_felts, OnchainReader},
 };
 
-use super::{require_user, AppState};
+use super::{
+    portfolio::{
+        get_cached_onchain_holdings_for_scope, get_cached_portfolio_balance_amounts_for_scope,
+    },
+    require_user, AppState,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct OnchainBalanceRequest {
     pub starknet_address: Option<String>,
     pub evm_address: Option<String>,
     pub btc_address: Option<String>,
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -274,6 +281,37 @@ fn looks_like_transient_rpc_error(message: &str) -> bool {
         || lower.contains("timed out")
 }
 
+// Internal helper that supports `prefer_portfolio_onchain_fallback` operations.
+fn prefer_portfolio_onchain_fallback(
+    field: &str,
+    current: Option<f64>,
+    portfolio_cached: Option<f64>,
+) -> Option<f64> {
+    let Some(cached) = portfolio_cached else {
+        return current;
+    };
+    if !cached.is_finite() || cached <= 0.0 {
+        return current;
+    }
+
+    match current {
+        None => {
+            tracing::debug!("wallet {} using cached fallback value={}", field, cached);
+            Some(cached)
+        }
+        Some(value) if value.is_finite() && value <= 0.0 => {
+            tracing::debug!(
+                "wallet {} replacing non-positive value {} with cached fallback {}",
+                field,
+                value,
+                cached
+            );
+            Some(cached)
+        }
+        Some(value) => Some(value),
+    }
+}
+
 // Internal helper that fetches data for `get_cached_onchain_balance`.
 async fn get_cached_onchain_balance(
     key: &str,
@@ -317,6 +355,20 @@ pub async fn get_onchain_balances(
         .list_wallet_addresses(&user_address)
         .await
         .unwrap_or_default();
+    let mut portfolio_scope_addresses = vec![user_address.clone()];
+    for linked in &linked_wallets {
+        let candidate = linked.wallet_address.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        if portfolio_scope_addresses
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(candidate))
+        {
+            continue;
+        }
+        portfolio_scope_addresses.push(candidate.to_string());
+    }
 
     let starknet_address = req.starknet_address.or_else(|| {
         linked_wallets
@@ -336,30 +388,35 @@ pub async fn get_onchain_balances(
             .find(|item| item.chain == "bitcoin")
             .map(|item| item.wallet_address.clone())
     });
+    let force_refresh = req.force.unwrap_or(false);
     let cache_key = onchain_balance_cache_key(
         &user_address,
         starknet_address.as_deref(),
         evm_address.as_deref(),
         btc_address.as_deref(),
     );
-    if let Some(cached) = get_cached_onchain_balance(
-        &cache_key,
-        Duration::from_secs(ONCHAIN_BALANCE_CACHE_TTL_SECS),
-    )
-    .await
-    {
-        return Ok(Json(ApiResponse::success(cached)));
+    if !force_refresh {
+        if let Some(cached) = get_cached_onchain_balance(
+            &cache_key,
+            Duration::from_secs(ONCHAIN_BALANCE_CACHE_TTL_SECS),
+        )
+        .await
+        {
+            return Ok(Json(ApiResponse::success(cached)));
+        }
     }
 
     let fetch_lock = onchain_balance_fetch_lock_for(&cache_key).await;
     let _guard = fetch_lock.lock().await;
-    if let Some(cached) = get_cached_onchain_balance(
-        &cache_key,
-        Duration::from_secs(ONCHAIN_BALANCE_CACHE_TTL_SECS),
-    )
-    .await
-    {
-        return Ok(Json(ApiResponse::success(cached)));
+    if !force_refresh {
+        if let Some(cached) = get_cached_onchain_balance(
+            &cache_key,
+            Duration::from_secs(ONCHAIN_BALANCE_CACHE_TTL_SECS),
+        )
+        .await
+        {
+            return Ok(Json(ApiResponse::success(cached)));
+        }
     }
 
     let strk_token = resolve_starknet_token_address(&state.config, "STRK");
@@ -368,64 +425,49 @@ pub async fn get_onchain_balances(
     let usdt_token = resolve_starknet_token_address(&state.config, "USDT");
     let wbtc_token = resolve_starknet_token_address(&state.config, "WBTC");
 
-    let strk_l2_fut = async {
-        match (starknet_address.as_deref(), strk_token.as_deref()) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "wallet starknet STRK",
-                    fetch_starknet_erc20_balance(&state.config, addr, token),
+    let starknet_batch_fut = async {
+        match starknet_address.as_deref() {
+            Some(addr) => {
+                let mut pairs: Vec<(String, String)> = Vec::new();
+                if let Some(token) = strk_token.as_deref() {
+                    pairs.push(("STRK".to_string(), token.to_string()));
+                }
+                if let Some(token) = carel_token.as_deref() {
+                    pairs.push(("CAREL".to_string(), token.to_string()));
+                }
+                if let Some(token) = usdc_token.as_deref() {
+                    pairs.push(("USDC".to_string(), token.to_string()));
+                }
+                if let Some(token) = usdt_token.as_deref() {
+                    pairs.push(("USDT".to_string(), token.to_string()));
+                }
+                if let Some(token) = wbtc_token.as_deref() {
+                    pairs.push(("WBTC".to_string(), token.to_string()));
+                }
+                if pairs.is_empty() {
+                    return (None, false);
+                }
+                match tokio::time::timeout(
+                    Duration::from_secs(ONCHAIN_BALANCE_TIMEOUT_SECS),
+                    fetch_starknet_erc20_balances_batch(&state.config, addr, &pairs),
                 )
                 .await
+                {
+                    Ok(Ok(map)) => (Some(map), false),
+                    Ok(Err(err)) => {
+                        tracing::warn!("wallet starknet batch balance failed: {}", err);
+                        (None, true)
+                    }
+                    Err(_) => {
+                        tracing::debug!(
+                            "wallet starknet batch balance timed out after {}s",
+                            ONCHAIN_BALANCE_TIMEOUT_SECS
+                        );
+                        (None, true)
+                    }
+                }
             }
-            _ => None,
-        }
-    };
-    let carel_fut = async {
-        match (starknet_address.as_deref(), carel_token.as_deref()) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "wallet starknet CAREL",
-                    fetch_starknet_erc20_balance(&state.config, addr, token),
-                )
-                .await
-            }
-            _ => None,
-        }
-    };
-    let usdc_fut = async {
-        match (starknet_address.as_deref(), usdc_token.as_deref()) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "wallet starknet USDC",
-                    fetch_starknet_erc20_balance(&state.config, addr, token),
-                )
-                .await
-            }
-            _ => None,
-        }
-    };
-    let usdt_fut = async {
-        match (starknet_address.as_deref(), usdt_token.as_deref()) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "wallet starknet USDT",
-                    fetch_starknet_erc20_balance(&state.config, addr, token),
-                )
-                .await
-            }
-            _ => None,
-        }
-    };
-    let wbtc_fut = async {
-        match (starknet_address.as_deref(), wbtc_token.as_deref()) {
-            (Some(addr), Some(token)) => {
-                fetch_optional_balance_with_timeout(
-                    "wallet starknet WBTC",
-                    fetch_starknet_erc20_balance(&state.config, addr, token),
-                )
-                .await
-            }
-            _ => None,
+            None => (None, false),
         }
     };
     let eth_fut = async {
@@ -468,16 +510,138 @@ pub async fn get_onchain_balances(
         }
     };
 
-    let (strk_l2, carel, usdc, usdt, wbtc, eth, strk_l1, btc) = tokio::join!(
-        strk_l2_fut,
-        carel_fut,
-        usdc_fut,
-        usdt_fut,
-        wbtc_fut,
-        eth_fut,
-        strk_l1_fut,
-        btc_fut
-    );
+    let ((starknet_batch, starknet_batch_had_issue), eth, strk_l1, btc) =
+        tokio::join!(starknet_batch_fut, eth_fut, strk_l1_fut, btc_fut);
+
+    let mut strk_l2 = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("STRK").copied().flatten());
+    let mut carel = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("CAREL").copied().flatten());
+    let mut usdc = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("USDC").copied().flatten());
+    let mut usdt = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("USDT").copied().flatten());
+    let mut wbtc = starknet_batch
+        .as_ref()
+        .and_then(|map| map.get("WBTC").copied().flatten());
+    let mut strk_l2_had_issue = starknet_batch_had_issue && starknet_address.is_some();
+    let mut carel_had_issue = starknet_batch_had_issue && starknet_address.is_some();
+    let mut usdc_had_issue = starknet_batch_had_issue && starknet_address.is_some();
+    let mut usdt_had_issue = starknet_batch_had_issue && starknet_address.is_some();
+    let mut wbtc_had_issue = starknet_batch_had_issue && starknet_address.is_some();
+
+    if strk_l2.is_none() {
+        strk_l2_had_issue = true;
+        if let (Some(addr), Some(token)) = (starknet_address.as_deref(), strk_token.as_deref()) {
+            strk_l2 = fetch_optional_balance_with_timeout(
+                "wallet starknet STRK fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if carel.is_none() {
+        carel_had_issue = true;
+        if let (Some(addr), Some(token)) = (starknet_address.as_deref(), carel_token.as_deref()) {
+            carel = fetch_optional_balance_with_timeout(
+                "wallet starknet CAREL fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if usdc.is_none() {
+        usdc_had_issue = true;
+        if let (Some(addr), Some(token)) = (starknet_address.as_deref(), usdc_token.as_deref()) {
+            usdc = fetch_optional_balance_with_timeout(
+                "wallet starknet USDC fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if usdt.is_none() {
+        usdt_had_issue = true;
+        if let (Some(addr), Some(token)) = (starknet_address.as_deref(), usdt_token.as_deref()) {
+            usdt = fetch_optional_balance_with_timeout(
+                "wallet starknet USDT fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if wbtc.is_none() {
+        wbtc_had_issue = true;
+        if let (Some(addr), Some(token)) = (starknet_address.as_deref(), wbtc_token.as_deref()) {
+            wbtc = fetch_optional_balance_with_timeout(
+                "wallet starknet WBTC fallback",
+                fetch_starknet_erc20_balance(&state.config, addr, token),
+            )
+            .await;
+        }
+    }
+    if starknet_address.is_some() {
+        let portfolio_onchain = get_cached_onchain_holdings_for_scope(
+            &state,
+            &user_address,
+            starknet_address.as_deref(),
+            evm_address.as_deref(),
+            btc_address.as_deref(),
+        )
+        .await;
+        let fallback_for = |symbol: &str| {
+            portfolio_onchain
+                .as_ref()
+                .and_then(|holdings| holdings.get(symbol).copied())
+        };
+        let strk_l2_fallback = if evm_address.is_none() {
+            fallback_for("STRK")
+        } else {
+            None
+        };
+        strk_l2 = prefer_portfolio_onchain_fallback("STRK_L2", strk_l2, strk_l2_fallback);
+        carel = prefer_portfolio_onchain_fallback("CAREL", carel, fallback_for("CAREL"));
+        usdc = prefer_portfolio_onchain_fallback("USDC", usdc, fallback_for("USDC"));
+        usdt = prefer_portfolio_onchain_fallback("USDT", usdt, fallback_for("USDT"));
+        wbtc = prefer_portfolio_onchain_fallback("WBTC", wbtc, fallback_for("WBTC"));
+
+        let portfolio_balance_fallback = get_cached_portfolio_balance_amounts_for_scope(
+            &user_address,
+            &portfolio_scope_addresses,
+        )
+        .await;
+        let fallback_balance_for = |symbol: &str| {
+            portfolio_balance_fallback
+                .as_ref()
+                .and_then(|balances| balances.get(symbol).copied())
+        };
+        if strk_l2_had_issue {
+            let strk_l2_balance_fallback = if evm_address.is_none() {
+                fallback_balance_for("STRK")
+            } else {
+                None
+            };
+            strk_l2 =
+                prefer_portfolio_onchain_fallback("STRK_L2", strk_l2, strk_l2_balance_fallback);
+        }
+        if carel_had_issue {
+            carel =
+                prefer_portfolio_onchain_fallback("CAREL", carel, fallback_balance_for("CAREL"));
+        }
+        if usdc_had_issue {
+            usdc = prefer_portfolio_onchain_fallback("USDC", usdc, fallback_balance_for("USDC"));
+        }
+        if usdt_had_issue {
+            usdt = prefer_portfolio_onchain_fallback("USDT", usdt, fallback_balance_for("USDT"));
+        }
+        if wbtc_had_issue {
+            wbtc = prefer_portfolio_onchain_fallback("WBTC", wbtc, fallback_balance_for("WBTC"));
+        }
+    }
 
     let response = OnchainBalanceResponse {
         strk_l2,
@@ -660,6 +824,50 @@ fn env_address(key: &str) -> Option<String> {
     clean_address(std::env::var(key).ok())
 }
 
+// Internal helper that supports `env_rpc_urls` operations.
+fn env_rpc_urls(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .ok()
+        .map(|raw| {
+            raw.split([',', ';', '\n', '\r', ' '])
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default()
+}
+
+// Internal helper that supports `wallet_rpc_urls` operations.
+fn wallet_rpc_urls(config: &Config) -> Vec<String> {
+    let mut urls = env_rpc_urls("STARKNET_WALLET_RPC_POOL");
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_WALLET_RPC_URL"));
+    }
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_API_RPC_POOL"));
+    }
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_API_RPC_URL"));
+    }
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_RPC_POOL"));
+    }
+    if urls.is_empty() {
+        urls.extend(env_rpc_urls("STARKNET_RPC_URL"));
+    }
+    if urls.is_empty() && !config.starknet_rpc_url.trim().is_empty() {
+        urls.push(config.starknet_rpc_url.trim().to_string());
+    }
+    let mut deduped = Vec::new();
+    for url in urls {
+        if !deduped.iter().any(|existing| existing == &url) {
+            deduped.push(url);
+        }
+    }
+    deduped
+}
+
 // Internal helper that parses or transforms values for `normalize_felt_hex`.
 fn normalize_felt_hex(value: &str) -> String {
     let trimmed = value.trim().to_ascii_lowercase();
@@ -755,7 +963,7 @@ pub(crate) async fn fetch_starknet_erc20_balance(
     if token.trim().is_empty() || owner.trim().is_empty() {
         return Ok(None);
     }
-    let reader = OnchainReader::from_config(config)?;
+    let reader = OnchainReader::from_config_for_wallet(config)?;
     let token_felt = parse_felt(token)?;
     let owner_felt = parse_felt(owner)?;
     let selector = get_selector_from_name("balanceOf")
@@ -796,6 +1004,85 @@ pub(crate) async fn fetch_starknet_erc20_balance(
     Ok(Some(scale_u128(raw, decimals)))
 }
 
+/// Fetches data for `fetch_starknet_erc20_balances_batch`.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+pub(crate) async fn fetch_starknet_erc20_balances_batch(
+    config: &Config,
+    owner: &str,
+    symbol_token_pairs: &[(String, String)],
+) -> Result<HashMap<String, Option<f64>>> {
+    let mut out: HashMap<String, Option<f64>> = HashMap::new();
+    if owner.trim().is_empty() || symbol_token_pairs.is_empty() {
+        return Ok(out);
+    }
+
+    let owner_felt = parse_felt(owner)?;
+    let owner_hex = format!("{:#x}", owner_felt);
+    let normalized_pairs: Vec<(String, String)> = symbol_token_pairs
+        .iter()
+        .filter_map(|(symbol, token)| {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some((symbol.clone(), trimmed.to_string()))
+            }
+        })
+        .collect();
+    let calls: Vec<ContractBatchCall> = normalized_pairs
+        .iter()
+        .map(|(_, token)| ContractBatchCall {
+            contract_address: token.clone(),
+            function: "balanceOf".to_string(),
+            calldata: vec![owner_hex.clone()],
+        })
+        .collect();
+
+    if calls.is_empty() {
+        return Ok(out);
+    }
+
+    let client = StarknetClient::new_with_urls(wallet_rpc_urls(config));
+    let batch_values = client.call_contract_batch(calls).await?;
+    for (index, result) in batch_values.iter().enumerate() {
+        let Some((symbol, token)) = normalized_pairs.get(index) else {
+            continue;
+        };
+        if result.len() < 2 {
+            out.insert(symbol.clone(), None);
+            continue;
+        }
+        let low = parse_felt(&result[0]);
+        let high = parse_felt(&result[1]);
+        let amount = match (low, high) {
+            (Ok(low), Ok(high)) => u256_from_felts(&low, &high).ok(),
+            _ => None,
+        };
+        if let Some(raw) = amount {
+            let decimals = known_starknet_token_decimals(config, token).unwrap_or_else(|| {
+                match symbol.as_str() {
+                    "USDC" | "USDT" => 6,
+                    "WBTC" => 8,
+                    _ => 18,
+                }
+            });
+            out.insert(symbol.clone(), Some(scale_u128(raw, decimals)));
+        } else {
+            out.insert(symbol.clone(), None);
+        }
+    }
+    Ok(out)
+}
+
 /// Fetches data for `fetch_starknet_decimals`.
 ///
 /// # Arguments
@@ -808,7 +1095,7 @@ pub(crate) async fn fetch_starknet_erc20_balance(
 /// # Notes
 /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub(crate) async fn fetch_starknet_decimals(config: &Config, token: &str) -> Result<u8> {
-    let reader = OnchainReader::from_config(config)?;
+    let reader = OnchainReader::from_config_for_wallet(config)?;
     let token_felt = parse_felt(token)?;
     let selector = get_selector_from_name("decimals")
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;

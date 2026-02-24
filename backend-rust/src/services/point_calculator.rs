@@ -1,20 +1,21 @@
-use crate::services::onchain::{
-    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
-};
+use crate::services::onchain::{parse_felt, OnchainInvoker};
 use crate::{
     config::Config,
     constants::{
         EPOCH_DURATION_SECONDS, MULTIPLIER_TIER_1, MULTIPLIER_TIER_2, MULTIPLIER_TIER_3,
         MULTIPLIER_TIER_4, POINTS_BATTLE_HIT, POINTS_BATTLE_LOSS, POINTS_BATTLE_MISS,
-        POINTS_BATTLE_TIMEOUT_WIN, POINTS_BATTLE_WIN, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_CAREL,
-        POINTS_MIN_STAKE_LP, POINTS_MIN_STAKE_STABLECOIN, POINTS_MIN_STAKE_STRK,
-        POINTS_MIN_USD_BRIDGE_BTC, POINTS_MIN_USD_BRIDGE_ETH, POINTS_MIN_USD_LIMIT_ORDER,
-        POINTS_MIN_USD_SWAP, POINTS_MIN_USD_SWAP_TESTNET, POINTS_MULTIPLIER_STAKE_BTC,
-        POINTS_MULTIPLIER_STAKE_CAREL_TIER_1, POINTS_MULTIPLIER_STAKE_CAREL_TIER_2,
-        POINTS_MULTIPLIER_STAKE_CAREL_TIER_3, POINTS_MULTIPLIER_STAKE_LP,
-        POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_ETH,
-        POINTS_PER_USD_LIMIT_ORDER, POINTS_PER_USD_STAKE, POINTS_PER_USD_SWAP,
-        POINT_CALCULATOR_INTERVAL_SECS,
+        POINTS_BATTLE_TIMEOUT_WIN, POINTS_BATTLE_WIN, POINTS_MIN_STAKE_BTC,
+        POINTS_MIN_STAKE_BTC_TESTNET, POINTS_MIN_STAKE_CAREL, POINTS_MIN_STAKE_CAREL_TESTNET,
+        POINTS_MIN_STAKE_LP, POINTS_MIN_STAKE_LP_TESTNET, POINTS_MIN_STAKE_STABLECOIN,
+        POINTS_MIN_STAKE_STABLECOIN_TESTNET, POINTS_MIN_STAKE_STRK, POINTS_MIN_STAKE_STRK_TESTNET,
+        POINTS_MIN_USD_BRIDGE_BTC, POINTS_MIN_USD_BRIDGE_BTC_TESTNET, POINTS_MIN_USD_BRIDGE_ETH,
+        POINTS_MIN_USD_BRIDGE_ETH_TESTNET, POINTS_MIN_USD_LIMIT_ORDER,
+        POINTS_MIN_USD_LIMIT_ORDER_TESTNET, POINTS_MIN_USD_SWAP, POINTS_MIN_USD_SWAP_TESTNET,
+        POINTS_MULTIPLIER_STAKE_BTC, POINTS_MULTIPLIER_STAKE_CAREL_TIER_1,
+        POINTS_MULTIPLIER_STAKE_CAREL_TIER_2, POINTS_MULTIPLIER_STAKE_CAREL_TIER_3,
+        POINTS_MULTIPLIER_STAKE_LP, POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_BRIDGE_BTC,
+        POINTS_PER_USD_BRIDGE_ETH, POINTS_PER_USD_LIMIT_ORDER, POINTS_PER_USD_STAKE,
+        POINTS_PER_USD_SWAP, POINT_CALCULATOR_INTERVAL_SECS,
     },
     db::Database,
     error::Result,
@@ -23,7 +24,7 @@ use crate::{
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use sqlx::Row;
-use starknet_core::types::{Call, Felt, FunctionCall};
+use starknet_core::types::{Call, Felt};
 use starknet_core::utils::get_selector_from_name;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
@@ -38,6 +39,8 @@ pub struct PointCalculator {
 const REFERRAL_MIN_USD_VOLUME: i64 = 20;
 const REFERRAL_REFERRER_BONUS_BPS: i64 = 1000; // 10%
 const REFERRAL_REFEREE_BONUS_BPS: i64 = 1000; // 10%
+const BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
+const BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
 
 impl PointCalculator {
     /// Constructs a new instance via `new`.
@@ -293,7 +296,12 @@ impl PointCalculator {
     async fn calculate_limit_order_points(&self, tx: &crate::models::Transaction) -> Result<f64> {
         let usd_value =
             sanitize_points_usd_base(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0));
-        if usd_value < POINTS_MIN_USD_LIMIT_ORDER {
+        let min_threshold = if self.config.is_testnet() {
+            POINTS_MIN_USD_LIMIT_ORDER_TESTNET
+        } else {
+            POINTS_MIN_USD_LIMIT_ORDER
+        };
+        if usd_value < min_threshold {
             return Ok(0.0);
         }
         self.apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_LIMIT_ORDER)
@@ -306,15 +314,33 @@ impl PointCalculator {
             sanitize_points_usd_base(tx.usd_value.and_then(|v| v.to_f64()).unwrap_or(0.0));
         let is_btc_bridge = is_btc_bridge(tx);
         let (min_threshold, per_usd_rate) = if is_btc_bridge {
-            (POINTS_MIN_USD_BRIDGE_BTC, POINTS_PER_USD_BRIDGE_BTC)
+            (
+                if self.config.is_testnet() {
+                    POINTS_MIN_USD_BRIDGE_BTC_TESTNET
+                } else {
+                    POINTS_MIN_USD_BRIDGE_BTC
+                },
+                POINTS_PER_USD_BRIDGE_BTC,
+            )
         } else {
-            (POINTS_MIN_USD_BRIDGE_ETH, POINTS_PER_USD_BRIDGE_ETH)
+            (
+                if self.config.is_testnet() {
+                    POINTS_MIN_USD_BRIDGE_ETH_TESTNET
+                } else {
+                    POINTS_MIN_USD_BRIDGE_ETH
+                },
+                POINTS_PER_USD_BRIDGE_ETH,
+            )
         };
         if usd_value < min_threshold {
             return Ok(0.0);
         }
-        self.apply_nft_discount_bonus(&tx.user_address, usd_value * per_usd_rate)
-            .await
+        let nft_adjusted = self
+            .apply_nft_discount_bonus(&tx.user_address, usd_value * per_usd_rate)
+            .await?;
+        Ok(self
+            .apply_ai_level_bridge_bonus(&tx.user_address, nft_adjusted)
+            .await)
     }
 
     // Internal helper that supports `calculate_stake_points` operations.
@@ -331,7 +357,7 @@ impl PointCalculator {
             .as_deref()
             .unwrap_or("CAREL")
             .to_ascii_uppercase();
-        let multiplier = stake_points_multiplier_for(&token, amount);
+        let multiplier = stake_points_multiplier_for(&token, amount, self.config.is_testnet());
         if multiplier <= 0.0 {
             return Ok(0.0);
         }
@@ -365,6 +391,25 @@ impl PointCalculator {
         Ok(boosted)
     }
 
+    // Internal helper that supports `apply_ai_level_bridge_bonus` operations.
+    async fn apply_ai_level_bridge_bonus(&self, user_address: &str, points: f64) -> f64 {
+        if points <= 0.0 {
+            return 0.0;
+        }
+        let level = match self.db.get_user_ai_level(user_address).await {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(
+                    "Point calculator fallback to AI level 1 for bridge bonus: user={} err={}",
+                    user_address,
+                    err
+                );
+                1
+            }
+        };
+        points * bridge_ai_level_bonus_factor(level)
+    }
+
     // Internal helper that supports `current_staked_carel_amount` operations.
     async fn current_staked_carel_amount(&self, user_address: &str) -> Result<f64> {
         let amount: Option<f64> = sqlx::query_scalar(
@@ -396,63 +441,20 @@ impl PointCalculator {
         if contract.trim().is_empty() || contract.starts_with("0x0000") {
             return Ok(0.0);
         }
-        let reader = match OnchainReader::from_config(&self.config) {
-            Ok(value) => value,
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to initialize on-chain reader for NFT discount: {}",
-                    err
-                );
-                return Ok(0.0);
-            }
+        let period_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
+        let Some(state) = self
+            .db
+            .get_nft_discount_state(contract, user_address, period_epoch)
+            .await?
+        else {
+            return Ok(0.0);
         };
-        let contract_felt = match parse_felt(contract) {
-            Ok(value) => value,
-            Err(err) => {
-                tracing::warn!(
-                    "Invalid discount contract address for NFT discount check: {}",
-                    err
-                );
-                return Ok(0.0);
-            }
-        };
-        let user_felt = match parse_felt(user_address) {
-            Ok(value) => value,
-            Err(err) => {
-                tracing::warn!(
-                    "Invalid user address for NFT discount check: user={}, error={}",
-                    user_address,
-                    err
-                );
-                return Ok(0.0);
-            }
-        };
-        let call = FunctionCall {
-            contract_address: contract_felt,
-            entry_point_selector: get_selector_from_name("has_active_discount")
-                .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?,
-            calldata: vec![user_felt],
-        };
-        let result = match reader.call(call).await {
-            Ok(value) => value,
-            Err(err) => {
-                tracing::warn!(
-                    "Failed on-chain NFT discount check for user={}: {}",
-                    user_address,
-                    err
-                );
-                return Ok(0.0);
-            }
-        };
-        if result.len() < 3 {
+        let effective_used = state.local_used_in_period.max(state.chain_used_in_period);
+        let has_remaining_usage = state.max_usage > 0 && effective_used < state.max_usage;
+        if !state.is_active || !has_remaining_usage {
             return Ok(0.0);
         }
-        let active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
-        if !active {
-            return Ok(0.0);
-        }
-        let discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
-        Ok(discount.max(0.0))
+        Ok(state.discount_percent.clamp(0.0, 100.0))
     }
 
     // Internal helper that checks conditions for `is_wash_trading`.
@@ -805,16 +807,51 @@ fn nft_factor_for_discount(discount_rate: f64) -> f64 {
     1.0 + (discount_rate.max(0.0) / 100.0)
 }
 
+// Internal helper that supports `bridge_ai_level_bonus_factor` operations.
+fn bridge_ai_level_bonus_factor(level: u8) -> f64 {
+    match level {
+        2 => 1.0 + (BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT / 100.0),
+        3 => 1.0 + (BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT / 100.0),
+        _ => 1.0,
+    }
+}
+
 // Internal helper that checks conditions for `is_lp_stake_symbol`.
 fn is_lp_stake_symbol(token: &str) -> bool {
     token.starts_with("LP")
 }
 
 // Internal helper that runs side-effecting logic for `stake_points_multiplier_for`.
-fn stake_points_multiplier_for(token: &str, amount: f64) -> f64 {
+fn stake_points_multiplier_for(token: &str, amount: f64, is_testnet: bool) -> f64 {
+    let min_carel = if is_testnet {
+        POINTS_MIN_STAKE_CAREL_TESTNET
+    } else {
+        POINTS_MIN_STAKE_CAREL
+    };
+    let min_btc = if is_testnet {
+        POINTS_MIN_STAKE_BTC_TESTNET
+    } else {
+        POINTS_MIN_STAKE_BTC
+    };
+    let min_stable = if is_testnet {
+        POINTS_MIN_STAKE_STABLECOIN_TESTNET
+    } else {
+        POINTS_MIN_STAKE_STABLECOIN
+    };
+    let min_strk = if is_testnet {
+        POINTS_MIN_STAKE_STRK_TESTNET
+    } else {
+        POINTS_MIN_STAKE_STRK
+    };
+    let min_lp = if is_testnet {
+        POINTS_MIN_STAKE_LP_TESTNET
+    } else {
+        POINTS_MIN_STAKE_LP
+    };
+
     match token {
         "CAREL" => {
-            if amount < POINTS_MIN_STAKE_CAREL {
+            if amount < min_carel {
                 0.0
             } else if amount < 1_000.0 {
                 POINTS_MULTIPLIER_STAKE_CAREL_TIER_1
@@ -825,28 +862,28 @@ fn stake_points_multiplier_for(token: &str, amount: f64) -> f64 {
             }
         }
         "BTC" | "WBTC" => {
-            if amount < POINTS_MIN_STAKE_BTC {
+            if amount < min_btc {
                 0.0
             } else {
                 POINTS_MULTIPLIER_STAKE_BTC
             }
         }
         "USDT" | "USDC" => {
-            if amount < POINTS_MIN_STAKE_STABLECOIN {
+            if amount < min_stable {
                 0.0
             } else {
                 POINTS_MULTIPLIER_STAKE_STABLECOIN
             }
         }
         "STRK" => {
-            if amount < POINTS_MIN_STAKE_STRK {
+            if amount < min_strk {
                 0.0
             } else {
                 POINTS_MULTIPLIER_STAKE_STABLECOIN
             }
         }
         _ if is_lp_stake_symbol(token) => {
-            if amount < POINTS_MIN_STAKE_LP {
+            if amount < min_lp {
                 0.0
             } else {
                 POINTS_MULTIPLIER_STAKE_LP
@@ -886,30 +923,52 @@ mod tests {
     #[test]
     // Internal helper that runs side-effecting logic for `stake_points_multiplier_matches_product_rules`.
     fn stake_points_multiplier_matches_product_rules() {
-        assert_eq!(stake_points_multiplier_for("CAREL", 99.0), 0.0);
+        assert_eq!(stake_points_multiplier_for("CAREL", 99.0, false), 0.0);
         assert_eq!(
-            stake_points_multiplier_for("CAREL", 100.0),
+            stake_points_multiplier_for("CAREL", 100.0, false),
             POINTS_MULTIPLIER_STAKE_CAREL_TIER_1
         );
         assert_eq!(
-            stake_points_multiplier_for("CAREL", 1_000.0),
+            stake_points_multiplier_for("CAREL", 1_000.0, false),
             POINTS_MULTIPLIER_STAKE_CAREL_TIER_2
         );
         assert_eq!(
-            stake_points_multiplier_for("CAREL", 10_000.0),
+            stake_points_multiplier_for("CAREL", 10_000.0, false),
             POINTS_MULTIPLIER_STAKE_CAREL_TIER_3
         );
         assert_eq!(
-            stake_points_multiplier_for("WBTC", 0.001),
+            stake_points_multiplier_for("WBTC", POINTS_MIN_STAKE_BTC, false),
             POINTS_MULTIPLIER_STAKE_BTC
         );
         assert_eq!(
-            stake_points_multiplier_for("USDT", 100.0),
+            stake_points_multiplier_for("USDT", POINTS_MIN_STAKE_STABLECOIN, false),
+            POINTS_MULTIPLIER_STAKE_STABLECOIN
+        );
+        assert_eq!(stake_points_multiplier_for("STRK", 199.0, false), 0.0);
+        assert_eq!(
+            stake_points_multiplier_for("STRK", POINTS_MIN_STAKE_STRK, false),
             POINTS_MULTIPLIER_STAKE_STABLECOIN
         );
         assert_eq!(
-            stake_points_multiplier_for("LP_CAREL_STRK", 1.0),
+            stake_points_multiplier_for("LP_CAREL_STRK", 1.0, false),
             POINTS_MULTIPLIER_STAKE_LP
+        );
+    }
+
+    #[test]
+    // Internal helper that supports `stake_points_multiplier_testnet_relaxes_thresholds` operations.
+    fn stake_points_multiplier_testnet_relaxes_thresholds() {
+        assert_eq!(
+            stake_points_multiplier_for("USDT", POINTS_MIN_STAKE_STABLECOIN_TESTNET, true),
+            POINTS_MULTIPLIER_STAKE_STABLECOIN
+        );
+        assert_eq!(
+            stake_points_multiplier_for("STRK", POINTS_MIN_STAKE_STRK_TESTNET, true),
+            POINTS_MULTIPLIER_STAKE_STABLECOIN
+        );
+        assert_eq!(
+            stake_points_multiplier_for("WBTC", POINTS_MIN_STAKE_BTC_TESTNET, true),
+            POINTS_MULTIPLIER_STAKE_BTC
         );
     }
 
@@ -918,5 +977,13 @@ mod tests {
     fn nft_factor_for_discount_matches_percentage() {
         assert_eq!(nft_factor_for_discount(0.0), 1.0);
         assert_eq!(nft_factor_for_discount(25.0), 1.25);
+    }
+
+    #[test]
+    // Internal helper that supports `bridge_ai_level_bonus_factor_matches_expected` operations.
+    fn bridge_ai_level_bonus_factor_matches_expected() {
+        assert_eq!(bridge_ai_level_bonus_factor(1), 1.0);
+        assert_eq!(bridge_ai_level_bonus_factor(2), 1.02);
+        assert_eq!(bridge_ai_level_bonus_factor(3), 1.05);
     }
 }

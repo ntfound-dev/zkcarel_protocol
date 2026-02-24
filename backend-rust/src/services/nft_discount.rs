@@ -51,18 +51,13 @@ async fn active_discount_rate(config: &Config, user_address: &str) -> Result<f64
     Ok(discount.max(0.0))
 }
 
-/// Handles `consume_nft_usage_if_active` logic.
-///
-/// # Arguments
-/// * Uses function parameters as validated input and runtime context.
-///
-/// # Returns
-/// * `Ok(...)` when processing succeeds.
-/// * `Err(AppError)` when validation, authorization, or integration checks fail.
-///
-/// # Notes
-/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
-pub async fn consume_nft_usage_if_active(
+/// Reads active NFT discount percentage for a user from on-chain discount contract.
+pub async fn read_active_discount_rate(config: &Config, user_address: &str) -> Result<f64> {
+    active_discount_rate(config, user_address).await
+}
+
+// Internal helper that runs side-effecting logic for `consume_nft_usage_inner`.
+async fn consume_nft_usage_inner(
     config: &Config,
     user_address: &str,
     action: &str,
@@ -71,11 +66,6 @@ pub async fn consume_nft_usage_if_active(
         return Ok(None);
     };
     if parse_felt(user_address).is_err() {
-        return Ok(None);
-    }
-
-    let active_discount = active_discount_rate(config, user_address).await?;
-    if active_discount <= 0.0 {
         return Ok(None);
     }
 
@@ -98,12 +88,43 @@ pub async fn consume_nft_usage_if_active(
     .map_err(|_| AppError::BlockchainRPC("NFT discount consume timeout".to_string()))??;
     let tx_hash_text = tx_hash.to_string();
     tracing::info!(
-        "nft_discount_usage_consumed action={} user={} discount={} tx_hash={}",
+        "nft_discount_usage_consumed action={} user={} tx_hash={}",
         action,
         user_address,
-        active_discount,
         tx_hash_text
     );
 
     Ok(Some(tx_hash_text))
+}
+
+/// Consumes one NFT discount usage on-chain without re-reading discount metadata first.
+pub async fn consume_nft_usage(
+    config: &Config,
+    user_address: &str,
+    action: &str,
+) -> Result<Option<String>> {
+    consume_nft_usage_inner(config, user_address, action).await
+}
+
+/// Handles `consume_nft_usage_if_active` logic.
+///
+/// # Arguments
+/// * Uses function parameters as validated input and runtime context.
+///
+/// # Returns
+/// * `Ok(...)` when processing succeeds.
+/// * `Err(AppError)` when validation, authorization, or integration checks fail.
+///
+/// # Notes
+/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+pub async fn consume_nft_usage_if_active(
+    config: &Config,
+    user_address: &str,
+    action: &str,
+) -> Result<Option<String>> {
+    let active_discount = active_discount_rate(config, user_address).await?;
+    if active_discount <= 0.0 {
+        return Ok(None);
+    }
+    consume_nft_usage_inner(config, user_address, action).await
 }

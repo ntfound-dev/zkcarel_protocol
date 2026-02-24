@@ -13,6 +13,25 @@ fn rpc_request(method: &str, params: serde_json::Value) -> serde_json::Value {
     })
 }
 
+// Internal helper that supports `rpc_request_with_id` operations.
+fn rpc_request_with_id(method: &str, params: serde_json::Value, id: u64) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": id
+    })
+}
+
+// Internal helper that supports `parse_rpc_url_list` operations.
+fn parse_rpc_url_list(raw: &str) -> Vec<String> {
+    raw.split([',', ';', '\n', '\r', ' '])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 // Internal helper that supports `call_contract_params` operations.
 fn call_contract_params(
     contract_address: &str,
@@ -74,7 +93,7 @@ fn retry_backoff_delay(attempt: usize) -> Duration {
 
 /// Starknet RPC Client
 pub struct StarknetClient {
-    rpc_url: String,
+    rpc_urls: Vec<String>,
     client: reqwest::Client,
 }
 
@@ -91,8 +110,41 @@ impl StarknetClient {
     /// # Notes
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub fn new(rpc_url: String) -> Self {
+        let rpc_urls = {
+            let parsed = parse_rpc_url_list(&rpc_url);
+            if parsed.is_empty() {
+                vec![rpc_url]
+            } else {
+                parsed
+            }
+        };
+        Self::new_with_urls(rpc_urls)
+    }
+
+    /// Constructs a new instance via `new_with_urls`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub fn new_with_urls(rpc_urls: Vec<String>) -> Self {
+        let sanitized: Vec<String> = rpc_urls
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        let rpc_urls = if sanitized.is_empty() {
+            vec!["http://localhost:5050".to_string()]
+        } else {
+            sanitized
+        };
         Self {
-            rpc_url,
+            rpc_urls,
             client: reqwest::Client::new(),
         }
     }
@@ -105,86 +157,250 @@ impl StarknetClient {
         let request = rpc_request(method, params);
         let mut last_error = format!("{} failed without additional details", method);
 
-        for attempt in 0..=RPC_MAX_RETRIES {
-            let response = match self.client.post(&self.rpc_url).json(&request).send().await {
-                Ok(response) => response,
-                Err(error) => {
-                    last_error = format!("{} request failed: {}", method, error);
-                    if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
-                        sleep(retry_backoff_delay(attempt)).await;
-                        continue;
+        for (rpc_index, rpc_url) in self.rpc_urls.iter().enumerate() {
+            for attempt in 0..=RPC_MAX_RETRIES {
+                let response = match self.client.post(rpc_url).json(&request).send().await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        last_error = format!("{} request failed on {}: {}", method, rpc_url, error);
+                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                            sleep(retry_backoff_delay(attempt)).await;
+                            continue;
+                        }
+                        break;
                     }
-                    return Err(crate::error::AppError::BlockchainRPC(last_error));
-                }
-            };
+                };
 
-            let status = response.status();
-            let body = match response.text().await {
-                Ok(body) => body,
-                Err(error) => {
-                    last_error = format!("{} response read failed: {}", method, error);
-                    if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
-                        sleep(retry_backoff_delay(attempt)).await;
-                        continue;
+                let status = response.status();
+                let body = match response.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        last_error =
+                            format!("{} response read failed on {}: {}", method, rpc_url, error);
+                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                            sleep(retry_backoff_delay(attempt)).await;
+                            continue;
+                        }
+                        break;
                     }
-                    return Err(crate::error::AppError::BlockchainRPC(last_error));
-                }
-            };
+                };
 
-            if !status.is_success() {
-                last_error = format!(
-                    "{} HTTP {}: {}",
-                    method,
-                    status.as_u16(),
-                    preview_rpc_body(&body)
-                );
-                if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
-                    sleep(retry_backoff_delay(attempt)).await;
-                    continue;
-                }
-                return Err(crate::error::AppError::BlockchainRPC(last_error));
-            }
-
-            let payload: RpcResponseEnvelope<T> = match serde_json::from_str(&body) {
-                Ok(payload) => payload,
-                Err(error) => {
+                if !status.is_success() {
                     last_error = format!(
-                        "{} decode failed: {} (body: {})",
+                        "{} HTTP {} on {}: {}",
                         method,
-                        error,
+                        status.as_u16(),
+                        rpc_url,
                         preview_rpc_body(&body)
                     );
                     if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
                         sleep(retry_backoff_delay(attempt)).await;
                         continue;
                     }
-                    return Err(crate::error::AppError::BlockchainRPC(last_error));
+                    break;
                 }
-            };
 
-            if let Some(error) = payload.error {
-                last_error = format!("{} RPC error {}: {}", method, error.code, error.message);
+                let payload: RpcResponseEnvelope<T> = match serde_json::from_str(&body) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        last_error = format!(
+                            "{} decode failed on {}: {} (body: {})",
+                            method,
+                            rpc_url,
+                            error,
+                            preview_rpc_body(&body)
+                        );
+                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                            sleep(retry_backoff_delay(attempt)).await;
+                            continue;
+                        }
+                        break;
+                    }
+                };
+
+                if let Some(error) = payload.error {
+                    last_error = format!(
+                        "{} RPC error {} on {}: {}",
+                        method, error.code, rpc_url, error.message
+                    );
+                    if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                        sleep(retry_backoff_delay(attempt)).await;
+                        continue;
+                    }
+                    break;
+                }
+
+                if let Some(result) = payload.result {
+                    return Ok(result);
+                }
+
+                last_error = format!(
+                    "{} RPC response missing result on {} (body: {})",
+                    method,
+                    rpc_url,
+                    preview_rpc_body(&body)
+                );
                 if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
                     sleep(retry_backoff_delay(attempt)).await;
                     continue;
                 }
-                return Err(crate::error::AppError::BlockchainRPC(last_error));
+                break;
             }
 
-            if let Some(result) = payload.result {
-                return Ok(result);
+            if rpc_index + 1 < self.rpc_urls.len() && is_transient_rpc_failure(&last_error) {
+                tracing::warn!(
+                    "{} failed on RPC {}. Falling back to next provider. err={}",
+                    method,
+                    rpc_url,
+                    last_error
+                );
+            }
+        }
+
+        Err(crate::error::AppError::BlockchainRPC(last_error))
+    }
+
+    /// Runs `call_contract_batch` and handles related side effects.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub async fn call_contract_batch(
+        &self,
+        calls: Vec<ContractBatchCall>,
+    ) -> Result<Vec<Vec<String>>> {
+        if calls.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut last_error = "starknet_call batch failed without additional details".to_string();
+        for (rpc_index, rpc_url) in self.rpc_urls.iter().enumerate() {
+            for attempt in 0..=RPC_MAX_RETRIES {
+                let payload: Vec<serde_json::Value> = calls
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, call)| {
+                        let selector = resolve_entry_point_selector(&call.function)
+                            .unwrap_or_else(|_| call.function.clone());
+                        let params = serde_json::json!([
+                            call_contract_params(
+                                &call.contract_address,
+                                &selector,
+                                call.calldata.clone()
+                            ),
+                            "latest"
+                        ]);
+                        rpc_request_with_id("starknet_call", params, (idx as u64) + 1)
+                    })
+                    .collect();
+
+                let response = match self.client.post(rpc_url).json(&payload).send().await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        last_error = format!(
+                            "starknet_call batch request failed on {}: {}",
+                            rpc_url, error
+                        );
+                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                            sleep(retry_backoff_delay(attempt)).await;
+                            continue;
+                        }
+                        break;
+                    }
+                };
+
+                let status = response.status();
+                let body = match response.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        last_error = format!(
+                            "starknet_call batch response read failed on {}: {}",
+                            rpc_url, error
+                        );
+                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                            sleep(retry_backoff_delay(attempt)).await;
+                            continue;
+                        }
+                        break;
+                    }
+                };
+
+                if !status.is_success() {
+                    last_error = format!(
+                        "starknet_call batch HTTP {} on {}: {}",
+                        status.as_u16(),
+                        rpc_url,
+                        preview_rpc_body(&body)
+                    );
+                    if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                        sleep(retry_backoff_delay(attempt)).await;
+                        continue;
+                    }
+                    break;
+                }
+
+                let mut items: Vec<RpcBatchEnvelope<Vec<String>>> =
+                    match serde_json::from_str::<Vec<RpcBatchEnvelope<Vec<String>>>>(&body) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            last_error = format!(
+                                "starknet_call batch decode failed on {}: {} (body: {})",
+                                rpc_url,
+                                error,
+                                preview_rpc_body(&body)
+                            );
+                            if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                                sleep(retry_backoff_delay(attempt)).await;
+                                continue;
+                            }
+                            break;
+                        }
+                    };
+
+                items.sort_by_key(|item| item.id.unwrap_or(0));
+                let mut out: Vec<Vec<String>> = Vec::with_capacity(calls.len());
+                let mut batch_ok = true;
+                for item in items {
+                    if let Some(err) = item.error {
+                        last_error = format!(
+                            "starknet_call batch rpc error {} on {}: {}",
+                            err.code, rpc_url, err.message
+                        );
+                        batch_ok = false;
+                        break;
+                    }
+                    if let Some(result) = item.result {
+                        out.push(result);
+                    } else {
+                        last_error =
+                            format!("starknet_call batch response missing result on {}", rpc_url);
+                        batch_ok = false;
+                        break;
+                    }
+                }
+                if batch_ok && out.len() == calls.len() {
+                    return Ok(out);
+                }
+                if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                    sleep(retry_backoff_delay(attempt)).await;
+                    continue;
+                }
+                break;
             }
 
-            last_error = format!(
-                "{} RPC response missing result (body: {})",
-                method,
-                preview_rpc_body(&body)
-            );
-            if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
-                sleep(retry_backoff_delay(attempt)).await;
-                continue;
+            if rpc_index + 1 < self.rpc_urls.len() && is_transient_rpc_failure(&last_error) {
+                tracing::warn!(
+                    "starknet_call batch failed on RPC {}. Falling back to next provider. err={}",
+                    rpc_url,
+                    last_error
+                );
             }
-            return Err(crate::error::AppError::BlockchainRPC(last_error));
         }
 
         Err(crate::error::AppError::BlockchainRPC(last_error))
@@ -314,9 +530,23 @@ struct RpcResponseEnvelope<T> {
 }
 
 #[derive(Debug, Deserialize)]
+struct RpcBatchEnvelope<T> {
+    id: Option<u64>,
+    result: Option<T>,
+    error: Option<RpcErrorObject>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RpcErrorObject {
     code: i64,
     message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContractBatchCall {
+    pub contract_address: String,
+    pub function: String,
+    pub calldata: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

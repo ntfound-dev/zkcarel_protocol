@@ -1514,36 +1514,6 @@ export function LimitOrder() {
             {/* Order Form */}
             <div className="p-6 rounded-2xl glass-strong border border-border">
               <Tabs value={orderType} onValueChange={(value) => setOrderType(value as "buy" | "sell")}>
-                <div className="mb-4 rounded-lg border border-border bg-surface/40 px-3 py-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-foreground">Hide Balance</p>
-                      <p className="text-[11px] text-muted-foreground">Enable Garaga privacy proof for this limit order.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setBalanceHidden((prev) => !prev)}
-                      className={cn(
-                        "inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors",
-                        balanceHidden
-                          ? "border-primary/70 bg-primary/20 text-primary"
-                          : "border-border bg-surface text-muted-foreground"
-                      )}
-                    >
-                      {balanceHidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                  {balanceHidden && (
-                    <p className="mt-2 text-[11px] text-muted-foreground">
-                      {hasTradePrivacyPayload
-                        ? "Garaga payload is ready."
-                        : isAutoPrivacyProvisioning
-                        ? "Preparing Garaga payload..."
-                        : "Garaga payload will be auto-prepared on submit."}
-                    </p>
-                  )}
-                </div>
-
                 <TabsList className="grid w-full grid-cols-2 mb-6">
                   <TabsTrigger value="buy" className="data-[state=active]:bg-success/20 data-[state=active]:text-success">
                     Buy

@@ -53,6 +53,7 @@ fn setup() -> (IBTCStakingDispatcher, ContractAddress, ContractAddress, Contract
     let mut constructor_args = array![];
     reward_token.serialize(ref constructor_args);
     owner.serialize(ref constructor_args);
+    btc_wrapper.serialize(ref constructor_args);
     
     let (staking_addr, _) = staking_class.deploy(@constructor_args).unwrap();
     let dispatcher = IBTCStakingDispatcher { contract_address: staking_addr };

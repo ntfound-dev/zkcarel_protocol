@@ -14,13 +14,13 @@ use crate::services::onchain::{
 };
 use crate::{
     constants::{
-        token_address_for, DEX_EKUBO, DEX_HAIKO, POINTS_MIN_USD_SWAP, POINTS_MIN_USD_SWAP_TESTNET,
-        POINTS_PER_USD_SWAP,
+        token_address_for, DEX_EKUBO, DEX_HAIKO, EPOCH_DURATION_SECONDS, POINTS_MIN_USD_SWAP,
+        POINTS_MIN_USD_SWAP_TESTNET, POINTS_PER_USD_SWAP,
     },
     error::{AppError, Result},
     models::{ApiResponse, StarknetWalletCall, SwapQuoteRequest, SwapQuoteResponse},
     services::gas_optimizer::GasOptimizer,
-    services::nft_discount::consume_nft_usage_if_active,
+    services::nft_discount::consume_nft_usage,
     services::notification_service::NotificationType,
     services::price_guard::{
         fallback_price_for, first_sane_price, sanitize_points_usd_base, sanitize_usd_notional,
@@ -45,8 +45,8 @@ use tokio::time::{sleep, timeout, Duration};
 
 const ORACLE_ROUTE_DEX_ID_HEX: &str = "0x4f52434c"; // 'ORCL'
 const ONCHAIN_DISCOUNT_TIMEOUT_MS: u64 = 2_500;
-const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 30;
-const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 600;
+const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 300;
+const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 1_800;
 const NFT_DISCOUNT_CACHE_MAX_ENTRIES: usize = 100_000;
 
 #[derive(Clone, Copy)]
@@ -672,19 +672,43 @@ async fn invalidate_cached_nft_discount(contract: &str, user: &str) {
     guard.remove(&key);
 }
 
-// Internal helper that checks conditions for `has_remaining_nft_usage` in the swap flow.
+#[derive(Clone, Copy, Debug, Default)]
+struct NftUsageSnapshot {
+    tier: i32,
+    discount_percent: f64,
+    max_usage: u128,
+    used_in_period: u128,
+}
+
+// Internal helper that supports `current_nft_period_epoch` operations in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-async fn has_remaining_nft_usage(
+fn current_nft_period_epoch() -> i64 {
+    chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS
+}
+
+// Internal helper that supports `u128_to_i64_saturating` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+fn u128_to_i64_saturating(value: u128) -> i64 {
+    if value > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        value as i64
+    }
+}
+
+// Internal helper that fetches data for `read_nft_usage_snapshot` in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn read_nft_usage_snapshot(
     reader: &OnchainReader,
     contract_address: Felt,
     user_felt: Felt,
-) -> Result<bool> {
+) -> Result<Option<NftUsageSnapshot>> {
     let storage_key = get_storage_var_address("user_nft", &[user_felt])
         .map_err(|e| AppError::Internal(format!("Storage key resolution error: {}", e)))?;
     let token_raw = reader.get_storage_at(contract_address, storage_key).await?;
     let token_id = felt_to_u128(&token_raw).unwrap_or(0);
     if token_id == 0 {
-        return Ok(false);
+        return Ok(None);
     }
 
     let info_call = FunctionCall {
@@ -695,12 +719,19 @@ async fn has_remaining_nft_usage(
     };
     let info = reader.call(info_call).await?;
     if info.len() < 7 {
-        return Ok(false);
+        return Ok(None);
     }
 
+    let tier = felt_to_u128(&info[0]).unwrap_or(0) as i32;
+    let discount = u256_from_felts(&info[1], &info[2]).unwrap_or(0) as f64;
     let max_usage = u256_from_felts(&info[3], &info[4]).unwrap_or(0);
     let used_in_period = u256_from_felts(&info[5], &info[6]).unwrap_or(0);
-    Ok(max_usage > 0 && used_in_period < max_usage)
+    Ok(Some(NftUsageSnapshot {
+        tier: tier.max(0),
+        discount_percent: discount.clamp(0.0, 100.0),
+        max_usage,
+        used_in_period,
+    }))
 }
 
 // Internal helper that supports `base_fee` operations in the swap flow.
@@ -759,7 +790,7 @@ fn discount_contract_address(state: &AppState) -> Option<&str> {
 
 // Internal helper that supports `active_nft_discount_percent` operations in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f64 {
+async fn cached_nft_discount_from_local_state(state: &AppState, user_address: &str) -> f64 {
     let Some(contract) = discount_contract_address(state) else {
         return 0.0;
     };
@@ -767,24 +798,62 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
     if let Some(cached) =
         get_cached_nft_discount(&cache_key, Duration::from_secs(NFT_DISCOUNT_CACHE_TTL_SECS)).await
     {
-        if cached <= 0.0 {
-            return 0.0;
-        }
-        tracing::debug!(
-            "Ignoring positive NFT discount cache in swap for strict usage revalidation user={} cached={}",
-            user_address,
-            cached
-        );
+        return cached.max(0.0);
     }
+
+    let period_epoch = current_nft_period_epoch();
+    match state
+        .db
+        .get_nft_discount_state(contract, user_address, period_epoch)
+        .await
+    {
+        Ok(Some(row)) => {
+            let age_secs = chrono::Utc::now()
+                .signed_duration_since(row.updated_at)
+                .num_seconds()
+                .max(0) as u64;
+            if age_secs > NFT_DISCOUNT_CACHE_STALE_SECS {
+                return 0.0;
+            }
+            let effective_used = row.local_used_in_period.max(row.chain_used_in_period);
+            let has_remaining_usage = row.max_usage > 0 && effective_used < row.max_usage;
+            let discount = if row.is_active && has_remaining_usage {
+                row.discount_percent.clamp(0.0, 100.0)
+            } else {
+                0.0
+            };
+            cache_nft_discount(&cache_key, discount).await;
+            discount
+        }
+        Ok(None) => 0.0,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to read local NFT discount state in swap for user={}: {}",
+                user_address,
+                err
+            );
+            0.0
+        }
+    }
+}
+
+// Internal helper that supports `refresh_nft_discount_for_submit` operations in the swap flow.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -> f64 {
+    let Some(contract) = discount_contract_address(state) else {
+        return 0.0;
+    };
+    let cache_key = nft_discount_cache_key(contract, user_address);
+    let period_epoch = current_nft_period_epoch();
 
     let reader = match OnchainReader::from_config(&state.config) {
         Ok(reader) => reader,
         Err(err) => {
             tracing::warn!(
-                "Failed to initialize on-chain reader for NFT discount in swap: {}",
+                "Failed to initialize on-chain reader for NFT discount submit validation in swap: {}",
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
 
@@ -792,7 +861,7 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(
-                "Invalid discount contract address while calculating swap fee discount: {}",
+                "Invalid discount contract address while validating swap fee discount: {}",
                 err
             );
             return 0.0;
@@ -802,7 +871,7 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(
-                "Invalid user address while calculating swap fee discount: user={}, err={}",
+                "Invalid user address while validating swap fee discount: user={}, err={}",
                 user_address,
                 err
             );
@@ -814,7 +883,7 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(
-                "Selector resolution failed for has_active_discount: {}",
+                "Selector resolution failed for has_active_discount in swap submit validation: {}",
                 err
             );
             return 0.0;
@@ -836,7 +905,7 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
             tracing::warn!(
-                "Failed on-chain NFT discount check in swap for user={}: {}",
+                "Failed on-chain NFT discount submit validation in swap for user={}: {}",
                 user_address,
                 err
             );
@@ -844,33 +913,29 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         }
         Err(_) => {
             tracing::warn!(
-                "Timeout on-chain NFT discount check in swap for user={}",
+                "Timeout on-chain NFT discount submit validation in swap for user={}",
                 user_address
             );
             return 0.0;
         }
     };
-
     if result.len() < 3 {
         return 0.0;
     }
 
-    let is_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
-    if !is_active {
-        cache_nft_discount(&cache_key, 0.0).await;
-        return 0.0;
-    }
+    let chain_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
+    let chain_discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
 
-    let has_remaining_usage = match timeout(
+    let usage_snapshot = match timeout(
         Duration::from_millis(ONCHAIN_DISCOUNT_TIMEOUT_MS),
-        has_remaining_nft_usage(&reader, contract_address, user_felt),
+        read_nft_usage_snapshot(&reader, contract_address, user_felt),
     )
     .await
     {
-        Ok(Ok(value)) => value,
+        Ok(Ok(value)) => value.unwrap_or_default(),
         Ok(Err(err)) => {
             tracing::warn!(
-                "Failed to validate NFT usage window in swap for user={}: {}",
+                "Failed to read NFT usage snapshot in swap submit validation for user={}: {}",
                 user_address,
                 err
             );
@@ -878,25 +943,95 @@ async fn active_nft_discount_percent(state: &AppState, user_address: &str) -> f6
         }
         Err(_) => {
             tracing::warn!(
-                "Timeout while validating NFT usage window in swap for user={}",
+                "Timeout reading NFT usage snapshot in swap submit validation for user={}",
                 user_address
             );
             return 0.0;
         }
     };
-    if !has_remaining_usage {
-        tracing::info!(
-            "NFT discount exhausted or unavailable in swap for user={}",
-            user_address
-        );
-        cache_nft_discount(&cache_key, 0.0).await;
-        return 0.0;
-    }
 
-    let discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
-    let normalized = discount.clamp(0.0, 100.0);
-    cache_nft_discount(&cache_key, normalized).await;
-    normalized
+    let discount_percent = if chain_discount > 0.0 {
+        chain_discount
+    } else {
+        usage_snapshot.discount_percent
+    }
+    .clamp(0.0, 100.0);
+    let max_usage_i64 = u128_to_i64_saturating(usage_snapshot.max_usage);
+    let chain_used_i64 = u128_to_i64_saturating(usage_snapshot.used_in_period);
+
+    let db_row = state
+        .db
+        .upsert_nft_discount_state_from_chain(
+            contract,
+            user_address,
+            period_epoch,
+            usage_snapshot.tier.max(0),
+            discount_percent,
+            chain_active,
+            max_usage_i64,
+            chain_used_i64,
+        )
+        .await;
+
+    let resolved_discount = match db_row {
+        Ok(row) => {
+            let effective_used = row.local_used_in_period.max(row.chain_used_in_period);
+            let has_remaining_usage = row.max_usage > 0 && effective_used < row.max_usage;
+            if row.is_active && has_remaining_usage {
+                row.discount_percent.clamp(0.0, 100.0)
+            } else {
+                0.0
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Failed to persist NFT discount state in swap for user={}: {}",
+                user_address,
+                err
+            );
+            let has_remaining_usage = usage_snapshot.max_usage > 0
+                && usage_snapshot.used_in_period < usage_snapshot.max_usage;
+            if chain_active && has_remaining_usage {
+                discount_percent
+            } else {
+                0.0
+            }
+        }
+    };
+
+    cache_nft_discount(&cache_key, resolved_discount).await;
+    resolved_discount
+}
+
+// Internal helper that runs side-effecting logic for `record_nft_discount_usage_after_submit`.
+// Keeps validation, normalization, and intent-binding logic centralized.
+async fn record_nft_discount_usage_after_submit(state: &AppState, user_address: &str) {
+    let Some(contract) = discount_contract_address(state) else {
+        return;
+    };
+    let period_epoch = current_nft_period_epoch();
+    match state
+        .db
+        .increment_nft_discount_local_usage(contract, user_address, period_epoch, 1)
+        .await
+    {
+        Ok(updated_usage) => {
+            tracing::debug!(
+                "Recorded local NFT usage after swap submit user={} period={} local_used={}",
+                user_address,
+                period_epoch,
+                updated_usage
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Failed recording local NFT usage after swap submit for user={}: {}",
+                user_address,
+                err
+            );
+        }
+    }
+    invalidate_cached_nft_discount(contract, user_address).await;
 }
 
 // Internal helper that parses or transforms values for `normalize_usd_volume` in the swap flow.
@@ -2630,7 +2765,7 @@ pub async fn execute_swap(
         .await
         .unwrap_or_default();
 
-    let nft_discount_percent = active_nft_discount_percent(&state, &user_address).await;
+    let nft_discount_percent = refresh_nft_discount_for_submit(&state, &user_address).await;
     let fee_before_discount = base_fee(amount_in) + mev_fee_for_mode(&req.mode, amount_in);
     let total_fee = total_fee(amount_in, &req.mode, nft_discount_percent);
     let fee_discount_saved = (fee_before_discount - total_fee).max(0.0);
@@ -2668,11 +2803,8 @@ pub async fn execute_swap(
         state.db.mark_transaction_private(&tx_hash).await?;
     }
     if nft_discount_percent > 0.0 {
-        let consume_result =
-            consume_nft_usage_if_active(&state.config, &user_address, "swap").await;
-        if let Some(contract) = discount_contract_address(&state) {
-            invalidate_cached_nft_discount(contract, &user_address).await;
-        }
+        record_nft_discount_usage_after_submit(&state, &user_address).await;
+        let consume_result = consume_nft_usage(&state.config, &user_address, "swap").await;
         if let Err(err) = consume_result {
             tracing::warn!(
                 "Failed to consume NFT discount usage after swap success: user={} tx_hash={} err={}",

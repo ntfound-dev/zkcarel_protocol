@@ -1,0 +1,118 @@
+<svg width="1800" height="1200" viewBox="0 0 1800 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="900" y1="0" x2="900" y2="1200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#070B1A" />
+      <stop offset="1" stop-color="#040713" />
+    </linearGradient>
+    <marker id="arrCyan" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#38BDF8" />
+    </marker>
+    <marker id="arrOrange" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#FB923C" />
+    </marker>
+    <marker id="arrGreen" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#4ADE80" />
+    </marker>
+    <marker id="arrPurple" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#C084FC" />
+    </marker>
+    <marker id="arrGray" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#94A3B8" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1800" height="1200" fill="url(#bg)" />
+
+  <text x="60" y="68" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">CAREL Tokenomics Architecture (Simplified)</text>
+  <text x="60" y="106" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Source: smartcontract/src/core + smartcontract/src/governance</text>
+
+  <rect x="60" y="150" width="760" height="980" rx="18" fill="#0A1025" stroke="#334155" />
+  <text x="92" y="195" fill="#A5B4FC" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Core Tokenomics</text>
+
+  <rect x="92" y="230" width="696" height="140" rx="14" fill="#121B39" stroke="#6366F1" />
+  <text x="122" y="280" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Token (CAREL)</text>
+  <text x="122" y="318" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Hard cap 1B, role-based mint/burn</text>
+
+  <rect x="92" y="400" width="696" height="140" rx="14" fill="#121B39" stroke="#6366F1" />
+  <text x="122" y="450" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">VestingManager</text>
+  <text x="122" y="488" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Allocation schedules + release() mints tokens</text>
+
+  <rect x="92" y="570" width="696" height="140" rx="14" fill="#121B39" stroke="#6366F1" />
+  <text x="122" y="620" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">FeeCollector</text>
+  <text x="122" y="658" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Collects swap/bridge/MEV fees and splits</text>
+
+  <rect x="92" y="740" width="696" height="170" rx="14" fill="#121B39" stroke="#6366F1" />
+  <text x="122" y="790" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Treasury</text>
+  <text x="122" y="828" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Receives protocol fees</text>
+  <text x="122" y="858" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Can burn tokens (policy) + fund rewards</text>
+
+  <rect x="92" y="940" width="696" height="150" rx="14" fill="#10291E" stroke="#16A34A" />
+  <text x="122" y="990" fill="#DCFCE7" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Rewards Pool</text>
+  <text x="122" y="1028" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="22">Funded from Treasury for staking incentives</text>
+
+  <rect x="900" y="150" width="840" height="420" rx="18" fill="#0B1720" stroke="#155E75" />
+  <text x="932" y="195" fill="#67E8F9" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Governance / Control</text>
+
+  <rect x="932" y="230" width="350" height="140" rx="14" fill="#102633" stroke="#06B6D4" />
+  <text x="962" y="280" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Governance</text>
+  <text x="962" y="318" fill="#99F6E4" font-family="Inter, Arial, sans-serif" font-size="22">propose / vote / execute</text>
+
+  <rect x="1310" y="230" width="398" height="140" rx="14" fill="#102633" stroke="#06B6D4" />
+  <text x="1340" y="280" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Timelock</text>
+  <text x="1340" y="318" fill="#99F6E4" font-family="Inter, Arial, sans-serif" font-size="22">queue / execute / cancel</text>
+
+  <rect x="932" y="400" width="776" height="140" rx="14" fill="#102633" stroke="#06B6D4" />
+  <text x="962" y="450" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Admin Targets (Core Parameters)</text>
+  <text x="962" y="488" fill="#A5F3FC" font-family="Inter, Arial, sans-serif" font-size="22">token roles, vesting config, fee rates, burn policy</text>
+
+  <rect x="900" y="610" width="840" height="520" rx="18" fill="#141A2C" stroke="#334155" />
+  <text x="932" y="655" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Execution and Users</text>
+
+  <rect x="932" y="690" width="370" height="170" rx="14" fill="#2A1733" stroke="#A855F7" />
+  <text x="962" y="742" fill="#F5D0FE" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Protocol Modules</text>
+  <text x="962" y="780" fill="#E9D5FF" font-family="Inter, Arial, sans-serif" font-size="22">Swap / Bridge / MEV</text>
+
+  <rect x="1330" y="690" width="378" height="170" rx="14" fill="#143123" stroke="#22C55E" />
+  <text x="1360" y="742" fill="#DCFCE7" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Users / Stakers</text>
+  <text x="1360" y="780" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="22">Receive rewards and vesting unlocks</text>
+
+  <rect x="932" y="890" width="776" height="200" rx="14" fill="#1A2238" stroke="#64748B" />
+  <text x="962" y="940" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Privacy Router</text>
+  <text x="962" y="978" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">submit_private_* entrypoints for private-proof flows</text>
+  <text x="962" y="1010" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">(token / vesting / fee / treasury / governance / timelock)</text>
+
+  <line x1="1302" y1="760" x2="788" y2="640" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrCyan)" />
+  <text x="980" y="675" fill="#38BDF8" font-family="Inter, Arial, sans-serif" font-size="20">1) Fees -> FeeCollector</text>
+
+  <line x1="440" y1="710" x2="440" y2="740" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrCyan)" />
+  <text x="462" y="732" fill="#38BDF8" font-family="Inter, Arial, sans-serif" font-size="20">2) Split to Treasury</text>
+
+  <line x1="370" y1="740" x2="370" y2="370" stroke="#FB923C" stroke-width="4" marker-end="url(#arrOrange)" />
+  <text x="392" y="560" fill="#FB923C" font-family="Inter, Arial, sans-serif" font-size="20">3) Burn path</text>
+
+  <line x1="440" y1="400" x2="440" y2="370" stroke="#4ADE80" stroke-width="4" marker-end="url(#arrGreen)" />
+  <text x="462" y="390" fill="#4ADE80" font-family="Inter, Arial, sans-serif" font-size="20">4) Mint on release()</text>
+
+  <line x1="440" y1="910" x2="440" y2="940" stroke="#4ADE80" stroke-width="4" marker-end="url(#arrGreen)" />
+  <text x="462" y="934" fill="#4ADE80" font-family="Inter, Arial, sans-serif" font-size="20">5) Fund rewards</text>
+
+  <line x1="788" y1="990" x2="1330" y2="775" stroke="#4ADE80" stroke-width="4" marker-end="url(#arrGreen)" />
+  <text x="930" y="882" fill="#4ADE80" font-family="Inter, Arial, sans-serif" font-size="20">6) Rewards to users</text>
+
+  <line x1="1282" y1="300" x2="1310" y2="300" stroke="#C084FC" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrPurple)" />
+  <line x1="1510" y1="370" x2="1510" y2="400" stroke="#C084FC" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrPurple)" />
+  <line x1="1320" y1="470" x2="788" y2="300" stroke="#C084FC" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrPurple)" />
+  <line x1="1320" y1="470" x2="788" y2="470" stroke="#C084FC" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrPurple)" />
+  <line x1="1320" y1="470" x2="788" y2="640" stroke="#C084FC" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrPurple)" />
+  <line x1="1320" y1="470" x2="788" y2="830" stroke="#C084FC" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrPurple)" />
+  <text x="1110" y="352" fill="#D8B4FE" font-family="Inter, Arial, sans-serif" font-size="20">7) Governance control updates</text>
+
+  <line x1="1320" y1="890" x2="1320" y2="540" stroke="#94A3B8" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrGray)" />
+  <text x="1340" y="730" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">Private action path</text>
+
+  <rect x="60" y="1145" width="20" height="20" fill="#38BDF8" /><text x="90" y="1161" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="18">Value/Fee flow</text>
+  <rect x="270" y="1145" width="20" height="20" fill="#4ADE80" /><text x="300" y="1161" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="18">Rewards/Mint flow</text>
+  <rect x="510" y="1145" width="20" height="20" fill="#FB923C" /><text x="540" y="1161" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="18">Burn flow</text>
+  <rect x="690" y="1145" width="20" height="20" fill="#C084FC" /><text x="720" y="1161" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="18">Governance control</text>
+  <rect x="960" y="1145" width="20" height="20" fill="#94A3B8" /><text x="990" y="1161" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="18">Private entrypoint route</text>
+</svg>

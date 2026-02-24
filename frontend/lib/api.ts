@@ -144,6 +144,13 @@ export interface ExecuteBridgeResponse {
   amount: string
   estimated_receive: string
   estimated_time: string
+  fee_before_discount: string
+  // Optional for backward compatibility when frontend talks to older backend payloads.
+  fee_discount_saved?: string
+  nft_discount_percent?: string
+  estimated_points_earned?: string
+  points_pending?: boolean
+  ai_level_points_bonus_percent?: string
   privacy_tx_hash?: string
   deposit_address?: string
   deposit_amount?: string
@@ -279,6 +286,19 @@ export interface LimitOrderResponse {
   order_id: string
   status: string
   created_at: string
+  nft_discount_percent?: string
+  estimated_points_earned?: string
+  points_pending?: boolean
+  privacy_tx_hash?: string
+}
+
+export interface StakeDepositResponse {
+  position_id: string
+  tx_hash: string
+  amount: number
+  nft_discount_percent?: string
+  estimated_points_earned?: string
+  points_pending?: boolean
   privacy_tx_hash?: string
 }
 
@@ -369,6 +389,8 @@ export interface StakingPool {
   rewards_per_day: number
   min_stake: number
   lock_period?: number | null
+  available?: boolean
+  status_message?: string | null
 }
 
 export interface StakingPosition {
@@ -1356,6 +1378,7 @@ export async function getBridgeQuote(payload: {
     body: JSON.stringify(payload),
     context: "Bridge quote",
     suppressErrorNotification: true,
+    timeoutMs: 45000,
   })
 }
 
@@ -1672,7 +1695,7 @@ export async function stakeDeposit(payload: {
   hide_balance?: boolean
   privacy?: PrivacyVerificationPayload
 }) {
-  return apiFetch<{ position_id: string; tx_hash: string; amount: number; privacy_tx_hash?: string }>(
+  return apiFetch<StakeDepositResponse>(
     "/api/v1/stake/deposit",
     {
       method: "POST",
@@ -1699,7 +1722,7 @@ export async function stakeWithdraw(payload: {
   hide_balance?: boolean
   privacy?: PrivacyVerificationPayload
 }) {
-  return apiFetch<{ position_id: string; tx_hash: string; amount: number; privacy_tx_hash?: string }>(
+  return apiFetch<StakeDepositResponse>(
     "/api/v1/stake/withdraw",
     {
       method: "POST",
@@ -2030,7 +2053,8 @@ export async function prepareAiAction(payload: {
     body: JSON.stringify(payload),
     context: "AI prepare action",
     suppressErrorNotification: true,
-    timeoutMs: 60000,
+    // Preparing signature window can take longer on busy RPCs.
+    timeoutMs: 180000,
   })
 }
 
@@ -2327,6 +2351,7 @@ export async function getOnchainBalances(payload: {
     starknet_address: payload.starknet_address ?? null,
     evm_address: payload.evm_address ?? null,
     btc_address: payload.btc_address ?? null,
+    force: force || undefined,
   }
   const cacheKey = JSON.stringify(normalizedPayload)
   const now = Date.now()
