@@ -945,15 +945,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     let btcAddress = ""
     let btcBalance: number | null = null
     let injected: InjectedBtc | null = null
+    let xverseConnectError: unknown = null
 
     if (provider === "xverse") {
-      const result = await connectBtcWalletViaXverse()
-      btcAddress = result.address
-      btcBalance = result.balance
-      injected = getInjectedBtc("xverse")
-    } else {
-      injected = getInjectedBtc(provider)
+      try {
+        const result = await connectBtcWalletViaXverse()
+        btcAddress = result.address
+        btcBalance = result.balance
+        injected = getInjectedBtc("xverse")
+      } catch (error) {
+        // Some Xverse builds fail in sats-connect popup decode path; fall back to injected API path.
+        xverseConnectError = error
+        console.warn("Xverse sats-connect failed, trying injected API fallback:", error)
+      }
+    }
+
+    if (!btcAddress) {
+      injected = injected || getInjectedBtc(provider)
       if (!injected) {
+        if (provider === "xverse" && xverseConnectError) {
+          throw normalizeXverseConnectError(xverseConnectError)
+        }
         throw new Error(
           "BTC wallet extension not detected. Install UniSat or Xverse (optional jika hanya pakai ETH/STRK)."
         )
@@ -2553,6 +2565,11 @@ function normalizeXverseConnectError(error: unknown): Error {
     }
     if (/reject|cancel/i.test(message)) {
       return new Error("Request rejected in Xverse wallet.")
+    }
+    if (/unexpected token|not valid json|decodetoken/i.test(message)) {
+      return new Error(
+        "Xverse session data appears corrupted. Close all Xverse popups, lock/unlock extension, then retry. If it persists, clear Xverse extension data or reinstall extension."
+      )
     }
     return new Error(message || "Failed to connect Xverse wallet.")
   }

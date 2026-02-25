@@ -1933,13 +1933,13 @@ impl AIService {
         let message = if locale == "id" {
             "Halo! Tentu bisa. Mau cek harga, saldo, poin, atau langsung aksi tertentu?".to_string()
         } else if level == 1 {
-            "Hey! Of course. On Level 1 I can help with price, balance, points, and market data."
+            "Welcome to CAREL Agent (Level 1). I can help with read-only data: balance, points, token prices, and market info."
                 .to_string()
         } else if level == 2 {
-            "Hey! Of course. On Level 2 I can run real swap/bridge/stake/claim/limit after setup confirmation."
+            "Welcome to CAREL Agent (Level 2). I can execute swap, bridge, stake, claim rewards, and limit orders after wallet confirmation."
                 .to_string()
         } else {
-            "Hey! Of course. On Level 3 I run Garaga/private mode for execution, plus unstake/portfolio/alerts."
+            "Welcome to CAREL Agent (Level 3). I can run Garaga/private execution plus unstake, portfolio actions, alerts, and deeper analysis."
                 .to_string()
         };
 
@@ -1983,7 +1983,7 @@ impl AIService {
                 "Sama-sama. Lanjut apa sekarang? Bisa cek harga, saldo, poin, atau langsung eksekusi command."
                     .to_string()
             } else {
-                "You're welcome. What do you want to do next? I can check price, balance, points, or run execution commands."
+                "You're welcome. What do you want to do next? I can check balance, points, prices, market info, or run execution commands."
                     .to_string()
             }
         } else if asks_identity {
@@ -1995,11 +1995,11 @@ impl AIService {
                 }
             } else {
                 match level {
-                    1 => "I'm CAREL Agent. On Level 1 I handle chat plus real-time read-only data: price, balance, points, and market."
+                    1 => "I'm CAREL Agent. Level 1 is read-only: check balance, points, token prices, and market info."
                         .to_string(),
-                    2 => "I'm CAREL Agent. On Level 2 I handle chat plus real on-chain swap/bridge/stake/claim/limit after setup."
+                    2 => "I'm CAREL Agent. Level 2 can execute swap, bridge, stake, claim rewards, and limit orders after setup."
                         .to_string(),
-                    _ => "I'm CAREL Agent. On Level 3 I run Garaga/private mode plus unstake/portfolio/alerts and deeper analysis."
+                    _ => "I'm CAREL Agent. Level 3 runs Garaga/private execution plus unstake, portfolio actions, alerts, and deeper analysis."
                         .to_string(),
                 }
             }
@@ -2045,10 +2045,10 @@ impl AIService {
     fn execute_unknown_command(&self, level: u8, locale: &str) -> AIResponse {
         let message = if has_llm_provider_configured(&self.config) {
             if level <= 1 {
-                "CAREL Agent is being further developed by the team for this feature. Right now I can help with available commands: price, balance, points, and market data."
+                "I can help with read-only commands right now: `check balance`, `my points`, `show STRK price`, and `market info`."
                     .to_string()
             } else {
-                "CAREL Agent is being further developed by the team for this feature. Right now I can help with available commands: swap, bridge (Level 2), stake, claim rewards, limit order, and cancel order. Examples: swap 25 STRK to WBTC; bridge 0.005 ETH to WBTC; stake 50 USDT; claim rewards USDT; limit order STRK/USDC amount 10 at 1.25 expiry 1d; cancel order <id>."
+                "I can help with these commands right now: swap, bridge (Level 2), stake, claim rewards, limit order, and cancel order. Example: `swap 25 STRK to WBTC`."
                     .to_string()
             }
         } else {

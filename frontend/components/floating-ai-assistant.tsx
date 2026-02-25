@@ -75,9 +75,9 @@ const aiTiers = [
 ]
 
 const tierGreetingMessage: Record<number, string> = {
-  1: "Hi! Level 1 is for chat and read-only queries. Try balance, points, or token prices.",
-  2: "Hi! Level 2 is active for live DeFi execution. Each action asks for wallet signature and burns 1 CAREL.",
-  3: "Hi! Level 3 is active in anonymous mode with Garaga/private execution and advanced analysis. Each action asks for wallet signature and burns 2 CAREL. Bridge is currently available on Level 2.",
+  1: "Welcome to CAREL Agent (Level 1). I can help with read-only data: balance, points, token prices, and market info.",
+  2: "Welcome to CAREL Agent (Level 2). I can execute live DeFi actions after wallet confirmation. Each execution burns 1 CAREL.",
+  3: "Welcome to CAREL Agent (Level 3). I can run private Garaga-mode execution and advanced analysis. Each execution burns 2 CAREL. Bridge is currently available on Level 2.",
 }
 
 const quickPromptsByTier: Record<number, string[]> = {
@@ -120,9 +120,9 @@ const quickPromptsByTier: Record<number, string[]> = {
 const l2BridgeShortcutPrompts = quickPromptsByTier[2].filter((prompt) => /\bbridge\b/i.test(prompt))
 
 const featureListByTier: Record<number, string> = {
-  1: "Features: chat, balance, points, token price, market info.",
-  2: "Features: DeFi execution (swap, bridge, stake, claim rewards, limit order, cancel order). Tap one example below to start. More features are coming soon as AI is actively being developed.",
-  3: "Features: anonymous execution mode (private swap, private stake, private claim, private limit order), plus portfolio rebalance, price alerts, and deep analysis. Bridge stays on Level 2 for now. Tap one example below to start. More features are coming soon as AI is actively being developed.",
+  1: "Available now: chat, balance check, points check, token price, and market summary.",
+  2: "Available now: swap, bridge, stake, claim rewards, create limit order, and cancel order. Tap one example below to start.",
+  3: "Available now: private swap/stake/claim/limit order, plus portfolio rebalance, price alerts, and deeper analysis. Bridge stays on Level 2 for now.",
 }
 
 const levelBadgeClasses: Record<number, string> = {
@@ -1966,13 +1966,15 @@ export function FloatingAIAssistant() {
         try {
           const balance = await getPortfolioBalance({ force: true })
           if (!balance.balances?.length) {
-            add("Portfolio check: no assets found yet on this account.")
+            add("Portfolio update (live): no assets found on this account yet.")
           } else {
             const top = balance.balances
               .slice(0, 3)
               .map((item) => `${item.token} ${item.amount.toFixed(4)} (~$${item.value_usd.toFixed(2)})`)
               .join(", ")
-            add(`Live portfolio: total ~$${balance.total_value_usd.toFixed(2)}. Top: ${top}.`)
+            add(
+              `Portfolio update (live): total value ~$${balance.total_value_usd.toFixed(2)}. Top holdings: ${top}.`
+            )
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to load portfolio."
@@ -1985,7 +1987,7 @@ export function FloatingAIAssistant() {
         try {
           const points = await getRewardsPoints({ force: true })
           add(
-            `Live points: ${points.total_points.toFixed(2)} points (epoch ${points.current_epoch}), estimated CAREL ${Number(points.estimated_reward_carel || 0).toFixed(6)}.`
+            `Points update (live): ${points.total_points.toFixed(2)} points in epoch ${points.current_epoch}. Estimated CAREL reward: ${Number(points.estimated_reward_carel || 0).toFixed(6)}.`
           )
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to load points."
@@ -2004,7 +2006,7 @@ export function FloatingAIAssistant() {
           })
           const last = candles.data[candles.data.length - 1]
           if (last) {
-            add(`Live ${token} price (1h): close ${Number(last.close).toFixed(6)}.`)
+            add(`Market update (live): ${token} 1h close is ${Number(last.close).toFixed(6)}.`)
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to load chart."
@@ -3736,11 +3738,16 @@ export function FloatingAIAssistant() {
       const prioritizeLive = (response.actions || []).some((action) =>
         LIVE_DATA_PRIORITY_ACTIONS.has(action)
       )
+      const shouldKeepBaseMessage =
+        !!baseAssistant &&
+        !/^(command received\.?|perintah diterima\.?)$/i.test(baseAssistant.trim())
       const assistantContent = directExecutionMessage
         ? directExecutionMessage
         : firstFollowUp
         ? prioritizeLive
-          ? firstFollowUp
+          ? shouldKeepBaseMessage
+            ? normalizeMessageText(`${baseAssistant}\n\n${firstFollowUp}`)
+            : firstFollowUp
           : normalizeMessageText(`${baseAssistant || fallbackAssistant}\n\n${firstFollowUp}`)
         : baseAssistant || fallbackAssistant
 
