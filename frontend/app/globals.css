@@ -6,9 +6,9 @@
 /* Carel Protocol Cyberpunk Theme - Dark Mode (Private) */
 :root {
   --background: #0A0A0F;
-  --foreground: #FFFFFF;
-  --card: rgba(8, 16, 38, 0.95);
-  --card-foreground: #FFFFFF;
+  --foreground: #F0F2FF;
+  --card: rgba(18, 18, 29, 0.8);
+  --card-foreground: #F0F2FF;
   --popover: #12121D;
   --popover-foreground: #F0F2FF;
   --primary: #9D00FF;
@@ -16,14 +16,14 @@
   --secondary: #00F3FF;
   --secondary-foreground: #0A0A0F;
   --muted: #12121D;
-  --muted-foreground: #8899BB;
+  --muted-foreground: #888899;
   --accent: #FF00E5;
   --accent-foreground: #FFFFFF;
   --destructive: #FF0055;
   --destructive-foreground: #FFFFFF;
   --success: #00FF88;
   --success-foreground: #0A0A0F;
-  --border: rgba(100, 120, 200, 0.15);
+  --border: rgba(157, 0, 255, 0.3);
   --input: #12121D;
   --ring: #00F3FF;
   --chart-1: #9D00FF;
@@ -55,10 +55,10 @@
 
 /* Light Theme (Transparent Mode) - Semi-dark glass effect */
 .light {
-  --background: rgba(9, 14, 32, 0.96);
-  --foreground: #FFFFFF;
-  --card: rgba(8, 16, 38, 0.95);
-  --card-foreground: #FFFFFF;
+  --background: rgba(30, 32, 45, 0.95);
+  --foreground: #E2E8F0;
+  --card: rgba(45, 50, 70, 0.6);
+  --card-foreground: #E2E8F0;
   --popover: rgba(40, 45, 65, 0.9);
   --popover-foreground: #E2E8F0;
   --primary: #A78BFA;
@@ -66,14 +66,14 @@
   --secondary: #22D3EE;
   --secondary-foreground: #0F172A;
   --muted: rgba(71, 85, 105, 0.5);
-  --muted-foreground: #8899BB;
+  --muted-foreground: #94A3B8;
   --accent: #C084FC;
   --accent-foreground: #FFFFFF;
   --destructive: #F87171;
   --destructive-foreground: #FFFFFF;
   --success: #34D399;
   --success-foreground: #0F172A;
-  --border: rgba(100, 120, 200, 0.15);
+  --border: rgba(167, 139, 250, 0.25);
   --input: rgba(55, 65, 90, 0.7);
   --ring: #A78BFA;
   --surface: rgba(50, 55, 75, 0.5);
@@ -88,9 +88,9 @@
 }
 
 @theme inline {
-  --font-sans: 'Orbitron', 'Exo 2', 'Geist', sans-serif;
+  --font-sans: var(--font-orbitron), var(--font-exo2), 'Geist', sans-serif;
   --font-mono: 'Geist Mono', 'Geist Mono Fallback';
-  --font-display: 'Orbitron', sans-serif;
+  --font-display: var(--font-orbitron), 'Orbitron', sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -148,7 +148,6 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-style: normal;
   }
 }
 
@@ -248,7 +247,7 @@
 }
 
 .carel-tech-heading {
-  font-family: "Michroma", "Orbitron", "Audiowide", "Exo 2", var(--font-sans);
+  font-family: var(--font-orbitron), "Orbitron", sans-serif;
   font-weight: 700;
   letter-spacing: 0.035em;
   line-height: 1.08;
@@ -259,8 +258,8 @@
 }
 
 .carel-tech-title {
-  font-family: "Michroma", "Orbitron", "Audiowide", "Exo 2", var(--font-sans);
-  font-weight: 800;
+  font-family: var(--font-orbitron), "Orbitron", sans-serif;
+  font-weight: 700;
   letter-spacing: 0.026em;
   line-height: 1.12;
   font-feature-settings: "liga" 0, "calt" 0;
@@ -269,60 +268,19 @@
 }
 
 .carel-tech-label {
-  font-family: "Orbitron", "Michroma", "Audiowide", "Exo 2", var(--font-sans);
-  font-size: 0.66rem;
+  font-family: var(--font-orbitron), "Orbitron", sans-serif;
+  font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: #6B7A99;
   font-feature-settings: "liga" 0, "calt" 0;
 }
 
 .carel-tech-copy {
-  font-family: "Exo 2", "Orbitron", var(--font-sans);
-  font-weight: 400;
+  font-family: var(--font-exo2), "Exo 2", sans-serif;
+  font-weight: 500;
   letter-spacing: 0.012em;
   line-height: 1.6;
-  color: #8899BB;
-}
-
-.carel-section-label {
-  font-size: 0.66rem;
-  font-weight: 600;
-  letter-spacing: 0.15em;
-  color: #6B7A99;
-  text-transform: uppercase;
-}
-
-.carel-primary-value {
-  color: #FFFFFF;
-  font-weight: 800;
-  opacity: 1;
-}
-
-.carel-secondary-text {
-  color: #8899BB;
-  font-weight: 400;
-}
-
-.carel-zk-card {
-  background: rgba(8, 16, 38, 0.95) !important;
-  border: 1px solid rgba(100, 120, 200, 0.15) !important;
-}
-
-.carel-gradient-button {
-  background: linear-gradient(135deg, #cc44ff, #7733ff) !important;
-  color: #FFFFFF !important;
-  font-weight: 700 !important;
-}
-
-.carel-typography-system .text-muted-foreground {
-  color: #8899BB;
-  font-weight: 400;
-}
-
-.carel-typography-system .text-foreground {
-  color: #FFFFFF;
 }
 
 .carel-neon-soft {
@@ -388,17 +346,17 @@
 
 /* Glassmorphism */
 .glass {
-  background: rgba(8, 16, 38, 0.95);
+  background: var(--card);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(100, 120, 200, 0.15);
+  border: 1px solid var(--border);
 }
 
 .glass-strong {
-  background: rgba(8, 16, 38, 0.95);
+  background: var(--card);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(100, 120, 200, 0.15);
+  border: 1px solid var(--border);
 }
 
 .light .glass-strong {
@@ -490,10 +448,4 @@
 ::selection {
   background: rgba(34, 211, 238, 0.35);
   color: #04131f;
-}
-
-.italic,
-i,
-em {
-  font-style: normal !important;
 }

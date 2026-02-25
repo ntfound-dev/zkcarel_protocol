@@ -1,7 +1,22 @@
 import React from "react"
 import type { Metadata, Viewport } from 'next'
 import { Analytics } from '@vercel/analytics/next'
+import { Orbitron, Exo_2 } from "next/font/google"
 import './globals.css'
+
+const orbitron = Orbitron({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800", "900"],
+  display: "swap",
+  variable: "--font-orbitron",
+})
+
+const exo2 = Exo_2({
+  subsets: ["latin"],
+  weight: ["100", "200", "300", "400", "500", "600", "700", "800", "900"],
+  display: "swap",
+  variable: "--font-exo2",
+})
 
 export const metadata: Metadata = {
   title: 'Carel Protocol - Privacy-First Crypto Trading',
@@ -28,7 +43,7 @@ export default function RootLayout({
       className="dark"
       suppressHydrationWarning
     >
-      <body className="font-sans antialiased min-h-screen bg-background circuit-bg">
+      <body className={`${orbitron.variable} ${exo2.variable} font-sans antialiased min-h-screen bg-background circuit-bg`}>
         {children}
         <Analytics />
       </body>

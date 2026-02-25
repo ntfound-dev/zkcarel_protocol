@@ -95,10 +95,10 @@ export function MarketTicker() {
 
   return (
     <section className="w-full">
-      <div className="p-4 rounded-2xl glass carel-zk-card border border-border">
+      <div className="p-4 rounded-2xl glass border border-border/60">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="carel-tech-label carel-section-label">Live Market</span>
+            <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase carel-tech-label">Live Market</span>
             <span
               className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-secondary/15"
               title={`WebSocket ${status.websocket}`}
@@ -114,7 +114,7 @@ export function MarketTicker() {
               />
             </span>
           </div>
-          <span className="text-xs carel-secondary-text">
+          <span className="text-xs text-muted-foreground">
             Updated {status.lastRefresh ? new Date(status.lastRefresh).toLocaleTimeString() : "—"}
           </span>
         </div>
@@ -141,14 +141,14 @@ export function MarketTicker() {
             return (
               <div
                 key={token.symbol}
-                className="min-w-[160px] flex-shrink-0 rounded-xl border border-border carel-zk-card px-3 py-3"
+                className="min-w-[160px] flex-shrink-0 rounded-xl border border-border bg-surface/40 px-3 py-3"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-lg">{token.icon}</span>
                     <div>
-                      <p className="text-sm carel-tech-title carel-primary-value">{token.symbol}</p>
-                      <p className="text-[10px] carel-secondary-text">{token.name}</p>
+                      <p className="text-sm font-semibold text-foreground carel-tech-title">{token.symbol}</p>
+                      <p className="text-[10px] text-muted-foreground">{token.name}</p>
                     </div>
                   </div>
                   <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold", badge.className)}>
@@ -156,7 +156,7 @@ export function MarketTicker() {
                   </span>
                 </div>
                 <div className="mt-3">
-                  <p className="text-lg carel-tech-title carel-primary-value">{formatPrice(price)}</p>
+                  <p className="text-lg font-bold text-foreground carel-tech-title">{formatPrice(price)}</p>
                   <p className={cn("text-xs", isPositive ? "text-success" : "text-destructive")}>
                     {Number.isFinite(change) ? `${isPositive ? "+" : ""}${change.toFixed(2)}%` : "—"}
                   </p>
