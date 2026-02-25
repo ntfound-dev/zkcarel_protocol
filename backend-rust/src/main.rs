@@ -23,10 +23,10 @@ mod tokenomics;
 mod utils;
 mod websocket;
 
+use anyhow::Context;
 use config::Config;
 use constants::API_VERSION;
 use db::Database;
-use anyhow::Context;
 
 // Internal helper that supports `install_rustls_crypto_provider` operations.
 fn install_rustls_crypto_provider() -> anyhow::Result<()> {
@@ -110,8 +110,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize Redis
     tracing::info!("Initializing Redis connection manager...");
-    let redis = redis::Client::open(config.redis_url.clone())
-        .context("invalid REDIS_URL format")?;
+    let redis =
+        redis::Client::open(config.redis_url.clone()).context("invalid REDIS_URL format")?;
     let redis_manager_config = redis::aio::ConnectionManagerConfig::new()
         .set_connection_timeout(Some(Duration::from_secs(10)))
         .set_response_timeout(Some(Duration::from_secs(5)))

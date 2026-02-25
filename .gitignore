@@ -3,3 +3,4 @@ target/
 .env
 backend-rust/.env
 smartcontract/.env
+dump.rdb

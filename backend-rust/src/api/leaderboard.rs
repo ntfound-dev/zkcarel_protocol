@@ -377,23 +377,22 @@ pub async fn get_user_categories(
 
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
 
-    let (user_points_total, points_rank, points_total): (f64, RankResult, CountResult) =
-        tokio::try_join!(
-            async {
-                let value: f64 = sqlx::query_scalar::<_, f64>(
-                    "SELECT COALESCE(SUM(total_points), 0)::FLOAT
+    let (user_points_total, points_rank, points_total): (f64, RankResult, CountResult) = tokio::try_join!(
+        async {
+            let value: f64 = sqlx::query_scalar::<_, f64>(
+                "SELECT COALESCE(SUM(total_points), 0)::FLOAT
                      FROM points
                      WHERE LOWER(user_address) = ANY($1) AND epoch = $2",
-                )
-                .bind(scope_addresses.clone())
-                .bind(current_epoch)
-                .fetch_one(state.db.pool())
-                .await?;
-                Ok::<f64, crate::error::AppError>(value)
-            },
-            async {
-                let rank: RankResult = sqlx::query_as(
-                    r#"
+            )
+            .bind(scope_addresses.clone())
+            .bind(current_epoch)
+            .fetch_one(state.db.pool())
+            .await?;
+            Ok::<f64, crate::error::AppError>(value)
+        },
+        async {
+            let rank: RankResult = sqlx::query_as(
+                r#"
                     WITH identity_points AS (
                         SELECT
                             COALESCE(uw.user_address, p.user_address) as identity,
@@ -416,16 +415,16 @@ pub async fn get_user_categories(
                           0
                       )
                     "#,
-                )
-                .bind(current_epoch)
-                .bind(&canonical_address)
-                .fetch_one(state.db.pool())
-                .await?;
-                Ok::<RankResult, crate::error::AppError>(rank)
-            },
-            async {
-                let total: CountResult = sqlx::query_as(
-                    r#"
+            )
+            .bind(current_epoch)
+            .bind(&canonical_address)
+            .fetch_one(state.db.pool())
+            .await?;
+            Ok::<RankResult, crate::error::AppError>(rank)
+        },
+        async {
+            let total: CountResult = sqlx::query_as(
+                r#"
                     SELECT COUNT(*) as count
                     FROM (
                         SELECT COALESCE(uw.user_address, p.user_address) as identity
@@ -436,31 +435,30 @@ pub async fn get_user_categories(
                         GROUP BY COALESCE(uw.user_address, p.user_address)
                     ) s
                     "#,
-                )
-                .bind(current_epoch)
-                .fetch_one(state.db.pool())
-                .await?;
-                Ok::<CountResult, crate::error::AppError>(total)
-            }
-        )?;
+            )
+            .bind(current_epoch)
+            .fetch_one(state.db.pool())
+            .await?;
+            Ok::<CountResult, crate::error::AppError>(total)
+        }
+    )?;
 
-    let (volume_value, volume_rank, volume_total): (f64, RankResult, CountResult) =
-        tokio::try_join!(
-            async {
-                let value: f64 = sqlx::query_scalar::<_, f64>(
-                    "SELECT COALESCE(SUM(usd_value), 0)::FLOAT
+    let (volume_value, volume_rank, volume_total): (f64, RankResult, CountResult) = tokio::try_join!(
+        async {
+            let value: f64 = sqlx::query_scalar::<_, f64>(
+                "SELECT COALESCE(SUM(usd_value), 0)::FLOAT
                      FROM transactions
                      WHERE LOWER(user_address) = ANY($1)
                        AND COALESCE(is_private, false) = false",
-                )
-                .bind(scope_addresses.clone())
-                .fetch_one(state.db.pool())
-                .await?;
-                Ok::<f64, crate::error::AppError>(value)
-            },
-            async {
-                let rank: RankResult = sqlx::query_as(
-                    r#"
+            )
+            .bind(scope_addresses.clone())
+            .fetch_one(state.db.pool())
+            .await?;
+            Ok::<f64, crate::error::AppError>(value)
+        },
+        async {
+            let rank: RankResult = sqlx::query_as(
+                r#"
                     WITH identity_volume AS (
                         SELECT
                             COALESCE(uw.user_address, t.user_address) as identity,
@@ -483,15 +481,15 @@ pub async fn get_user_categories(
                         0
                     )
                     "#,
-                )
-                .bind(&canonical_address)
-                .fetch_one(state.db.pool())
-                .await?;
-                Ok::<RankResult, crate::error::AppError>(rank)
-            },
-            async {
-                let total: CountResult = sqlx::query_as(
-                    r#"
+            )
+            .bind(&canonical_address)
+            .fetch_one(state.db.pool())
+            .await?;
+            Ok::<RankResult, crate::error::AppError>(rank)
+        },
+        async {
+            let total: CountResult = sqlx::query_as(
+                r#"
                     SELECT COUNT(*) as count
                     FROM (
                         SELECT COALESCE(uw.user_address, t.user_address) as identity
@@ -502,18 +500,17 @@ pub async fn get_user_categories(
                         GROUP BY COALESCE(uw.user_address, t.user_address)
                     ) s
                     "#,
-                )
-                .fetch_one(state.db.pool())
-                .await?;
-                Ok::<CountResult, crate::error::AppError>(total)
-            }
-        )?;
+            )
+            .fetch_one(state.db.pool())
+            .await?;
+            Ok::<CountResult, crate::error::AppError>(total)
+        }
+    )?;
 
-    let (referral_count, referral_rank, referral_total): (i64, RankResult, CountResult) =
-        tokio::try_join!(
-            async {
-                let count: i64 = sqlx::query_scalar::<_, i64>(
-                    r#"
+    let (referral_count, referral_rank, referral_total): (i64, RankResult, CountResult) = tokio::try_join!(
+        async {
+            let count: i64 = sqlx::query_scalar::<_, i64>(
+                r#"
                     WITH referral_counts AS (
                         SELECT
                             COALESCE(uw.user_address, u.referrer) as identity,
@@ -534,15 +531,15 @@ pub async fn get_user_categories(
                         0
                     )
                     "#,
-                )
-                .bind(&canonical_address)
-                .fetch_one(state.db.pool())
-                .await?;
-                Ok::<i64, crate::error::AppError>(count)
-            },
-            async {
-                let rank: RankResult = sqlx::query_as(
-                    r#"
+            )
+            .bind(&canonical_address)
+            .fetch_one(state.db.pool())
+            .await?;
+            Ok::<i64, crate::error::AppError>(count)
+        },
+        async {
+            let rank: RankResult = sqlx::query_as(
+                r#"
                     WITH referral_counts AS (
                         SELECT
                             COALESCE(uw.user_address, u.referrer) as identity,
@@ -575,19 +572,19 @@ pub async fn get_user_categories(
                     CROSS JOIN user_referral ur
                     WHERE COALESCE(rc.referral_count, 0) > ur.referral_count
                     "#,
-                )
-                .bind(&canonical_address)
+            )
+            .bind(&canonical_address)
+            .fetch_one(state.db.pool())
+            .await?;
+            Ok::<RankResult, crate::error::AppError>(rank)
+        },
+        async {
+            let total: CountResult = sqlx::query_as("SELECT COUNT(*) as count FROM users")
                 .fetch_one(state.db.pool())
                 .await?;
-                Ok::<RankResult, crate::error::AppError>(rank)
-            },
-            async {
-                let total: CountResult = sqlx::query_as("SELECT COUNT(*) as count FROM users")
-                    .fetch_one(state.db.pool())
-                    .await?;
-                Ok::<CountResult, crate::error::AppError>(total)
-            }
-        )?;
+            Ok::<CountResult, crate::error::AppError>(total)
+        }
+    )?;
 
     let categories = vec![
         UserRankCategory {

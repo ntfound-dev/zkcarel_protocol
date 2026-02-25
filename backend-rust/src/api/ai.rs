@@ -1800,8 +1800,7 @@ async fn verify_ai_upgrade_payment_tx_hash(
     let payment_address =
         configured_ai_upgrade_payment_address(&state.config).ok_or_else(|| {
             AppError::BadRequest(
-                "TREASURY_ADDRESS is not configured. Cannot verify AI upgrade payment."
-                    .to_string(),
+                "TREASURY_ADDRESS is not configured. Cannot verify AI upgrade payment.".to_string(),
             )
         })?;
     let carel_token = state.config.carel_token_address.trim();
