@@ -688,14 +688,22 @@ type TimedCacheEntry<T> = {
 
 let refreshTokenInFlight: Promise<string | null> | null = null
 let lastAuthExpiredEmitAt = 0
+const notificationsInFlight = new Map<string, Promise<PaginatedResponse<BackendNotification>>>()
+const notificationsCache = new Map<string, TimedCacheEntry<PaginatedResponse<BackendNotification>>>()
 let portfolioBalanceInFlight: Promise<BalanceResponse> | null = null
 let portfolioBalanceCache: TimedCacheEntry<BalanceResponse> | null = null
 let portfolioAnalyticsInFlight: Promise<AnalyticsResponse> | null = null
 let portfolioAnalyticsCache: TimedCacheEntry<AnalyticsResponse> | null = null
+const portfolioOhlcvInFlight = new Map<string, Promise<PortfolioOHLCVResponse>>()
+const portfolioOhlcvCache = new Map<string, TimedCacheEntry<PortfolioOHLCVResponse>>()
 let rewardsPointsInFlight: Promise<RewardsPointsResponse> | null = null
 let rewardsPointsCache: TimedCacheEntry<RewardsPointsResponse> | null = null
+const leaderboardInFlight = new Map<string, Promise<LeaderboardResponse>>()
+const leaderboardCache = new Map<string, TimedCacheEntry<LeaderboardResponse>>()
 let stakePoolsInFlight: Promise<StakingPool[]> | null = null
 let stakePoolsCache: TimedCacheEntry<StakingPool[]> | null = null
+const limitOrdersInFlight = new Map<string, Promise<PaginatedResponse<LimitOrderItem>>>()
+const limitOrdersCache = new Map<string, TimedCacheEntry<PaginatedResponse<LimitOrderItem>>>()
 let ownedNftsInFlight: Promise<NFTItem[]> | null = null
 let ownedNftsCache: TimedCacheEntry<NFTItem[]> | null = null
 const onchainBalancesInFlight = new Map<string, Promise<OnchainBalancesResponse>>()
@@ -1066,10 +1074,40 @@ export async function connectWallet(payload: {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function getNotifications(page = 1, limit = 20) {
-  return apiFetch<PaginatedResponse<BackendNotification>>(
-    `/api/v1/notifications/list?page=${page}&limit=${limit}`
+export async function getNotifications(page = 1, limit = 20, options?: { force?: boolean }) {
+  const force = options?.force === true
+  const key = `${page}:${limit}`
+  const now = Date.now()
+  if (!force) {
+    const cached = notificationsCache.get(key)
+    if (cached && cached.expiresAt > now) {
+      return cached.data
+    }
+    const inFlight = notificationsInFlight.get(key)
+    if (inFlight) {
+      return inFlight
+    }
+  }
+
+  const request = apiFetch<PaginatedResponse<BackendNotification>>(
+    `/api/v1/notifications/list?page=${page}&limit=${limit}`,
+    {
+      timeoutMs: SLOW_READ_TIMEOUT_MS,
+      suppressErrorNotification: true,
+    }
   )
+    .then((data) => {
+      notificationsCache.set(key, {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      })
+      return data
+    })
+    .finally(() => {
+      notificationsInFlight.delete(key)
+    })
+  notificationsInFlight.set(key, request)
+  return request
 }
 
 /**
@@ -1180,10 +1218,42 @@ export async function getPortfolioHistory(period: "1d" | "7d" | "30d" | "all") {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function getPortfolioOHLCV(params: { interval: string; limit?: number }) {
+export async function getPortfolioOHLCV(
+  params: { interval: string; limit?: number },
+  options?: { force?: boolean }
+) {
+  const force = options?.force === true
   const search = new URLSearchParams({ interval: params.interval })
   if (params.limit) search.set("limit", String(params.limit))
-  return apiFetch<PortfolioOHLCVResponse>(`/api/v1/portfolio/ohlcv?${search.toString()}`)
+  const key = `${params.interval}:${params.limit ?? ""}`
+  const now = Date.now()
+  if (!force) {
+    const cached = portfolioOhlcvCache.get(key)
+    if (cached && cached.expiresAt > now) {
+      return cached.data
+    }
+    const inFlight = portfolioOhlcvInFlight.get(key)
+    if (inFlight) {
+      return inFlight
+    }
+  }
+
+  const request = apiFetch<PortfolioOHLCVResponse>(`/api/v1/portfolio/ohlcv?${search.toString()}`, {
+    timeoutMs: SLOW_READ_TIMEOUT_MS,
+    suppressErrorNotification: true,
+  })
+    .then((data) => {
+      portfolioOhlcvCache.set(key, {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      })
+      return data
+    })
+    .finally(() => {
+      portfolioOhlcvInFlight.delete(key)
+    })
+  portfolioOhlcvInFlight.set(key, request)
+  return request
 }
 
 /**
@@ -1194,8 +1264,39 @@ export async function getPortfolioOHLCV(params: { interval: string; limit?: numb
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function getLeaderboard(type: "points" | "volume" | "referrals") {
-  return apiFetch<LeaderboardResponse>(`/api/v1/leaderboard/${type}`)
+export async function getLeaderboard(
+  type: "points" | "volume" | "referrals",
+  options?: { force?: boolean }
+) {
+  const force = options?.force === true
+  const key = type
+  const now = Date.now()
+  if (!force) {
+    const cached = leaderboardCache.get(key)
+    if (cached && cached.expiresAt > now) {
+      return cached.data
+    }
+    const inFlight = leaderboardInFlight.get(key)
+    if (inFlight) {
+      return inFlight
+    }
+  }
+  const request = apiFetch<LeaderboardResponse>(`/api/v1/leaderboard/${type}`, {
+    timeoutMs: SLOW_READ_TIMEOUT_MS,
+    suppressErrorNotification: true,
+  })
+    .then((data) => {
+      leaderboardCache.set(key, {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      })
+      return data
+    })
+    .finally(() => {
+      leaderboardInFlight.delete(key)
+    })
+  leaderboardInFlight.set(key, request)
+  return request
 }
 
 /**
@@ -1688,10 +1789,41 @@ export async function getGardenAppEarnings() {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function listLimitOrders(page = 1, limit = 10, status?: string) {
+export async function listLimitOrders(page = 1, limit = 10, status?: string, options?: { force?: boolean }) {
+  const force = options?.force === true
   const params = new URLSearchParams({ page: String(page), limit: String(limit) })
   if (status) params.set("status", status)
-  return apiFetch<PaginatedResponse<LimitOrderItem>>(`/api/v1/limit-order/list?${params.toString()}`)
+  const key = `${page}:${limit}:${status || ""}`
+  const now = Date.now()
+  if (!force) {
+    const cached = limitOrdersCache.get(key)
+    if (cached && cached.expiresAt > now) {
+      return cached.data
+    }
+    const inFlight = limitOrdersInFlight.get(key)
+    if (inFlight) {
+      return inFlight
+    }
+  }
+  const request = apiFetch<PaginatedResponse<LimitOrderItem>>(
+    `/api/v1/limit-order/list?${params.toString()}`,
+    {
+      timeoutMs: SLOW_READ_TIMEOUT_MS,
+      suppressErrorNotification: true,
+    }
+  )
+    .then((data) => {
+      limitOrdersCache.set(key, {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      })
+      return data
+    })
+    .finally(() => {
+      limitOrdersInFlight.delete(key)
+    })
+  limitOrdersInFlight.set(key, request)
+  return request
 }
 
 /**

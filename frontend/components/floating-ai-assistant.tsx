@@ -440,12 +440,60 @@ function isWalletCancellationMessage(message: string): boolean {
 }
 
 // Internal helper that formats on-chain setup failures into actionable messages.
+function formatDecimalTokenAmount(raw: string, decimals: number, precision = 6): string {
+  const normalized = (raw || "").replace(/\D/g, "")
+  if (!normalized) return "0"
+  const trimmed = normalized.replace(/^0+/, "") || "0"
+  if (trimmed === "0") return "0"
+  if (trimmed.length <= decimals) {
+    const fraction = trimmed
+      .padStart(decimals, "0")
+      .replace(/0+$/, "")
+      .slice(0, precision)
+    return fraction ? `0.${fraction}` : "0"
+  }
+  const whole = trimmed.slice(0, trimmed.length - decimals)
+  const fraction = trimmed
+    .slice(trimmed.length - decimals)
+    .replace(/0+$/, "")
+    .slice(0, precision)
+  return fraction ? `${whole}.${fraction}` : whole
+}
+
+// Internal helper that detects Starknet v3 resource-bound balance validation failures.
+function isResourceBoundsExceedBalanceError(message: string): boolean {
+  const lower = (message || "").toLowerCase()
+  return (
+    lower.includes("validationfailure") &&
+    lower.includes("resources bounds") &&
+    lower.includes("exceed balance")
+  )
+}
+
+// Internal helper that parses `exceed balance (<felt>)` from provider errors.
+function extractExceedBalanceRaw(message: string): string | null {
+  const match = message.match(/exceed balance\s*\((\d+)\)/i)
+  if (!match) return null
+  return match[1] || null
+}
+
+// Internal helper that formats on-chain setup failures into actionable messages.
 function formatSetupFailureMessage(
   rawMessage: string,
   requiredCarel: number,
   knownCarelBalance: number | null
 ): string {
   const lowerRaw = rawMessage.toLowerCase()
+  if (isResourceBoundsExceedBalanceError(rawMessage)) {
+    const rawBalance = extractExceedBalanceRaw(rawMessage)
+    const balanceHint = rawBalance
+      ? ` Wallet STRK balance is ~${formatDecimalTokenAmount(rawBalance, 18)} STRK.`
+      : ""
+    return (
+      "Insufficient STRK to cover Starknet max-fee/resource-bounds for execution setup." +
+      `${balanceHint} Top up STRK (recommended >= 5 STRK), then retry Auto Setup On-Chain.`
+    )
+  }
   if (isErc20InsufficientBalanceError(rawMessage) || /fee transfer failed/i.test(lowerRaw)) {
     const balanceHint =
       typeof knownCarelBalance === "number" && Number.isFinite(knownCarelBalance)
@@ -1831,7 +1879,31 @@ export function FloatingAIAssistant() {
         return created
       }
 
-      throw new Error("No valid on-chain setup found. Click Auto Setup On-Chain and confirm in wallet.")
+      const setupSubmittedRecently =
+        Date.now() - lastSetupSubmitAtRef.current <= AI_SETUP_SUBMIT_COOLDOWN_MS + 15_000
+      if (setupSubmittedRecently) {
+        try {
+          const pending = await loadPendingActions(true)
+          const latest = pickLatestPendingAction(pending)
+          if (latest && latest > 0) {
+            setActionId(String(latest))
+            notifications.addNotification({
+              type: "warning",
+              title: "Using pending setup",
+              message:
+                "Setup tx was submitted recently and is now visible. Using latest pending setup for this execution.",
+            })
+            return latest
+          }
+        } catch {
+          // Keep explicit failure message below.
+        }
+      }
+
+      const failureDetail = lastSetupFailureRef.current.trim()
+      throw new Error(
+        failureDetail || "No valid on-chain setup found. Click Auto Setup On-Chain and confirm in wallet."
+      )
     } finally {
       setIsAutoPreparingAction(false)
     }

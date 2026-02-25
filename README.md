@@ -148,6 +148,11 @@ cd frontend && npm install && npm run dev
 # open http://localhost:3000
 ```
 
+Connectivity note:
+- Default dev flow is local frontend (`:3000`) to local backend (`:8080`).
+- If frontend is deployed on Vercel while backend is still local, use ngrok tunnel temporarily.
+- Full connectivity modes and exact ngrok/Vercel steps are documented in [`frontend/README.md`](frontend/README.md#backend-connectivity-modes).
+
 ## Documentation Map
 | Document | Scope |
 | --- | --- |

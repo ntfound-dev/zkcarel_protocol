@@ -5,6 +5,7 @@ This README explains frontend setup, environment configuration, wallet integrati
 - [Scope and Related Docs](#scope-and-related-docs)
 - [Prerequisites](#prerequisites)
 - [Local Setup](#local-setup)
+- [Backend Connectivity Modes](#backend-connectivity-modes)
 - [Environment Variables](#environment-variables)
   - [Core](#core)
   - [Contract Addresses](#contract-addresses)
@@ -34,6 +35,57 @@ npm install
 npm run dev
 ```
 Open `http://localhost:3000`.
+
+## Backend Connectivity Modes
+
+### 1) Local frontend + local backend (default, recommended for development)
+- Keep frontend backend URL at localhost.
+- Do not point frontend to ngrok unless you need public access.
+
+`frontend/.env` (or `frontend/.env.local`):
+```env
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8080
+NEXT_PUBLIC_BACKEND_WS_URL=ws://localhost:8080
+```
+
+Run:
+```bash
+# terminal 1
+cd backend-rust
+cargo run
+
+# terminal 2
+cd frontend
+npm run dev
+```
+
+### 2) Vercel frontend + local backend through ngrok (temporary demo setup)
+- Use this only when backend is still local but frontend is hosted on Vercel.
+- ngrok free URL changes every time ngrok restarts.
+
+Run tunnel:
+```bash
+ngrok http 8080
+```
+
+Set Vercel Environment Variables (Production):
+```env
+NEXT_PUBLIC_BACKEND_URL=https://<your-ngrok-id>.ngrok-free.app
+NEXT_PUBLIC_BACKEND_WS_URL=wss://<your-ngrok-id>.ngrok-free.app
+```
+
+Then redeploy Vercel after env change:
+- `Vercel Dashboard -> Project -> Deployments -> ... -> Redeploy`
+- Use `Redeploy without cache` when changing `NEXT_PUBLIC_*` variables.
+
+### 3) Vercel frontend + public backend (recommended for judge/demo day)
+- Deploy backend to stable public host (not local tunnel).
+- Point `NEXT_PUBLIC_BACKEND_URL` to stable backend URL.
+- Redeploy frontend once after env update.
+
+Important env precedence:
+- `frontend/.env.local` overrides `frontend/.env`.
+- If your app keeps calling old ngrok URL, check `frontend/.env.local` first.
 
 ## Environment Variables
 Create `frontend/.env.local` and set values as needed.
