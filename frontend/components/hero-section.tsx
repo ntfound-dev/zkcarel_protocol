@@ -41,14 +41,14 @@ export function HeroSection() {
           </div>
           
           {/* Main Title */}
-          <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-foreground mb-4 lg:mb-6 leading-tight carel-tech-heading">
+          <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-white mb-4 lg:mb-6 leading-tight carel-tech-heading">
             <span className="inline-block text-balance carel-hero-purple-sharp">
               Trade Freely. Leave No Trace.
             </span>
           </h1>
           
           {/* Subtitle */}
-          <p className="text-base sm:text-lg lg:text-xl text-muted-foreground max-w-2xl mx-auto mb-8 text-pretty carel-tech-copy">
+          <p className="text-base sm:text-lg lg:text-xl text-white max-w-2xl mx-auto mb-8 text-pretty carel-tech-copy">
             Zero-knowledge privacy for every DeFi action on Starknet. Your wallet, invisible. Your trades, untouchable.
           </p>
           

@@ -288,14 +288,11 @@
 }
 
 .carel-hero-purple-sharp {
-  background: linear-gradient(90deg, #ffffff 0%, #f4dcff 46%, #cb83ff 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: #ffffff;
   text-shadow:
-    0 0 1px rgba(255, 255, 255, 0.92),
-    0 0 10px rgba(184, 77, 255, 0.62),
-    0 0 22px rgba(184, 77, 255, 0.42);
+    0 0 1px rgba(255, 255, 255, 0.95),
+    0 0 12px rgba(184, 77, 255, 0.82),
+    0 0 28px rgba(184, 77, 255, 0.56);
 }
 
 .ambient-orb {
