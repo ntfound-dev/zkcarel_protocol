@@ -41,7 +41,7 @@ export function HeroSection() {
           </div>
           
           {/* Main Title */}
-          <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-foreground mb-4 lg:mb-6 leading-tight carel-tech-heading carel-neon-soft">
+          <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-foreground mb-4 lg:mb-6 leading-tight carel-tech-heading carel-neon-soft">
             <span className="text-balance">Trade Freely. Leave No Trace.</span>
           </h1>
           
