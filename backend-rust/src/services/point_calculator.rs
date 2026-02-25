@@ -39,8 +39,8 @@ pub struct PointCalculator {
 const REFERRAL_MIN_USD_VOLUME: i64 = 20;
 const REFERRAL_REFERRER_BONUS_BPS: i64 = 1000; // 10%
 const REFERRAL_REFEREE_BONUS_BPS: i64 = 1000; // 10%
-const BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
-const BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
+const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
+const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
 
 impl PointCalculator {
     /// Constructs a new instance via `new`.
@@ -288,8 +288,12 @@ impl PointCalculator {
         if usd_value < min_usd {
             return Ok(0.0);
         }
-        self.apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_SWAP)
-            .await
+        let nft_adjusted = self
+            .apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_SWAP)
+            .await?;
+        Ok(self
+            .apply_ai_level_points_bonus(&tx.user_address, nft_adjusted)
+            .await)
     }
 
     // Internal helper that supports `calculate_limit_order_points` operations.
@@ -304,8 +308,12 @@ impl PointCalculator {
         if usd_value < min_threshold {
             return Ok(0.0);
         }
-        self.apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_LIMIT_ORDER)
-            .await
+        let nft_adjusted = self
+            .apply_nft_discount_bonus(&tx.user_address, usd_value * POINTS_PER_USD_LIMIT_ORDER)
+            .await?;
+        Ok(self
+            .apply_ai_level_points_bonus(&tx.user_address, nft_adjusted)
+            .await)
     }
 
     // Internal helper that supports `calculate_bridge_points` operations.
@@ -339,7 +347,7 @@ impl PointCalculator {
             .apply_nft_discount_bonus(&tx.user_address, usd_value * per_usd_rate)
             .await?;
         Ok(self
-            .apply_ai_level_bridge_bonus(&tx.user_address, nft_adjusted)
+            .apply_ai_level_points_bonus(&tx.user_address, nft_adjusted)
             .await)
     }
 
@@ -362,11 +370,15 @@ impl PointCalculator {
             return Ok(0.0);
         }
 
-        self.apply_nft_discount_bonus(
-            &tx.user_address,
-            usd_value * POINTS_PER_USD_STAKE * multiplier,
-        )
-        .await
+        let nft_adjusted = self
+            .apply_nft_discount_bonus(
+                &tx.user_address,
+                usd_value * POINTS_PER_USD_STAKE * multiplier,
+            )
+            .await?;
+        Ok(self
+            .apply_ai_level_points_bonus(&tx.user_address, nft_adjusted)
+            .await)
     }
 
     // Internal helper that supports `calculate_battleship_points` operations.
@@ -391,8 +403,8 @@ impl PointCalculator {
         Ok(boosted)
     }
 
-    // Internal helper that supports `apply_ai_level_bridge_bonus` operations.
-    async fn apply_ai_level_bridge_bonus(&self, user_address: &str, points: f64) -> f64 {
+    // Internal helper that supports `apply_ai_level_points_bonus` operations.
+    async fn apply_ai_level_points_bonus(&self, user_address: &str, points: f64) -> f64 {
         if points <= 0.0 {
             return 0.0;
         }
@@ -400,14 +412,14 @@ impl PointCalculator {
             Ok(value) => value,
             Err(err) => {
                 tracing::warn!(
-                    "Point calculator fallback to AI level 1 for bridge bonus: user={} err={}",
+                    "Point calculator fallback to AI level 1 for points bonus: user={} err={}",
                     user_address,
                     err
                 );
                 1
             }
         };
-        points * bridge_ai_level_bonus_factor(level)
+        points * ai_level_points_bonus_factor(level)
     }
 
     // Internal helper that supports `current_staked_carel_amount` operations.
@@ -807,11 +819,11 @@ fn nft_factor_for_discount(discount_rate: f64) -> f64 {
     1.0 + (discount_rate.max(0.0) / 100.0)
 }
 
-// Internal helper that supports `bridge_ai_level_bonus_factor` operations.
-fn bridge_ai_level_bonus_factor(level: u8) -> f64 {
+// Internal helper that supports `ai_level_points_bonus_factor` operations.
+fn ai_level_points_bonus_factor(level: u8) -> f64 {
     match level {
-        2 => 1.0 + (BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT / 100.0),
-        3 => 1.0 + (BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT / 100.0),
+        2 => 1.0 + (AI_LEVEL_2_POINTS_BONUS_PERCENT / 100.0),
+        3 => 1.0 + (AI_LEVEL_3_POINTS_BONUS_PERCENT / 100.0),
         _ => 1.0,
     }
 }
@@ -980,10 +992,10 @@ mod tests {
     }
 
     #[test]
-    // Internal helper that supports `bridge_ai_level_bonus_factor_matches_expected` operations.
-    fn bridge_ai_level_bonus_factor_matches_expected() {
-        assert_eq!(bridge_ai_level_bonus_factor(1), 1.0);
-        assert_eq!(bridge_ai_level_bonus_factor(2), 1.02);
-        assert_eq!(bridge_ai_level_bonus_factor(3), 1.05);
+    // Internal helper that supports `ai_level_points_bonus_factor_matches_expected` operations.
+    fn ai_level_points_bonus_factor_matches_expected() {
+        assert_eq!(ai_level_points_bonus_factor(1), 1.0);
+        assert_eq!(ai_level_points_bonus_factor(2), 1.02);
+        assert_eq!(ai_level_points_bonus_factor(3), 1.05);
     }
 }

@@ -48,6 +48,8 @@ const ONCHAIN_DISCOUNT_TIMEOUT_MS: u64 = 2_500;
 const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 300;
 const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 1_800;
 const NFT_DISCOUNT_CACHE_MAX_ENTRIES: usize = 100_000;
+const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
+const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
 
 #[derive(Clone, Copy)]
 struct CachedNftDiscount {
@@ -764,6 +766,7 @@ fn estimate_swap_points_for_response(
     volume_usd: f64,
     is_testnet: bool,
     nft_discount_percent: f64,
+    ai_level: u8,
 ) -> f64 {
     let sanitized = sanitize_points_usd_base(volume_usd);
     let min_threshold = if is_testnet {
@@ -775,7 +778,17 @@ fn estimate_swap_points_for_response(
         return 0.0;
     }
     let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
-    (sanitized * POINTS_PER_USD_SWAP * nft_factor).max(0.0)
+    let ai_factor = 1.0 + (ai_level_points_bonus_percent(ai_level) / 100.0);
+    (sanitized * POINTS_PER_USD_SWAP * nft_factor * ai_factor).max(0.0)
+}
+
+// Internal helper that supports `ai_level_points_bonus_percent` operations in the swap flow.
+fn ai_level_points_bonus_percent(level: u8) -> f64 {
+    match level {
+        2 => AI_LEVEL_2_POINTS_BONUS_PERCENT,
+        3 => AI_LEVEL_3_POINTS_BONUS_PERCENT,
+        _ => 0.0,
+    }
 }
 
 // Internal helper that supports `discount_contract_address` operations in the swap flow.
@@ -2775,10 +2788,22 @@ pub async fn execute_swap(
         amount_in * from_price,
         expected_out * to_price,
     ));
+    let user_ai_level = match state.db.get_user_ai_level(&user_address).await {
+        Ok(level) => level,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to resolve user AI level for swap points bonus (user={}): {}",
+                user_address,
+                err
+            );
+            1
+        }
+    };
     let estimated_points_earned = estimate_swap_points_for_response(
         volume_usd,
         state.config.is_testnet(),
         nft_discount_percent,
+        user_ai_level,
     );
 
     // Simpan ke database

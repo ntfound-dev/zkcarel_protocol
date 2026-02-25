@@ -43,6 +43,9 @@ use super::{
     require_starknet_user, require_user, AppState,
 };
 
+const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
+const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
+
 #[derive(Debug, Serialize)]
 pub struct CreateOrderResponse {
     pub order_id: String,
@@ -88,6 +91,7 @@ fn estimate_limit_order_points_for_response(
     usd_value: f64,
     nft_discount_percent: f64,
     is_testnet: bool,
+    ai_level: u8,
 ) -> f64 {
     let sanitized = sanitize_points_usd_base(usd_value);
     let min_threshold = if is_testnet {
@@ -99,7 +103,17 @@ fn estimate_limit_order_points_for_response(
         return 0.0;
     }
     let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
-    (sanitized * POINTS_PER_USD_LIMIT_ORDER * nft_factor).max(0.0)
+    let ai_factor = 1.0 + (ai_level_points_bonus_percent(ai_level) / 100.0);
+    (sanitized * POINTS_PER_USD_LIMIT_ORDER * nft_factor * ai_factor).max(0.0)
+}
+
+// Internal helper that supports `ai_level_points_bonus_percent` operations in the limit-order flow.
+fn ai_level_points_bonus_percent(level: u8) -> f64 {
+    match level {
+        2 => AI_LEVEL_2_POINTS_BONUS_PERCENT,
+        3 => AI_LEVEL_3_POINTS_BONUS_PERCENT,
+        _ => 0.0,
+    }
 }
 
 // Internal helper that supports `active_nft_discount_percent_for_response` operations in the limit-order flow.
@@ -663,12 +677,24 @@ pub async fn create_order(
     let from_token_symbol = req.from_token.trim().to_ascii_uppercase();
     let nft_discount_percent =
         active_nft_discount_percent_for_response(&state, &user_address).await;
+    let user_ai_level = match state.db.get_user_ai_level(&user_address).await {
+        Ok(level) => level,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to resolve user AI level for limit-order points bonus (user={}): {}",
+                user_address,
+                err
+            );
+            1
+        }
+    };
     let from_token_price = latest_limit_order_price(&state, &from_token_symbol).await?;
     let estimated_usd_value = sanitize_usd_notional(amount * from_token_price);
     let estimated_points_earned = estimate_limit_order_points_for_response(
         estimated_usd_value,
         nft_discount_percent,
         state.config.is_testnet(),
+        user_ai_level,
     );
 
     ensure_supported_limit_order_pair(&req.from_token, &req.to_token)?;

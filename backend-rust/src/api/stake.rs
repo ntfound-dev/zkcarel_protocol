@@ -12,11 +12,11 @@ use crate::{
     constants::{
         token_address_for, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_BTC_TESTNET,
         POINTS_MIN_STAKE_CAREL, POINTS_MIN_STAKE_LP, POINTS_MIN_STAKE_LP_TESTNET,
-        POINTS_MIN_STAKE_STABLECOIN,
-        POINTS_MIN_STAKE_STABLECOIN_TESTNET, POINTS_MIN_STAKE_STRK, POINTS_MIN_STAKE_STRK_TESTNET,
-        POINTS_MULTIPLIER_STAKE_BTC, POINTS_MULTIPLIER_STAKE_CAREL_TIER_1,
-        POINTS_MULTIPLIER_STAKE_CAREL_TIER_2, POINTS_MULTIPLIER_STAKE_CAREL_TIER_3,
-        POINTS_MULTIPLIER_STAKE_LP, POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_STAKE,
+        POINTS_MIN_STAKE_STABLECOIN, POINTS_MIN_STAKE_STABLECOIN_TESTNET, POINTS_MIN_STAKE_STRK,
+        POINTS_MIN_STAKE_STRK_TESTNET, POINTS_MULTIPLIER_STAKE_BTC,
+        POINTS_MULTIPLIER_STAKE_CAREL_TIER_1, POINTS_MULTIPLIER_STAKE_CAREL_TIER_2,
+        POINTS_MULTIPLIER_STAKE_CAREL_TIER_3, POINTS_MULTIPLIER_STAKE_LP,
+        POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_STAKE,
     },
     // 1. Import hasher agar fungsi di hash.rs terhitung "used"
     crypto::hash,
@@ -128,6 +128,8 @@ const STARKNET_ONCHAIN_STAKE_POOLS: &[&str] = &["CAREL", "USDC", "USDT", "WBTC",
 const BTC_GARDEN_POOL: &str = "BTC";
 const WBTC_STAKING_NOT_REGISTERED_MSG: &str =
     "WBTC staking token is not registered on StakingBTC yet. Admin must call add_btc_token first.";
+const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
+const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
 
 // Internal helper that supports `min_stake_for_pool_token` operations.
 fn min_stake_for_pool_token(token: &str, is_testnet: bool) -> Option<f64> {
@@ -233,6 +235,7 @@ fn estimate_stake_points_for_response(
     amount: f64,
     nft_discount_percent: f64,
     is_testnet: bool,
+    ai_level: u8,
 ) -> f64 {
     let sanitized = sanitize_points_usd_base(usd_value);
     if amount <= 0.0 || sanitized <= 0.0 {
@@ -243,7 +246,17 @@ fn estimate_stake_points_for_response(
         return 0.0;
     }
     let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
-    (sanitized * POINTS_PER_USD_STAKE * multiplier * nft_factor).max(0.0)
+    let ai_factor = 1.0 + (ai_level_points_bonus_percent(ai_level) / 100.0);
+    (sanitized * POINTS_PER_USD_STAKE * multiplier * nft_factor * ai_factor).max(0.0)
+}
+
+// Internal helper that supports `ai_level_points_bonus_percent` operations.
+fn ai_level_points_bonus_percent(level: u8) -> f64 {
+    match level {
+        2 => AI_LEVEL_2_POINTS_BONUS_PERCENT,
+        3 => AI_LEVEL_3_POINTS_BONUS_PERCENT,
+        _ => 0.0,
+    }
 }
 
 // Internal helper that supports `active_nft_discount_percent_for_response` operations.
@@ -1203,7 +1216,10 @@ fn u128_to_token_amount(value: u128) -> f64 {
 }
 
 // Internal helper that supports `latest_prices_for_tokens` operations.
-async fn latest_prices_for_tokens(state: &AppState, tokens: &[String]) -> Result<HashMap<String, f64>> {
+async fn latest_prices_for_tokens(
+    state: &AppState,
+    tokens: &[String],
+) -> Result<HashMap<String, f64>> {
     let mut token_candidates: HashMap<String, Vec<String>> = HashMap::new();
     let mut candidate_symbols: Vec<String> = Vec::new();
 
@@ -1211,7 +1227,10 @@ async fn latest_prices_for_tokens(state: &AppState, tokens: &[String]) -> Result
         let token_upper = token.to_ascii_uppercase();
         let candidates = symbol_candidates_for(&token_upper);
         for candidate in &candidates {
-            if !candidate_symbols.iter().any(|existing| existing == candidate) {
+            if !candidate_symbols
+                .iter()
+                .any(|existing| existing == candidate)
+            {
                 candidate_symbols.push(candidate.clone());
             }
         }
@@ -1572,12 +1591,24 @@ pub async fn deposit(
     let usd_value = sanitize_usd_notional(amount * price);
     let nft_discount_percent =
         active_nft_discount_percent_for_response(&state, &user_address).await;
+    let user_ai_level = match state.db.get_user_ai_level(&user_address).await {
+        Ok(level) => level,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to resolve user AI level for stake points bonus (user={}): {}",
+                user_address,
+                err
+            );
+            1
+        }
+    };
     let estimated_points_earned = estimate_stake_points_for_response(
         usd_value,
         pool_token,
         amount,
         nft_discount_percent,
         state.config.is_testnet(),
+        user_ai_level,
     );
     let onchain_block_number = resolve_onchain_block_number_best_effort(&state, &tx_hash).await;
     let tx = crate::models::Transaction {
