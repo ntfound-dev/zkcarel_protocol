@@ -765,7 +765,9 @@ export function EnhancedNavigation() {
     }
 
     const status = faucetStatus[symbol]
-    if (!status?.can_claim || faucetLoading[symbol]) return
+    const statusKnown = typeof status?.can_claim === "boolean"
+    const canClaimByStatus = statusKnown ? Boolean(status?.can_claim) : true
+    if (!canClaimByStatus || faucetLoading[symbol]) return
 
     setFaucetLoading((prev) => ({ ...prev, [symbol]: true }))
     try {
@@ -902,22 +904,23 @@ export function EnhancedNavigation() {
                 {internalFaucetTokens.map((token) => {
                   const walletReady = wallet.isConnected && Boolean(effectiveStarknetAddress)
                   const status = walletReady ? faucetStatus[token.symbol] : undefined
-                  const canClaim = walletReady && (status?.can_claim ?? false)
+                  const statusKnown = typeof status?.can_claim === "boolean"
+                  const canClaim = walletReady && (statusKnown ? Boolean(status?.can_claim) : true)
                   const isLoading = faucetLoading[token.symbol]
                   const nextClaimAtMs = status?.next_claim_at
                     ? new Date(status.next_claim_at).getTime()
                     : NaN
                   const isCooldown =
                     Number.isFinite(nextClaimAtMs) && nextClaimAtMs > Date.now()
-                  const isDisabled = !canClaim || isLoading
+                  const isDisabled = !walletReady || isLoading || (statusKnown && !canClaim)
                   const label = isLoading
                     ? "Claiming..."
                     : !wallet.isConnected
                     ? "Connect"
                     : !effectiveStarknetAddress
                     ? "Link Starknet"
-                    : !status
-                    ? "Unavailable"
+                    : !statusKnown
+                    ? `+${token.amount}`
                     : canClaim
                     ? `+${token.amount}`
                     : isCooldown

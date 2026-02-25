@@ -42,16 +42,12 @@ export function HeroSection() {
           
           {/* Main Title */}
           <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-foreground mb-4 lg:mb-6 leading-tight carel-tech-heading carel-neon-soft">
-            <span className="text-balance">Invisible Trades,</span>
-            <br />
-            <span className="bg-gradient-to-r from-primary via-accent to-secondary bg-clip-text text-transparent">
-              Infinite Freedom.
-            </span>
+            <span className="text-balance">Trade Freely. Leave No Trace.</span>
           </h1>
           
           {/* Subtitle */}
           <p className="text-base sm:text-lg lg:text-xl text-muted-foreground max-w-2xl mx-auto mb-8 text-pretty carel-tech-copy">
-            Experience the freedom of DeFi with zero-knowledge privacy. Seamlessly switch between Public Mode for standard visibility and Hide Mode for secure, anonymous execution powered by Garaga.
+            Zero-knowledge privacy for every DeFi action on Starknet. Your wallet, invisible. Your trades, untouchable.
           </p>
           
           {/* CTA Buttons */}

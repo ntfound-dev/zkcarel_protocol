@@ -2555,6 +2555,7 @@ export async function getFaucetStatus(options?: { starknetAddress?: string }) {
     headers: buildStarknetAddressHeader(options?.starknetAddress),
     context: "Get faucet status",
     suppressErrorNotification: true,
+    timeoutMs: SLOW_READ_TIMEOUT_MS,
   })
 }
 
