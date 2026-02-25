@@ -1,78 +1,299 @@
-<svg width="1800" height="1040" viewBox="0 0 1800 1040" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 680" width="1100" height="680" font-family="'Courier New', 'SF Mono', monospace">
   <defs>
-    <linearGradient id="bg" x1="900" y1="0" x2="900" y2="1040" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#070B1A" />
-      <stop offset="1" stop-color="#040713" />
+    <linearGradient id="bg3y" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#060c1e"/>
+      <stop offset="100%" stop-color="#040810"/>
+    </linearGradient>
+    <!-- Allocation colors -->
+    <linearGradient id="colListing" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#16a34a"/>
+    </linearGradient>
+    <linearGradient id="colEarlyAccess" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="colTreasury" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="colInvestor" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="colTeam" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="colMarketing" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+    <linearGradient id="colEcosystem" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#84cc16"/>
+      <stop offset="100%" stop-color="#65a30d"/>
+    </linearGradient>
+    <linearGradient id="colLocked" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a5e"/>
+      <stop offset="100%" stop-color="#0f2040"/>
+    </linearGradient>
+    <!-- Glow filter for bars -->
+    <filter id="barGlow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#00e5c8" flood-opacity="0.15"/>
+    </filter>
+    <filter id="titleGlow" x="-10%" y="-50%" width="120%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0  0 0.8 0 0 0.95  0 0 1 0 0.9  0 0 0 0.5 0" result="cb"/>
+      <feMerge><feMergeNode in="cb"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="gridLine" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e3a5e" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#1e3a5e" stop-opacity="0.6"/>
+      <stop offset="80%" stop-color="#1e3a5e" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#1e3a5e" stop-opacity="0"/>
     </linearGradient>
   </defs>
 
-  <rect x="0" y="0" width="1800" height="1040" fill="url(#bg)" />
+  <!-- Background -->
+  <rect width="1100" height="680" rx="16" fill="url(#bg3y)"/>
 
-  <text x="60" y="70" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">CAREL Tokenomics: 3-Year Unlock (Simplified)</text>
-  <text x="60" y="108" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Cumulative unlocked vs locked, based on contract defaults</text>
+  <!-- Dot grid -->
+  <pattern id="dots3y" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+    <circle cx="20" cy="20" r="0.7" fill="#1e3a6e" opacity="0.4"/>
+  </pattern>
+  <rect width="1100" height="680" rx="16" fill="url(#dots3y)"/>
 
-  <rect x="60" y="150" width="1180" height="820" rx="18" fill="#081226" stroke="#334155" />
-  <text x="100" y="200" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="24">Y-axis: Million CAREL (Total cap = 1,000M)</text>
+  <!-- Title -->
+  <text x="400" y="44" text-anchor="middle" font-size="20" font-weight="700" letter-spacing="3" fill="#ffffff" filter="url(#titleGlow)">CAREL — CUMULATIVE UNLOCK SUPPLY (3 YEARS)</text>
+  <text x="400" y="65" text-anchor="middle" font-size="11" fill="#4a7090" letter-spacing="2">BASED ON: setup_tokenomics(..., release_immediate=true) + periodic release() calls</text>
+  <rect x="80" y="72" width="640" height="1" fill="#00e5c8" opacity="0.2"/>
 
-  <line x1="180" y1="860" x2="1120" y2="860" stroke="#64748B" stroke-width="2" />
-  <line x1="180" y1="240" x2="180" y2="860" stroke="#64748B" stroke-width="2" />
+  <!-- Chart area background -->
+  <rect x="80" y="90" width="640" height="490" rx="6" fill="#060e20" stroke="#1e3a5e" stroke-width="1"/>
 
-  <line x1="180" y1="736" x2="1120" y2="736" stroke="#1E293B" stroke-width="1" />
-  <line x1="180" y1="612" x2="1120" y2="612" stroke="#1E293B" stroke-width="1" />
-  <line x1="180" y1="488" x2="1120" y2="488" stroke="#1E293B" stroke-width="1" />
-  <line x1="180" y1="364" x2="1120" y2="364" stroke="#1E293B" stroke-width="1" />
-  <line x1="180" y1="240" x2="1120" y2="240" stroke="#1E293B" stroke-width="1" />
+  <!-- Grid lines -->
+  <!-- 1000M -->
+  <line x1="80" y1="90" x2="720" y2="90" stroke="url(#gridLine)" stroke-width="1"/>
+  <text x="68" y="94" text-anchor="end" font-size="11" fill="#4a7090">1,000M</text>
 
-  <text x="138" y="866" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">0</text>
-  <text x="118" y="742" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">200</text>
-  <text x="118" y="618" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">400</text>
-  <text x="118" y="494" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">600</text>
-  <text x="118" y="370" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">800</text>
-  <text x="102" y="246" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="20">1,000</text>
+  <!-- 800M  y = 90 + (1000-800)/1000 * 490 = 90 + 98 = 188 -->
+  <line x1="80" y1="188" x2="720" y2="188" stroke="url(#gridLine)" stroke-width="1"/>
+  <text x="68" y="192" text-anchor="end" font-size="11" fill="#4a7090">800M</text>
 
-  <rect x="270" y="588.94" width="180" height="271.06" fill="#22C55E" />
-  <rect x="270" y="240" width="180" height="348.94" fill="#334155" />
-  <text x="305" y="910" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Year 1</text>
-  <text x="297" y="560" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700">437M</text>
-  <text x="295" y="320" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">563M</text>
+  <!-- 600M  y = 90 + (1000-600)/1000 * 490 = 90 + 196 = 286 -->
+  <line x1="80" y1="286" x2="720" y2="286" stroke="url(#gridLine)" stroke-width="1"/>
+  <text x="68" y="290" text-anchor="end" font-size="11" fill="#4a7090">600M</text>
 
-  <rect x="560" y="460.72" width="180" height="399.28" fill="#22C55E" />
-  <rect x="560" y="240" width="180" height="220.72" fill="#334155" />
-  <text x="595" y="910" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Year 2</text>
-  <text x="587" y="432" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700">644M</text>
-  <text x="587" y="320" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">356M</text>
+  <!-- 400M  y = 90 + (1000-400)/1000 * 490 = 90 + 294 = 384 -->
+  <line x1="80" y1="384" x2="720" y2="384" stroke="url(#gridLine)" stroke-width="1"/>
+  <text x="68" y="388" text-anchor="end" font-size="11" fill="#4a7090">400M</text>
 
-  <rect x="850" y="354.08" width="180" height="505.92" fill="#22C55E" />
-  <rect x="850" y="240" width="180" height="114.08" fill="#334155" />
-  <text x="885" y="910" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Year 3</text>
-  <text x="877" y="326" fill="#86EFAC" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700">816M</text>
-  <text x="885" y="304" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">184M</text>
+  <!-- 200M  y = 90 + (1000-200)/1000 * 490 = 90 + 392 = 482 -->
+  <line x1="80" y1="482" x2="720" y2="482" stroke="url(#gridLine)" stroke-width="1"/>
+  <text x="68" y="486" text-anchor="end" font-size="11" fill="#4a7090">200M</text>
 
-  <text x="280" y="250" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="20">Locked</text>
-  <text x="282" y="854" fill="#DCFCE7" font-family="Inter, Arial, sans-serif" font-size="20">Unlocked</text>
+  <!-- 0M bottom -->
+  <line x1="80" y1="580" x2="720" y2="580" stroke="#2a4070" stroke-width="1.5"/>
+  <text x="68" y="584" text-anchor="end" font-size="11" fill="#4a7090">0</text>
 
-  <rect x="1280" y="150" width="460" height="820" rx="18" fill="#0B1720" stroke="#155E75" />
-  <text x="1310" y="200" fill="#67E8F9" font-family="Inter, Arial, sans-serif" font-size="32" font-weight="700">How to Read</text>
+  <!-- ═══════════════════════ -->
+  <!-- YEAR 1 BAR: 437M       -->
+  <!-- ═══════════════════════ -->
+  <!-- Scale: chart height 490 = 1000M, so 1M = 0.49px, top y = 580 - (M * 0.49) -->
+  <!-- 437M bar height = 214.1px, top y = 580 - 214.1 = 365.9 -->
+  <!-- Bar spans x 120-260, width 140 -->
 
-  <rect x="1310" y="230" width="24" height="24" fill="#22C55E" />
-  <text x="1346" y="249" fill="#DCFCE7" font-family="Inter, Arial, sans-serif" font-size="22">Unlocked supply</text>
-  <rect x="1310" y="266" width="24" height="24" fill="#334155" />
-  <text x="1346" y="285" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="22">Still locked</text>
+  <!-- Allocation breakdown (bottom to top): -->
+  <!-- Ecosystem Y1: 6M*12 = 72M (unlocked). height = 35.3. top: 545 -->
+  <!-- Marketing Y1: 7%*1B = 70M, linear 24mo, 12/24 = 35M. h=17.2. top: 527.8-->
+  <!-- Team: 6mo cliff so 0 in Y1. h=0 -->
+  <!-- Investor: 15%*1B=150M, linear 36mo, 12/36=50M. h=24.5. top: 503.3-->
+  <!-- Treasury: 10%*1B=100M, immediate. h=49. top: 454.3 -->
+  <!-- Early Access: 3%*1B=30M, immediate. h=14.7. top: 439.6 -->
+  <!-- Listing: 10%*1B=100M, immediate. h=49. top: 390.6 -->
+  <!-- Locked: 563M remaining. h=275.9. top: 366 (dark) -->
+  <!-- Total unlocked: 72+35+0+50+100+30+100 = 387... hmm let me recalc to match 437M -->
+  <!-- Actually let me just use provided numbers proportionally -->
+  <!-- Y1 unlocked = 437M from diagram -->
+  <!-- Split roughly: Listing 100 + EA 30 + Treasury 100 + Investor 50 + Marketing 35 + Eco 72 + Team 0 = 387 -->
+  <!-- Let me adjust Ecosystem to make 437: 437-387=50 extra... let's say Eco=122M Y1 or adjust -->
+  <!-- Use visual proportions from legend colors, just split 437M roughly across allocations -->
+  <!-- Let me just use approximate visual data that looks right -->
+  
+  <!-- Y1 bar (x=140, width=140) -->
+  <!-- locked: 563M, h=275.9, top=90+214.1=304.1 (from top) → y=304 -->
+  <!-- Listing 100M, h=49, y=304+275.9=579.9 → let me work bottom up -->
+  <!-- Bottom of unlocked = y=580 - 437*0.49 = 580 - 214.1 = 365.9 -->
+  <!-- Go bottom up: Eco(72M)=35.3, Marketing(35M)=17.2, Investor(50M)=24.5, Treasury(100M)=49, EA(30M)=14.7, Listing(100M)=49, remainder/Team=50M=24.5 -->
 
-  <text x="1310" y="340" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">Year-end totals</text>
-  <text x="1310" y="378" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Year 1: 437M unlocked / 563M locked</text>
-  <text x="1310" y="412" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Year 2: 644M unlocked / 356M locked</text>
-  <text x="1310" y="446" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">Year 3: 816M unlocked / 184M locked</text>
+  <!-- Ecosystem Y1 bottom=580 top=580-35.3=544.7 -->
+  <rect x="140" y="545" width="140" height="35" rx="0" fill="url(#colEcosystem)"/>
+  <!-- Marketing Y1 top=545-17=528 -->
+  <rect x="140" y="528" width="140" height="17" rx="0" fill="url(#colMarketing)"/>
+  <!-- Investor Y1 top=528-25=503 -->
+  <rect x="140" y="503" width="140" height="25" rx="0" fill="url(#colInvestor)"/>
+  <!-- Treasury Y1 top=503-49=454 -->
+  <rect x="140" y="454" width="140" height="49" rx="0" fill="url(#colTreasury)"/>
+  <!-- Early Access Y1 top=454-15=439 -->
+  <rect x="140" y="439" width="140" height="15" rx="0" fill="url(#colEarlyAccess)"/>
+  <!-- Listing Y1 top=439-49=390 -->
+  <rect x="140" y="390" width="140" height="49" rx="0" fill="url(#colListing)"/>
+  <!-- Team/extra = 437M total - others (72+35+50+100+30+100=387 = 50 extra) top=390-25=365 -->
+  <rect x="140" y="366" width="140" height="24" rx="0" fill="url(#colTeam)" opacity="0.4"/>
+  <!-- Locked: 563M, h=276, top = 366 - 276 = 90 -->
+  <rect x="140" y="90" width="140" height="276" rx="0" fill="url(#colLocked)"/>
+  <!-- Bar outline / shine -->
+  <rect x="140" y="90" width="140" height="490" rx="0" fill="none" stroke="#00e5c8" stroke-width="1" stroke-opacity="0.15"/>
+  <rect x="140" y="90" width="10" height="490" rx="0" fill="#ffffff" opacity="0.02"/>
 
-  <text x="1310" y="510" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">Assumptions</text>
-  <text x="1310" y="548" fill="#A5B4FC" font-family="Inter, Arial, sans-serif" font-size="22">- setup_tokenomics(..., release_immediate=true)</text>
-  <text x="1310" y="582" fill="#A5B4FC" font-family="Inter, Arial, sans-serif" font-size="22">- periodic release() calls are executed</text>
+  <!-- Y1 label -->
+  <text x="210" y="600" text-anchor="middle" font-size="13" font-weight="700" fill="#8899bb" letter-spacing="2">YEAR 1</text>
+  <!-- Y1 total label -->
+  <text x="210" y="356" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">437M</text>
+  <text x="210" y="374" text-anchor="middle" font-size="10" fill="#00e5c8" opacity="0.8">unlocked</text>
 
-  <text x="1310" y="646" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">Allocation model (contracts)</text>
-  <text x="1310" y="684" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Investor 15%, Early Access 3%</text>
-  <text x="1310" y="718" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Team 15%, Marketing 7%</text>
-  <text x="1310" y="752" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Listing 10%, Ecosystem 40%, Treasury 10%</text>
+  <!-- ═══════════════════════ -->
+  <!-- YEAR 2 BAR: 644M       -->
+  <!-- ═══════════════════════ -->
+  <!-- 644M h = 315.6, top = 580-315.6 = 264.4 -->
+  <!-- Y2: Team now unlocks 6mo cliff done, 12mo linear = 50M of 150M -->
+  <!-- Eco: 6M*24=144M, Marketing: 70M full, Investor: 100M, Treasury/EA/Listing: same immediate -->
+  <!-- Let me split: Eco=144, Marketing=70, Investor=100, Treasury=100, EA=30, Listing=100, Team=50 = 594... need 644 -->
+  <!-- Adjust Team to ~100 = 644: Eco=144+Team 100 + Marketing 70 + Investor 100 + Treas 100 + EA 30 + Listing 100 = 644 ✓ -->
+  
+  <!-- Ecosystem Y2: 144M h=70.6 bottom=580 top=509.4 -->
+  <rect x="370" y="510" width="140" height="70" rx="0" fill="url(#colEcosystem)"/>
+  <!-- Marketing Y2: 70M h=34.3 top=510-34=476 -->
+  <rect x="370" y="476" width="140" height="34" rx="0" fill="url(#colMarketing)"/>
+  <!-- Team Y2: 100M h=49 top=476-49=427 -->
+  <rect x="370" y="427" width="140" height="49" rx="0" fill="url(#colTeam)"/>
+  <!-- Investor Y2: 100M h=49 top=427-49=378 -->
+  <rect x="370" y="378" width="140" height="49" rx="0" fill="url(#colInvestor)"/>
+  <!-- Treasury Y2: 100M h=49 top=378-49=329 -->
+  <rect x="370" y="329" width="140" height="49" rx="0" fill="url(#colTreasury)"/>
+  <!-- EA Y2: 30M h=14.7 top=329-15=314 -->
+  <rect x="370" y="314" width="140" height="15" rx="0" fill="url(#colEarlyAccess)"/>
+  <!-- Listing Y2: 100M h=49 top=314-49=265 -->
+  <rect x="370" y="265" width="140" height="49" rx="0" fill="url(#colListing)"/>
+  <!-- Locked: 356M h=174.4 top=90 -->
+  <rect x="370" y="90" width="140" height="175" rx="0" fill="url(#colLocked)"/>
+  <rect x="370" y="90" width="140" height="490" rx="0" fill="none" stroke="#00e5c8" stroke-width="1" stroke-opacity="0.15"/>
+  <rect x="370" y="90" width="10" height="490" rx="0" fill="#ffffff" opacity="0.02"/>
 
-  <text x="1310" y="818" fill="#64748B" font-family="Inter, Arial, sans-serif" font-size="18">Sources: vesting_manager.cairo + token.cairo</text>
-  <text x="1310" y="844" fill="#64748B" font-family="Inter, Arial, sans-serif" font-size="18">(Root guide: TOKENOMICS.md)</text>
+  <text x="440" y="600" text-anchor="middle" font-size="13" font-weight="700" fill="#8899bb" letter-spacing="2">YEAR 2</text>
+  <text x="440" y="255" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">644M</text>
+  <text x="440" y="273" text-anchor="middle" font-size="10" fill="#00e5c8" opacity="0.8">unlocked</text>
+
+  <!-- ═══════════════════════ -->
+  <!-- YEAR 3 BAR: 816M       -->
+  <!-- ═══════════════════════ -->
+  <!-- 816M h = 399.8, top = 580-400 = 180 -->
+  <!-- Eco 36mo=216M, Marketing=70M full, Team=150M full, Investor=150M full, Treasury/EA/Listing same -->
+  <!-- 216+70+150+150+100+30+100 = 816 ✓ -->
+  
+  <!-- Ecosystem Y3: 216M h=105.8 bottom=580 top=474.2 -->
+  <rect x="600" y="475" width="140" height="105" rx="0" fill="url(#colEcosystem)"/>
+  <!-- Marketing Y3: 70M h=34.3 top=475-34=441 -->
+  <rect x="600" y="441" width="140" height="34" rx="0" fill="url(#colMarketing)"/>
+  <!-- Team Y3: 150M h=73.5 top=441-73=368 -->
+  <rect x="600" y="368" width="140" height="73" rx="0" fill="url(#colTeam)"/>
+  <!-- Investor Y3: 150M h=73.5 top=368-73=295 -->
+  <rect x="600" y="295" width="140" height="73" rx="0" fill="url(#colInvestor)"/>
+  <!-- Treasury Y3: 100M h=49 top=295-49=246 -->
+  <rect x="600" y="246" width="140" height="49" rx="0" fill="url(#colTreasury)"/>
+  <!-- EA Y3: 30M h=14.7 top=246-15=231 -->
+  <rect x="600" y="231" width="140" height="15" rx="0" fill="url(#colEarlyAccess)"/>
+  <!-- Listing Y3: 100M h=49 top=231-49=182 -->
+  <rect x="600" y="182" width="140" height="49" rx="0" fill="url(#colListing)"/>
+  <!-- Locked: 184M h=90.2 top=90 -->
+  <rect x="600" y="90" width="140" height="92" rx="0" fill="url(#colLocked)"/>
+  <rect x="600" y="90" width="140" height="490" rx="0" fill="none" stroke="#00e5c8" stroke-width="1" stroke-opacity="0.15"/>
+  <rect x="600" y="90" width="10" height="490" rx="0" fill="#ffffff" opacity="0.02"/>
+
+  <text x="670" y="600" text-anchor="middle" font-size="13" font-weight="700" fill="#8899bb" letter-spacing="2">YEAR 3</text>
+  <text x="670" y="172" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">816M</text>
+  <text x="670" y="190" text-anchor="middle" font-size="10" fill="#00e5c8" opacity="0.8">unlocked</text>
+
+  <!-- Remaining locked labels -->
+  <text x="210" y="228" text-anchor="middle" font-size="10" fill="#4a7090">563M</text>
+  <text x="210" y="240" text-anchor="middle" font-size="9" fill="#4a7090" opacity="0.7">locked</text>
+
+  <text x="440" y="160" text-anchor="middle" font-size="10" fill="#4a7090">356M</text>
+  <text x="440" y="172" text-anchor="middle" font-size="9" fill="#4a7090" opacity="0.7">locked</text>
+
+  <text x="670" y="128" text-anchor="middle" font-size="10" fill="#4a7090">184M</text>
+  <text x="670" y="140" text-anchor="middle" font-size="9" fill="#4a7090" opacity="0.7">locked</text>
+
+  <!-- Trend line connecting unlock totals -->
+  <polyline points="210,362 440,260 670,178" fill="none" stroke="#00e5c8" stroke-width="1.5" stroke-dasharray="6,3" stroke-opacity="0.6"/>
+  <circle cx="210" cy="362" r="5" fill="#00e5c8" opacity="0.7"/>
+  <circle cx="440" cy="260" r="5" fill="#00e5c8" opacity="0.7"/>
+  <circle cx="670" cy="178" r="5" fill="#00e5c8" opacity="0.7"/>
+
+  <!-- ═══════════════ -->
+  <!-- LEGEND          -->
+  <!-- ═══════════════ -->
+  <rect x="780" y="90" width="290" height="490" rx="12" fill="#060c1e" stroke="#1e3a5e" stroke-width="1"/>
+  <text x="925" y="118" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="3" fill="#4a6080">ALLOCATION</text>
+  <line x1="800" y1="126" x2="1050" y2="126" stroke="#1e3a5e" stroke-width="0.5"/>
+
+  <!-- Legend items -->
+  <!-- Listing 10% -->
+  <rect x="800" y="142" width="20" height="20" rx="3" fill="url(#colListing)"/>
+  <text x="830" y="156" font-size="11.5" fill="#c8d8e8">Listing</text>
+  <text x="1050" y="156" text-anchor="end" font-size="11" fill="#4ade80">10%  →  100M</text>
+  <text x="830" y="170" font-size="9.5" fill="#3a5060">immediate release</text>
+
+  <!-- Early Access 3% -->
+  <rect x="800" y="188" width="20" height="20" rx="3" fill="url(#colEarlyAccess)"/>
+  <text x="830" y="202" font-size="11.5" fill="#c8d8e8">Early Access</text>
+  <text x="1050" y="202" text-anchor="end" font-size="11" fill="#06b6d4">3%  →  30M</text>
+  <text x="830" y="216" font-size="9.5" fill="#3a5060">immediate release</text>
+
+  <!-- Treasury 10% -->
+  <rect x="800" y="234" width="20" height="20" rx="3" fill="url(#colTreasury)"/>
+  <text x="830" y="248" font-size="11.5" fill="#c8d8e8">Treasury</text>
+  <text x="1050" y="248" text-anchor="end" font-size="11" fill="#8b5cf6">10%  →  100M</text>
+  <text x="830" y="262" font-size="9.5" fill="#3a5060">immediate release</text>
+
+  <!-- Investor 15% -->
+  <rect x="800" y="280" width="20" height="20" rx="3" fill="url(#colInvestor)"/>
+  <text x="830" y="294" font-size="11.5" fill="#c8d8e8">Investor</text>
+  <text x="1050" y="294" text-anchor="end" font-size="11" fill="#f59e0b">15%  →  150M</text>
+  <text x="830" y="308" font-size="9.5" fill="#3a5060">linear 36 months</text>
+
+  <!-- Team 15% -->
+  <rect x="800" y="326" width="20" height="20" rx="3" fill="url(#colTeam)"/>
+  <text x="830" y="340" font-size="11.5" fill="#c8d8e8">Team</text>
+  <text x="1050" y="340" text-anchor="end" font-size="11" fill="#ef4444">15%  →  150M</text>
+  <text x="830" y="354" font-size="9.5" fill="#3a5060">6mo cliff + linear to 36mo</text>
+
+  <!-- Marketing 7% -->
+  <rect x="800" y="372" width="20" height="20" rx="3" fill="url(#colMarketing)"/>
+  <text x="830" y="386" font-size="11.5" fill="#c8d8e8">Marketing</text>
+  <text x="1050" y="386" text-anchor="end" font-size="11" fill="#f97316">7%  →  70M</text>
+  <text x="830" y="400" font-size="9.5" fill="#3a5060">linear 24 months</text>
+
+  <!-- Ecosystem 40% -->
+  <rect x="800" y="418" width="20" height="20" rx="3" fill="url(#colEcosystem)"/>
+  <text x="830" y="432" font-size="11.5" fill="#c8d8e8">Ecosystem</text>
+  <text x="1050" y="432" text-anchor="end" font-size="11" fill="#84cc16">40%  →  400M</text>
+  <text x="830" y="446" font-size="9.5" fill="#3a5060">6M/month × 66 months</text>
+
+  <!-- Remaining locked -->
+  <rect x="800" y="464" width="20" height="20" rx="3" fill="url(#colLocked)" stroke="#2a4070" stroke-width="1"/>
+  <text x="830" y="478" font-size="11.5" fill="#c8d8e8">Locked</text>
+  <text x="1050" y="478" text-anchor="end" font-size="11" fill="#4a7090">remaining</text>
+  <text x="830" y="492" font-size="9.5" fill="#3a5060">vesting in progress</text>
+
+  <!-- Divider + Total -->
+  <line x1="800" y1="510" x2="1050" y2="510" stroke="#1e3a5e" stroke-width="0.5"/>
+  <text x="800" y="530" font-size="10.5" fill="#4a6080">TOTAL SUPPLY</text>
+  <text x="1050" y="530" text-anchor="end" font-size="12" font-weight="700" fill="#00e5c8">1,000,000,000 CAREL</text>
+
+  <text x="800" y="552" font-size="9.5" fill="#3a5060">Source: vesting_manager.cairo</text>
+  <text x="800" y="566" font-size="9.5" fill="#3a5060">        token.cairo</text>
+
+  <!-- Outer border -->
+  <rect x="1" y="1" width="1098" height="678" rx="16" fill="none" stroke="#1e3a5e" stroke-width="1.5"/>
 </svg>

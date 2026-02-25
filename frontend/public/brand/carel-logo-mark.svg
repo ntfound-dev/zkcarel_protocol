@@ -1,43 +1,110 @@
-<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="shieldStroke" x1="96" y1="56" x2="416" y2="456" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#22D3EE" />
-      <stop offset="0.5" stop-color="#A855F7" />
-      <stop offset="1" stop-color="#F97316" />
-    </linearGradient>
-    <linearGradient id="shieldFill" x1="256" y1="40" x2="256" y2="472" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0E132A" />
-      <stop offset="1" stop-color="#060917" />
-    </linearGradient>
-    <radialGradient id="coreFill" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 256) rotate(90) scale(220 190)">
-      <stop stop-color="#111A3B" />
-      <stop offset="1" stop-color="#070C1F" />
+    <!-- Background radial glow -->
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0d1b3e" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#060b1a" stop-opacity="1"/>
     </radialGradient>
-    <linearGradient id="mono" x1="160" y1="170" x2="352" y2="350" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#E0E7FF" />
-      <stop offset="0.5" stop-color="#A5B4FC" />
-      <stop offset="1" stop-color="#22D3EE" />
+    <!-- Shield outer gradient -->
+    <linearGradient id="shieldOuter" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f5c8"/>
+      <stop offset="35%" stop-color="#7b61ff"/>
+      <stop offset="70%" stop-color="#c44dff"/>
+      <stop offset="100%" stop-color="#ff5e8a"/>
     </linearGradient>
+    <!-- Shield fill gradient -->
+    <linearGradient id="shieldFill" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#0a1628"/>
+      <stop offset="50%" stop-color="#0d1f3c"/>
+      <stop offset="100%" stop-color="#060f1e"/>
+    </linearGradient>
+    <!-- Z letter gradient -->
+    <linearGradient id="zGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f5c8"/>
+      <stop offset="40%" stop-color="#4dd9ff"/>
+      <stop offset="100%" stop-color="#ffffff"/>
+    </linearGradient>
+    <!-- Glow filter for Z -->
+    <filter id="glowZ" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0  0 1 0 0 0.95  0 0 1 0 0.8  0 0 0 1 0" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- Shield glow filter -->
+    <filter id="shieldGlow" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0  0 0.8 0 0 0.95  0 0 1 0 1  0 0 0 0.6 0" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- Inner shine -->
+    <linearGradient id="shineGrad" x1="0%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="60%" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Noise texture -->
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feBlend in="SourceGraphic" mode="overlay" result="blend"/>
+      <feComposite in="blend" in2="SourceGraphic" operator="in"/>
+    </filter>
   </defs>
 
-  <path
-    d="M256 34L421 92V238C421 346 350 432 256 466C162 432 91 346 91 238V92L256 34Z"
-    fill="url(#shieldFill)"
-    stroke="url(#shieldStroke)"
-    stroke-width="16"
-  />
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="256" fill="url(#bgGlow)"/>
 
-  <path
-    d="M256 86L377 129V241C377 323 325 387 256 414C187 387 135 323 135 241V129L256 86Z"
-    fill="url(#coreFill)"
-    stroke="#7C3AED"
-    stroke-opacity="0.6"
-    stroke-width="8"
-  />
+  <!-- Outer glow ring -->
+  <ellipse cx="256" cy="270" rx="175" ry="190" fill="none" stroke="#7b61ff" stroke-width="1" stroke-opacity="0.15" filter="url(#shieldGlow)"/>
 
-  <g>
-    <path d="M169 177H343" stroke="url(#mono)" stroke-width="30" stroke-linecap="round" />
-    <path d="M343 177L169 335" stroke="url(#mono)" stroke-width="30" stroke-linecap="round" />
-    <path d="M169 335H343" stroke="url(#mono)" stroke-width="30" stroke-linecap="round" />
+  <!-- Shield outer stroke (gradient border) -->
+  <path d="M256 72 L388 122 L388 268 C388 340 330 395 256 430 C182 395 124 340 124 268 L124 122 Z"
+        fill="url(#shieldOuter)" filter="url(#shieldGlow)"/>
+
+  <!-- Shield inner fill -->
+  <path d="M256 83 L377 130 L377 268 C377 333 323 385 256 418 C189 385 135 333 135 268 L135 130 Z"
+        fill="url(#shieldFill)"/>
+
+  <!-- Shield inner shine overlay -->
+  <path d="M256 83 L377 130 L377 268 C377 333 323 385 256 418 C189 385 135 333 135 268 L135 130 Z"
+        fill="url(#shineGrad)"/>
+
+  <!-- Subtle circuit line decorations -->
+  <g opacity="0.2" stroke="#00f5c8" stroke-width="1" fill="none">
+    <line x1="155" y1="180" x2="180" y2="180"/>
+    <circle cx="180" cy="180" r="3" fill="#00f5c8"/>
+    <line x1="180" y1="180" x2="180" y2="165"/>
+    <line x1="332" y1="180" x2="307" y2="180"/>
+    <circle cx="307" cy="180" r="3" fill="#00f5c8"/>
+    <line x1="307" y1="180" x2="307" y2="165"/>
+    <line x1="155" y1="360" x2="180" y2="360"/>
+    <circle cx="180" cy="360" r="3" fill="#00f5c8"/>
+    <line x1="332" y1="360" x2="307" y2="360"/>
+    <circle cx="307" cy="360" r="3" fill="#00f5c8"/>
   </g>
+
+  <!-- Z letterform - bold geometric -->
+  <g filter="url(#glowZ)">
+    <!-- Top bar of Z -->
+    <rect x="168" y="175" width="176" height="32" rx="4" fill="url(#zGrad)"/>
+    <!-- Diagonal of Z -->
+    <polygon points="326,207 186,305 344,305 344,273 222,273 362,175 362,207" fill="url(#zGrad)"/>
+    <!-- Bottom bar of Z -->
+    <rect x="168" y="305" width="176" height="32" rx="4" fill="url(#zGrad)"/>
+  </g>
+
+  <!-- Top accent line -->
+  <line x1="200" y1="105" x2="312" y2="105" stroke="url(#shieldOuter)" stroke-width="1.5" stroke-opacity="0.6"/>
+
+  <!-- Small dot accents -->
+  <circle cx="256" cy="96" r="3" fill="#00f5c8" opacity="0.7"/>
+  <circle cx="200" cy="105" r="2" fill="#7b61ff" opacity="0.7"/>
+  <circle cx="312" cy="105" r="2" fill="#ff5e8a" opacity="0.7"/>
 </svg>
