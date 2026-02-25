@@ -62,12 +62,12 @@ function formatCompactNumber(value: number, maxFractionDigits = 2): string {
 function StatCard({ icon: Icon, label, value, valueTitle, subValue, progress, trend, className }: StatCardProps) {
   return (
     <div className={cn(
-      "p-4 rounded-xl glass border border-border hover:border-primary/50 transition-all duration-300 group",
+      "p-4 rounded-xl glass carel-zk-card border border-border hover:border-primary/40 transition-all duration-300 group",
       className
     )}>
       <div className="flex items-center gap-2 mb-2">
         <Icon className="h-4 w-4 text-primary group-hover:animate-pulse-glow" />
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider carel-tech-label">
+        <span className="carel-tech-label carel-section-label">
           {label}
         </span>
       </div>
@@ -75,12 +75,12 @@ function StatCard({ icon: Icon, label, value, valueTitle, subValue, progress, tr
         <div>
           <p
             title={valueTitle}
-            className="text-xl lg:text-2xl font-bold text-foreground leading-tight whitespace-normal [overflow-wrap:anywhere] carel-tech-title"
+            className="text-xl lg:text-2xl leading-tight whitespace-normal [overflow-wrap:anywhere] carel-tech-title carel-primary-value"
           >
             {value}
           </p>
           {subValue && (
-            <p className="text-xs text-muted-foreground mt-1">{subValue}</p>
+            <p className="text-xs carel-secondary-text mt-1">{subValue}</p>
           )}
         </div>
         {trend && (
@@ -132,15 +132,15 @@ interface LeaderboardRankProps {
  */
 function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
   return (
-    <div className="p-4 rounded-xl glass border border-border hover:border-primary/50 transition-all duration-300">
+    <div className="p-4 rounded-xl glass carel-zk-card border border-border hover:border-primary/40 transition-all duration-300">
       <div className="flex items-center gap-2 mb-3">
         <Trophy className="h-4 w-4 text-primary" />
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider carel-tech-label">
+        <span className="carel-tech-label carel-section-label">
           Leaderboard Rank
         </span>
       </div>
       <div className="flex items-center gap-3 mb-4">
-        <span className="text-2xl lg:text-3xl font-bold text-foreground carel-tech-title">
+        <span className="text-2xl lg:text-3xl carel-tech-title carel-primary-value">
           {rank && rank > 0 ? `#${rank}` : "—"}
         </span>
         <span className={cn(
@@ -159,8 +159,8 @@ function LeaderboardRank({ rank, change, categories }: LeaderboardRankProps) {
       <div className="space-y-2">
         {categories.map((cat) => (
           <div key={cat.label} className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">{cat.label}</span>
-            <span className="font-medium text-foreground">
+            <span className="carel-secondary-text">{cat.label}</span>
+            <span className="carel-primary-value font-semibold">
               {cat.rank && cat.rank > 0 ? `#${cat.rank}` : "—"}
             </span>
           </div>
@@ -472,7 +472,7 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
   if (variant === "inline") {
     return (
       <section className={cn("w-full", className)}>
-        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-3 carel-tech-label">
+        <h2 className="text-sm font-bold uppercase tracking-widest px-1 mb-3 carel-tech-label carel-section-label">
           Quick Stats
         </h2>
         <div
@@ -499,7 +499,7 @@ export function QuickStatsSidebar({ variant = "sidebar", className }: QuickStats
   return (
     <aside className={cn("w-72 shrink-0 hidden xl:block", className)}>
       <div className="sticky top-20 space-y-4">
-        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-widest px-1 mb-4 carel-tech-label">
+        <h2 className="text-sm font-bold uppercase tracking-widest px-1 mb-4 carel-tech-label carel-section-label">
           Quick Stats
         </h2>
         {statsBlocks}

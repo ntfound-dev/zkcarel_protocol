@@ -897,10 +897,10 @@ function TokenSelector({
       : selectedToken.balance
   
   return (
-    <div className="p-3 sm:p-4 rounded-xl glass border border-border hover:border-primary/50 transition-all duration-300">
+    <div className="p-3 sm:p-4 rounded-xl glass carel-zk-card border border-border hover:border-primary/40 transition-all duration-300">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm text-muted-foreground">{label}</span>
-        <span className="text-xs text-muted-foreground">
+        <span className="carel-tech-label carel-section-label">{label}</span>
+        <span className="text-xs carel-secondary-text">
           Balance: {hideBalance ? "••••••" : `${selectedToken.balance.toLocaleString()} ${selectedToken.symbol}`}
         </span>
       </div>
@@ -913,8 +913,8 @@ function TokenSelector({
             >
               <span className="text-xl">{selectedToken.icon}</span>
               <div className="text-left">
-                <span className="font-bold block">{selectedToken.symbol}</span>
-                <span className="text-[10px] text-muted-foreground">{selectedToken.network}</span>
+                <span className="block font-extrabold carel-primary-value">{selectedToken.symbol}</span>
+                <span className="text-[10px] carel-secondary-text">{selectedToken.network}</span>
               </div>
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
             </Button>
@@ -931,10 +931,10 @@ function TokenSelector({
               >
                 <span className="text-lg">{token.icon}</span>
                 <div className="flex flex-col flex-1">
-                  <span className="font-medium text-foreground">{token.symbol}</span>
-                  <span className="text-xs text-muted-foreground">{token.name} ({token.network})</span>
+                  <span className="font-semibold carel-primary-value">{token.symbol}</span>
+                  <span className="text-xs carel-secondary-text">{token.name} ({token.network})</span>
                 </div>
-                <span className="text-xs text-muted-foreground">
+                <span className="text-xs carel-secondary-text">
                   {hideBalance ? "••••" : token.balance.toLocaleString()}
                 </span>
               </DropdownMenuItem>
@@ -956,11 +956,11 @@ function TokenSelector({
             readOnly={readOnly}
             placeholder="0.0"
               className={cn(
-              "w-full bg-transparent text-right text-xl sm:text-2xl font-bold text-foreground outline-none placeholder:text-muted-foreground/50",
+              "w-full bg-transparent text-right text-xl sm:text-2xl font-extrabold carel-primary-value outline-none placeholder:text-muted-foreground/50",
               readOnly && "cursor-default"
             )}
           />
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-sm carel-secondary-text mt-1">
             ≈ {hasPrice
               ? `$${usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
               : "—"}
@@ -977,7 +977,7 @@ function TokenSelector({
                   sanitizeDecimalInput(String((availableBalanceForTrade * pct) / 100), tokenDecimals)
                 )
               }
-              className="flex-1 py-1 text-xs font-medium text-muted-foreground hover:text-primary border border-border hover:border-primary/50 rounded-md transition-colors"
+              className="flex-1 py-1 text-xs font-semibold carel-secondary-text hover:text-primary border border-border hover:border-primary/50 rounded-md transition-colors"
             >
               {pct === 100 ? "MAX" : `${pct}%`}
             </button>
@@ -1005,17 +1005,17 @@ function SimpleRouteVisualization({ fromToken, toToken, isCrossChain }: { fromTo
     <div className="flex items-center justify-center gap-2 py-3 text-sm">
       <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30">
         <span>{fromToken.icon}</span>
-        <span className="font-medium text-foreground">{fromToken.symbol}</span>
-        <span className="text-[10px] text-muted-foreground">({fromToken.network})</span>
+        <span className="font-semibold carel-primary-value">{fromToken.symbol}</span>
+        <span className="text-[10px] carel-secondary-text">({fromToken.network})</span>
       </div>
-      <div className="flex items-center gap-1 text-muted-foreground">
+      <div className="flex items-center gap-1 carel-secondary-text">
         <span className="text-xs">{isCrossChain ? "Bridge" : "Swap"}</span>
         <span>→</span>
       </div>
       <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary/10 border border-secondary/30">
         <span>{toToken.icon}</span>
-        <span className="font-medium text-foreground">{toToken.symbol}</span>
-        <span className="text-[10px] text-muted-foreground">({toToken.network})</span>
+        <span className="font-semibold carel-primary-value">{toToken.symbol}</span>
+        <span className="text-[10px] carel-secondary-text">({toToken.network})</span>
       </div>
     </div>
   )
@@ -3633,12 +3633,12 @@ export function TradingInterface() {
   }
 
   return (
-    <div className="w-full max-w-xl mx-auto px-2 sm:px-0 pb-28 md:pb-0">
-      <div className="p-4 sm:p-6 rounded-xl sm:rounded-2xl glass-strong border border-border neon-border">
+    <div className="w-full max-w-xl mx-auto px-2 sm:px-0 pb-28 md:pb-0 carel-typography-system">
+      <div className="p-4 sm:p-6 rounded-xl sm:rounded-2xl glass-strong carel-zk-card border border-border neon-border">
         {/* Header with Privacy Toggle */}
         <div className="flex items-center justify-between mb-4 sm:mb-6">
           <div className="flex items-center gap-3">
-            <h2 className="text-xl font-bold text-foreground">Unified Trade</h2>
+            <h2 className="text-xl carel-tech-title carel-primary-value">Unified Trade</h2>
             {fromSource.visible && (
               <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide", fromSource.className)}>
                 {fromSource.label}
@@ -3748,14 +3748,14 @@ export function TradingInterface() {
         </div>
 
         {/* Simplified Route Display */}
-        <div className="mt-3 sm:mt-4 p-3 rounded-xl bg-surface/30 border border-border/50">
+        <div className="mt-3 sm:mt-4 p-3 rounded-xl bg-surface/30 border border-border/50 carel-zk-card">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <span className="text-xs carel-section-label flex items-center gap-1">
               <Zap className="h-3 w-3 text-secondary" />
               Best Route via {quote?.type === "bridge" ? (quote.provider || "Bridge") : "Auto"}
             </span>
             {isQuoteLoading ? (
-              <span className="text-xs text-muted-foreground">Fetching quote...</span>
+              <span className="text-xs carel-secondary-text">Fetching quote...</span>
             ) : quoteError ? (
               <span className="text-xs text-destructive">Quote unavailable</span>
             ) : (
@@ -4298,7 +4298,7 @@ export function TradingInterface() {
           disabled={swapState !== "idle" || !!executeDisabledReason}
           className={cn(
             "hidden md:inline-flex w-full mt-6 py-6 text-lg font-bold transition-all text-primary-foreground",
-            swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
+            swapState === "idle" && "carel-gradient-button bg-[length:200%_100%] animate-gradient hover:opacity-90",
             swapState === "confirming" && "bg-primary/80",
             swapState === "processing" && "bg-secondary/80",
             swapState === "success" && "bg-success",
@@ -4328,7 +4328,7 @@ export function TradingInterface() {
             disabled={swapState !== "idle" || !!executeDisabledReason}
             className={cn(
               "w-full h-12 text-base font-semibold transition-all text-primary-foreground",
-              swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
+              swapState === "idle" && "carel-gradient-button bg-[length:200%_100%] animate-gradient hover:opacity-90",
               swapState === "confirming" && "bg-primary/80",
               swapState === "processing" && "bg-secondary/80",
               swapState === "success" && "bg-success",

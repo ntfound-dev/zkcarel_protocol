@@ -53,7 +53,7 @@ export function HeroSection() {
           {/* CTA Buttons */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
             <Link href="#featured-services">
-              <Button size="lg" className="w-full sm:w-auto gap-2 bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-8 py-6 text-lg">
+              <Button size="lg" className="w-full sm:w-auto gap-2 carel-gradient-button px-8 py-6 text-lg">
                 <ArrowRightLeft className="h-5 w-5" />
                 Start Trading
               </Button>
