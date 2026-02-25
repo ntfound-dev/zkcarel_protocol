@@ -42,7 +42,9 @@ export function HeroSection() {
           
           {/* Main Title */}
           <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-foreground mb-4 lg:mb-6 leading-tight carel-tech-heading carel-neon-soft">
-            <span className="text-balance">Trade Freely. Leave No Trace.</span>
+            <span className="inline-block text-balance bg-gradient-to-r from-[#f6edff] via-[#d98bff] to-[#b84dff] bg-clip-text text-transparent bg-[length:200%_100%] animate-gradient drop-shadow-[0_0_14px_#b84dff]">
+              Trade Freely. Leave No Trace.
+            </span>
           </h1>
           
           {/* Subtitle */}

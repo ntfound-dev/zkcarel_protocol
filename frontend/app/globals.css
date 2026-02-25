@@ -11,46 +11,46 @@
   --card-foreground: #F0F2FF;
   --popover: #12121D;
   --popover-foreground: #F0F2FF;
-  --primary: #9D00FF;
+  --primary: #B84DFF;
   --primary-foreground: #FFFFFF;
   --secondary: #00F3FF;
   --secondary-foreground: #0A0A0F;
   --muted: #12121D;
   --muted-foreground: #888899;
-  --accent: #FF00E5;
+  --accent: #FF4EF2;
   --accent-foreground: #FFFFFF;
   --destructive: #FF0055;
   --destructive-foreground: #FFFFFF;
   --success: #00FF88;
   --success-foreground: #0A0A0F;
-  --border: rgba(157, 0, 255, 0.3);
+  --border: rgba(184, 77, 255, 0.34);
   --input: #12121D;
   --ring: #00F3FF;
-  --chart-1: #9D00FF;
+  --chart-1: #B84DFF;
   --chart-2: #00F3FF;
-  --chart-3: #FF00E5;
+  --chart-3: #FF4EF2;
   --chart-4: #00FF88;
   --chart-5: #FF0055;
   --radius: 0.75rem;
   --sidebar: #0D0D14;
   --sidebar-foreground: #F0F2FF;
-  --sidebar-primary: #9D00FF;
+  --sidebar-primary: #B84DFF;
   --sidebar-primary-foreground: #FFFFFF;
   --sidebar-accent: #12121D;
   --sidebar-accent-foreground: #F0F2FF;
-  --sidebar-border: rgba(157, 0, 255, 0.2);
+  --sidebar-border: rgba(184, 77, 255, 0.24);
   --sidebar-ring: #00F3FF;
   
   /* Cyberpunk specific */
-  --neon-purple: #9D00FF;
+  --neon-purple: #B84DFF;
   --neon-cyan: #00F3FF;
-  --neon-pink: #FF00E5;
+  --neon-pink: #FF4EF2;
   --neon-green: #00FF88;
   --neon-red: #FF0055;
   --surface: #12121D;
-  --glow-purple: 0 0 20px rgba(157, 0, 255, 0.7);
+  --glow-purple: 0 0 22px rgba(184, 77, 255, 0.78);
   --glow-cyan: 0 0 15px rgba(0, 243, 255, 0.5);
-  --glow-pink: 0 0 15px rgba(255, 0, 229, 0.5);
+  --glow-pink: 0 0 16px rgba(255, 78, 242, 0.56);
 }
 
 /* Light Theme (Transparent Mode) - Semi-dark glass effect */
@@ -61,30 +61,30 @@
   --card-foreground: #E2E8F0;
   --popover: rgba(40, 45, 65, 0.9);
   --popover-foreground: #E2E8F0;
-  --primary: #A78BFA;
+  --primary: #B59AFF;
   --primary-foreground: #FFFFFF;
   --secondary: #22D3EE;
   --secondary-foreground: #0F172A;
   --muted: rgba(71, 85, 105, 0.5);
   --muted-foreground: #94A3B8;
-  --accent: #C084FC;
+  --accent: #D59BFF;
   --accent-foreground: #FFFFFF;
   --destructive: #F87171;
   --destructive-foreground: #FFFFFF;
   --success: #34D399;
   --success-foreground: #0F172A;
-  --border: rgba(167, 139, 250, 0.25);
+  --border: rgba(181, 154, 255, 0.28);
   --input: rgba(55, 65, 90, 0.7);
-  --ring: #A78BFA;
+  --ring: #B59AFF;
   --surface: rgba(50, 55, 75, 0.5);
-  --neon-purple: #A78BFA;
+  --neon-purple: #B59AFF;
   --neon-cyan: #22D3EE;
-  --neon-pink: #E879F9;
+  --neon-pink: #F0A2FF;
   --neon-green: #34D399;
   --neon-red: #F87171;
-  --glow-purple: 0 0 20px rgba(167, 139, 250, 0.4);
+  --glow-purple: 0 0 22px rgba(181, 154, 255, 0.48);
   --glow-cyan: 0 0 20px rgba(34, 211, 238, 0.4);
-  --glow-pink: 0 0 20px rgba(232, 121, 249, 0.4);
+  --glow-pink: 0 0 20px rgba(240, 162, 255, 0.45);
 }
 
 @theme inline {
