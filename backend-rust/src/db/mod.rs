@@ -3,6 +3,7 @@ use crate::{
     error::{AppError, Result},
     models::*,
 };
+use anyhow::Context;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
 #[derive(Clone)]
@@ -184,7 +185,8 @@ impl Database {
         let pool = PgPoolOptions::new()
             .max_connections(config.database_max_connections)
             .connect(&config.database_url)
-            .await?;
+            .await
+            .context("failed to connect to PostgreSQL using DATABASE_URL")?;
 
         Ok(Self { pool })
     }
@@ -202,7 +204,10 @@ impl Database {
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn run_migrations(&self) -> anyhow::Result<()> {
         // migrations harus berada di crate root: ./migrations
-        sqlx::migrate!("./migrations").run(&self.pool).await?;
+        sqlx::migrate!("./migrations")
+            .run(&self.pool)
+            .await
+            .context("failed to run SQLx migrations")?;
         Ok(())
     }
 

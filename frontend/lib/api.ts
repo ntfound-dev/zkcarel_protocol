@@ -670,6 +670,7 @@ type BattleshipRequestOptions = {
 }
 
 const DEFAULT_TIMEOUT_MS = 15000
+const SLOW_READ_TIMEOUT_MS = 60000
 const AUTH_TOKEN_STORAGE_KEY = "auth_token"
 const WALLET_ADDRESS_STORAGE_KEY = "wallet_address"
 const WALLET_NETWORK_STORAGE_KEY = "wallet_network"
@@ -689,12 +690,24 @@ let refreshTokenInFlight: Promise<string | null> | null = null
 let lastAuthExpiredEmitAt = 0
 let portfolioBalanceInFlight: Promise<BalanceResponse> | null = null
 let portfolioBalanceCache: TimedCacheEntry<BalanceResponse> | null = null
+let portfolioAnalyticsInFlight: Promise<AnalyticsResponse> | null = null
+let portfolioAnalyticsCache: TimedCacheEntry<AnalyticsResponse> | null = null
 let rewardsPointsInFlight: Promise<RewardsPointsResponse> | null = null
 let rewardsPointsCache: TimedCacheEntry<RewardsPointsResponse> | null = null
+let stakePoolsInFlight: Promise<StakingPool[]> | null = null
+let stakePoolsCache: TimedCacheEntry<StakingPool[]> | null = null
 let ownedNftsInFlight: Promise<NFTItem[]> | null = null
 let ownedNftsCache: TimedCacheEntry<NFTItem[]> | null = null
 const onchainBalancesInFlight = new Map<string, Promise<OnchainBalancesResponse>>()
 const onchainBalancesCache = new Map<string, TimedCacheEntry<OnchainBalancesResponse>>()
+const leaderboardUserCategoriesInFlight = new Map<
+  string,
+  Promise<LeaderboardUserCategoriesResponse>
+>()
+const leaderboardUserCategoriesCache = new Map<
+  string,
+  TimedCacheEntry<LeaderboardUserCategoriesResponse>
+>()
 
 /**
  * Runs `getStoredAuthToken` as part of the frontend API client workflow.
@@ -747,6 +760,18 @@ function setStoredAuthToken(token: string) {
 function clearStoredAuthToken() {
   if (typeof window === "undefined") return
   window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+}
+
+/**
+ * Parses or transforms values for `normalizeAddressCacheKey`.
+ *
+ * @param value - Input used by `normalizeAddressCacheKey` to compute state, payload, or request behavior.
+ *
+ * @returns Result used by UI state, request lifecycle, or callback chaining.
+ * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
+ */
+function normalizeAddressCacheKey(value: string): string {
+  return value.trim().toLowerCase()
 }
 
 /**
@@ -1109,8 +1134,30 @@ export async function getPortfolioBalance(options?: { force?: boolean }) {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function getPortfolioAnalytics() {
-  return apiFetch<AnalyticsResponse>("/api/v1/portfolio/analytics")
+export async function getPortfolioAnalytics(options?: { force?: boolean }) {
+  const force = options?.force === true
+  const now = Date.now()
+  if (!force && portfolioAnalyticsCache && portfolioAnalyticsCache.expiresAt > now) {
+    return portfolioAnalyticsCache.data
+  }
+  if (!force && portfolioAnalyticsInFlight) {
+    return portfolioAnalyticsInFlight
+  }
+  portfolioAnalyticsInFlight = apiFetch<AnalyticsResponse>("/api/v1/portfolio/analytics", {
+    timeoutMs: SLOW_READ_TIMEOUT_MS,
+    suppressErrorNotification: true,
+  })
+    .then((data) => {
+      portfolioAnalyticsCache = {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      }
+      return data
+    })
+    .finally(() => {
+      portfolioAnalyticsInFlight = null
+    })
+  return portfolioAnalyticsInFlight
 }
 
 /**
@@ -1186,7 +1233,10 @@ export async function getLeaderboardGlobalMetricsEpoch(epoch: number) {
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
 export async function getLeaderboardUserRank(address: string) {
-  return apiFetch<LeaderboardUserRank>(`/api/v1/leaderboard/user/${address}`)
+  return apiFetch<LeaderboardUserRank>(`/api/v1/leaderboard/user/${address}`, {
+    timeoutMs: SLOW_READ_TIMEOUT_MS,
+    suppressErrorNotification: true,
+  })
 }
 
 /**
@@ -1197,8 +1247,46 @@ export async function getLeaderboardUserRank(address: string) {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function getLeaderboardUserCategories(address: string) {
-  return apiFetch<LeaderboardUserCategoriesResponse>(`/api/v1/leaderboard/user/${address}/categories`)
+export async function getLeaderboardUserCategories(address: string, options?: { force?: boolean }) {
+  const key = normalizeAddressCacheKey(address)
+  const force = options?.force === true
+  const now = Date.now()
+  if (!key) {
+    return {
+      categories: [],
+    }
+  }
+  if (!force) {
+    const cached = leaderboardUserCategoriesCache.get(key)
+    if (cached && cached.expiresAt > now) {
+      return cached.data
+    }
+    const inFlight = leaderboardUserCategoriesInFlight.get(key)
+    if (inFlight) {
+      return inFlight
+    }
+  }
+
+  const request = apiFetch<LeaderboardUserCategoriesResponse>(
+    `/api/v1/leaderboard/user/${address}/categories`,
+    {
+      timeoutMs: SLOW_READ_TIMEOUT_MS,
+      suppressErrorNotification: true,
+    }
+  )
+    .then((data) => {
+      leaderboardUserCategoriesCache.set(key, {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      })
+      return data
+    })
+    .finally(() => {
+      leaderboardUserCategoriesInFlight.delete(key)
+    })
+
+  leaderboardUserCategoriesInFlight.set(key, request)
+  return request
 }
 
 /**
@@ -1664,8 +1752,31 @@ export async function cancelLimitOrder(
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-export async function getStakePools() {
-  return apiFetch<StakingPool[]>("/api/v1/stake/pools")
+export async function getStakePools(options?: { force?: boolean }) {
+  const force = options?.force === true
+  const now = Date.now()
+  if (!force && stakePoolsCache && stakePoolsCache.expiresAt > now) {
+    return stakePoolsCache.data
+  }
+  if (!force && stakePoolsInFlight) {
+    return stakePoolsInFlight
+  }
+
+  stakePoolsInFlight = apiFetch<StakingPool[]>("/api/v1/stake/pools", {
+    timeoutMs: SLOW_READ_TIMEOUT_MS,
+    suppressErrorNotification: true,
+  })
+    .then((data) => {
+      stakePoolsCache = {
+        data,
+        expiresAt: Date.now() + SHARED_READ_CACHE_TTL_MS,
+      }
+      return data
+    })
+    .finally(() => {
+      stakePoolsInFlight = null
+    })
+  return stakePoolsInFlight
 }
 
 /**

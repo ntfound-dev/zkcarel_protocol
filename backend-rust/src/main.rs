@@ -4,6 +4,7 @@ use axum::{
     Router,
 };
 use std::net::SocketAddr;
+use std::time::Duration;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -25,6 +26,17 @@ mod websocket;
 use config::Config;
 use constants::API_VERSION;
 use db::Database;
+use anyhow::Context;
+
+// Internal helper that supports `install_rustls_crypto_provider` operations.
+fn install_rustls_crypto_provider() -> anyhow::Result<()> {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .map_err(|_| anyhow::anyhow!("failed to install rustls crypto provider"))?;
+    }
+    Ok(())
+}
 
 #[tokio::main]
 // Internal helper that supports `main` operations.
@@ -37,6 +49,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    install_rustls_crypto_provider()?;
 
     // Load configuration
     let config = Config::from_env()?;
@@ -95,8 +109,19 @@ async fn main() -> anyhow::Result<()> {
     db.run_migrations().await?;
 
     // Initialize Redis
-    let redis = redis::Client::open(config.redis_url.clone())?;
-    let redis_manager = redis::aio::ConnectionManager::new(redis).await?;
+    tracing::info!("Initializing Redis connection manager...");
+    let redis = redis::Client::open(config.redis_url.clone())
+        .context("invalid REDIS_URL format")?;
+    let redis_manager_config = redis::aio::ConnectionManagerConfig::new()
+        .set_connection_timeout(Some(Duration::from_secs(10)))
+        .set_response_timeout(Some(Duration::from_secs(5)))
+        .set_number_of_retries(10)
+        .set_min_delay(Duration::from_millis(200))
+        .set_max_delay(Duration::from_secs(3));
+    let redis_manager = redis::aio::ConnectionManager::new_with_config(redis, redis_manager_config)
+        .await
+        .context("failed to initialize Redis connection manager (check REDIS_URL, TLS, and network latency)")?;
+    tracing::info!("Redis connection manager initialized");
 
     // Masukkan manager ke AppState
     let app_state = api::AppState {

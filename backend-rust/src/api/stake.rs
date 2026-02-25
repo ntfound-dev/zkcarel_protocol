@@ -3,6 +3,7 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use std::collections::HashMap;
 
 use crate::services::onchain::{
     felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
@@ -1201,23 +1202,79 @@ fn u128_to_token_amount(value: u128) -> f64 {
     (value as f64) / CAREL_DECIMALS
 }
 
-// Internal helper that supports `latest_price` operations.
-async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
-    let token = token.to_ascii_uppercase();
-    for candidate in symbol_candidates_for(&token) {
-        let prices: Vec<f64> = sqlx::query_scalar(
-            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
-        )
-        .bind(&candidate)
-        .fetch_all(state.db.pool())
-        .await?;
+// Internal helper that supports `latest_prices_for_tokens` operations.
+async fn latest_prices_for_tokens(state: &AppState, tokens: &[String]) -> Result<HashMap<String, f64>> {
+    let mut token_candidates: HashMap<String, Vec<String>> = HashMap::new();
+    let mut candidate_symbols: Vec<String> = Vec::new();
 
-        if let Some(value) = first_sane_price(&candidate, &prices) {
-            return Ok(value);
+    for token in tokens {
+        let token_upper = token.to_ascii_uppercase();
+        let candidates = symbol_candidates_for(&token_upper);
+        for candidate in &candidates {
+            if !candidate_symbols.iter().any(|existing| existing == candidate) {
+                candidate_symbols.push(candidate.clone());
+            }
         }
+        token_candidates.insert(token_upper, candidates);
     }
 
-    Ok(fallback_price_for(&token))
+    if candidate_symbols.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows: Vec<(String, f64)> = sqlx::query_as(
+        r#"
+        WITH ranked_prices AS (
+            SELECT
+                UPPER(token) AS token,
+                close::FLOAT AS close,
+                ROW_NUMBER() OVER (PARTITION BY UPPER(token) ORDER BY timestamp DESC) AS rn
+            FROM price_history
+            WHERE UPPER(token) = ANY($1)
+        )
+        SELECT token, close
+        FROM ranked_prices
+        WHERE rn <= 16
+        ORDER BY token, rn
+        "#,
+    )
+    .bind(candidate_symbols)
+    .fetch_all(state.db.pool())
+    .await?;
+
+    let mut prices_by_token: HashMap<String, Vec<f64>> = HashMap::new();
+    for (token, close) in rows {
+        prices_by_token.entry(token).or_default().push(close);
+    }
+
+    let mut resolved: HashMap<String, f64> = HashMap::new();
+    for (token, candidates) in token_candidates {
+        let mut selected: Option<f64> = None;
+        for candidate in &candidates {
+            if let Some(prices) = prices_by_token.get(candidate) {
+                if let Some(sane) = first_sane_price(candidate, prices) {
+                    selected = Some(sane);
+                    break;
+                }
+            }
+        }
+        resolved.insert(
+            token.clone(),
+            selected.unwrap_or_else(|| fallback_price_for(&token)),
+        );
+    }
+
+    Ok(resolved)
+}
+
+// Internal helper that supports `latest_price` operations.
+async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
+    let token_upper = token.to_ascii_uppercase();
+    let prices = latest_prices_for_tokens(state, std::slice::from_ref(&token_upper)).await?;
+    Ok(prices
+        .get(&token_upper)
+        .copied()
+        .unwrap_or_else(|| fallback_price_for(&token_upper)))
 }
 
 // Internal helper that supports `staking_contract_or_error` operations.
@@ -1312,8 +1369,18 @@ pub async fn get_pools(
         },
     ];
 
+    let pool_tokens = pools
+        .iter()
+        .map(|pool| pool.token.to_ascii_uppercase())
+        .collect::<Vec<_>>();
+    let latest_prices = latest_prices_for_tokens(&state, &pool_tokens).await?;
+
     for pool in &mut pools {
-        let price = latest_price(&state, pool.token.as_str()).await?;
+        let token = pool.token.to_ascii_uppercase();
+        let price = latest_prices
+            .get(&token)
+            .copied()
+            .unwrap_or_else(|| fallback_price_for(&token));
         pool.tvl_usd = pool.total_staked * price;
     }
 

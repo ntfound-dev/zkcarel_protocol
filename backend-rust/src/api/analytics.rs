@@ -98,12 +98,14 @@ pub async fn get_analytics(
     let normalized_addresses = normalize_scope_addresses(&user_addresses);
 
     let analytics = AnalyticsService::new(state.db.clone(), state.config.clone());
-    let pnl_24h = analytics.calculate_pnl(&user_addresses, "24h").await?;
-    let pnl_7d = analytics.calculate_pnl(&user_addresses, "7d").await?;
-    let pnl_30d = analytics.calculate_pnl(&user_addresses, "30d").await?;
-    let pnl_all = analytics.calculate_pnl(&user_addresses, "all_time").await?;
-    let allocation = analytics.get_allocation(&user_addresses).await?;
-    let trading = analytics.get_trading_performance(&user_addresses).await?;
+    let (pnl_24h, pnl_7d, pnl_30d, pnl_all, allocation, trading) = tokio::try_join!(
+        analytics.calculate_pnl(&user_addresses, "24h"),
+        analytics.calculate_pnl(&user_addresses, "7d"),
+        analytics.calculate_pnl(&user_addresses, "30d"),
+        analytics.calculate_pnl(&user_addresses, "all_time"),
+        analytics.get_allocation(&user_addresses),
+        analytics.get_trading_performance(&user_addresses),
+    )?;
 
     // Current epoch (30 days window)
     let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
