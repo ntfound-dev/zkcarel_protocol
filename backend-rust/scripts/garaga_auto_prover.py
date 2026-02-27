@@ -32,6 +32,10 @@ def fail(message: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
+def warn(message: str) -> None:
+    print(f"[garaga-auto-prover] {message}", file=sys.stderr)
+
+
 def getenv_required(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
@@ -290,7 +294,12 @@ class RedisQueueLease:
             pass
 
 
-def redis_cli(redis_url: str, args: list[str], timeout_secs: int = 5) -> str:
+def redis_cli(
+    redis_url: str,
+    args: list[str],
+    timeout_secs: int = 5,
+    hard_fail: bool = True,
+) -> str:
     cmd = ["redis-cli", "--raw", "--no-auth-warning", "-u", redis_url, *args]
     try:
         proc = subprocess.run(
@@ -301,22 +310,43 @@ def redis_cli(redis_url: str, args: list[str], timeout_secs: int = 5) -> str:
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        fail(f"redis-cli timeout: {' '.join(args)} ({exc})")
+        if hard_fail:
+            fail(f"redis-cli timeout: {' '.join(args)} ({exc})")
+        warn(f"redis-cli timeout (ignored): {' '.join(args)} ({exc})")
+        return ""
     except OSError as exc:
-        fail(f"Failed to run redis-cli: {exc}")
+        if hard_fail:
+            fail(f"Failed to run redis-cli: {exc}")
+        warn(f"Failed to run redis-cli (ignored): {exc}")
+        return ""
     if proc.returncode != 0:
-        fail(
-            "Redis queue command failed.\n"
+        if hard_fail:
+            fail(
+                "Redis queue command failed.\n"
+                f"command: {' '.join(args)}\n"
+                f"stdout:\n{proc.stdout}\n"
+                f"stderr:\n{proc.stderr}"
+            )
+        warn(
+            "Redis queue command failed (ignored).\n"
             f"command: {' '.join(args)}\n"
             f"stdout:\n{proc.stdout}\n"
             f"stderr:\n{proc.stderr}"
         )
+        return ""
     return proc.stdout
 
 
 def acquire_prover_queue_slot(job_timeout_secs: int) -> RedisQueueLease:
     redis_url = os.getenv("GARAGA_REDIS_URL", "").strip() or os.getenv("REDIS_URL", "").strip()
+    fail_open = bool_env("GARAGA_PROVER_QUEUE_FAIL_OPEN", True)
     if not redis_url:
+        if fail_open:
+            warn(
+                "Redis queue disabled: REDIS_URL/GARAGA_REDIS_URL not set; "
+                "continuing prover without queue lock."
+            )
+            return RedisQueueLease(redis_url="", key="", acquired=False)
         fail("Missing REDIS_URL (or GARAGA_REDIS_URL) for Garaga prover Redis queue.")
 
     max_concurrent = int(os.getenv("GARAGA_PROVER_MAX_CONCURRENT", "2").strip() or "2")
@@ -332,13 +362,41 @@ def acquire_prover_queue_slot(job_timeout_secs: int) -> RedisQueueLease:
     deadline = time.monotonic() + queue_timeout_secs
 
     while True:
-        current = int(redis_cli(redis_url, ["INCR", key]).strip() or "0")
-        redis_cli(redis_url, ["EXPIRE", key, str(slot_ttl_secs)])
+        incr_raw = redis_cli(
+            redis_url,
+            ["INCR", key],
+            hard_fail=not fail_open,
+        )
+        if not incr_raw:
+            warn("Redis queue unavailable; continuing prover without queue lock.")
+            return RedisQueueLease(redis_url="", key="", acquired=False)
+        try:
+            current = int(incr_raw.strip() or "0")
+        except ValueError:
+            if fail_open:
+                warn(
+                    f"Invalid Redis INCR response {incr_raw!r}; continuing prover without queue lock."
+                )
+                return RedisQueueLease(redis_url="", key="", acquired=False)
+            fail(f"Invalid Redis INCR response: {incr_raw!r}")
+        expire_raw = redis_cli(
+            redis_url,
+            ["EXPIRE", key, str(slot_ttl_secs)],
+            hard_fail=not fail_open,
+        )
+        if not expire_raw and fail_open:
+            # Undo slot increment when TTL refresh fails, then continue without queue gating.
+            redis_cli(redis_url, ["DECR", key], hard_fail=False)
+            warn("Redis queue EXPIRE failed; continuing prover without queue lock.")
+            return RedisQueueLease(redis_url="", key="", acquired=False)
         if current <= max_concurrent:
             lease.acquired = True
             return lease
 
-        redis_cli(redis_url, ["DECR", key])
+        decr_raw = redis_cli(redis_url, ["DECR", key], hard_fail=not fail_open)
+        if not decr_raw and fail_open:
+            warn("Redis queue DECR failed; continuing prover without queue lock.")
+            return RedisQueueLease(redis_url="", key="", acquired=False)
         if time.monotonic() >= deadline:
             fail(
                 "Garaga prover queue timeout after "
