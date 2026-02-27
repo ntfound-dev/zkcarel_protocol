@@ -338,7 +338,7 @@ async fn resolve_allowed_starknet_senders_async(
                 continue;
             }
             if let Ok(felt) = parse_felt(wallet.wallet_address.trim()) {
-                if !out.iter().any(|existing| *existing == felt) {
+                if !out.contains(&felt) {
                     out.push(felt);
                 }
             }
@@ -382,7 +382,7 @@ fn verify_rename_fee_invoke_payload(
         }
     };
 
-    if !allowed_senders.iter().any(|candidate| *candidate == sender) {
+    if !allowed_senders.contains(&sender) {
         return Err(AppError::BadRequest(
             "rename_onchain_tx_hash sender does not match authenticated Starknet user".to_string(),
         ));

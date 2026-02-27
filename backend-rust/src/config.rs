@@ -472,14 +472,76 @@ impl Config {
 
         let using_dev_credentials =
             self.backend_private_key.contains("123456") || self.jwt_secret.contains("super_secret");
+        let is_production = is_production_env(&self.environment);
         if using_dev_credentials {
             let env = self.environment.to_ascii_lowercase();
-            let is_non_production =
-                matches!(env.as_str(), "development" | "dev" | "local" | "testnet");
+            let is_non_production = !is_production
+                && matches!(env.as_str(), "development" | "dev" | "local" | "testnet");
             if is_non_production {
                 tracing::debug!("Detected dev credentials in config (development mode)");
             } else {
                 tracing::warn!("Detected dev credentials in config");
+            }
+        }
+
+        if is_production {
+            if is_placeholder_address(&self.ai_executor_address) {
+                anyhow::bail!("AI_EXECUTOR_ADDRESS must be set to a real contract in production");
+            }
+            if self
+                .ai_signature_verifier_address
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && !is_placeholder_address(value))
+                .is_none()
+            {
+                anyhow::bail!(
+                    "AI_SIGNATURE_VERIFIER_ADDRESS is required in production (real verifier contract)"
+                );
+            }
+            if self
+                .treasury_address
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && !is_placeholder_address(value))
+                .is_none()
+            {
+                anyhow::bail!("TREASURY_ADDRESS is required in production");
+            }
+            if self
+                .backend_account_address
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && !is_placeholder_address(value))
+                .is_none()
+            {
+                anyhow::bail!("BACKEND_ACCOUNT_ADDRESS is required in production");
+            }
+            if env_truthy("AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION") {
+                anyhow::bail!(
+                    "AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION must be disabled in production"
+                );
+            }
+            let verifier_mode = env::var("AI_SIGNATURE_VERIFIER_MODE")
+                .unwrap_or_else(|_| "account".to_string())
+                .trim()
+                .to_ascii_lowercase();
+            if verifier_mode == "allowlist" && !env_truthy("AI_ALLOWLIST_VERIFIER_ACCEPT_RISK") {
+                anyhow::bail!(
+                    "AI_SIGNATURE_VERIFIER_MODE=allowlist is blocked in production unless AI_ALLOWLIST_VERIFIER_ACCEPT_RISK=true"
+                );
+            }
+            if using_dev_credentials {
+                anyhow::bail!("Development credentials are not allowed in production");
+            }
+            let llm_configured = has_non_empty(&self.llm_api_key)
+                || has_non_empty(&self.openai_api_key)
+                || has_non_empty(&self.cairo_coder_api_key)
+                || has_non_empty(&self.gemini_api_key);
+            if !llm_configured {
+                anyhow::bail!(
+                    "At least one AI provider key must be configured in production (LLM_API_KEY / OPENAI_API_KEY / CAIRO_CODER_API_KEY / GEMINI_API_KEY)"
+                );
             }
         }
 
@@ -573,6 +635,33 @@ impl Config {
         let chain = self.starknet_chain_id.to_ascii_uppercase();
         chain.contains("SEPOLIA") || chain.contains("GOERLI")
     }
+}
+
+fn has_non_empty(value: &Option<String>) -> bool {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .is_some()
+}
+
+fn env_truthy(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn is_production_env(environment: &str) -> bool {
+    matches!(
+        environment.trim().to_ascii_lowercase().as_str(),
+        "production" | "prod" | "mainnet"
+    )
 }
 
 // Internal helper that supports `load_env_override` operations.

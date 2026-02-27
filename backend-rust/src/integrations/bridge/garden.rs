@@ -85,8 +85,7 @@ impl GardenClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(crate::error::AppError::ExternalAPI(format!(
-                "{}",
+            return Err(crate::error::AppError::ExternalAPI(
                 humanize_garden_api_error(
                     "quote",
                     status,
@@ -96,7 +95,8 @@ impl GardenClient {
                     Some(from_token),
                     Some(to_token),
                 )
-            )));
+                .to_string(),
+            ));
         }
 
         let body: Value = response.json().await.map_err(|e| {
@@ -208,8 +208,7 @@ impl GardenClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(crate::error::AppError::ExternalAPI(format!(
-                "{}",
+            return Err(crate::error::AppError::ExternalAPI(
                 humanize_garden_api_error(
                     "order",
                     status,
@@ -219,7 +218,8 @@ impl GardenClient {
                     Some(&quote.from_token),
                     Some(&quote.to_token),
                 )
-            )));
+                .to_string(),
+            ));
         }
 
         let body: Value = response.json().await.map_err(|e| {
@@ -313,10 +313,10 @@ impl GardenClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(crate::error::AppError::ExternalAPI(format!(
-                "{}",
+            return Err(crate::error::AppError::ExternalAPI(
                 humanize_garden_api_error("order status", status, &body, None, None, None, None)
-            )));
+                    .to_string(),
+            ));
         }
 
         let body: Value = response.json().await.map_err(|e| {
@@ -693,10 +693,10 @@ impl GardenClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(crate::error::AppError::ExternalAPI(format!(
-                "{}",
+            return Err(crate::error::AppError::ExternalAPI(
                 humanize_garden_api_error("request", status, &body, None, None, None, None)
-            )));
+                    .to_string(),
+            ));
         }
 
         response.json().await.map_err(|e| {

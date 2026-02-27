@@ -328,6 +328,10 @@ fn build_router(state: api::AppState) -> Router {
             "/api/v1/privacy/prepare-private-execution",
             post(api::privacy::prepare_private_execution),
         )
+        .route(
+            "/api/v1/privacy/relayer-execute",
+            post(api::privacy::relay_private_execution),
+        )
         // Private BTC swap
         .route(
             "/api/v1/private-btc-swap/initiate",

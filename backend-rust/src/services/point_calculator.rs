@@ -39,8 +39,8 @@ pub struct PointCalculator {
 const REFERRAL_MIN_USD_VOLUME: i64 = 20;
 const REFERRAL_REFERRER_BONUS_BPS: i64 = 1000; // 10%
 const REFERRAL_REFEREE_BONUS_BPS: i64 = 1000; // 10%
-const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
-const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
+const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 20.0;
+const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 40.0;
 
 impl PointCalculator {
     /// Constructs a new instance via `new`.
@@ -160,7 +160,7 @@ impl PointCalculator {
             return Ok(());
         }
 
-        let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+        let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
         let prev_total: Decimal = sqlx::query_scalar(
             "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2",
         )
@@ -488,7 +488,7 @@ impl PointCalculator {
 
     // Internal helper that supports `flag_wash_trading` operations.
     async fn flag_wash_trading(&self, user_address: &str) -> Result<()> {
-        let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+        let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
         sqlx::query(
             "UPDATE points SET wash_trading_flagged = true
@@ -995,7 +995,7 @@ mod tests {
     // Internal helper that supports `ai_level_points_bonus_factor_matches_expected` operations.
     fn ai_level_points_bonus_factor_matches_expected() {
         assert_eq!(ai_level_points_bonus_factor(1), 1.0);
-        assert_eq!(ai_level_points_bonus_factor(2), 1.02);
-        assert_eq!(ai_level_points_bonus_factor(3), 1.05);
+        assert_eq!(ai_level_points_bonus_factor(2), 1.2);
+        assert_eq!(ai_level_points_bonus_factor(3), 1.4);
     }
 }

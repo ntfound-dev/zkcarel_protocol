@@ -302,7 +302,7 @@ pub mod SwapAggregator {
         // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn register_dex_router(ref self: ContractState, dex_id: felt252, router_address: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
-            let current: u64 = self.dex_ids.len().into();
+            let current: u64 = self.dex_ids.len();
             assert!(current < self.max_dexes.read(), "DEX limit reached");
             assert!(!router_address.is_zero(), "Router required");
             self.dex_routers.entry(dex_id).write(router_address);

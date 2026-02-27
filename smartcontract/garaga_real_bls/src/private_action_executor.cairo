@@ -17,6 +17,8 @@ pub trait IPrivateActionExecutor<TContractState> {
     // Updates relayer configuration after access-control and invariant checks.
     // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn set_relayer(ref self: TContractState, relayer: ContractAddress);
+    // Updates trusted privacy intermediary used for private execution entry.
+    fn set_intermediary(ref self: TContractState, intermediary: ContractAddress);
     // Updates targets configuration after access-control and invariant checks.
     // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
     fn set_targets(
@@ -183,6 +185,7 @@ pub mod PrivateActionExecutor {
     pub struct Storage {
         pub admin: ContractAddress,
         pub relayer: ContractAddress,
+        pub intermediary: ContractAddress,
         pub verifier: ContractAddress,
         pub swap_target: ContractAddress,
         pub limit_order_target: ContractAddress,
@@ -200,6 +203,7 @@ pub mod PrivateActionExecutor {
         ActionExecuted: ActionExecuted,
         VerifierUpdated: VerifierUpdated,
         RelayerUpdated: RelayerUpdated,
+        IntermediaryUpdated: IntermediaryUpdated,
         TargetsUpdated: TargetsUpdated,
     }
 
@@ -227,6 +231,11 @@ pub mod PrivateActionExecutor {
     #[derive(Drop, starknet::Event)]
     pub struct RelayerUpdated {
         pub relayer: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct IntermediaryUpdated {
+        pub intermediary: ContractAddress,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -277,6 +286,13 @@ pub mod PrivateActionExecutor {
             self.emit(Event::RelayerUpdated(RelayerUpdated { relayer }));
         }
 
+        fn set_intermediary(ref self: ContractState, intermediary: ContractAddress) {
+            self._assert_admin();
+            assert!(!intermediary.is_zero(), "Intermediary required");
+            self.intermediary.write(intermediary);
+            self.emit(Event::IntermediaryUpdated(IntermediaryUpdated { intermediary }));
+        }
+
         // Updates targets configuration after access-control and invariant checks.
         // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn set_targets(
@@ -306,6 +322,7 @@ pub mod PrivateActionExecutor {
             proof: Span<felt252>,
             public_inputs: Span<felt252>,
         ) {
+            self._assert_submitter_authorized();
             let sender = get_caller_address();
             assert!(!self.nullifiers.read(nullifier), "Nullifier already used");
             assert!(
@@ -634,10 +651,30 @@ pub mod PrivateActionExecutor {
             );
         }
 
+        fn _assert_submitter_authorized(self: @ContractState) {
+            let intermediary = self.intermediary.read();
+            if !intermediary.is_zero() {
+                let caller = get_caller_address();
+                assert!(
+                    caller == intermediary || caller == self.admin.read(),
+                    "Only intermediary/admin",
+                );
+                return;
+            }
+            self._assert_relayer_or_admin();
+        }
+
         // Implements assert executor authorized logic while keeping state transitions deterministic.
         // Used in Hide Mode flows with nullifier/commitment binding and relayer-gated execution.
         fn _assert_executor_authorized(self: @ContractState, commitment: felt252) {
             let caller = get_caller_address();
+            let intermediary = self.intermediary.read();
+            if !intermediary.is_zero() {
+                let is_intermediary = caller == intermediary;
+                let is_admin = caller == self.admin.read();
+                assert!(is_intermediary || is_admin, "Only intermediary/admin");
+                return;
+            }
             let owner = self.commitment_submitter.read(commitment);
             let is_owner = !owner.is_zero() && caller == owner;
             let is_relayer = caller == self.relayer.read();

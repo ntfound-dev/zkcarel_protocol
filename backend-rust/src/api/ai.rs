@@ -3,6 +3,7 @@ use crate::indexer::starknet_client::StarknetClient;
 use crate::services::onchain::{
     felt_to_u128, parse_felt, resolve_backend_account, OnchainInvoker, OnchainReader,
 };
+use crate::services::relayer::RelayerService;
 use crate::{
     error::{AppError, Result},
     models::{ApiResponse, Transaction},
@@ -16,30 +17,25 @@ use chrono::Utc;
 use redis::AsyncCommands;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use starknet_core::types::typed_data::TypedData;
 use starknet_core::types::{
     Call, ExecutionResult, Felt as CoreFelt, FunctionCall, InvokeTransaction,
     Transaction as StarknetTransaction, TransactionFinalityStatus,
 };
 use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
 use starknet_crypto::{poseidon_hash_many, Felt as CryptoFelt};
+use starknet_signers::SigningKey;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{sleep, Duration};
 
-const DEFAULT_SIGNATURE_WINDOW_SECONDS: u64 = 180;
-const MIN_SIGNATURE_WINDOW_SECONDS: u64 = 60;
-const MAX_SIGNATURE_WINDOW_SECONDS: u64 = 300;
-const SIGNATURE_PAST_SKEW_SECONDS: u64 = 60;
-const CHAIN_TIMESTAMP_FETCH_TIMEOUT_MS: u64 = 3_500;
-const CHAIN_TIMESTAMP_DRIFT_GUARD_SECONDS: u64 = 300;
 const AI_EXECUTE_TIMEOUT_MS: u64 = 12_000;
 const AI_LEVEL_2_TOTAL_CAREL_WEI: u128 = 5_000_000_000_000_000_000;
 const AI_LEVEL_3_TOTAL_CAREL_WEI: u128 = 10_000_000_000_000_000_000;
 const AI_LEVEL_PAYMENT_DECIMALS: u32 = 18;
 const AI_EXECUTOR_READY_POLL_ATTEMPTS: usize = 12;
 const AI_EXECUTOR_READY_POLL_DELAY_MS: u64 = 1_500;
-const AI_PREPARE_READY_POLL_ATTEMPTS: usize = 16;
-const AI_PREPARE_READY_POLL_DELAY_MS: u64 = 900;
 const DEFAULT_AI_EXECUTOR_TARGET_RATE_LIMIT: u128 = 1_000;
+const EXECUTOR_HASH_WINDOW_TTL_SECONDS: u64 = 4 * 60;
 
 #[derive(Debug, Deserialize)]
 pub struct AICommandRequest {
@@ -94,17 +90,15 @@ struct RateLimitEnsureResult {
 pub struct PrepareAIActionRequest {
     pub level: u8,
     pub context: Option<String>,
-    pub window_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct PrepareAIActionResponse {
-    pub tx_hash: String,
     pub action_type: u64,
     pub params: String,
-    pub hashes_prepared: u64,
-    pub from_timestamp: u64,
-    pub to_timestamp: u64,
+    pub nonce: u64,
+    pub message_hash: String,
+    pub typed_data: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -290,6 +284,15 @@ fn is_bridge_command(command: &str) -> bool {
     lower.contains("bridge") || lower.contains("jembatan")
 }
 
+// Internal helper that supports `requires_privacy_relayer` operations.
+fn requires_privacy_relayer(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    let privacy_intent = lower.contains("hide") || lower.contains("private");
+    let executable_intent =
+        lower.contains("swap") || lower.contains("stake") || lower.contains("limit");
+    privacy_intent && executable_intent
+}
+
 // Internal helper that supports `resolve_effective_ai_level` operations.
 async fn resolve_effective_ai_level(
     state: &AppState,
@@ -324,6 +327,157 @@ fn requires_onchain_action_id(level: u8, command: &str) -> bool {
 // Internal helper that supports `should_consume_onchain_action` operations.
 fn should_consume_onchain_action(command: &str) -> bool {
     requires_onchain_action_id(2, command) || requires_onchain_action_id(3, command)
+}
+
+// Internal helper that parses or transforms values for `normalize_hex_address`.
+fn normalize_hex_address(address: &str) -> Option<String> {
+    parse_felt(address).ok().map(|felt| format!("{:#x}", felt))
+}
+
+// Internal helper that checks conditions for `is_same_account_address`.
+fn is_same_account_address(left: &str, right: &str) -> bool {
+    match (normalize_hex_address(left), normalize_hex_address(right)) {
+        (Some(lhs), Some(rhs)) => lhs == rhs,
+        _ => left.trim().eq_ignore_ascii_case(right.trim()),
+    }
+}
+
+// Internal helper that supports `executor_hash_window_cache_key` operations.
+fn executor_hash_window_cache_key(user_address: &str) -> String {
+    format!(
+        "executor_hash_window:{}",
+        user_address.trim().to_ascii_lowercase()
+    )
+}
+
+// Internal helper that supports `legacy_allowlist_verifier_mode_enabled` operations.
+fn legacy_allowlist_verifier_mode_enabled() -> bool {
+    std::env::var("AI_SIGNATURE_VERIFIER_MODE")
+        .unwrap_or_else(|_| "account".to_string())
+        .trim()
+        .eq_ignore_ascii_case("allowlist")
+}
+
+// Internal helper that supports `is_executor_hash_window_cached` operations.
+async fn is_executor_hash_window_cached(state: &AppState, user_address: &str) -> bool {
+    let mut conn = state.redis.clone();
+    let key = executor_hash_window_cache_key(user_address);
+    match conn.exists::<_, bool>(&key).await {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                "executor hash-window cache read failed user={} err={}",
+                user_address,
+                err
+            );
+            false
+        }
+    }
+}
+
+// Internal helper that runs side-effecting logic for `cache_executor_hash_window`.
+async fn cache_executor_hash_window(state: &AppState, user_address: &str, message_hash: &str) {
+    let mut conn = state.redis.clone();
+    let key = executor_hash_window_cache_key(user_address);
+    let write: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(&key, message_hash, EXECUTOR_HASH_WINDOW_TTL_SECONDS)
+        .await;
+    if let Err(err) = write {
+        tracing::warn!(
+            "executor hash-window cache write failed user={} err={}",
+            user_address,
+            err
+        );
+    }
+}
+
+// Internal helper that supports `is_set_valid_hash_calldata_shape_error` operations.
+fn is_set_valid_hash_calldata_shape_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("invalid calldata")
+        || lower.contains("unexpected calldata")
+        || lower.contains("input too short")
+        || lower.contains("wrong number of arguments")
+        || lower.contains("insufficient arguments")
+}
+
+// Internal helper that runs side-effecting logic for `set_legacy_verifier_hash_window`.
+async fn set_legacy_verifier_hash_window(state: &AppState, message_hash: CoreFelt) -> Result<()> {
+    let verifier = state
+        .config
+        .ai_signature_verifier_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "AI_SIGNATURE_VERIFIER_ADDRESS is required when AI_SIGNATURE_VERIFIER_MODE=allowlist"
+                    .to_string(),
+            )
+        })?;
+    let onchain = OnchainInvoker::from_config(&state.config)?.ok_or_else(|| {
+        AppError::BadRequest(
+            "Backend on-chain signer is not configured. Set BACKEND_ACCOUNT_ADDRESS and BACKEND_PRIVATE_KEY."
+                .to_string(),
+        )
+    })?;
+    let to = parse_felt(verifier)?;
+    let selector = get_selector_from_name("set_valid_hash")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let valid_until = Utc::now()
+        .timestamp()
+        .saturating_add(EXECUTOR_HASH_WINDOW_TTL_SECONDS as i64)
+        .max(0) as u64;
+    let call_with_expiry = Call {
+        to,
+        selector,
+        calldata: vec![message_hash, CoreFelt::from(valid_until)],
+    };
+    match onchain.invoke(call_with_expiry).await {
+        Ok(_) => Ok(()),
+        Err(first_err) => {
+            let first_text = first_err.to_string();
+            if !is_set_valid_hash_calldata_shape_error(&first_text) {
+                return Err(AppError::BlockchainRPC(format!(
+                    "Failed to set verifier valid-hash window: {}",
+                    first_text
+                )));
+            }
+            let fallback_call = Call {
+                to,
+                selector,
+                calldata: vec![message_hash],
+            };
+            onchain
+                .invoke(fallback_call)
+                .await
+                .map(|_| ())
+                .map_err(|err| {
+                    AppError::BlockchainRPC(format!("Failed to set verifier valid hash: {}", err))
+                })
+        }
+    }
+}
+
+// Internal helper that runs side-effecting logic for `ensure_executor_hash_window`.
+async fn ensure_executor_hash_window(
+    state: &AppState,
+    user_address: &str,
+    message_hash: CoreFelt,
+    message_hash_hex: &str,
+) -> Result<()> {
+    if !legacy_allowlist_verifier_mode_enabled() {
+        return Ok(());
+    }
+
+    if is_executor_hash_window_cached(state, user_address).await {
+        return Ok(());
+    }
+
+    set_legacy_verifier_hash_window(state, message_hash).await?;
+    cache_executor_hash_window(state, user_address, message_hash_hex).await;
+    Ok(())
 }
 
 // Internal helper that supports `ai_action_consumed_key` operations.
@@ -391,14 +545,24 @@ async fn consume_onchain_action_via_backend(state: &AppState, action_id: u64) ->
     let to = parse_felt(contract)?;
     let selector = get_selector_from_name("execute_action")
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let action_hash = fetch_ai_executor_action_hash(state, to, action_id).await?;
+    let mut execute_calldata = vec![CoreFelt::from(action_id)];
+    if action_hash == CoreFelt::from(0_u8) {
+        execute_calldata.push(CoreFelt::from(0_u8));
+    } else {
+        let signature = sign_ai_executor_action_hash(state, action_hash)?;
+        execute_calldata.push(CoreFelt::from(2_u8));
+        execute_calldata.push(signature.r);
+        execute_calldata.push(signature.s);
+    }
     let execute_call = Call {
         to,
         selector,
         // execute_action(action_id: u64, backend_signature: Span<felt252>)
-        calldata: vec![CoreFelt::from(action_id), CoreFelt::from(0_u8)],
+        calldata: execute_calldata,
     };
     match onchain.invoke(execute_call.clone()).await {
-        Ok(tx_hash) => return Ok(tx_hash),
+        Ok(tx_hash) => Ok(tx_hash),
         Err(err) => {
             let lower = err.to_string().to_ascii_lowercase();
             if lower.contains("invalid backend signature")
@@ -416,7 +580,7 @@ async fn consume_onchain_action_via_backend(state: &AppState, action_id: u64) ->
                         .contains("invalid backend signature")
                     {
                         return AppError::BadRequest(
-                            "AI setup signature window is stale/mismatched. Click Auto Setup On-Chain once, then retry the command."
+                            "Backend signer key/account mismatch. Ensure BACKEND_PRIVATE_KEY matches backend Starknet account configured as AI executor signer."
                                 .to_string(),
                         );
                     }
@@ -442,20 +606,80 @@ async fn consume_onchain_action_via_backend(state: &AppState, action_id: u64) ->
             }
             if lower.contains("invalid backend signature") {
                 return Err(AppError::BadRequest(
-                    "AI executor still requires backend signature. Disable signature verification on AI executor or enable AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION=true."
+                    "Invalid backend signature. Ensure BACKEND_PRIVATE_KEY matches backend Starknet account configured as AI executor signer."
                         .to_string(),
                 ));
             }
-            return Err(AppError::BlockchainRPC(format!(
+            Err(AppError::BlockchainRPC(format!(
                 "Failed to consume AI action on-chain: {}",
                 msg
-            )));
+            )))
         }
     }
 }
 
+// Internal helper that fetches data for `fetch_ai_executor_action_hash`.
+async fn fetch_ai_executor_action_hash(
+    state: &AppState,
+    contract_address: CoreFelt,
+    action_id: u64,
+) -> Result<CoreFelt> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let selector = get_selector_from_name("get_action_hash")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let values = reader
+        .call(FunctionCall {
+            contract_address,
+            entry_point_selector: selector,
+            calldata: vec![CoreFelt::from(action_id)],
+        })
+        .await
+        .map_err(|err| {
+            let text = err.to_string();
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("entrypointnotfound") || lower.contains("entrypoint not found") {
+                return AppError::BadRequest(
+                    "AI executor contract does not expose get_action_hash(action_id). Deploy the latest AIExecutor contract."
+                        .to_string(),
+                );
+            }
+            AppError::BlockchainRPC(format!(
+                "Failed to read AI executor action hash for action_id {}: {}",
+                action_id, text
+            ))
+        })?;
+    values.first().copied().ok_or_else(|| {
+        AppError::Internal(format!(
+            "AI executor get_action_hash returned empty response for action_id {}",
+            action_id
+        ))
+    })
+}
+
+// Internal helper that supports `sign_ai_executor_action_hash` operations.
+fn sign_ai_executor_action_hash(
+    state: &AppState,
+    action_hash: CoreFelt,
+) -> Result<starknet_core::crypto::Signature> {
+    let private_key = parse_felt(&state.config.backend_private_key)?;
+    let signing_key = SigningKey::from_secret_scalar(private_key);
+    signing_key.sign(&action_hash).map_err(|err| {
+        AppError::Internal(format!(
+            "Failed to sign AI executor action hash with backend key: {}",
+            err
+        ))
+    })
+}
+
 // Internal helper that supports `ai_executor_auto_disable_signature_verification` operations.
 fn ai_executor_auto_disable_signature_verification() -> bool {
+    let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
+    if matches!(
+        environment.trim().to_ascii_lowercase().as_str(),
+        "production" | "prod" | "mainnet"
+    ) {
+        return false;
+    }
     std::env::var("AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION")
         .ok()
         .map(|value| {
@@ -611,6 +835,9 @@ pub async fn execute_command(
         req.action_id
     );
     ensure_ai_level_scope(level, &command)?;
+    if requires_privacy_relayer(&command) {
+        let _ = RelayerService::from_config(&state.config)?;
+    }
 
     let needs_onchain_action = requires_onchain_action_id(level, &command);
     let mut resolved_action_id: Option<u64> = None;
@@ -666,6 +893,18 @@ pub async fn execute_command(
     let should_consume = needs_onchain_action
         && should_consume_onchain_action(&command)
         && !ai_response.actions.is_empty();
+    if should_consume {
+        if let Some(action_user) = onchain_action_user.as_deref() {
+            if let Some(backend_account) = resolve_backend_account(&state.config) {
+                if is_same_account_address(action_user, backend_account) {
+                    return Err(AppError::BadRequest(
+                        "Connected Starknet wallet cannot be the same account as BACKEND_ACCOUNT_ADDRESS for on-chain AI execution. Use a separate user wallet."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+    }
     if needs_onchain_action && should_consume_onchain_action(&command) && !should_consume {
         tracing::warn!(
             "AI execute skipped on-chain consume: user={} level={} reason=no_executable_actions",
@@ -762,114 +1001,75 @@ fn compute_action_hash(
     user_address: &str,
     action_type: u64,
     params: &str,
-    timestamp: u64,
+    nonce: u64,
 ) -> Result<CryptoFelt> {
     let user = parse_crypto_felt(user_address)?;
     let mut data = vec![user, CryptoFelt::from(action_type)];
     data.extend(serialize_byte_array(params)?);
-    data.push(CryptoFelt::from(timestamp));
+    data.push(CryptoFelt::from(nonce));
     Ok(poseidon_hash_many(&data))
 }
 
-// Internal helper that builds inputs for `build_set_valid_hash_call`.
-fn build_set_valid_hash_call(
-    verifier_address: &str,
+// Internal helper that supports `build_ai_setup_typed_data` operations.
+fn build_ai_setup_typed_data(
+    chain_id: &str,
     user_address: &str,
-    message_hash: &CryptoFelt,
-) -> Result<Call> {
-    let to = parse_felt(verifier_address)?;
-    let selector = get_selector_from_name("set_valid_hash")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let signer = parse_felt(user_address)?;
-    let hash = parse_felt(&message_hash.to_string())?;
+    level: u8,
+    action_type: u64,
+    params: &str,
+    nonce: u64,
+) -> Result<(serde_json::Value, CryptoFelt)> {
+    let action_hash = compute_action_hash(user_address, action_type, params, nonce)?;
+    let typed_data = serde_json::json!({
+        "types": {
+            "StarkNetDomain": [
+                { "name": "name", "type": "felt" },
+                { "name": "version", "type": "felt" },
+                { "name": "chainId", "type": "felt" }
+            ],
+            "CarelAISetup": [
+                { "name": "purpose", "type": "felt" },
+                { "name": "level", "type": "felt" },
+                { "name": "actionType", "type": "felt" },
+                { "name": "nonce", "type": "felt" },
+                { "name": "actionHash", "type": "felt" }
+            ]
+        },
+        "primaryType": "CarelAISetup",
+        "domain": {
+            "name": "CAREL Protocol",
+            "version": "1",
+            "chainId": chain_id
+        },
+        "message": {
+            "purpose": "AI_SETUP",
+            "level": level,
+            "actionType": action_type,
+            "nonce": nonce,
+            "actionHash": format!("{:#x}", action_hash)
+        }
+    });
+    Ok((typed_data, action_hash))
+}
 
-    Ok(Call {
-        to,
-        selector,
-        calldata: vec![signer, hash, CoreFelt::from(1_u8)],
+// Internal helper that supports `compute_typed_data_message_hash` operations.
+fn compute_typed_data_message_hash(
+    typed_data: &serde_json::Value,
+    user_address: &str,
+) -> Result<CoreFelt> {
+    let data: TypedData = serde_json::from_value(typed_data.clone()).map_err(|err| {
+        AppError::Internal(format!(
+            "Failed to parse AI setup typed data for message hash: {}",
+            err
+        ))
+    })?;
+    let account = parse_felt(user_address)?;
+    data.message_hash(account).map_err(|err| {
+        AppError::Internal(format!(
+            "Failed to compute AI setup typed-data message hash: {}",
+            err
+        ))
     })
-}
-
-// Internal helper that resolves a stable timestamp baseline for AI signature-window hashes.
-async fn resolve_signature_reference_timestamp(state: &AppState) -> u64 {
-    let local_now = chrono::Utc::now().timestamp().max(0) as u64;
-    let client = StarknetClient::new(state.config.starknet_rpc_url.clone());
-    let fetch = async {
-        let head = client.get_block_number().await?;
-        let block = client.get_block(head).await?;
-        Ok::<u64, AppError>(block.timestamp)
-    };
-
-    match tokio::time::timeout(
-        Duration::from_millis(CHAIN_TIMESTAMP_FETCH_TIMEOUT_MS),
-        fetch,
-    )
-    .await
-    {
-        Ok(Ok(chain_now)) if chain_now > 0 => {
-            let drift = chain_now.abs_diff(local_now);
-            if drift > CHAIN_TIMESTAMP_DRIFT_GUARD_SECONDS {
-                tracing::warn!(
-                    "AI prepare using local timestamp due large chain/local drift: chain={} local={} drift={}s",
-                    chain_now,
-                    local_now,
-                    drift
-                );
-                local_now
-            } else {
-                chain_now
-            }
-        }
-        Ok(Ok(_)) => local_now,
-        Ok(Err(err)) => {
-            tracing::warn!(
-                "AI prepare falling back to local timestamp (failed fetching chain time): {}",
-                err
-            );
-            local_now
-        }
-        Err(_) => {
-            tracing::warn!(
-                "AI prepare falling back to local timestamp (chain time fetch timeout after {}ms)",
-                CHAIN_TIMESTAMP_FETCH_TIMEOUT_MS
-            );
-            local_now
-        }
-    }
-}
-
-// Internal helper that runs side-effecting logic for `wait_for_prepare_hashes_confirmation`.
-async fn wait_for_prepare_hashes_confirmation(state: &AppState, tx_hash: CoreFelt) -> Result<()> {
-    let reader = OnchainReader::from_config(&state.config)?;
-    let mut last_error = String::new();
-
-    for attempt in 0..AI_PREPARE_READY_POLL_ATTEMPTS {
-        match reader.get_transaction_receipt(&tx_hash).await {
-            Ok(receipt) => {
-                if let ExecutionResult::Reverted { reason } = receipt.receipt.execution_result() {
-                    return Err(AppError::BadRequest(format!(
-                        "AI setup pre-signature transaction reverted: {}",
-                        reason
-                    )));
-                }
-                // Pre-confirmed is sufficient for setup usability; waiting for deeper finality
-                // increases stale-signature risk in the frontend confirmation step.
-                return Ok(());
-            }
-            Err(err) => {
-                last_error = err.to_string();
-                if attempt + 1 < AI_PREPARE_READY_POLL_ATTEMPTS {
-                    sleep(Duration::from_millis(AI_PREPARE_READY_POLL_DELAY_MS)).await;
-                    continue;
-                }
-            }
-        }
-    }
-
-    Err(AppError::BadRequest(format!(
-        "AI setup signature window is not confirmed on-chain yet: {}",
-        last_error
-    )))
 }
 
 /// POST /api/v1/ai/prepare-action
@@ -904,69 +1104,34 @@ pub async fn prepare_action_signature(
         ));
     }
 
-    let verifier_address = state
-        .config
-        .ai_signature_verifier_address
-        .as_deref()
-        .unwrap_or("")
-        .trim();
-    if verifier_address.is_empty() || verifier_address.starts_with("0x0000") {
-        return Err(crate::error::AppError::BadRequest(
-            "AI signature verifier not configured".to_string(),
-        ));
-    }
-
-    let onchain = OnchainInvoker::from_config(&state.config)?.ok_or_else(|| {
-        crate::error::AppError::BadRequest("Backend on-chain signer is not configured".to_string())
-    })?;
-    let backend_signer = resolve_backend_account(&state.config).ok_or_else(|| {
-        crate::error::AppError::BadRequest(
-            "Backend signer address is not configured. Set BACKEND_ACCOUNT_ADDRESS.".to_string(),
-        )
-    })?;
-
-    let window_seconds = req
-        .window_seconds
-        .unwrap_or(DEFAULT_SIGNATURE_WINDOW_SECONDS)
-        .clamp(MIN_SIGNATURE_WINDOW_SECONDS, MAX_SIGNATURE_WINDOW_SECONDS);
-    let now = resolve_signature_reference_timestamp(&state).await;
-    let from_timestamp = now.saturating_sub(SIGNATURE_PAST_SKEW_SECONDS);
-    let to_timestamp = now.saturating_add(window_seconds);
-    tracing::debug!(
-        "AI prepare signature window: now={} from={} to={} level={} user={}",
-        now,
-        from_timestamp,
-        to_timestamp,
+    let nonce = Utc::now()
+        .timestamp_millis()
+        .max(0)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let chain_id = state.config.starknet_chain_id.trim();
+    let chain_id = if chain_id.is_empty() {
+        "SN_SEPOLIA"
+    } else {
+        chain_id
+    };
+    let (typed_data, _action_hash) = build_ai_setup_typed_data(
+        chain_id,
+        &user_address,
         req.level,
-        user_address
-    );
-
-    let mut signers: Vec<String> = vec![user_address.clone()];
-    if !backend_signer.eq_ignore_ascii_case(&user_address) {
-        signers.push(backend_signer.to_string());
-    }
-    let mut calls = Vec::new();
-    for ts in from_timestamp..=to_timestamp {
-        let hash = compute_action_hash(&user_address, action_type, &params, ts)?;
-        for signer in &signers {
-            calls.push(build_set_valid_hash_call(verifier_address, signer, &hash)?);
-        }
-    }
-    tracing::debug!(
-        "AI prepare set_valid_hash calls={} signers={}",
-        calls.len(),
-        signers.len()
-    );
-
-    let tx_hash = onchain.invoke_many(calls).await?;
-    wait_for_prepare_hashes_confirmation(&state, tx_hash).await?;
+        action_type,
+        &params,
+        nonce,
+    )?;
+    let message_hash = compute_typed_data_message_hash(&typed_data, &user_address)?;
+    let message_hash_hex = format!("{:#x}", message_hash);
+    ensure_executor_hash_window(&state, &user_address, message_hash, &message_hash_hex).await?;
     let response = PrepareAIActionResponse {
-        tx_hash: format!("{:#x}", tx_hash),
         action_type,
         params,
-        hashes_prepared: (to_timestamp.saturating_sub(from_timestamp) + 1) * (signers.len() as u64),
-        from_timestamp,
-        to_timestamp,
+        nonce,
+        message_hash: message_hash_hex,
+        typed_data,
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -1010,7 +1175,7 @@ pub async fn get_pending_actions(
         .await?;
 
     let mut pending = vec![];
-    if let Some(len_hex) = result.get(0) {
+    if let Some(len_hex) = result.first() {
         let len = parse_felt_u64(len_hex).unwrap_or(0);
         for i in 0..len as usize {
             if let Some(val) = result.get(i + 1) {
@@ -1711,7 +1876,7 @@ async fn resolve_allowed_starknet_senders_async(
                 continue;
             }
             if let Ok(felt) = parse_felt(wallet.wallet_address.trim()) {
-                if !out.iter().any(|existing| *existing == felt) {
+                if !out.contains(&felt) {
                     out.push(felt);
                 }
             }
@@ -1756,7 +1921,7 @@ fn verify_ai_upgrade_fee_invoke_payload(
         }
     };
 
-    if !allowed_senders.iter().any(|candidate| *candidate == sender) {
+    if !allowed_senders.contains(&sender) {
         return Err(AppError::BadRequest(
             "onchain_tx_hash sender does not match authenticated Starknet user".to_string(),
         ));
@@ -1896,7 +2061,7 @@ async fn fetch_pending_actions_page(
         .await?;
 
     let mut pending = vec![];
-    if let Some(len_hex) = result.get(0) {
+    if let Some(len_hex) = result.first() {
         let len = parse_felt_u64(len_hex).unwrap_or(0);
         for i in 0..len as usize {
             if let Some(val) = result.get(i + 1) {

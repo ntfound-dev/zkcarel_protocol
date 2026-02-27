@@ -1,51 +1,68 @@
-# garaga_real_bls (Isolated Project)
+# garaga_real_bls (Real Groth16 BLS Verifier)
 
-Folder ini adalah project Scarb terpisah untuk verifier Garaga + `PrivateActionExecutor`.
+Package ini berisi verifier Groth16 BLS12-381 yang real (generated) dan executor kompatibilitas lama. Dipakai hanya saat butuh proof real on-chain.
 
-## Kenapa dipisah dari `smartcontract/`
-- Generated verifier dari Garaga sangat berat saat build/test.
-- Dipisah supaya test/build kontrak utama (`smartcontract/src`) tetap cepat.
-- Tidak ada konflik source code selama command dijalankan di folder yang benar.
+## Table of Contents
+- Scope
+- When to Use
+- Repository Contents
+- Build and Test
+- Deployment Notes
+- Env Integration
+- Current Constraints
 
-## Command
-Jalankan dari root repo:
+## Scope
+- Target: Starknet Sepolia (testnet) dan eventual mainnet.
+- Fokus: verifier Groth16 BLS12-381 yang real.
+- Bukan jalur MVP harian (compile berat).
 
+## When to Use
+Gunakan jika:
+- Butuh verifier BLS real untuk proof Garaga on-chain.
+- Validasi end-to-end proof flow (bukan mock).
+- Menjaga kompatibilitas deployment lama yang masih memakai executor generasi awal.
+- Sedang menyiapkan migrasi menuju verifier real untuk environment produksi.
+
+Jangan gunakan untuk dev harian MVP. Untuk itu pakai `smartcontract/private_executor_lite/README.md`.
+Dokumen bukti tx MVP saat ini tidak menggunakan package ini sebagai jalur default.
+
+## Repository Contents
+- `Groth16VerifierBLS12_381` (generated verifier, compile berat)
+- `PrivateActionExecutor` (executor kompatibilitas, bukan `ShieldedPoolV2`)
+
+## Build and Test
+Dari root repo:
 ```bash
 bash smartcontract/scripts/test_garaga_fast.sh
 ```
 
-Fork verifier test (berat):
-
+Fork test verifier (lebih berat, default `ignored`):
 ```bash
 bash smartcontract/scripts/test_garaga_fork.sh
 ```
 
 Atau manual:
-
 ```bash
 cd smartcontract/garaga_real_bls
 asdf exec snforge test
 ```
 
-## Toolchain
-Project ini membaca versi dari:
+## Deployment Notes
+- Pastikan `sncast` tersedia.
+- Declare dan deploy class verifier terlebih dulu.
+- Wiring adapter/router dilakukan via script deploy/wiring di `smartcontract/scripts/`.
 
-```text
-smartcontract/garaga_real_bls/.tool-versions
-```
+## Env Integration
+Minimal env yang harus benar:
+- `GARAGA_VERIFIER_ADDRESS=<alamat verifier real>`
+- `GARAGA_VERIFICATION_MODE=5`
+- `PRIVACY_VERIFIER_KIND=garaga`
 
-Jika muncul error `No version is set`, pastikan command dijalankan dari folder ini atau gunakan helper script di `smartcontract/scripts/`.
+Re-wire adapter/router via:
+- `smartcontract/scripts/04_deploy_adapters.sh`
+- `smartcontract/scripts/07_wire_privacy_router_v2.sh`
 
-## Hide Mode Executor Notes
-- `PrivateActionExecutor` sekarang punya jalur `execute_private_swap_with_payout` untuk relayer/pool flow:
-  - verify intent (`nullifier`, `commitment`, `intent_hash`),
-  - call `execute_swap` di target swap,
-  - payout token hasil swap ke recipient.
-- Intent hash untuk jalur ini dihitung via endpoint preview:
-  - `preview_swap_payout_intent_hash(entrypoint_selector, calldata, approval_token, payout_token, recipient, min_payout)`
-- Untuk staking relayer multi-contract, executor juga menyediakan jalur target eksplisit:
-  - `preview_stake_target_intent_hash(target, entrypoint_selector, calldata)`
-  - `execute_private_stake_with_target(commitment, target, entrypoint_selector, calldata)`
-- Untuk stake deposit relayer (butuh approve token ke staking target), gunakan jalur approval-aware:
-  - `preview_stake_target_intent_hash_with_approval(target, entrypoint_selector, calldata, approval_token)`
-  - `execute_private_stake_with_target_and_approval(commitment, target, entrypoint_selector, calldata, approval_token)`
+## Current Constraints
+- Compile jauh lebih berat dibanding `private_executor_lite`.
+- Bukan jalur MVP default.
+- Verifier real harus konsisten dengan proof format yang dipakai backend.

@@ -51,6 +51,7 @@ fn test_submit_action_increments_count() {
     let action_id = dispatcher.submit_action(
         ActionType::Swap, 
         "swap 1 ETH for STRK", 
+        0,
         array![0x1].span()
     );
     
@@ -71,11 +72,11 @@ fn test_rate_limit_enforcement() {
     // Explicitly type 'i' as u64 to allow comparison
     let mut i: u64 = 0;
     while i < 10 {
-        dispatcher.submit_action(ActionType::Stake, "stake action", array![].span());
+        dispatcher.submit_action(ActionType::Stake, "stake action", 0, array![].span());
         i += 1;
     };
     
-    dispatcher.submit_action(ActionType::Swap, "over limit", array![].span());
+    dispatcher.submit_action(ActionType::Swap, "over limit", 0, array![].span());
 }
 
 #[test]
@@ -90,14 +91,14 @@ fn test_rate_limit_resets_next_day() {
     
     let mut i: u64 = 0;
     while i < 10 {
-        dispatcher.submit_action(ActionType::MintNFT, "mint", array![].span());
+        dispatcher.submit_action(ActionType::MintNFT, "mint", 0, array![].span());
         i += 1;
     };
     
     // Jump to the next day
     cheat_block_timestamp(dispatcher.contract_address, initial_time + 86401, CheatSpan::TargetCalls(5));
     
-    let new_action_id = dispatcher.submit_action(ActionType::Bridge, "bridge", array![].span());
+    let new_action_id = dispatcher.submit_action(ActionType::Bridge, "bridge", 0, array![].span());
     assert!(new_action_id == 11, "Should allow new day action");
 }
 
@@ -108,7 +109,7 @@ fn test_execute_action_by_authorized_backend() {
     let (dispatcher, backend, user, _) = setup();
     
     start_cheat_caller_address(dispatcher.contract_address, user);
-    let action_id = dispatcher.submit_action(ActionType::MultiStep, "complex", array![].span());
+    let action_id = dispatcher.submit_action(ActionType::MultiStep, "complex", 0, array![].span());
     stop_cheat_caller_address(dispatcher.contract_address);
     
     start_cheat_caller_address(dispatcher.contract_address, backend);
@@ -126,9 +127,85 @@ fn test_execute_action_unauthorized_fails() {
     let (dispatcher, _, user, _) = setup();
     
     start_cheat_caller_address(dispatcher.contract_address, user);
-    let action_id = dispatcher.submit_action(ActionType::Swap, "test", array![].span());
+    let action_id = dispatcher.submit_action(ActionType::Swap, "test", 0, array![].span());
     
     dispatcher.execute_action(action_id, array![].span());
+}
+
+#[test]
+// Test case: validates backend signer rotation behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+fn test_rotate_backend_signer_updates_executor_authority() {
+    let (dispatcher, backend, user, _) = setup();
+    let new_backend: ContractAddress = 0x444.try_into().unwrap();
+    let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    admin.set_backend_signer(new_backend);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, user);
+    let action_id = dispatcher.submit_action(ActionType::Swap, "rotate backend", 0, array![].span());
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, new_backend);
+    dispatcher.execute_action(action_id, array![].span());
+
+    let pending = dispatcher.get_pending_actions(user);
+    assert!(pending.len() == 0, "Action should be executed by new backend signer");
+}
+
+#[test]
+#[should_panic(expected: "Unauthorized backend signer")]
+// Test case: validates old backend signer loses authority after rotation behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+fn test_rotate_backend_signer_revokes_old_signer() {
+    let (dispatcher, backend, user, _) = setup();
+    let new_backend: ContractAddress = 0x444.try_into().unwrap();
+    let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    admin.set_backend_signer(new_backend);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, user);
+    let action_id = dispatcher.submit_action(ActionType::Swap, "old backend should fail", 0, array![].span());
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    dispatcher.execute_action(action_id, array![].span());
+}
+
+#[test]
+// Test case: validates admin transfer behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+fn test_transfer_admin_allows_new_admin_config() {
+    let (dispatcher, backend, _, _) = setup();
+    let new_admin: ContractAddress = 0x555.try_into().unwrap();
+    let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    admin.set_admin(new_admin);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    start_cheat_caller_address(dispatcher.contract_address, new_admin);
+    admin.set_rate_limit(1234);
+    let current = admin.rate_limit();
+    assert!(current == 1234, "New admin should be able to set rate limit");
+}
+
+#[test]
+#[should_panic(expected: "Unauthorized admin")]
+// Test case: validates previous admin loses permissions after transfer behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+fn test_transfer_admin_revokes_old_admin() {
+    let (dispatcher, backend, _, _) = setup();
+    let new_admin: ContractAddress = 0x555.try_into().unwrap();
+    let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+
+    start_cheat_caller_address(dispatcher.contract_address, backend);
+    admin.set_admin(new_admin);
+    admin.set_rate_limit(4321);
 }
 
 #[test]
@@ -205,9 +282,9 @@ fn test_max_actions_per_user_enforced() {
     stop_cheat_caller_address(dispatcher.contract_address);
 
     start_cheat_caller_address(dispatcher.contract_address, user);
-    dispatcher.submit_action(ActionType::Swap, "one", array![].span());
-    dispatcher.submit_action(ActionType::Swap, "two", array![].span());
-    dispatcher.submit_action(ActionType::Swap, "three", array![].span());
+    dispatcher.submit_action(ActionType::Swap, "one", 0, array![].span());
+    dispatcher.submit_action(ActionType::Swap, "two", 0, array![].span());
+    dispatcher.submit_action(ActionType::Swap, "three", 0, array![].span());
 }
 
 #[test]

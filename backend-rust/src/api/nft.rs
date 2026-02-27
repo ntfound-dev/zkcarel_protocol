@@ -24,7 +24,7 @@ const OWNED_NFT_CACHE_STALE_SECS: u64 = 1_200;
 const OWNED_NFT_CACHE_MAX_ENTRIES: usize = 100_000;
 
 #[derive(Debug, Serialize, Clone)]
-pub struct NFT {
+pub struct Nft {
     pub token_id: String,
     pub tier: i32,
     pub discount: f64,
@@ -41,7 +41,7 @@ pub struct NFT {
 #[derive(Clone)]
 struct CachedOwnedNfts {
     fetched_at: Instant,
-    value: Vec<NFT>,
+    value: Vec<Nft>,
 }
 
 static OWNED_NFT_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedOwnedNfts>>> =
@@ -96,7 +96,7 @@ fn owned_nft_cache_key(contract: &str, user: &str) -> String {
 }
 
 // Internal helper that fetches data for `get_cached_owned_nfts`.
-async fn get_cached_owned_nfts(key: &str, max_age: Duration) -> Option<Vec<NFT>> {
+async fn get_cached_owned_nfts(key: &str, max_age: Duration) -> Option<Vec<Nft>> {
     let cache = owned_nft_cache();
     let guard = cache.read().await;
     let entry = guard.get(key)?;
@@ -107,7 +107,7 @@ async fn get_cached_owned_nfts(key: &str, max_age: Duration) -> Option<Vec<NFT>>
 }
 
 // Internal helper that supports `cache_owned_nfts` operations.
-async fn cache_owned_nfts(key: String, value: Vec<NFT>) {
+async fn cache_owned_nfts(key: String, value: Vec<Nft>) {
     let cache = owned_nft_cache();
     let mut guard = cache.write().await;
     guard.insert(
@@ -329,7 +329,7 @@ async fn fallback_owned_nft_from_discount_state(
     state: &AppState,
     contract: &str,
     user_address: &str,
-) -> Option<NFT> {
+) -> Option<Nft> {
     let read = timeout(
         Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
         read_discount_state_onchain(state, contract, user_address),
@@ -376,7 +376,7 @@ async fn fallback_owned_nft_from_discount_state(
         tier = 1;
     }
 
-    Some(NFT {
+    Some(Nft {
         token_id: "0x0".to_string(),
         tier,
         discount,
@@ -393,14 +393,14 @@ pub async fn mint_nft(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<MintRequest>,
-) -> Result<Json<ApiResponse<NFT>>> {
+) -> Result<Json<ApiResponse<Nft>>> {
     let user_address = require_starknet_user(&headers, &state).await?;
     if !(1..=5).contains(&req.tier) {
         return Err(crate::error::AppError::BadRequest(
             "Invalid tier".to_string(),
         ));
     }
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
     let _ = discount_contract_or_error(&state)?;
     let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
     let tx_hash = onchain_tx_hash.ok_or_else(|| {
@@ -430,7 +430,7 @@ pub async fn mint_nft(
     }
 
     let discount = discount_for_tier(req.tier);
-    let nft = NFT {
+    let nft = Nft {
         token_id: format!("NFT_{}", tx_hash.trim_start_matches("0x")),
         tier: req.tier,
         discount,
@@ -452,7 +452,7 @@ pub async fn mint_nft(
 pub async fn get_owned_nfts(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<ApiResponse<Vec<NFT>>>> {
+) -> Result<Json<ApiResponse<Vec<Nft>>>> {
     let user_address = require_starknet_user(&headers, &state).await?;
     let Some(contract) = discount_contract(&state) else {
         return Ok(Json(ApiResponse::success(Vec::new())));
@@ -514,7 +514,7 @@ async fn get_owned_nfts_uncached(
     state: &AppState,
     contract: &str,
     user_address: &str,
-) -> Result<Vec<NFT>> {
+) -> Result<Vec<Nft>> {
     let token_id = match timeout(
         Duration::from_millis(ONCHAIN_NFT_READ_TIMEOUT_MS),
         read_user_nft_token_id_onchain(state, contract, user_address),
@@ -685,7 +685,7 @@ async fn get_owned_nfts_uncached(
         nft_state.max_usage
     );
 
-    let nfts = vec![NFT {
+    let nfts = vec![Nft {
         token_id: format!("0x{:x}", nft_state.token_id),
         tier,
         discount: display_discount,

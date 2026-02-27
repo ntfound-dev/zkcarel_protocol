@@ -58,7 +58,7 @@ impl EventParser {
             (
                 event.data.get(1).cloned(),
                 event.data.get(2).cloned(),
-                event.data.get(0).cloned(),
+                event.data.first().cloned(),
                 event.data.get(3).cloned(),
             )
         } else {
@@ -94,7 +94,7 @@ impl EventParser {
 
     // Internal helper that parses or transforms values for `parse_bridge_event`.
     fn parse_bridge_event(&self, event: &Event) -> Option<ParsedEvent> {
-        let user = if key_is(event.keys.get(0)?.as_str(), "BridgeInitiated") {
+        let user = if key_is(event.keys.first()?.as_str(), "BridgeInitiated") {
             event.data.get(1)?.clone()
         } else {
             user_from_keys_or_data(event, 0)?
@@ -153,7 +153,7 @@ impl EventParser {
         Some(ParsedEvent {
             event_type: "LimitOrderFilled".to_string(),
             data: serde_json::json!({
-                "order_id": event.data.get(0)?.clone(),
+                "order_id": event.data.first()?.clone(),
                 "filled_amount": event.data.get(1)?.clone(),
             }),
         })

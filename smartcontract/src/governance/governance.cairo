@@ -152,14 +152,11 @@ pub mod Governance {
             assert!(current_block <= proposal.end_block, "Voting has ended");
             assert!(!self.has_voted.entry((proposal_id, caller)).read(), "User already voted");
 
-            if support == AGAINST {
-                proposal.against_votes += 1;
-            } else if support == FOR {
-                proposal.for_votes += 1;
-            } else if support == ABSTAIN {
-                proposal.abstain_votes += 1;
-            } else {
-                panic!("Invalid support value");
+            match support {
+                0_u8 => proposal.against_votes += 1,
+                1_u8 => proposal.for_votes += 1,
+                2_u8 => proposal.abstain_votes += 1,
+                _ => panic!("Invalid support value"),
             }
 
             self.has_voted.entry((proposal_id, caller)).write(true);
@@ -185,11 +182,10 @@ pub mod Governance {
             self.proposals.entry(proposal_id).write(proposal);
 
             let mut i: usize = 0;
-            loop {
-                if i >= targets.len() { break; }
+            while i < targets.len() {
                 let _ = call_contract_syscall(*targets.at(i), selector!("execute"), *calldatas.at(i));
                 i += 1;
-            };
+            }
         }
 
         // Implements cancel logic while keeping state transitions deterministic.
@@ -259,20 +255,18 @@ pub mod Governance {
             let mut data = array![];
             data.append(targets.len().into());
             let mut i: usize = 0;
-            loop {
-                if i >= targets.len() { break; }
+            while i < targets.len() {
                 let target_felt: felt252 = (*targets.at(i)).into();
                 data.append(target_felt);
                 let call = *calldatas.at(i);
                 data.append(call.len().into());
                 let mut j: usize = 0;
-                loop {
-                    if j >= call.len() { break; }
+                while j < call.len() {
                     data.append(*call.at(j));
                     j += 1;
-                };
+                }
                 i += 1;
-            };
+            }
             poseidon_hash_span(data.span())
         }
     }

@@ -648,26 +648,28 @@ fn board_commitment_for_cells(user_address: &str, cells: &HashSet<(u8, u8)>) -> 
 }
 
 // Internal helper that supports `response_binding` operations.
-fn response_binding(
+struct ResponseBindingInput<'a> {
     game_id: u64,
-    shooter: &str,
-    responder: &str,
+    shooter: &'a str,
+    responder: &'a str,
     shot_x: u8,
     shot_y: u8,
     defend_x: u8,
     defend_y: u8,
     is_hit: bool,
-) -> Result<Felt> {
+}
+
+fn response_binding(input: ResponseBindingInput<'_>) -> Result<Felt> {
     let values = vec![
         short_string_to_felt("RESPONSE")?,
-        Felt::from(game_id),
-        parse_felt(shooter)?,
-        parse_felt(responder)?,
-        Felt::from(shot_x),
-        Felt::from(shot_y),
-        Felt::from(defend_x),
-        Felt::from(defend_y),
-        if is_hit { Felt::ONE } else { Felt::ZERO },
+        Felt::from(input.game_id),
+        parse_felt(input.shooter)?,
+        parse_felt(input.responder)?,
+        Felt::from(input.shot_x),
+        Felt::from(input.shot_y),
+        Felt::from(input.defend_x),
+        Felt::from(input.defend_y),
+        if input.is_hit { Felt::ONE } else { Felt::ZERO },
     ];
     Ok(poseidon_hash_many(&values))
 }
@@ -1144,11 +1146,11 @@ fn parse_selector(name: &str) -> Result<Felt> {
 }
 
 // Internal helper that fetches data for `find_battleship_call`.
-fn find_battleship_call<'a>(
-    calls: &'a [ParsedExecuteCall],
+fn find_battleship_call(
+    calls: &[ParsedExecuteCall],
     contract: Felt,
     selector: Felt,
-) -> Result<&'a ParsedExecuteCall> {
+) -> Result<&ParsedExecuteCall> {
     calls
         .iter()
         .find(|call| call.to == contract && call.selector == selector)
@@ -1539,10 +1541,7 @@ async fn save_battle_transaction(
 }
 
 // Internal helper that supports `game_from_store_mut` operations.
-fn game_from_store_mut<'a>(
-    store: &'a mut BattleshipStore,
-    game_id: u64,
-) -> Result<&'a mut BattleshipGame> {
+fn game_from_store_mut(store: &mut BattleshipStore, game_id: u64) -> Result<&mut BattleshipGame> {
     store.games.get_mut(&game_id).ok_or_else(|| {
         AppError::BadRequest(
             "Game not found in local cache. Open game state first and retry.".to_string(),
@@ -1975,16 +1974,16 @@ pub async fn respond_shot(
         (pending, is_hit, shot_has_ship, defense_success)
     };
 
-    let binding = response_binding(
+    let binding = response_binding(ResponseBindingInput {
         game_id,
-        &pending_shot.shooter,
-        &user,
-        pending_shot.x,
-        pending_shot.y,
-        req.defend_x,
-        req.defend_y,
+        shooter: &pending_shot.shooter,
+        responder: &user,
+        shot_x: pending_shot.x,
+        shot_y: pending_shot.y,
+        defend_x: req.defend_x,
+        defend_y: req.defend_y,
         is_hit,
-    )?;
+    })?;
 
     if req
         .onchain_tx_hash

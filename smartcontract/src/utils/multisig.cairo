@@ -87,13 +87,12 @@ pub mod Multisig {
         assert!(required <= initial_owners.len().into(), "Required exceeds owner count");
 
         let mut i: usize = 0;
-        loop {
-            if i >= initial_owners.len() { break; }
+        while i < initial_owners.len() {
             let owner = *initial_owners.at(i);
             self.owners.push(owner);
             self.is_owner.entry(owner).write(true);
             i += 1;
-        };
+        }
         self.required_confirmations.write(required);
         self.executing.write(false);
     }

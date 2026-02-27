@@ -12,7 +12,7 @@ pub enum ActionType {
     Basic,
 }
 
-#[derive(Copy, Drop, Serde, starknet::Store)]
+#[derive(Copy, Drop, Serde, PartialEq, starknet::Store)]
 pub enum Status {
     #[default]
     Pending,
@@ -39,6 +39,7 @@ pub trait IAIExecutor<TContractState> {
         ref self: TContractState, 
         action_type: ActionType, 
         params: ByteArray, 
+        message_hash: felt252,
         user_signature: Span<felt252>
     ) -> u64;
     // Applies execute action after input validation and commits the resulting state.
@@ -73,6 +74,8 @@ pub trait IAIExecutor<TContractState> {
         start_offset: u64,
         limit: u64
     ) -> Array<u64>;
+    // Returns action hash for an action id from storage without mutating state.
+    fn get_action_hash(self: @TContractState, action_id: u64) -> felt252;
     // Implements check rate limit logic while keeping state transitions deterministic.
     // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn check_rate_limit(self: @TContractState, user: ContractAddress) -> bool;
@@ -99,6 +102,12 @@ pub trait IAIExecutorAdmin<TContractState> {
     // Updates fee recipient configuration after access-control and invariant checks.
     // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_fee_recipient(ref self: TContractState, recipient: ContractAddress);
+    // Updates backend signer configuration after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    fn set_backend_signer(ref self: TContractState, signer: ContractAddress);
+    // Transfers admin ownership after access-control and invariant checks.
+    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    fn set_admin(ref self: TContractState, new_admin: ContractAddress);
     // Updates rate limit configuration after access-control and invariant checks.
     // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn set_rate_limit(ref self: TContractState, limit: u256);
@@ -162,7 +171,6 @@ pub mod AIExecutor {
     use starknet::{get_caller_address, get_block_timestamp, get_contract_address};
     use core::num::traits::Zero;
     use core::traits::TryInto;
-    use core::poseidon::poseidon_hash_span;
     use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy::action_types::ACTION_AI;
     use super::{
@@ -251,22 +259,6 @@ pub mod AIExecutor {
         }
     }
 
-    // Implements compute action hash logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
-    fn compute_action_hash(
-        user: ContractAddress,
-        action_type: ActionType,
-        params: ByteArray,
-        timestamp: u64
-    ) -> felt252 {
-        let mut data = array![];
-        user.serialize(ref data);
-        action_type_to_felt(action_type).serialize(ref data);
-        params.serialize(ref data);
-        timestamp.serialize(ref data);
-        poseidon_hash_span(data.span())
-    }
-
     // Applies verify sig and consume after input validation and commits the resulting state.
     // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn verify_sig_and_consume(
@@ -287,6 +279,7 @@ pub mod AIExecutor {
             ref self: ContractState, 
             action_type: ActionType, 
             params: ByteArray, 
+            message_hash: felt252,
             user_signature: Span<felt252>
         ) -> u64 {
             let caller = get_caller_address();
@@ -302,12 +295,12 @@ pub mod AIExecutor {
             state.daily_count += 1_u32;
             state.lifetime_total += 1_u128;
 
-            let now = get_block_timestamp();
             let mut action_hash: felt252 = 0;
             if self.signature_verification_enabled.read() {
                 let verifier = self.signature_verifier.read();
                 assert!(!verifier.is_zero(), "Verifier not set");
-                action_hash = compute_action_hash(caller, action_type, params, now);
+                assert!(message_hash != 0, "Message hash required");
+                action_hash = message_hash;
                 let ok = verify_sig_and_consume(verifier, caller, action_hash, user_signature);
                 assert!(ok, "Invalid user signature");
             }
@@ -399,11 +392,7 @@ pub mod AIExecutor {
             let user = self.action_user.entry(action_id).read();
             assert!(!user.is_zero(), "Action not found");
             let status = self.action_status.entry(action_id).read();
-            if let Status::Pending = status {
-                // ok
-            } else {
-                panic!("Action not pending");
-            }
+            assert!(status == Status::Pending, "Action not pending");
             if self.signature_verification_enabled.read() {
                 let verifier = self.signature_verifier.read();
                 assert!(!verifier.is_zero(), "Verifier not set");
@@ -450,15 +439,12 @@ pub mod AIExecutor {
             assert!(get_caller_address() == user, "Only user can cancel");
 
             let status = self.action_status.entry(action_id).read();
-            if let Status::Pending = status {
-                self.action_status.entry(action_id).write(Status::Cancelled);
-                let mut state: UserState = self.user_states.entry(user).read();
-                if state.pending_count > 0 {
-                    state.pending_count -= 1;
-                    self.user_states.entry(user).write(state);
-                }
-            } else {
-                panic!("Cannot cancel");
+            assert!(status == Status::Pending, "Cannot cancel");
+            self.action_status.entry(action_id).write(Status::Cancelled);
+            let mut state: UserState = self.user_states.entry(user).read();
+            if state.pending_count > 0 {
+                state.pending_count -= 1;
+                self.user_states.entry(user).write(state);
             }
         }
 
@@ -476,7 +462,7 @@ pub mod AIExecutor {
                 let action_user = self.action_user.entry(i).read();
                 if action_user == user {
                     let status = self.action_status.entry(i).read();
-                    if let Status::Pending = status {
+                    if status == Status::Pending {
                         result.append(i);
                         produced += 1;
                     }
@@ -509,7 +495,7 @@ pub mod AIExecutor {
                 let action_user = self.action_user.entry(i).read();
                 if action_user == user {
                     let status = self.action_status.entry(i).read();
-                    if let Status::Pending = status {
+                    if status == Status::Pending {
                         result.append(i);
                         remaining -= 1;
                     }
@@ -527,6 +513,11 @@ pub mod AIExecutor {
             let state: UserState = self.user_states.entry(user).read();
             let current: u32 = if state.last_reset_day == day { state.daily_count } else { 0_u32 };
             current.into() < self.rate_limit.read()
+        }
+
+        // Returns action hash for an action id from storage without mutating state.
+        fn get_action_hash(self: @ContractState, action_id: u64) -> felt252 {
+            self.action_hashes.entry(action_id).read()
         }
 
         // Applies submit private ai action after input validation and commits the resulting state.
@@ -572,6 +563,22 @@ pub mod AIExecutor {
             assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
             assert!(!recipient.is_zero(), "Recipient required");
             self.fee_recipient.write(recipient);
+        }
+
+        // Updates backend signer configuration after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        fn set_backend_signer(ref self: ContractState, signer: ContractAddress) {
+            assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
+            assert!(!signer.is_zero(), "Backend signer required");
+            self.ai_backend_signer.write(signer);
+        }
+
+        // Transfers admin ownership after access-control and invariant checks.
+        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        fn set_admin(ref self: ContractState, new_admin: ContractAddress) {
+            assert!(get_caller_address() == self.admin.read(), "Unauthorized admin");
+            assert!(!new_admin.is_zero(), "Admin required");
+            self.admin.write(new_admin);
         }
 
         // Updates rate limit configuration after access-control and invariant checks.

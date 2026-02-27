@@ -108,7 +108,7 @@ pub async fn get_analytics(
     )?;
 
     // Current epoch (30 days window)
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
     let total_points: Decimal = if normalized_addresses.is_empty() {
         Decimal::ZERO

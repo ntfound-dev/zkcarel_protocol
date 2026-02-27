@@ -175,16 +175,13 @@ pub mod EmergencyPause {
             let len = self.contracts_to_pause.len();
             
             let mut i: u64 = 0;
-            loop {
-                if i >= len {
-                    break;
-                }
+            while i < len {
                 if self.contracts_to_pause.at(i).read() == address {
                     found_index = Option::Some(i);
                     break;
                 }
                 i += 1;
-            };
+            }
 
             if let Option::Some(index) = found_index {
                 let last_index = self.contracts_to_pause.len() - 1;

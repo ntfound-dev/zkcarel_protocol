@@ -296,10 +296,10 @@ pub enum NotificationType {
     System,
 }
 
-impl ToString for NotificationType {
-    // Internal helper that supports `to_string` operations.
-    fn to_string(&self) -> String {
-        match self {
+impl std::fmt::Display for NotificationType {
+    // Internal helper that supports formatted output and `to_string()`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
             Self::SwapCompleted => "swap.completed",
             Self::SwapFailed => "swap.failed",
             Self::OrderFilled => "order.filled",
@@ -310,8 +310,8 @@ impl ToString for NotificationType {
             Self::RewardClaimable => "reward.claimable",
             Self::PriceAlert => "price.alert",
             Self::System => "system",
-        }
-        .to_string()
+        };
+        write!(f, "{}", value)
     }
 }
 

@@ -71,7 +71,7 @@ pub trait ITimelockPrivacy<TContractState> {
 pub mod Timelock {
     use starknet::ContractAddress;
     use starknet::storage::*;
-    use starknet::{get_caller_address, get_block_timestamp};
+    use starknet::{get_caller_address, get_block_timestamp, SyscallResultTrait};
     use starknet::syscalls::call_contract_syscall;
     use core::poseidon::poseidon_hash_span;
     use core::num::traits::Zero;
@@ -158,7 +158,7 @@ pub mod Timelock {
 
             // In Starknet, 'value' (ETH) is typically handled via a separate 
             // ERC20 transfer, but we proceed with the target call here.
-            let result = call_contract_syscall(target, selector, calldata).unwrap();
+            let result = call_contract_syscall(target, selector, calldata).unwrap_syscall();
             result
         }
 

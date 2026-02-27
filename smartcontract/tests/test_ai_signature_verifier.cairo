@@ -2,62 +2,47 @@ use starknet::ContractAddress;
 use core::array::ArrayTrait;
 use core::serde::Serde;
 use core::traits::TryInto;
-use core::poseidon::poseidon_hash_span;
 use snforge_std::{
     declare, DeclareResultTrait, ContractClassTrait,
-    start_cheat_caller_address, stop_cheat_caller_address,
-    cheat_block_timestamp, CheatSpan
+    start_cheat_caller_address, stop_cheat_caller_address
 };
 
 use smartcontract::ai::ai_executor::{
     IAIExecutorDispatcher, IAIExecutorDispatcherTrait, ActionType,
     IAIExecutorAdminDispatcher, IAIExecutorAdminDispatcherTrait
 };
-use smartcontract::ai::ai_signature_verifier::{
-    IAISignatureVerifierAdminDispatcher, IAISignatureVerifierAdminDispatcherTrait
+use smartcontract::mocks::mock_signature_account::{
+    IMockSignatureAccountAdminDispatcher, IMockSignatureAccountAdminDispatcherTrait
 };
 
-// Implements action type to felt logic while keeping state transitions deterministic.
+// Deploys a mock account contract and returns the contract address.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
-fn action_type_to_felt(action_type: ActionType) -> felt252 {
-    match action_type {
-        ActionType::Swap => 0,
-        ActionType::Bridge => 1,
-        ActionType::Stake => 2,
-        ActionType::ClaimReward => 3,
-        ActionType::MintNFT => 4,
-        ActionType::MultiStep => 5,
-        ActionType::Basic => 6,
-    }
+fn deploy_mock_account(admin: ContractAddress) -> ContractAddress {
+    let class = declare("MockSignatureAccount").unwrap().contract_class();
+    let mut args = array![];
+    admin.serialize(ref args);
+    let (address, _) = class.deploy(@args).unwrap();
+    address
 }
 
-// Implements compute action hash logic while keeping state transitions deterministic.
+// Deploys executor+verifier fixture wired with mock signer accounts.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
-fn compute_action_hash(
-    user: ContractAddress,
-    action_type: ActionType,
-    params: ByteArray,
-    timestamp: u64
-) -> felt252 {
-    let mut data = array![];
-    user.serialize(ref data);
-    action_type_to_felt(action_type).serialize(ref data);
-    params.serialize(ref data);
-    timestamp.serialize(ref data);
-    poseidon_hash_span(data.span())
-}
+fn setup_with_signature_verifier() -> (
+    IAIExecutorDispatcher,
+    ContractAddress,
+    ContractAddress,
+    ContractAddress,
+    ContractAddress
+) {
+    let admin: ContractAddress = 0x111.try_into().unwrap();
+    let carel_token: ContractAddress = 0x222.try_into().unwrap();
 
-#[test]
-// Test case: validates ai executor signature verification with allowlist behavior with expected assertions and revert boundaries.
-// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
-fn test_ai_executor_signature_verification_with_allowlist() {
-    let carel_token: ContractAddress = 0x111.try_into().unwrap();
-    let backend_signer: ContractAddress = 0x222.try_into().unwrap();
-    let user: ContractAddress = 0x333.try_into().unwrap();
+    let backend_signer = deploy_mock_account(admin);
+    let user = deploy_mock_account(admin);
 
     let verifier_class = declare("AISignatureVerifier").unwrap().contract_class();
     let mut verifier_args = array![];
-    backend_signer.serialize(ref verifier_args);
+    admin.serialize(ref verifier_args);
     let (verifier_address, _) = verifier_class.deploy(@verifier_args).unwrap();
 
     let executor_class = declare("AIExecutor").unwrap().contract_class();
@@ -72,98 +57,157 @@ fn test_ai_executor_signature_verification_with_allowlist() {
     admin_exec.set_signature_verification(verifier_address, true);
     stop_cheat_caller_address(executor_address);
 
-    let timestamp: u64 = 5000;
-    cheat_block_timestamp(executor_address, timestamp, CheatSpan::TargetCalls(5));
-
-    let params = "swap 1 BTC to STRK";
-    let msg_hash = compute_action_hash(user, ActionType::Swap, params.clone(), timestamp);
-
-    let verifier_admin = IAISignatureVerifierAdminDispatcher { contract_address: verifier_address };
-    start_cheat_caller_address(verifier_address, backend_signer);
-    verifier_admin.set_valid_hash(user, msg_hash, true);
-    stop_cheat_caller_address(verifier_address);
-
-    let executor = IAIExecutorDispatcher { contract_address: executor_address };
-    start_cheat_caller_address(executor_address, user);
-    let action_id = executor.submit_action(ActionType::Swap, params, array![0x1].span());
-    assert!(action_id == 1, "Action should be accepted with valid signature");
+    (
+        IAIExecutorDispatcher { contract_address: executor_address },
+        admin,
+        verifier_address,
+        backend_signer,
+        user
+    )
 }
 
 #[test]
-#[should_panic(expected: "Invalid user signature")]
-// Test case: validates ai executor rejects replay hash behavior with expected assertions and revert boundaries.
+// Test case: validates ai executor signature verification with account is_valid_signature behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
-fn test_ai_executor_rejects_replay_hash() {
-    let carel_token: ContractAddress = 0x111.try_into().unwrap();
-    let backend_signer: ContractAddress = 0x222.try_into().unwrap();
-    let user: ContractAddress = 0x333.try_into().unwrap();
+fn test_ai_executor_signature_verification_with_account_signature() {
+    let (executor, admin, _, _, user) = setup_with_signature_verifier();
 
-    let verifier_class = declare("AISignatureVerifier").unwrap().contract_class();
-    let mut verifier_args = array![];
-    backend_signer.serialize(ref verifier_args);
-    let (verifier_address, _) = verifier_class.deploy(@verifier_args).unwrap();
+    let message_hash: felt252 = 0xabc;
+    let r: felt252 = 0x123;
+    let s: felt252 = 0x456;
 
-    let executor_class = declare("AIExecutor").unwrap().contract_class();
-    let mut executor_args = array![];
-    carel_token.serialize(ref executor_args);
-    backend_signer.serialize(ref executor_args);
-    let (executor_address, _) = executor_class.deploy(@executor_args).unwrap();
+    let user_admin = IMockSignatureAccountAdminDispatcher { contract_address: user };
+    start_cheat_caller_address(user, admin);
+    user_admin.set_valid_signature(message_hash, r, s, true);
+    stop_cheat_caller_address(user);
 
-    let admin_exec = IAIExecutorAdminDispatcher { contract_address: executor_address };
-    start_cheat_caller_address(executor_address, backend_signer);
-    admin_exec.set_fee_config(1_000_000_000_000_000_000, 2_000_000_000_000_000_000, false);
-    admin_exec.set_signature_verification(verifier_address, true);
-    stop_cheat_caller_address(executor_address);
-
-    let timestamp: u64 = 7000;
-    cheat_block_timestamp(executor_address, timestamp, CheatSpan::TargetCalls(5));
-
-    let params = "swap 1 BTC to STRK";
-    let msg_hash = compute_action_hash(user, ActionType::Swap, params.clone(), timestamp);
-
-    let verifier_admin = IAISignatureVerifierAdminDispatcher { contract_address: verifier_address };
-    start_cheat_caller_address(verifier_address, backend_signer);
-    verifier_admin.set_valid_hash(user, msg_hash, true);
-    stop_cheat_caller_address(verifier_address);
-
-    let executor = IAIExecutorDispatcher { contract_address: executor_address };
-    start_cheat_caller_address(executor_address, user);
-    let _ = executor.submit_action(ActionType::Swap, params.clone(), array![0x1].span());
-
-    // Reuse the same hash/signature should fail after consume.
-    executor.submit_action(ActionType::Swap, params, array![0x1].span());
+    start_cheat_caller_address(executor.contract_address, user);
+    let action_id = executor.submit_action(
+        ActionType::Swap,
+        "swap 1 BTC to STRK",
+        message_hash,
+        array![r, s].span()
+    );
+    assert!(action_id == 1, "Action should be accepted with valid account signature");
 }
 
 #[test]
 #[should_panic(expected: "Invalid user signature")]
-// Test case: validates ai executor signature verification rejects unknown hash behavior with expected assertions and revert boundaries.
+// Test case: validates ai executor rejects replay signature hash behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
-fn test_ai_executor_signature_verification_rejects_unknown_hash() {
-    let carel_token: ContractAddress = 0x111.try_into().unwrap();
-    let backend_signer: ContractAddress = 0x222.try_into().unwrap();
-    let user: ContractAddress = 0x333.try_into().unwrap();
+fn test_ai_executor_rejects_replay_signature_hash() {
+    let (executor, admin, _, _, user) = setup_with_signature_verifier();
 
-    let verifier_class = declare("AISignatureVerifier").unwrap().contract_class();
-    let mut verifier_args = array![];
-    backend_signer.serialize(ref verifier_args);
-    let (verifier_address, _) = verifier_class.deploy(@verifier_args).unwrap();
+    let message_hash: felt252 = 0xdef;
+    let r: felt252 = 0x777;
+    let s: felt252 = 0x888;
 
-    let executor_class = declare("AIExecutor").unwrap().contract_class();
-    let mut executor_args = array![];
-    carel_token.serialize(ref executor_args);
-    backend_signer.serialize(ref executor_args);
-    let (executor_address, _) = executor_class.deploy(@executor_args).unwrap();
+    let user_admin = IMockSignatureAccountAdminDispatcher { contract_address: user };
+    start_cheat_caller_address(user, admin);
+    user_admin.set_valid_signature(message_hash, r, s, true);
+    stop_cheat_caller_address(user);
 
-    let admin_exec = IAIExecutorAdminDispatcher { contract_address: executor_address };
-    start_cheat_caller_address(executor_address, backend_signer);
-    admin_exec.set_fee_config(1_000_000_000_000_000_000, 2_000_000_000_000_000_000, false);
-    admin_exec.set_signature_verification(verifier_address, true);
-    stop_cheat_caller_address(executor_address);
+    start_cheat_caller_address(executor.contract_address, user);
+    let _ = executor.submit_action(
+        ActionType::Swap,
+        "swap 1 BTC to STRK",
+        message_hash,
+        array![r, s].span()
+    );
 
-    let timestamp: u64 = 6000;
-    cheat_block_timestamp(executor_address, timestamp, CheatSpan::TargetCalls(2));
+    // Reusing identical hash+signature should fail because verifier consumes hash.
+    executor.submit_action(
+        ActionType::Swap,
+        "swap 1 BTC to STRK",
+        message_hash,
+        array![r, s].span()
+    );
+}
 
-    let executor = IAIExecutorDispatcher { contract_address: executor_address };
-    start_cheat_caller_address(executor_address, user);
-    executor.submit_action(ActionType::Swap, "swap", array![0x1].span());
+#[test]
+#[should_panic(expected: "Invalid user signature")]
+// Test case: validates ai executor rejects unknown account signature behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+fn test_ai_executor_signature_verification_rejects_unknown_signature() {
+    let (executor, _, _, _, user) = setup_with_signature_verifier();
+
+    let message_hash: felt252 = 0x999;
+    let r: felt252 = 0xaaa;
+    let s: felt252 = 0xbbb;
+
+    start_cheat_caller_address(executor.contract_address, user);
+    executor.submit_action(
+        ActionType::Swap,
+        "swap",
+        message_hash,
+        array![r, s].span()
+    );
+}
+
+#[test]
+// Test case: validates ai executor execute_action accepts valid backend account signature behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+fn test_ai_executor_execute_action_accepts_valid_backend_signature() {
+    let (executor, admin, _, backend_signer, user) = setup_with_signature_verifier();
+
+    let action_hash: felt252 = 0x4444;
+    let user_r: felt252 = 0x1001;
+    let user_s: felt252 = 0x1002;
+    let backend_r: felt252 = 0x2001;
+    let backend_s: felt252 = 0x2002;
+
+    let user_admin = IMockSignatureAccountAdminDispatcher { contract_address: user };
+    start_cheat_caller_address(user, admin);
+    user_admin.set_valid_signature(action_hash, user_r, user_s, true);
+    stop_cheat_caller_address(user);
+
+    let backend_admin = IMockSignatureAccountAdminDispatcher { contract_address: backend_signer };
+    start_cheat_caller_address(backend_signer, admin);
+    backend_admin.set_valid_signature(action_hash, backend_r, backend_s, true);
+    stop_cheat_caller_address(backend_signer);
+
+    start_cheat_caller_address(executor.contract_address, user);
+    let action_id = executor.submit_action(
+        ActionType::Swap,
+        "swap",
+        action_hash,
+        array![user_r, user_s].span()
+    );
+    stop_cheat_caller_address(executor.contract_address);
+
+    start_cheat_caller_address(executor.contract_address, backend_signer);
+    executor.execute_action(action_id, array![backend_r, backend_s].span());
+    stop_cheat_caller_address(executor.contract_address);
+
+    let pending = executor.get_pending_actions(user);
+    assert!(pending.len() == 0, "Action should be executed and removed from pending");
+}
+
+#[test]
+#[should_panic(expected: "Invalid backend signature")]
+// Test case: validates ai executor execute_action rejects invalid backend signature behavior with expected assertions and revert boundaries.
+// Used in isolated test context to validate invariants and avoid regressions in contract behavior.
+fn test_ai_executor_execute_action_rejects_invalid_backend_signature() {
+    let (executor, admin, _, backend_signer, user) = setup_with_signature_verifier();
+
+    let action_hash: felt252 = 0x5555;
+    let user_r: felt252 = 0x3001;
+    let user_s: felt252 = 0x3002;
+
+    let user_admin = IMockSignatureAccountAdminDispatcher { contract_address: user };
+    start_cheat_caller_address(user, admin);
+    user_admin.set_valid_signature(action_hash, user_r, user_s, true);
+    stop_cheat_caller_address(user);
+
+    start_cheat_caller_address(executor.contract_address, user);
+    let action_id = executor.submit_action(
+        ActionType::Swap,
+        "swap",
+        action_hash,
+        array![user_r, user_s].span()
+    );
+    stop_cheat_caller_address(executor.contract_address);
+
+    start_cheat_caller_address(executor.contract_address, backend_signer);
+    executor.execute_action(action_id, array![0x9, 0xa].span());
 }

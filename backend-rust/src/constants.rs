@@ -1,5 +1,4 @@
-/// Application constants
-
+// Application constants
 // Token addresses (Starknet)
 pub const TOKEN_CAREL: &str = "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545";
 // Canonical Starknet Sepolia WBTC (Garden `starknet_sepolia:wbtc` token.address).

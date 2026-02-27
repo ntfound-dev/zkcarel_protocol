@@ -3,7 +3,7 @@ use crate::{
     config::Config,
     constants::token_address_for,
     constants::PRICE_UPDATER_INTERVAL_SECS,
-    db::Database,
+    db::{Database, PriceTickUpsert},
     error::{AppError, Result},
     models::PriceTick,
     services::price_guard::sanitize_price_usd,
@@ -42,6 +42,16 @@ pub struct PriceChartService {
     db: Database,
     config: Config,
     price_cache: Arc<RwLock<HashMap<String, Decimal>>>,
+}
+
+struct CandleSaveInput<'a> {
+    token: &'a str,
+    timestamp: DateTime<Utc>,
+    open: Decimal,
+    high: Decimal,
+    low: Decimal,
+    close: Decimal,
+    interval: &'a str,
 }
 
 impl PriceChartService {
@@ -367,29 +377,29 @@ impl PriceChartService {
                     let high = candle.high.max(current_price);
                     let low = candle.low.min(current_price);
 
-                    self.save_candle(
+                    self.save_candle(CandleSaveInput {
                         token,
-                        candle_start,
-                        candle.open,
+                        timestamp: candle_start,
+                        open: candle.open,
                         high,
                         low,
-                        current_price,
+                        close: current_price,
                         interval,
-                    )
+                    })
                     .await?;
                 }
                 None => {
                     let open = last_price.unwrap_or(current_price);
 
-                    self.save_candle(
+                    self.save_candle(CandleSaveInput {
                         token,
-                        candle_start,
+                        timestamp: candle_start,
                         open,
-                        current_price,
-                        current_price,
-                        current_price,
+                        high: current_price,
+                        low: current_price,
+                        close: current_price,
                         interval,
-                    )
+                    })
                     .await?;
                 }
             }
@@ -399,51 +409,53 @@ impl PriceChartService {
     }
 
     // Internal helper that updates state for `save_candle`.
-    async fn save_candle(
-        &self,
-        token: &str,
-        timestamp: DateTime<Utc>,
-        open: Decimal,
-        high: Decimal,
-        low: Decimal,
-        close: Decimal,
-        interval: &str,
-    ) -> Result<()> {
-        let close_f64 = close
+    async fn save_candle(&self, input: CandleSaveInput<'_>) -> Result<()> {
+        let close_f64 = input
+            .close
             .to_f64()
             .ok_or_else(|| AppError::Internal("close".into()))?;
-        let Some(close_sane) = sanitize_price_usd(token, close_f64) else {
+        let Some(close_sane) = sanitize_price_usd(input.token, close_f64) else {
             tracing::warn!(
                 "Skip saving outlier candle for {} interval {}: close={}",
-                token,
-                interval,
+                input.token,
+                input.interval,
                 close_f64
             );
             return Ok(());
         };
-        let open_sane = open
+        let open_sane = input
+            .open
             .to_f64()
             .ok_or_else(|| AppError::Internal("open".into()))
             .ok()
-            .and_then(|v| sanitize_price_usd(token, v))
+            .and_then(|v| sanitize_price_usd(input.token, v))
             .unwrap_or(close_sane);
-        let high_sane = high
+        let high_sane = input
+            .high
             .to_f64()
             .ok_or_else(|| AppError::Internal("high".into()))
             .ok()
-            .and_then(|v| sanitize_price_usd(token, v))
+            .and_then(|v| sanitize_price_usd(input.token, v))
             .unwrap_or(open_sane.max(close_sane));
-        let low_sane = low
+        let low_sane = input
+            .low
             .to_f64()
             .ok_or_else(|| AppError::Internal("low".into()))
             .ok()
-            .and_then(|v| sanitize_price_usd(token, v))
+            .and_then(|v| sanitize_price_usd(input.token, v))
             .unwrap_or(open_sane.min(close_sane));
 
         self.db
-            .save_price_tick(
-                token, timestamp, open_sane, high_sane, low_sane, close_sane, 0.0, interval,
-            )
+            .save_price_tick(PriceTickUpsert {
+                token: input.token,
+                timestamp: input.timestamp,
+                open: open_sane,
+                high: high_sane,
+                low: low_sane,
+                close: close_sane,
+                volume: 0.0,
+                interval: input.interval,
+            })
             .await?;
 
         Ok(())

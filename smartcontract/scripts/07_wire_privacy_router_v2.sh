@@ -185,6 +185,8 @@ wire_privacy_router SWAP_AGGREGATOR_ADDRESS
 wire_privacy_router PRIVATE_SWAP_ADDRESS
 # DarkPool/PrivatePayments use direct verifier, no set_privacy_router entrypoint
 wire_privacy_router ANONYMOUS_CREDENTIALS_ADDRESS
+# Runtime FE/BE uses LIMIT_ORDER_BOOK_ADDRESS; KEEPER_NETWORK_ADDRESS kept as catalog alias.
+wire_privacy_router LIMIT_ORDER_BOOK_ADDRESS
 wire_privacy_router KEEPER_NETWORK_ADDRESS
 
 # External assets (optional)

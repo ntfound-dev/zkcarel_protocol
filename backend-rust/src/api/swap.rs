@@ -10,13 +10,14 @@ use super::{
     require_starknet_user, require_user, AppState,
 };
 use crate::services::onchain::{
-    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
+    felt_to_u128, parse_felt, u256_from_felts, OnchainReader,
 };
 use crate::{
     constants::{
         token_address_for, DEX_EKUBO, DEX_HAIKO, EPOCH_DURATION_SECONDS, POINTS_MIN_USD_SWAP,
         POINTS_MIN_USD_SWAP_TESTNET, POINTS_PER_USD_SWAP,
     },
+    db::NftDiscountStateUpsert,
     error::{AppError, Result},
     models::{ApiResponse, StarknetWalletCall, SwapQuoteRequest, SwapQuoteResponse},
     services::gas_optimizer::GasOptimizer,
@@ -27,6 +28,7 @@ use crate::{
         symbol_candidates_for,
     },
     services::privacy_verifier::parse_privacy_verifier_kind,
+    services::relayer::RelayerService,
     services::LiquidityAggregator,
     services::NotificationService,
 };
@@ -48,8 +50,8 @@ const ONCHAIN_DISCOUNT_TIMEOUT_MS: u64 = 2_500;
 const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 300;
 const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 1_800;
 const NFT_DISCOUNT_CACHE_MAX_ENTRIES: usize = 100_000;
-const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
-const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
+const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 20.0;
+const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 40.0;
 
 #[derive(Clone, Copy)]
 struct CachedNftDiscount {
@@ -496,34 +498,38 @@ fn build_submit_private_intent_call(
 
 // Internal helper that builds inputs for `build_execute_private_swap_with_payout_call` in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-fn build_execute_private_swap_with_payout_call(
-    executor: Felt,
-    payload: &AutoPrivacyPayloadResponse,
+struct SwapPayoutCallInput<'a> {
     action_target: Felt,
     action_selector: Felt,
-    action_calldata: &[Felt],
+    action_calldata: &'a [Felt],
     approval_token: Felt,
     payout_token: Felt,
     recipient: Felt,
     min_payout_low: Felt,
     min_payout_high: Felt,
+}
+
+fn build_execute_private_swap_with_payout_call(
+    executor: Felt,
+    payload: &AutoPrivacyPayloadResponse,
+    input: &SwapPayoutCallInput<'_>,
 ) -> Result<Call> {
     let selector = get_selector_from_name("execute_private_swap_with_payout")
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
 
-    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + action_calldata.len());
+    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
     calldata.push(parse_felt(payload.commitment.trim())?);
     if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-        calldata.push(action_target);
+        calldata.push(input.action_target);
     }
-    calldata.push(action_selector);
-    calldata.push(Felt::from(action_calldata.len() as u64));
-    calldata.extend_from_slice(action_calldata);
-    calldata.push(approval_token);
-    calldata.push(payout_token);
-    calldata.push(recipient);
-    calldata.push(min_payout_low);
-    calldata.push(min_payout_high);
+    calldata.push(input.action_selector);
+    calldata.push(Felt::from(input.action_calldata.len() as u64));
+    calldata.extend_from_slice(input.action_calldata);
+    calldata.push(input.approval_token);
+    calldata.push(input.payout_token);
+    calldata.push(input.recipient);
+    calldata.push(input.min_payout_low);
+    calldata.push(input.min_payout_high);
 
     Ok(Call {
         to: executor,
@@ -617,14 +623,7 @@ async fn shielded_fixed_amount(
 async fn compute_swap_payout_intent_hash_on_executor(
     state: &AppState,
     executor: Felt,
-    action_target: Felt,
-    action_selector: Felt,
-    action_calldata: &[Felt],
-    approval_token: Felt,
-    payout_token: Felt,
-    recipient: Felt,
-    min_payout_low: Felt,
-    min_payout_high: Felt,
+    input: &SwapPayoutCallInput<'_>,
 ) -> Result<String> {
     let reader = OnchainReader::from_config(&state.config)?;
     let selector_name = match hide_executor_kind() {
@@ -633,18 +632,18 @@ async fn compute_swap_payout_intent_hash_on_executor(
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
-    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + action_calldata.len());
+    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
     if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-        calldata.push(action_target);
+        calldata.push(input.action_target);
     }
-    calldata.push(action_selector);
-    calldata.push(Felt::from(action_calldata.len() as u64));
-    calldata.extend_from_slice(action_calldata);
-    calldata.push(approval_token);
-    calldata.push(payout_token);
-    calldata.push(recipient);
-    calldata.push(min_payout_low);
-    calldata.push(min_payout_high);
+    calldata.push(input.action_selector);
+    calldata.push(Felt::from(input.action_calldata.len() as u64));
+    calldata.extend_from_slice(input.action_calldata);
+    calldata.push(input.approval_token);
+    calldata.push(input.payout_token);
+    calldata.push(input.recipient);
+    calldata.push(input.min_payout_low);
+    calldata.push(input.min_payout_high);
 
     let out = reader
         .call(FunctionCall {
@@ -974,16 +973,16 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
 
     let db_row = state
         .db
-        .upsert_nft_discount_state_from_chain(
-            contract,
+        .upsert_nft_discount_state_from_chain(NftDiscountStateUpsert {
+            contract_address: contract,
             user_address,
             period_epoch,
-            usage_snapshot.tier.max(0),
+            tier: usage_snapshot.tier.max(0),
             discount_percent,
-            chain_active,
-            max_usage_i64,
-            chain_used_i64,
-        )
+            is_active: chain_active,
+            max_usage: max_usage_i64,
+            chain_used_in_period: chain_used_i64,
+        })
         .await;
 
     let resolved_discount = match db_row {
@@ -1163,10 +1162,7 @@ fn parse_decimal_to_scaled_u128(raw: &str, decimals: u32) -> Result<u128> {
         ));
     }
 
-    let (whole_raw, frac_raw) = trimmed
-        .split_once('.')
-        .map(|(whole, frac)| (whole, frac))
-        .unwrap_or((trimmed, ""));
+    let (whole_raw, frac_raw) = trimmed.split_once('.').unwrap_or((trimmed, ""));
     if !whole_raw.chars().all(|c| c.is_ascii_digit())
         || !frac_raw.chars().all(|c| c.is_ascii_digit())
     {
@@ -1538,7 +1534,7 @@ fn push_token_candidate(raw: Option<String>, out: &mut Vec<Felt>) {
     };
     match parse_felt(&candidate) {
         Ok(felt) => {
-            if !out.iter().any(|existing| *existing == felt) {
+            if !out.contains(&felt) {
                 out.push(felt);
             }
         }
@@ -1831,12 +1827,7 @@ async fn fetch_onchain_swap_context(
                 FunctionCall {
                     contract_address: swap_contract,
                     entry_point_selector: route_selector,
-                    calldata: vec![
-                        from_token_felt.clone(),
-                        to_token_felt.clone(),
-                        amount_low,
-                        amount_high,
-                    ],
+                    calldata: vec![*from_token_felt, *to_token_felt, amount_low, amount_high],
                 },
             )
             .await
@@ -1853,8 +1844,8 @@ async fn fetch_onchain_swap_context(
                             "Failed to fetch on-chain swap route: {} (swap_contract={}, from_token={}, to_token={}). If this is RPC/network related, set STARKNET_API_RPC_URL to a healthy Starknet Sepolia endpoint and retry. If you see EntrypointNotFound, check STARKNET_SWAP_CONTRACT_ADDRESS/SWAP_AGGREGATOR_ADDRESS and restart backend.",
                             message,
                             felt_debug(swap_contract),
-                            felt_debug(from_token_felt.clone()),
-                            felt_debug(to_token_felt.clone())
+                            felt_debug(*from_token_felt),
+                            felt_debug(*to_token_felt)
                         )));
                     }
                     continue;
@@ -1865,13 +1856,13 @@ async fn fetch_onchain_swap_context(
                 Ok(route) => {
                     tracing::debug!(
                         "Resolved on-chain swap route with token addresses: {} -> {}",
-                        felt_hex(from_token_felt.clone()),
-                        felt_hex(to_token_felt.clone())
+                        felt_hex(*from_token_felt),
+                        felt_hex(*to_token_felt)
                     );
                     return Ok(OnchainSwapContext {
                         swap_contract,
-                        from_token: from_token_felt.clone(),
-                        to_token: to_token_felt.clone(),
+                        from_token: *from_token_felt,
+                        to_token: *to_token_felt,
                         amount_low,
                         amount_high,
                         route,
@@ -1882,8 +1873,8 @@ async fn fetch_onchain_swap_context(
                         first_error = Some(AppError::BadRequest(format!(
                             "{} (from_token={}, to_token={})",
                             err,
-                            felt_hex(from_token_felt.clone()),
-                            felt_hex(to_token_felt.clone())
+                            felt_hex(*from_token_felt),
+                            felt_hex(*to_token_felt)
                         )));
                     }
                 }
@@ -1976,7 +1967,7 @@ async fn resolve_allowed_swap_senders(
     let mut out: Vec<Felt> = Vec::new();
     for candidate in [resolved_starknet_user, auth_subject] {
         if let Ok(felt) = parse_felt(candidate) {
-            if !out.iter().any(|existing| *existing == felt) {
+            if !out.contains(&felt) {
                 out.push(felt);
             }
         }
@@ -1988,7 +1979,7 @@ async fn resolve_allowed_swap_senders(
                 continue;
             }
             if let Ok(felt) = parse_felt(wallet.wallet_address.trim()) {
-                if !out.iter().any(|existing| *existing == felt) {
+                if !out.contains(&felt) {
                     out.push(felt);
                 }
             }
@@ -2073,7 +2064,7 @@ fn verify_swap_invoke_payload(
 
     let (sender, calldata) = extract_invoke_sender_and_calldata(tx)?;
 
-    if !allowed_senders.iter().any(|candidate| *candidate == sender) {
+    if !allowed_senders.contains(&sender) {
         let expected = allowed_senders
             .iter()
             .map(|felt| felt.to_string())
@@ -2104,10 +2095,7 @@ fn verify_swap_invoke_payload(
     if let Some(calls) = calls {
         for call in calls {
             if call.selector == approve_selector {
-                if !from_token_candidates
-                    .iter()
-                    .any(|candidate| *candidate == call.to)
-                {
+                if !from_token_candidates.contains(&call.to) {
                     continue;
                 }
                 saw_approve_from_token = true;
@@ -2121,10 +2109,7 @@ fn verify_swap_invoke_payload(
                 }
                 continue;
             }
-            if !swap_selectors
-                .iter()
-                .any(|selector| *selector == call.selector)
-            {
+            if !swap_selectors.contains(&call.selector) {
                 continue;
             }
             saw_swap_selector = true;
@@ -2136,9 +2121,9 @@ fn verify_swap_invoke_payload(
                 saw_expected_contract = true;
             }
 
-            let from_idx = first_index_of_any(&call.calldata, &from_token_candidates);
+            let from_idx = first_index_of_any(&call.calldata, from_token_candidates);
             let to_idx = from_idx.and_then(|idx| {
-                first_index_of_any_from(&call.calldata, &to_token_candidates, idx + 1)
+                first_index_of_any_from(&call.calldata, to_token_candidates, idx + 1)
             });
 
             if let (Some(from_idx), Some(to_idx)) = (from_idx, to_idx) {
@@ -2584,19 +2569,19 @@ pub async fn execute_swap(
                 req.mode.eq_ignore_ascii_case("private"),
             );
             let recipient_felt = parse_felt(final_recipient)?;
-            let intent_hash = compute_swap_payout_intent_hash_on_executor(
-                &state,
-                executor,
-                onchain_context.swap_contract,
+            let swap_payout_input = SwapPayoutCallInput {
+                action_target: onchain_context.swap_contract,
                 action_selector,
-                &action_calldata,
-                onchain_context.from_token,
-                onchain_context.to_token,
-                recipient_felt,
-                onchain_context.route.min_amount_out_low,
-                onchain_context.route.min_amount_out_high,
-            )
-            .await?;
+                action_calldata: &action_calldata,
+                approval_token: onchain_context.from_token,
+                payout_token: onchain_context.to_token,
+                recipient: recipient_felt,
+                min_payout_low: onchain_context.route.min_amount_out_low,
+                min_payout_high: onchain_context.route.min_amount_out_high,
+            };
+            let intent_hash =
+                compute_swap_payout_intent_hash_on_executor(&state, executor, &swap_payout_input)
+                    .await?;
             bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
             ensure_public_inputs_bind_nullifier_commitment(
                 &payload.nullifier,
@@ -2605,11 +2590,8 @@ pub async fn execute_swap(
                 "swap hide payload (bound)",
             )?;
 
-            let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-                return Err(AppError::BadRequest(
-                    "On-chain relayer account is not configured for hide mode".to_string(),
-                ));
-            };
+            let relayer = RelayerService::from_config(&state.config)
+                .map_err(map_hide_relayer_invoke_error)?;
             let mut relayer_calls: Vec<Call> = Vec::new();
             if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
                 let commitment_felt = parse_felt(payload.commitment.trim())?;
@@ -2695,22 +2677,15 @@ pub async fn execute_swap(
             let execute_call = build_execute_private_swap_with_payout_call(
                 executor,
                 &payload,
-                onchain_context.swap_contract,
-                action_selector,
-                &action_calldata,
-                onchain_context.from_token,
-                onchain_context.to_token,
-                recipient_felt,
-                onchain_context.route.min_amount_out_low,
-                onchain_context.route.min_amount_out_high,
+                &swap_payout_input,
             )?;
             relayer_calls.push(submit_call);
             relayer_calls.push(execute_call);
-            let tx_hash_felt = invoker
-                .invoke_many(relayer_calls)
+            let submitted = relayer
+                .submit_calls(relayer_calls)
                 .await
                 .map_err(map_hide_relayer_invoke_error)?;
-            let tx_hash = format!("{:#x}", tx_hash_felt);
+            let tx_hash = submitted.tx_hash;
             tracing::info!(
                 "Submitted hide swap via relayer pool user={} tx_hash={} executor={}",
                 user_address,

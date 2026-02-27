@@ -1034,11 +1034,10 @@ async fn merge_onchain_holdings(
     }
 
     let strk_total = starknet_strk.unwrap_or(0.0) + evm_strk.unwrap_or(0.0);
-    if (starknet_address.is_some() || evm_address.is_some())
-        && (starknet_strk.is_some() || evm_strk.is_some())
+    if strk_total > 0.0
+        || ((starknet_address.is_some() || evm_address.is_some())
+            && (starknet_strk.is_some() || evm_strk.is_some()))
     {
-        resolved_onchain.insert("STRK".to_string(), strk_total);
-    } else if strk_total > 0.0 {
         resolved_onchain.insert("STRK".to_string(), strk_total);
     }
 
@@ -1160,11 +1159,11 @@ async fn build_portfolio_ohlcv(
     let from = chrono::Utc
         .timestamp_opt(start_ts, 0)
         .single()
-        .unwrap_or_else(|| chrono::Utc::now());
+        .unwrap_or_else(chrono::Utc::now);
     let to = chrono::Utc
         .timestamp_opt(now_ts, 0)
         .single()
-        .unwrap_or_else(|| chrono::Utc::now());
+        .unwrap_or_else(chrono::Utc::now);
 
     let mut series = Vec::new();
     for (token, amount) in holding_map {

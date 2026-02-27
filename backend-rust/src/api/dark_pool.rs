@@ -124,7 +124,7 @@ pub async fn is_nullifier_used(
         .await?;
 
     let used = result
-        .get(0)
+        .first()
         .map(|v| v == &starknet_core::types::Felt::from(1_u8))
         .unwrap_or(false);
 

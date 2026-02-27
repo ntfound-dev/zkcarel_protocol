@@ -186,9 +186,7 @@ pub async fn get_status(
             let can_claim =
                 if !state.config.is_testnet() || !token_faucet_configured(&state, &token_symbol) {
                     false
-                } else if token_symbol == "CAREL" && carel_unlimited {
-                    true
-                } else if last_claim_at.is_none() {
+                } else if (token_symbol == "CAREL" && carel_unlimited) || last_claim_at.is_none() {
                     true
                 } else {
                     state

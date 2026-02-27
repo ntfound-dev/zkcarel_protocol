@@ -21,7 +21,7 @@ This checklist tracks the current contract security posture, open hardening item
 | Area | Status | Notes |
 | --- | --- | --- |
 | Network | Active (Testnet) | Starknet Sepolia is the current deployment target |
-| Test Status | Passing | `145/145` passing on current integrated suite |
+| Test Status | Passing | `172/172` (main) and `12/12` (private_executor_lite) passing |
 | Hide Mode | Active | Relayer path for swap/limit/stake only |
 | Upgradeability | Not implemented | No proxy path; redeploy + migration model |
 

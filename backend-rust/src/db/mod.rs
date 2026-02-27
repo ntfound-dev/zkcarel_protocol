@@ -23,6 +23,30 @@ pub struct NftDiscountState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct PriceTickUpsert<'a> {
+    pub token: &'a str,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub interval: &'a str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NftDiscountStateUpsert<'a> {
+    pub contract_address: &'a str,
+    pub user_address: &'a str,
+    pub period_epoch: i64,
+    pub tier: i32,
+    pub discount_percent: f64,
+    pub is_active: bool,
+    pub max_usage: i64,
+    pub chain_used_in_period: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1359,17 +1383,7 @@ impl Database {
     ///
     /// # Notes
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
-    pub async fn save_price_tick(
-        &self,
-        token: &str,
-        timestamp: chrono::DateTime<chrono::Utc>,
-        open: f64,
-        high: f64,
-        low: f64,
-        close: f64,
-        volume: f64,
-        interval: &str,
-    ) -> Result<()> {
+    pub async fn save_price_tick(&self, input: PriceTickUpsert<'_>) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO price_history
@@ -1382,14 +1396,14 @@ impl Database {
                 volume = price_history.volume + $7
             "#,
         )
-        .bind(token)
-        .bind(timestamp)
-        .bind(rust_decimal::Decimal::from_f64_retain(open))
-        .bind(rust_decimal::Decimal::from_f64_retain(high))
-        .bind(rust_decimal::Decimal::from_f64_retain(low))
-        .bind(rust_decimal::Decimal::from_f64_retain(close))
-        .bind(rust_decimal::Decimal::from_f64_retain(volume))
-        .bind(interval)
+        .bind(input.token)
+        .bind(input.timestamp)
+        .bind(rust_decimal::Decimal::from_f64_retain(input.open))
+        .bind(rust_decimal::Decimal::from_f64_retain(input.high))
+        .bind(rust_decimal::Decimal::from_f64_retain(input.low))
+        .bind(rust_decimal::Decimal::from_f64_retain(input.close))
+        .bind(rust_decimal::Decimal::from_f64_retain(input.volume))
+        .bind(input.interval)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1635,17 +1649,14 @@ impl Database {
     /// Updates state for `upsert_nft_discount_state_from_chain`.
     pub async fn upsert_nft_discount_state_from_chain(
         &self,
-        contract_address: &str,
-        user_address: &str,
-        period_epoch: i64,
-        tier: i32,
-        discount_percent: f64,
-        is_active: bool,
-        max_usage: i64,
-        chain_used_in_period: i64,
+        input: NftDiscountStateUpsert<'_>,
     ) -> Result<NftDiscountState> {
-        ensure_varchar_max("nft_discount_state.contract_address", contract_address, 66)?;
-        ensure_varchar_max("nft_discount_state.user_address", user_address, 66)?;
+        ensure_varchar_max(
+            "nft_discount_state.contract_address",
+            input.contract_address,
+            66,
+        )?;
+        ensure_varchar_max("nft_discount_state.user_address", input.user_address, 66)?;
 
         let row = sqlx::query(
             r#"
@@ -1686,14 +1697,14 @@ impl Database {
                 updated_at
             "#,
         )
-        .bind(contract_address)
-        .bind(user_address)
-        .bind(period_epoch)
-        .bind(tier)
-        .bind(discount_percent)
-        .bind(is_active)
-        .bind(max_usage.max(0))
-        .bind(chain_used_in_period.max(0))
+        .bind(input.contract_address)
+        .bind(input.user_address)
+        .bind(input.period_epoch)
+        .bind(input.tier)
+        .bind(input.discount_percent)
+        .bind(input.is_active)
+        .bind(input.max_usage.max(0))
+        .bind(input.chain_used_in_period.max(0))
         .fetch_one(&self.pool)
         .await?;
 

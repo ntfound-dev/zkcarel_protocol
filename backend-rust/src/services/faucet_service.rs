@@ -153,7 +153,7 @@ impl FaucetService {
         };
         let result = self.reader.call(call).await;
         if let Ok(values) = result {
-            if let Some(value) = values.get(0) {
+            if let Some(value) = values.first() {
                 if let Ok(decoded) = u256_from_felts(value, &Felt::from(0_u128)) {
                     return Ok(decoded as u8);
                 }
@@ -177,7 +177,7 @@ impl FaucetService {
         };
         let values = self.reader.call(call).await?;
         let low = values
-            .get(0)
+            .first()
             .ok_or_else(|| AppError::Internal("Balance low missing".into()))?;
         let high = values
             .get(1)

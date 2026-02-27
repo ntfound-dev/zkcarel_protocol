@@ -277,7 +277,7 @@ pub mod BridgeAggregator {
         fn register_bridge_provider(ref self: ContractState, provider_id: felt252, info: BridgeProvider) {
             // Uses Ownable internal helper to enforce owner-only registration.
             self.ownable.assert_only_owner();
-            let current: u64 = self.provider_ids.len().into();
+            let current: u64 = self.provider_ids.len();
             assert!(current < self.max_providers.read(), "Provider limit reached");
             
             self.bridge_providers.entry(provider_id).write(info);

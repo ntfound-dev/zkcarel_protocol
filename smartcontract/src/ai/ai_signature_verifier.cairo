@@ -22,15 +22,6 @@ pub trait IAISignatureVerifier<TContractState> {
     ) -> bool;
 }
 
-// Admin controls for allowlist-based verifier.
-// Owner-only configuration for tests and staging.
-#[starknet::interface]
-pub trait IAISignatureVerifierAdmin<TContractState> {
-    // Updates valid hash configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
-    fn set_valid_hash(ref self: TContractState, signer: ContractAddress, message_hash: felt252, valid: bool);
-}
-
 // ZK privacy hooks for AI signature verification.
 #[starknet::interface]
 pub trait IAISignatureVerifierPrivacy<TContractState> {
@@ -50,8 +41,18 @@ pub trait IAISignatureVerifierPrivacy<TContractState> {
     );
 }
 
-// Simple allowlist-based signature verifier for AI actions.
-// Replace with proper ECDSA/account verification for production.
+// Minimal Starknet account signature interface (SRC-6 compatible).
+#[starknet::interface]
+pub trait ISignatureAccount<TContractState> {
+    // Returns `'VALID'` when signature is valid for the given hash.
+    fn is_valid_signature(
+        self: @TContractState,
+        message_hash: felt252,
+        signature: Span<felt252>
+    ) -> felt252;
+}
+
+// Production-oriented account-based signature verifier for AI actions.
 #[starknet::contract]
 pub mod AISignatureVerifier {
     use starknet::ContractAddress;
@@ -60,6 +61,7 @@ pub mod AISignatureVerifier {
     use core::num::traits::Zero;
     use crate::privacy::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy::action_types::ACTION_AI;
+    use super::{ISignatureAccountDispatcher, ISignatureAccountDispatcherTrait};
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
 
@@ -69,7 +71,6 @@ pub mod AISignatureVerifier {
 
     #[storage]
     pub struct Storage {
-        pub valid_hashes: Map<(ContractAddress, felt252), bool>,
         pub used_hashes: Map<(ContractAddress, felt252), bool>,
         pub privacy_router: ContractAddress,
         #[substorage(v0)]
@@ -79,17 +80,9 @@ pub mod AISignatureVerifier {
     #[event]
     #[derive(Drop, starknet::Event)]
     pub enum Event {
-        HashUpdated: HashUpdated,
         HashConsumed: HashConsumed,
         #[flat]
         OwnableEvent: OwnableComponent::Event,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    pub struct HashUpdated {
-        pub signer: ContractAddress,
-        pub message_hash: felt252,
-        pub valid: bool,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -115,12 +108,11 @@ pub mod AISignatureVerifier {
             message_hash: felt252,
             signature: Span<felt252>
         ) -> bool {
-            let _ = signature;
-            let key = (signer, message_hash);
-            if !self.valid_hashes.entry(key).read() {
+            if signer.is_zero() || message_hash == 0 || signature.len() == 0 {
                 return false;
             }
-            !self.used_hashes.entry(key).read()
+            let account = ISignatureAccountDispatcher { contract_address: signer };
+            account.is_valid_signature(message_hash, signature) == 'VALID'
         }
 
         // Applies verify and consume after input validation and commits the resulting state.
@@ -131,28 +123,16 @@ pub mod AISignatureVerifier {
             message_hash: felt252,
             signature: Span<felt252>
         ) -> bool {
-            let _ = signature;
             let key = (signer, message_hash);
-            if !self.valid_hashes.entry(key).read() {
+            if self.used_hashes.entry(key).read() {
                 return false;
             }
-            if self.used_hashes.entry(key).read() {
+            if !self.verify_signature(signer, message_hash, signature) {
                 return false;
             }
             self.used_hashes.entry(key).write(true);
             self.emit(Event::HashConsumed(HashConsumed { signer, message_hash }));
             true
-        }
-    }
-
-    #[abi(embed_v0)]
-    impl AdminImpl of super::IAISignatureVerifierAdmin<ContractState> {
-        // Updates valid hash configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
-        fn set_valid_hash(ref self: ContractState, signer: ContractAddress, message_hash: felt252, valid: bool) {
-            self.ownable.assert_only_owner();
-            self.valid_hashes.entry((signer, message_hash)).write(valid);
-            self.emit(Event::HashUpdated(HashUpdated { signer, message_hash, valid }));
         }
     }
 

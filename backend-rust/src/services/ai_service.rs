@@ -591,65 +591,23 @@ fn parse_intent_from_command(command: &str) -> Intent {
     }
 }
 
-// Internal helper that checks conditions for `intent_has_missing_execution_parameters`.
-fn intent_has_missing_execution_parameters(intent: &Intent) -> bool {
-    let action = intent.action.as_str();
-    let get_str = |key: &str| {
-        intent
-            .parameters
-            .get(key)
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-    };
-    let get_amount = || {
-        intent
-            .parameters
-            .get("amount")
-            .and_then(|value| value.as_f64())
-            .unwrap_or(0.0)
-    };
-
-    match action {
-        "swap" | "bridge" => {
-            let from = get_str("from");
-            let to = get_str("to");
-            let amount = get_amount();
-            from.is_empty() || to.is_empty() || amount <= 0.0 || from == to
-        }
-        "limit_order_create" => {
-            let from = get_str("from");
-            let to = get_str("to");
-            let amount = get_amount();
-            from.is_empty() || to.is_empty() || amount <= 0.0 || from == to
-        }
-        "stake" | "unstake" => {
-            let token = get_str("token");
-            let amount = get_amount();
-            token.is_empty() || amount <= 0.0
-        }
-        _ => false,
-    }
-}
-
 // Internal helper that checks conditions for `should_try_llm_intent_assist`.
 fn should_try_llm_intent_assist(intent: &Intent) -> bool {
-    matches!(
-        intent.action.as_str(),
-        "unknown" | "chat_general" | "chat_greeting"
-    ) || intent_has_missing_execution_parameters(intent)
+    matches!(intent.action.as_str(), "unknown")
 }
 
-// Internal helper that checks conditions for `intent_is_more_actionable`.
-fn intent_is_more_actionable(current: &Intent, candidate: &Intent) -> bool {
-    if candidate.action == "unknown" {
-        return false;
+// Internal helper that checks conditions for `is_chat_intent`.
+fn is_chat_intent(intent: &Intent) -> bool {
+    matches!(intent.action.as_str(), "chat_general" | "chat_greeting")
+}
+
+// Internal helper that supports `llm_temperature_for_intent` operations.
+fn llm_temperature_for_intent(intent: &Intent) -> f64 {
+    if is_chat_intent(intent) {
+        0.7
+    } else {
+        0.2
     }
-    if current.action == "unknown" {
-        return true;
-    }
-    let current_missing = intent_has_missing_execution_parameters(current);
-    let candidate_missing = intent_has_missing_execution_parameters(candidate);
-    current_missing && !candidate_missing
 }
 
 #[derive(Debug, Serialize)]
@@ -792,7 +750,7 @@ pub fn classify_command_scope(command: &str) -> AIGuardScope {
     }
 }
 
-/// AI Service - keyword intent + optional LLM rewrite (Gemini/Cairo/OpenAI)
+/// AI Service - deterministic intent routing + LLM-first chat responses
 pub struct AIService {
     db: Database,
     config: Config,
@@ -816,30 +774,29 @@ impl AIService {
 
     /// Execute AI command.
     /// Flow:
-    /// 1) intent routing (deterministic)
-    /// 2) optional LLM rewrite (Gemini/Cairo/OpenAI if configured)
+    /// 1) deterministic intent routing
+    /// 2) LLM-first response for chat intents
+    /// 3) optional LLM text assist only for unknown intent replies
     pub async fn execute_command(
         &self,
         user_address: &str,
         command: &str,
         level: u8,
     ) -> Result<AIResponse> {
-        // Parse user intent
-        let mut intent = self.parse_intent(command).await?;
+        let intent = self.parse_intent(command).await?;
         let mut response = self
             .execute_intent_response(user_address, level, &intent)
             .await?;
+        let llm_configured = has_llm_provider_configured(&self.config);
+        let llm_rewrite_timeout_ms = if self.config.ai_llm_rewrite_timeout_ms == 0 {
+            LLM_REWRITE_TIMEOUT_MS_DEFAULT
+        } else {
+            self.config.ai_llm_rewrite_timeout_ms
+        };
 
-        // LLM can assist deterministic parser for execution commands when user phrasing is unclear.
-        // We still route final execution through deterministic intent + on-chain confirmations.
-        let should_try_llm_assist =
-            has_llm_provider_configured(&self.config) && should_try_llm_intent_assist(&intent);
-        if should_try_llm_assist {
-            let llm_rewrite_timeout_ms = if self.config.ai_llm_rewrite_timeout_ms == 0 {
-                LLM_REWRITE_TIMEOUT_MS_DEFAULT
-            } else {
-                self.config.ai_llm_rewrite_timeout_ms
-            };
+        // LLM-first for chat to make conversations feel more natural.
+        // On-chain intents remain deterministic and never use LLM to alter action/params.
+        if llm_configured && is_chat_intent(&intent) {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(llm_rewrite_timeout_ms),
                 self.generate_with_llm(user_address, command, level, &intent, &response),
@@ -847,20 +804,29 @@ impl AIService {
             .await
             {
                 Ok(Some(llm_text)) => {
-                    let candidate_intent = parse_intent_from_command(&llm_text);
-                    if intent_is_more_actionable(&intent, &candidate_intent) {
-                        tracing::info!(
-                            "LLM intent assist improved command parse: {} -> {}",
-                            intent.action,
-                            candidate_intent.action
-                        );
-                        intent = candidate_intent;
-                        response = self
-                            .execute_intent_response(user_address, level, &intent)
-                            .await?;
-                    } else if matches!(intent.action.as_str(), "unknown") {
-                        // Preserve previous behavior for unknown commands:
-                        // if no better executable intent is found, use LLM rewritten reply.
+                    if !llm_text.trim().is_empty() {
+                        response.message = llm_text;
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    tracing::warn!("LLM rewrite timed out after {}ms", llm_rewrite_timeout_ms);
+                }
+            }
+            return Ok(response);
+        }
+
+        // For unknown intents only: keep deterministic action routing, but allow LLM to improve
+        // the final explanatory text.
+        if llm_configured && should_try_llm_intent_assist(&intent) {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(llm_rewrite_timeout_ms),
+                self.generate_with_llm(user_address, command, level, &intent, &response),
+            )
+            .await
+            {
+                Ok(Some(llm_text)) => {
+                    if !llm_text.trim().is_empty() {
                         response.message = llm_text;
                     }
                 }
@@ -990,7 +956,7 @@ impl AIService {
                     content: user_prompt,
                 },
             ],
-            temperature: 0.2,
+            temperature: llm_temperature_for_intent(intent),
             max_tokens: 256,
         };
 
@@ -1071,7 +1037,7 @@ impl AIService {
                 parts: vec![GeminiPart { text: prompt }],
             }],
             generation_config: GeminiGenerationConfig {
-                temperature: 0.2,
+                temperature: llm_temperature_for_intent(intent),
                 max_output_tokens: 256,
             },
         };
@@ -1249,7 +1215,7 @@ impl AIService {
                     content: user_prompt,
                 },
             ],
-            temperature: 0.2,
+            temperature: llm_temperature_for_intent(intent),
             max_tokens: 256,
         };
 
@@ -1464,7 +1430,7 @@ impl AIService {
     // Internal helper that runs side-effecting logic for `execute_points_command`.
     async fn execute_points_command(&self, user_address: &str, locale: &str) -> Result<AIResponse> {
         let is_id = is_indonesian_locale(locale);
-        let epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+        let epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
         let points = self.db.get_user_points(user_address, epoch).await?;
 
@@ -2358,5 +2324,42 @@ mod tests {
     fn classify_command_scope_enforces_portfolio_alert() {
         let scope = classify_command_scope("buat alert harga btc");
         assert_eq!(scope, AIGuardScope::PortfolioAlert);
+    }
+
+    #[test]
+    // Internal helper that supports `should_try_llm_intent_assist_only_unknown` operations.
+    fn should_try_llm_intent_assist_only_unknown() {
+        let unknown = Intent {
+            action: "unknown".to_string(),
+            parameters: serde_json::json!({}),
+        };
+        let chat = Intent {
+            action: "chat_general".to_string(),
+            parameters: serde_json::json!({}),
+        };
+        let swap = Intent {
+            action: "swap".to_string(),
+            parameters: serde_json::json!({}),
+        };
+
+        assert!(should_try_llm_intent_assist(&unknown));
+        assert!(!should_try_llm_intent_assist(&chat));
+        assert!(!should_try_llm_intent_assist(&swap));
+    }
+
+    #[test]
+    // Internal helper that supports `llm_temperature_for_intent_is_higher_for_chat` operations.
+    fn llm_temperature_for_intent_is_higher_for_chat() {
+        let chat = Intent {
+            action: "chat_greeting".to_string(),
+            parameters: serde_json::json!({}),
+        };
+        let swap = Intent {
+            action: "swap".to_string(),
+            parameters: serde_json::json!({}),
+        };
+
+        assert_eq!(llm_temperature_for_intent(&chat), 0.7);
+        assert_eq!(llm_temperature_for_intent(&swap), 0.2);
     }
 }

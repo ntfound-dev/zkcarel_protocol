@@ -4,6 +4,7 @@ This guide defines the recommended contract deployment order and wiring steps fo
 ## Table of Contents
 - [Prerequisites](#prerequisites)
 - [Deploy Order](#deploy-order)
+- [Profile Alignment (Important)](#profile-alignment-important)
 - [Optional: Real Garaga Verifier (BLS12-381)](#optional-real-garaga-verifier-bls12-381)
 - [Export Addresses](#export-addresses)
 - [V2 Privacy Wiring](#v2-privacy-wiring)
@@ -41,7 +42,7 @@ scarb build
 | 8 | `AIExecutor` | `carel_token`, `backend_signer` |
 | 9 | `BridgeAggregator` | `owner`, `min_liquidity` |
 | 10 | `SwapAggregator` | `owner`, `price_oracle`, `fee_collector` (or project-specific constructor set) |
-| 11 | `DCAOrders` (Limit Order Book) | `owner` |
+| 11 | `KeeperNetwork` (Limit Order Book) | `owner` |
 | 12 | `StakingCarel` | `carel_token`, `reward_pool` |
 | 13 | `StakingStablecoin` | `pool_admin`, `reward_pool`, `token_list` |
 | 14 | `StakingBTC` | `pool_admin`, `reward_pool`, `btc_token` |
@@ -51,7 +52,23 @@ scarb build
 | 18 | `PrivatePayments` | `admin`, `garaga_adapter` |
 | 19 | `AnonymousCredentials` | `admin`, `garaga_adapter` |
 | 20 | `BattleshipGaraga` | `admin`, `garaga_adapter`, `timeout_config` |
-| 21 | `PrivateActionExecutor / ShieldedPoolV2` | `admin`, `router`, `verifier_adapter`, module-specific params |
+| 21 | `ShieldedPoolV2` (MVP default hide executor) | `admin`, `verifier`, `relayer` |
+| 22 | `PrivateActionExecutor` (legacy/compatibility) | `admin`, `verifier`, `relayer`, `swap_target`, `limit_target`, `staking_target` |
+
+## Profile Alignment (Important)
+Untuk menghindari mismatch saat demo:
+- `smartcontract/.env` dipakai sebagai katalog deploy/contracts inventory.
+- Runtime bukti MVP biasanya memakai:
+  - `backend-rust/.env`
+  - `frontend/.env.local`
+
+Setelah deploy/wiring kontrak:
+1. Sinkronkan alamat dari `smartcontract/.env` ke `backend-rust/.env`.
+2. Sinkronkan alamat dari backend ke `frontend/.env.local`.
+3. Restart backend + frontend.
+
+Catatan:
+- Jika alamat `ZK_PRIVACY_ROUTER_ADDRESS` di runtime profile berbeda dengan katalog smartcontract, bukti tx akan mengikuti runtime profile aktif.
 
 ## Optional: Real Garaga Verifier (BLS12-381)
 Use this section when moving from mock verification to real BLS12-381 proof verification.
@@ -140,6 +157,13 @@ The script updates:
 - `frontend/.env` and `frontend/.env.local` -> `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS`, `NEXT_PUBLIC_AI_EXECUTOR_ADDRESS`
 
 Then restart backend and frontend services.
+
+Latest verified run (Feb 26, 2026):
+- RPC: `https://api.zan.top/node/v1/starknet/sepolia/<key>/rpc/v0_10`
+- New `AI_EXECUTOR_ADDRESS`: `0x01b46617037091d04d978d2cbda42887ab4ace055b63c8b7881d34a7ec5b076b`
+- Deploy tx: `0x057ee4fb05d584d4d5dc1fd54ceed57a6e5638b3fe8f2e8de6f222b66b6c2b9a`
+- Config tx (rate/fee/limits/verifier): `0x00c473fff1062e048d407b8e378337ce2f86489487cf31f5346ea2ebdb9eba46`, `0x002bb9b874a213c2b20d03acf8827e3db1912ead8abea5934e5aa0640e076a61`, `0x046c27a0f32d84dd42f3094a90c0b90f2e3501d63518ee5f93e9f7bc08180ae8`, `0x075f6f5bb1ae646a31f5f0373749b4fe99c164b05cfcfe0ac52ad3fd6e4e9462`, `0x0722f5eea40ab5fd4b89f96484ca373cfbf31a5fc5c1a92dd218c29739c08cd0`, `0x0105bcf4255238c6aac5e02d66e6ee39f65ba41f060530f54b6cae3553bb4423`
+- CAREL burner grant tx: `0x0745212c6e5a3cab6f62f8111aa946ef4bafd5b540b7d68dbbc70c9eee8e3158`
 
 ## V2 Privacy Wiring
 Default script:

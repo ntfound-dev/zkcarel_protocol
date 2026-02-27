@@ -991,7 +991,7 @@ pub(crate) async fn fetch_starknet_erc20_balance(
         Err(err) => return Err(err),
     };
     let low = values
-        .get(0)
+        .first()
         .ok_or_else(|| AppError::Internal("Balance low missing".into()))?;
     let high = values
         .get(1)
@@ -1068,7 +1068,7 @@ pub(crate) async fn fetch_starknet_erc20_balances_batch(
             _ => None,
         };
         if let Some(raw) = amount {
-            let decimals = known_starknet_token_decimals(config, token).unwrap_or_else(|| {
+            let decimals = known_starknet_token_decimals(config, token).unwrap_or({
                 match symbol.as_str() {
                     "USDC" | "USDT" => 6,
                     "WBTC" => 8,
@@ -1106,7 +1106,7 @@ pub(crate) async fn fetch_starknet_decimals(config: &Config, token: &str) -> Res
     };
     let values = reader.call(call).await?;
     let value = values
-        .get(0)
+        .first()
         .ok_or_else(|| AppError::Internal("Decimals missing".into()))?;
     let raw = value.to_string();
     let parsed = if let Some(hex) = raw.strip_prefix("0x") {

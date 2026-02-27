@@ -84,15 +84,15 @@ fn garden_token_supported_on_chain(chain: &str, token: &str) -> bool {
 
 // Internal helper that supports `garden_supports_route` operations.
 fn garden_supports_route(from: &str, to: &str) -> bool {
-    match (from, to) {
+    matches!(
+        (from, to),
         ("ethereum", "bitcoin")
-        | ("bitcoin", "ethereum")
-        | ("bitcoin", "starknet")
-        | ("starknet", "bitcoin")
-        | ("ethereum", "starknet")
-        | ("starknet", "ethereum") => true,
-        _ => false,
-    }
+            | ("bitcoin", "ethereum")
+            | ("bitcoin", "starknet")
+            | ("starknet", "bitcoin")
+            | ("ethereum", "starknet")
+            | ("starknet", "ethereum")
+    )
 }
 
 // Internal helper that checks conditions for `is_active_config_value`.

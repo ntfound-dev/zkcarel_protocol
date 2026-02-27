@@ -100,7 +100,7 @@ impl SocialVerifier {
 
     /// Award social points
     pub async fn award_points(&self, user_address: &str, points: f64) -> Result<()> {
-        let epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+        let epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
         // Gunakan from_f64_retain atau unwrap_or_default untuk keamanan
         let points_decimal =

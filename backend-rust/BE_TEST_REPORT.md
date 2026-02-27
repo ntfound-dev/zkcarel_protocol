@@ -1,11 +1,10 @@
 # Backend Test Report
 
-**Project:** CAREL Protocol Backend (`backend-rust`)  
-**Date:** February 24, 2026  
+**Project:** CAREL Protocol Backend (`backend-rust`)
+**Date:** February 25, 2026
 **Command:** `cargo test`
 
 ## Summary
-
 - Build profile: `test` (unoptimized + debuginfo)
 - Compile result: success
 - Collected tests: `188`
@@ -17,23 +16,16 @@
 - Final status: **PASS**
 
 ## Execution Snapshot
-
 ```bash
 cd /mnt/c/Users/frend/zkcare_protocol/backend-rust
 cargo test
 ```
 
-Observed highlights:
+Observed tail:
+- `test result: ok. 188 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`
 
-- `Compiling carel-backend v0.1.0`
-- `Finished 'test' profile target(s) in 3m 34s`
-- `running 188 tests`
-- `test result: ok. 188 passed; 0 failed`
-
-## Coverage Notes (from executed suites)
-
-The run includes unit/integration tests across:
-
+## Coverage Notes
+Executed suites include:
 - API modules (`ai`, `auth`, `bridge`, `swap`, `stake`, `limit_order`, `nft`, `portfolio`, etc.)
 - Services (`ai_service`, `point_calculator`, `route_optimizer`, `event_indexer`, etc.)
 - Indexer and Starknet client utilities
@@ -41,16 +33,18 @@ The run includes unit/integration tests across:
 - WebSocket payload behavior
 
 ## Conclusion
+Backend automated tests are healthy for this run: **188/188 passing**.
 
-Backend automated tests are healthy for this run: **188/188 passing** with no failures.
+## Scope Note
+- Report ini hanya untuk module backend (`backend-rust`).
+- Frontend dan smartcontract punya report terpisah.
 
-## Recommended Retest Commands
-
+## Recommended Commands
 ```bash
-# Full backend suite
+# Full suite
 cd /mnt/c/Users/frend/zkcare_protocol/backend-rust
 cargo test
 
-# Faster re-run without rebuild noise
+# Fast rerun
 cargo test -q
 ```

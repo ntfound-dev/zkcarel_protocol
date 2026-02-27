@@ -256,7 +256,7 @@ fn wei_to_carel_amount(wei: u128) -> Decimal {
 // Internal helper that supports `crypto_felt_to_core` operations.
 fn crypto_felt_to_core(value: &CryptoFelt) -> Result<Felt> {
     let hex = value.to_fixed_hex_string();
-    Ok(Felt::from_hex(&hex).map_err(|e| AppError::Internal(format!("Invalid felt hex: {}", e)))?)
+    Felt::from_hex(&hex).map_err(|e| AppError::Internal(format!("Invalid felt hex: {}", e)))
 }
 
 // Internal helper that parses or transforms values for `normalize_scope_addresses`.
@@ -404,7 +404,7 @@ pub async fn get_points(
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<PointsResponse>>> {
     let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64; // ~30 days
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS; // ~30 days
     let cache_key = points_response_cache_key(&user_addresses, current_epoch);
     if let Some(cached) = get_cached_points_response(
         &cache_key,
@@ -575,7 +575,7 @@ pub async fn sync_points_onchain(
 ) -> Result<Json<ApiResponse<SyncOnchainPointsResponse>>> {
     let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
     let starknet_user = super::require_starknet_user(&headers, &state).await?;
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
     let points = aggregate_points_for_scope(&state, &user_addresses, current_epoch).await?;
     let offchain_points = points.total_points.max(Decimal::ZERO).trunc();
     let offchain_points_u128 = offchain_points.to_u128().unwrap_or(0);
@@ -682,7 +682,7 @@ pub async fn claim_rewards(
     let user_address = require_user(&headers, &state).await?;
 
     // Get previous epoch (finalized)
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
     let prev_epoch = current_epoch - 1;
 
     // Get user points from previous epoch
@@ -713,7 +713,7 @@ pub async fn claim_rewards(
     let carel_amount = net_carel_dec.to_f64().unwrap_or(0.0);
     let total_points: f64 = points.total_points.to_string().parse().unwrap_or(0.0);
 
-    let mut tx_hash = format!("0x{}", hex::encode(&rand::random::<[u8; 32]>()));
+    let mut tx_hash = format!("0x{}", hex::encode(rand::random::<[u8; 32]>()));
     let mut carel_amount_out = carel_amount;
 
     match claim_rewards_onchain(
@@ -760,7 +760,7 @@ pub async fn convert_to_carel(
 ) -> Result<Json<ApiResponse<ClaimResponse>>> {
     let user_address = require_user(&headers, &state).await?;
 
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
     let epoch = req.epoch.unwrap_or(current_epoch);
     if epoch < 0 {
         return Err(AppError::BadRequest("Invalid epoch".into()));
@@ -832,7 +832,7 @@ pub async fn convert_to_carel(
     let points_converted = points_value.to_f64().unwrap_or(0.0);
 
     // Execute conversion (mock)
-    let tx_hash = format!("0x{}", hex::encode(&rand::random::<[u8; 32]>()));
+    let tx_hash = format!("0x{}", hex::encode(rand::random::<[u8; 32]>()));
 
     let response = ClaimResponse {
         tx_hash,
@@ -955,15 +955,16 @@ fn build_batch_claim_call(
     let user_felt = parse_felt(user)?;
     let (amount_low, amount_high) = u256_to_felts(amount_wei);
 
-    let mut calldata = Vec::new();
-    calldata.push(Felt::from(epoch as u128));
-    calldata.push(Felt::from(1_u128)); // claims length
-    calldata.push(user_felt);
-    calldata.push(amount_low);
-    calldata.push(amount_high);
-    calldata.push(Felt::from(0_u128)); // proof_offset
-    calldata.push(Felt::from(proofs.len() as u128)); // proof_len
-    calldata.push(Felt::from(proofs.len() as u128)); // proofs length
+    let mut calldata = vec![
+        Felt::from(epoch as u128),
+        Felt::from(1_u128), // claims length
+        user_felt,
+        amount_low,
+        amount_high,
+        Felt::from(0_u128),               // proof_offset
+        Felt::from(proofs.len() as u128), // proof_len
+        Felt::from(proofs.len() as u128), // proofs length
+    ];
     calldata.extend_from_slice(proofs);
 
     Ok(Call {

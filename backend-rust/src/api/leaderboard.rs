@@ -248,7 +248,7 @@ pub async fn get_user_rank(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> Result<Json<ApiResponse<UserRankResponse>>> {
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
     let (canonical_address, scope_addresses) =
         resolve_leaderboard_identity(&state, &address).await?;
@@ -328,7 +328,7 @@ pub async fn get_user_rank(
 pub async fn get_global_metrics(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<GlobalMetricsResponse>>> {
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
     let points_total: Decimal = sqlx::query_scalar::<_, Decimal>(
         "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1",
@@ -375,7 +375,7 @@ pub async fn get_user_categories(
     let (canonical_address, scope_addresses) =
         resolve_leaderboard_identity(&state, &address).await?;
 
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
     let (user_points_total, points_rank, points_total): (f64, RankResult, CountResult) = tokio::try_join!(
         async {
@@ -617,7 +617,7 @@ pub async fn get_user_categories(
 
 // Internal helper that fetches data for `get_points_leaderboard`.
 async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry>> {
-    let current_epoch = (chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS) as i64;
+    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
         r#"

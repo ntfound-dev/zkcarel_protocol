@@ -10,5 +10,6 @@ pub mod utils;
 pub mod trading;
 pub mod governance;
 pub mod privacy;
+pub mod privacy_intermediary;
 pub mod point_token;
 pub mod mocks;

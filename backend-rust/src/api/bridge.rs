@@ -23,6 +23,7 @@ use crate::{
     },
     // Mengimpor hasher untuk menghilangkan warning unused di crypto/hash.rs
     crypto::hash,
+    db::NftDiscountStateUpsert,
     error::Result,
     integrations::bridge::{
         AtomiqClient, AtomiqQuote, GardenClient, GardenEvmTransaction, GardenQuote,
@@ -122,8 +123,8 @@ const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 300;
 const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 1_800;
 const NFT_DISCOUNT_CACHE_MAX_ENTRIES: usize = 100_000;
 const BRIDGE_MEV_FEE_RATE: f64 = 0.01;
-const BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
-const BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
+const BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 20.0;
+const BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 40.0;
 
 // Internal helper that supports `canonical_bridge_chain` operations in the bridge flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
@@ -514,16 +515,16 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
 
     let db_row = state
         .db
-        .upsert_nft_discount_state_from_chain(
-            contract,
+        .upsert_nft_discount_state_from_chain(NftDiscountStateUpsert {
+            contract_address: contract,
             user_address,
             period_epoch,
-            usage_snapshot.tier.max(0),
+            tier: usage_snapshot.tier.max(0),
             discount_percent,
-            chain_active,
-            max_usage_i64,
-            chain_used_i64,
-        )
+            is_active: chain_active,
+            max_usage: max_usage_i64,
+            chain_used_in_period: chain_used_i64,
+        })
         .await;
 
     let resolved_discount = match db_row {

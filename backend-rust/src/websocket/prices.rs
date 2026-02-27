@@ -158,7 +158,7 @@ async fn latest_price_with_change(
     }
 
     let latest = prices
-        .get(0)
+        .first()
         .copied()
         .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or_else(|| fallback_price_for(token));

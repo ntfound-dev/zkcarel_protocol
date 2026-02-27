@@ -15,6 +15,7 @@ pub mod point_calculator;
 pub mod price_chart_service;
 pub mod price_guard;
 pub mod privacy_verifier;
+pub mod relayer;
 pub mod route_optimizer;
 pub mod snapshot_manager;
 pub mod social_verifier;
@@ -93,7 +94,7 @@ pub async fn start_background_services(db: Database, config: Config) {
         if let Ok(tree) = merkle.generate_for_epoch(finalize_epoch).await {
             let _ = merkle.save_merkle_root(finalize_epoch, tree.root).await;
 
-            if let Ok(sample) = sqlx::query(
+            if let Ok(Some(row)) = sqlx::query(
                 "SELECT user_address, total_points FROM points
                  WHERE epoch = $1 AND finalized = true AND total_points > 0
                  ORDER BY user_address ASC LIMIT 1",
@@ -102,23 +103,21 @@ pub async fn start_background_services(db: Database, config: Config) {
             .fetch_optional(db.pool())
             .await
             {
-                if let Some(row) = sample {
-                    let address: String = row.get("user_address");
-                    let points: rust_decimal::Decimal = row.get("total_points");
-                    if let Ok(total_points) = sqlx::query_scalar::<_, rust_decimal::Decimal>(
-                        "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1",
-                    )
-                    .bind(finalize_epoch)
-                    .fetch_one(db.pool())
-                    .await
-                    {
-                        let amount_wei = merkle.calculate_reward_amount_wei(points, total_points);
-                        let _ = merkle
-                            .generate_proof(&tree, &address, amount_wei, finalize_epoch)
-                            .await;
-                    }
-                    let _ = merkle.get_merkle_root(finalize_epoch).await;
+                let address: String = row.get("user_address");
+                let points: rust_decimal::Decimal = row.get("total_points");
+                if let Ok(total_points) = sqlx::query_scalar::<_, rust_decimal::Decimal>(
+                    "SELECT COALESCE(SUM(total_points), 0) FROM points WHERE epoch = $1",
+                )
+                .bind(finalize_epoch)
+                .fetch_one(db.pool())
+                .await
+                {
+                    let amount_wei = merkle.calculate_reward_amount_wei(points, total_points);
+                    let _ = merkle
+                        .generate_proof(&tree, &address, amount_wei, finalize_epoch)
+                        .await;
                 }
+                let _ = merkle.get_merkle_root(finalize_epoch).await;
             }
         }
 

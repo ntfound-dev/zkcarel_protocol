@@ -21,8 +21,8 @@ fn felt_from_address(address: &str) -> Result<Felt> {
     } else {
         format!("0x{addr}")
     };
-    Ok(Felt::from_hex(&normalized)
-        .map_err(|e| crate::error::AppError::Internal(format!("Invalid address: {}", e)))?)
+    Felt::from_hex(&normalized)
+        .map_err(|e| crate::error::AppError::Internal(format!("Invalid address: {}", e)))
 }
 
 // Internal helper that builds inputs for `create_leaf_hash`.
