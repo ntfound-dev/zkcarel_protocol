@@ -283,12 +283,15 @@ class RedisQueueLease:
     acquired: bool = False
 
     def release(self) -> None:
-        if not self.acquired:
+        if not self.acquired or not self.redis_url or not self.key:
             return
         try:
-            current = int(redis_cli(self.redis_url, ["DECR", self.key]).strip() or "0")
+            current_raw = redis_cli(self.redis_url, ["DECR", self.key], hard_fail=False)
+            if not current_raw:
+                return
+            current = int(current_raw.strip() or "0")
             if current <= 0:
-                redis_cli(self.redis_url, ["DEL", self.key])
+                redis_cli(self.redis_url, ["DEL", self.key], hard_fail=False)
         except Exception:
             # Best-effort release. TTL handles stale slots.
             pass
@@ -398,6 +401,13 @@ def acquire_prover_queue_slot(job_timeout_secs: int) -> RedisQueueLease:
             warn("Redis queue DECR failed; continuing prover without queue lock.")
             return RedisQueueLease(redis_url="", key="", acquired=False)
         if time.monotonic() >= deadline:
+            if fail_open:
+                warn(
+                    "Garaga prover queue timeout after "
+                    f"{queue_timeout_secs}s (max concurrent={max_concurrent}); "
+                    "continuing prover without queue lock."
+                )
+                return RedisQueueLease(redis_url="", key="", acquired=False)
             fail(
                 "Garaga prover queue timeout after "
                 f"{queue_timeout_secs}s (max concurrent={max_concurrent})."
