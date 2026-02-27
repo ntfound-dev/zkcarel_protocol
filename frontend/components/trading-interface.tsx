@@ -155,6 +155,19 @@ const HIDE_BALANCE_SHIELDED_POOL_V2 =
   HIDE_BALANCE_EXECUTOR_KIND === "shielded_pool_v2" ||
   HIDE_BALANCE_EXECUTOR_KIND === "shielded-v2" ||
   HIDE_BALANCE_EXECUTOR_KIND === "v2"
+const HIDE_BALANCE_SHIELDED_POOL_V3 =
+  HIDE_BALANCE_EXECUTOR_KIND === "shielded_pool_v3" ||
+  HIDE_BALANCE_EXECUTOR_KIND === "shielded-v3" ||
+  HIDE_BALANCE_EXECUTOR_KIND === "v3"
+const HIDE_BALANCE_SHIELDED_POOL = HIDE_BALANCE_SHIELDED_POOL_V2 || HIDE_BALANCE_SHIELDED_POOL_V3
+const MIN_WAIT_MS = 3600 * 1000
+const HIDE_STRK_DENOM_OPTIONS = [
+  { id: "1", amount: "1" },
+  { id: "5", amount: "5" },
+  { id: "10", amount: "10" },
+  { id: "50", amount: "50" },
+  { id: "100", amount: "100" },
+] as const
 const BRIDGE_TO_STRK_DISABLED_MESSAGE =
   "Bridge to STRK is currently disabled. Use Starknet L2 Swap for STRK pairs."
 const UNSUPPORTED_BRIDGE_PAIR_MESSAGE =
@@ -339,8 +352,34 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
     }
     return {
       verifier: (parsed.verifier || "garaga").trim() || "garaga",
+      note_version:
+        typeof parsed.note_version === "string" && parsed.note_version.trim().length > 0
+          ? parsed.note_version.trim()
+          : undefined,
+      root:
+        typeof parsed.root === "string" && parsed.root.trim().length > 0
+          ? parsed.root.trim()
+          : undefined,
       nullifier,
       commitment,
+      recipient:
+        typeof parsed.recipient === "string" && parsed.recipient.trim().length > 0
+          ? parsed.recipient.trim()
+          : undefined,
+      note_commitment:
+        typeof parsed.note_commitment === "string" && parsed.note_commitment.trim().length > 0
+          ? parsed.note_commitment.trim()
+          : undefined,
+      denom_id:
+        typeof parsed.denom_id === "string" && parsed.denom_id.trim().length > 0
+          ? parsed.denom_id.trim()
+          : undefined,
+      spendable_at_unix:
+        typeof parsed.spendable_at_unix === "number" &&
+        Number.isFinite(parsed.spendable_at_unix) &&
+        parsed.spendable_at_unix > 0
+          ? Math.floor(parsed.spendable_at_unix)
+          : undefined,
       proof,
       public_inputs: publicInputs,
     }
@@ -359,7 +398,15 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
  */
 const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
   if (typeof window === "undefined") return
-  window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(payload))
+  const normalizedPayload: PrivacyVerificationPayload = { ...payload }
+  if (
+    HIDE_BALANCE_SHIELDED_POOL_V3 &&
+    normalizedPayload.note_version?.trim().toLowerCase() === "v3" &&
+    typeof normalizedPayload.spendable_at_unix !== "number"
+  ) {
+    normalizedPayload.spendable_at_unix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+  }
+  window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(normalizedPayload))
   window.dispatchEvent(new Event("trade-privacy-payload-updated"))
 }
 
@@ -400,6 +447,7 @@ const randomHexFelt = () => {
 
 const createDevTradePrivacyPayload = (): PrivacyVerificationPayload => ({
   verifier: "garaga",
+  note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
   nullifier: randomHexFelt(),
   commitment: randomHexFelt(),
   proof: ["0x1"],
@@ -546,6 +594,16 @@ const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
     minimumFractionDigits: 0,
     maximumFractionDigits: maxFractionDigits,
   })
+}
+
+const formatRemainingDuration = (remainingMs: number) => {
+  const totalSec = Math.max(0, Math.ceil(remainingMs / 1000))
+  const hours = Math.floor(totalSec / 3600)
+  const minutes = Math.floor((totalSec % 3600) / 60)
+  const seconds = totalSec % 60
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds
+    .toString()
+    .padStart(2, "0")}`
 }
 
 /**
@@ -1209,12 +1267,19 @@ export function TradingInterface() {
   const [balanceHidden, setBalanceHidden] = React.useState(false)
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
+  const [nowMs, setNowMs] = React.useState(() => Date.now())
+  const [hideStrkDenomId, setHideStrkDenomId] = React.useState<string>("10")
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
   // Hide Balance (Garaga) is only enabled for Starknet <-> Starknet swap flow.
   const hideBalanceSupportedForCurrentPair =
     chainFromNetwork(fromToken.network) === "starknet" &&
     chainFromNetwork(toToken.network) === "starknet"
   const hideBalanceOnchain = hideBalanceSupportedForCurrentPair && balanceHidden
+  const hideStrkDenomEnabled =
+    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && fromToken.symbol.toUpperCase() === "STRK"
+  const selectedHideStrkDenom =
+    HIDE_STRK_DENOM_OPTIONS.find((option) => option.id === hideStrkDenomId) ||
+    HIDE_STRK_DENOM_OPTIONS[0]
   
   // Settings state
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -1230,6 +1295,16 @@ export function TradingInterface() {
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  React.useEffect(() => {
+    if (!hideStrkDenomEnabled) return
+    const targetAmount = selectedHideStrkDenom.amount
+    if (fromAmount === targetAmount) return
+    setFromAmount(targetAmount)
+  }, [hideStrkDenomEnabled, selectedHideStrkDenom.amount, fromAmount])
   const refreshTradePrivacyPayload = React.useCallback(() => {
     setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
   }, [])
@@ -1239,6 +1314,7 @@ export function TradingInterface() {
       setHasTradePrivacyPayload(true)
       return cachedPayload
     }
+    const recipientForPayload = (receiveAddress || preferredReceiveAddress).trim() || undefined
 
     if (autoPrivacyPayloadPromiseRef.current) {
       return autoPrivacyPayloadPromiseRef.current
@@ -1278,15 +1354,29 @@ export function TradingInterface() {
             from_token: fromToken.symbol,
             to_token: toToken.symbol,
             amount: fromAmount,
-            recipient: receiveAddress || undefined,
+            recipient: recipientForPayload,
             from_network: fromToken.network,
             to_network: toToken.network,
+            note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
+            denom_id: hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined,
           },
         })
         const payload: PrivacyVerificationPayload = {
           verifier: (response.payload?.verifier || "garaga").trim() || "garaga",
+          note_version: response.payload?.note_version?.trim() || undefined,
+          root: response.payload?.root?.trim() || undefined,
           nullifier: response.payload?.nullifier?.trim(),
           commitment: response.payload?.commitment?.trim(),
+          recipient: response.payload?.recipient?.trim() || recipientForPayload,
+          note_commitment: response.payload?.note_commitment?.trim() || undefined,
+          denom_id:
+            response.payload?.denom_id?.trim() ||
+            (hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined),
+          spendable_at_unix:
+            typeof response.payload?.spendable_at_unix === "number" &&
+            Number.isFinite(response.payload.spendable_at_unix)
+              ? Math.floor(response.payload.spendable_at_unix)
+              : undefined,
           proof: normalizeHexArray(response.payload?.proof),
           public_inputs: normalizeHexArray(response.payload?.public_inputs),
         }
@@ -1306,8 +1396,14 @@ export function TradingInterface() {
 
         const normalizedPayload: PrivacyVerificationPayload = {
           verifier: payload.verifier,
+          note_version: payload.note_version,
+          root: payload.root,
           nullifier: payload.nullifier,
           commitment: payload.commitment,
+          recipient: payload.recipient,
+          note_commitment: payload.note_commitment,
+          denom_id: payload.denom_id,
+          spendable_at_unix: payload.spendable_at_unix,
           proof,
           public_inputs: publicInputs,
         }
@@ -1353,8 +1449,11 @@ export function TradingInterface() {
     fromAmount,
     fromToken.network,
     fromToken.symbol,
+    hideStrkDenomEnabled,
     notifications,
+    preferredReceiveAddress,
     receiveAddress,
+    selectedHideStrkDenom.id,
     toToken.network,
     toToken.symbol,
     wallet.isConnected,
@@ -2124,6 +2223,26 @@ export function TradingInterface() {
     quote?.type === "swap" && Array.isArray(quote.onchainCalls) && quote.onchainCalls.length > 0
   const hasFallbackPositiveBalance =
     Number.isFinite(fromToken.balance) && fromToken.balance > 0
+  const activeTradePrivacyPayload = hideBalanceOnchain ? loadTradePrivacyPayload() : undefined
+  const activeHideRecipient =
+    HIDE_BALANCE_SHIELDED_POOL_V3 && hideBalanceOnchain
+      ? (activeTradePrivacyPayload?.recipient || "").trim()
+      : ""
+  const activeHideRecipientMismatched =
+    !!activeHideRecipient &&
+    !!resolvedReceiveAddress &&
+    normalizeFeltAddress(activeHideRecipient) !== normalizeFeltAddress(resolvedReceiveAddress)
+  const privacySpendableAtMs =
+    typeof activeTradePrivacyPayload?.spendable_at_unix === "number" &&
+    Number.isFinite(activeTradePrivacyPayload.spendable_at_unix)
+      ? activeTradePrivacyPayload.spendable_at_unix * 1000
+      : null
+  const hideMixingWindowRemainingMs =
+    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && privacySpendableAtMs
+      ? Math.max(0, privacySpendableAtMs - nowMs)
+      : 0
+  const hideMixingWindowBlocked =
+    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && hideMixingWindowRemainingMs > 0
   const executeDisabledReason =
     !wallet.isConnected
       ? "Connect your wallet first."
@@ -2147,6 +2266,10 @@ export function TradingInterface() {
       ? "Quote on-chain calldata is not ready yet. Refresh the quote."
       : isCrossChain && !resolvedReceiveAddress
       ? "Receive address is required."
+      : hideMixingWindowBlocked
+      ? `Hide Balance note masih dalam mixing window. Tunggu ${formatRemainingDuration(
+          hideMixingWindowRemainingMs
+        )}.`
       : null
   /**
    * Runs `executeButtonLabel` and handles related side effects.
@@ -2335,15 +2458,40 @@ export function TradingInterface() {
                 from_token: fromToken.symbol,
                 to_token: toToken.symbol,
                 amount: fromAmount,
-                recipient: receiveAddress || undefined,
+                recipient:
+                  resolvedPayload?.recipient ||
+                  (receiveAddress || preferredReceiveAddress).trim() ||
+                  undefined,
                 from_network: fromToken.network,
                 to_network: toToken.network,
+                note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
+                denom_id:
+                  resolvedPayload?.denom_id ||
+                  (hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined),
+                note_commitment: resolvedPayload?.note_commitment,
+                spendable_at_unix: resolvedPayload?.spendable_at_unix,
+                nullifier: resolvedPayload?.nullifier,
               },
             })
             const preparedPayload: PrivacyVerificationPayload = {
               verifier: (preparedPrivate.payload?.verifier || "garaga").trim() || "garaga",
+              note_version: preparedPrivate.payload?.note_version?.trim() || undefined,
+              root: preparedPrivate.payload?.root?.trim() || undefined,
               nullifier: preparedPrivate.payload?.nullifier?.trim(),
               commitment: preparedPrivate.payload?.commitment?.trim(),
+              recipient:
+                resolvedPayload?.recipient ||
+                (receiveAddress || preferredReceiveAddress).trim() ||
+                undefined,
+              note_commitment: preparedPrivate.payload?.note_commitment?.trim() || undefined,
+              denom_id:
+                preparedPrivate.payload?.denom_id?.trim() ||
+                (hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined),
+              spendable_at_unix:
+                typeof preparedPrivate.payload?.spendable_at_unix === "number" &&
+                Number.isFinite(preparedPrivate.payload.spendable_at_unix)
+                  ? Math.floor(preparedPrivate.payload.spendable_at_unix)
+                  : undefined,
               proof: normalizeHexArray(preparedPrivate.payload?.proof),
               public_inputs: normalizeHexArray(preparedPrivate.payload?.public_inputs),
             }
@@ -2458,11 +2606,14 @@ export function TradingInterface() {
       fromToken.network,
       fromToken.symbol,
       hideBalanceOnchain,
+      hideStrkDenomEnabled,
       isSwapContractEventOnly,
       mevProtection,
       notifications,
+      preferredReceiveAddress,
       quote,
       receiveAddress,
+      selectedHideStrkDenom.id,
       starknetProviderHint,
       toToken.network,
       toToken.symbol,
@@ -2862,6 +3013,23 @@ export function TradingInterface() {
     const effectiveHideBalance = requestedHideBalance && !!tradePrivacyPayload
 
     try {
+      if (
+        requestedHideBalance &&
+        HIDE_BALANCE_SHIELDED_POOL_V3 &&
+        typeof tradePrivacyPayload?.spendable_at_unix === "number"
+      ) {
+        const remainingMs = Math.max(
+          0,
+          tradePrivacyPayload.spendable_at_unix * 1000 - Date.now()
+        )
+        if (remainingMs > 0) {
+          throw new Error(
+            `Hide Balance note masih dalam mixing window. Tunggu ${formatRemainingDuration(
+              remainingMs
+            )} sebelum execute.`
+          )
+        }
+      }
       if (requestedHideBalance && !tradePrivacyPayload) {
         if (!HIDE_BALANCE_FALLBACK_TO_PUBLIC_ENABLED) {
           throw new Error(
@@ -2875,7 +3043,7 @@ export function TradingInterface() {
             "Proof belum siap. Transaksi dilanjutkan dalam mode publik supaya tidak blok user.",
         })
       }
-      if (effectiveHideBalance && HIDE_BALANCE_SHIELDED_POOL_V2 && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
+      if (effectiveHideBalance && HIDE_BALANCE_SHIELDED_POOL && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
         throw new Error(
           "Hide Balance strict mode aktif: relayer pool harus enabled. Public wallet path diblok untuk cegah kebocoran data swap di explorer."
         )
@@ -3319,7 +3487,7 @@ export function TradingInterface() {
             message: "Submitting hide-mode swap through Starknet relayer pool.",
           })
           try {
-            if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+            if (HIDE_BALANCE_SHIELDED_POOL) {
               response = await executeSwap({
                 from_token: fromToken.symbol,
                 to_token: toToken.symbol,
@@ -3327,7 +3495,7 @@ export function TradingInterface() {
                 min_amount_out: minAmountOut,
                 slippage: slippageValue,
                 deadline,
-                recipient,
+                recipient: HIDE_BALANCE_SHIELDED_POOL_V3 ? undefined : recipient,
                 mode: mevProtection ? "private" : "transparent",
                 hide_balance: true,
                 privacy: submittedPrivacyPayload,
@@ -3387,9 +3555,16 @@ export function TradingInterface() {
                   from_token: fromToken.symbol,
                   to_token: toToken.symbol,
                   amount: fromAmount,
-                  recipient,
+                  recipient: submittedPrivacyPayload?.recipient || recipient,
                   from_network: fromToken.network,
                   to_network: toToken.network,
+                  note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
+                  denom_id:
+                    submittedPrivacyPayload?.denom_id ||
+                    (hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined),
+                  note_commitment: submittedPrivacyPayload?.note_commitment,
+                  spendable_at_unix: submittedPrivacyPayload?.spendable_at_unix,
+                  nullifier: submittedPrivacyPayload?.nullifier,
                 },
               })
               persistTradePrivacyPayload(relayed.privacyPayload)
@@ -3771,7 +3946,11 @@ export function TradingInterface() {
             {hideBalanceOnchain && (
               hasTradePrivacyPayload ? (
                 <p className="text-xs text-warning">
-                  On-chain Hide Balance aktif (ikon mata kanan atas).
+                  {hideMixingWindowBlocked
+                    ? `On-chain Hide Balance aktif. Mixing window berjalan: ${formatRemainingDuration(
+                        hideMixingWindowRemainingMs
+                      )}.`
+                    : "On-chain Hide Balance aktif (ikon mata kanan atas)."}
                 </p>
               ) : (
                 <p className="text-xs text-warning">
@@ -3782,6 +3961,46 @@ export function TradingInterface() {
                     : "Hide Balance aktif. Sistem akan menyiapkan payload Garaga otomatis saat Execute Trade."}
                 </p>
               )
+            )}
+            {hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && activeHideRecipient && (
+              <p className="text-xs text-muted-foreground">
+                Recipient note V3 terkunci: {shortenAddress(activeHideRecipient)}
+              </p>
+            )}
+            {hideBalanceOnchain &&
+              HIDE_BALANCE_SHIELDED_POOL_V3 &&
+              hasTradePrivacyPayload &&
+              activeHideRecipientMismatched && (
+                <p className="text-xs text-warning">
+                  Receive address saat ini berbeda dari recipient note V3. Eksekusi tetap memakai
+                  recipient yang terkunci di note.
+                </p>
+              )}
+            {hideStrkDenomEnabled && (
+              <div>
+                <label className="text-sm text-foreground mb-2 block">
+                  Hide Denomination (STRK)
+                </label>
+                <div className="grid grid-cols-5 gap-2">
+                  {HIDE_STRK_DENOM_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      onClick={() => setHideStrkDenomId(option.id)}
+                      className={cn(
+                        "py-2 rounded-lg text-xs font-medium transition-all border",
+                        hideStrkDenomId === option.id
+                          ? "bg-primary/20 text-primary border-primary"
+                          : "bg-surface text-muted-foreground border-border hover:border-primary/50"
+                      )}
+                    >
+                      {option.amount}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Denom note V3: {selectedHideStrkDenom.amount} STRK.
+                </p>
+              </div>
             )}
 
             {/* Slippage Tolerance */}

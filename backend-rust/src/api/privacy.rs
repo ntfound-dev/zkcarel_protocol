@@ -59,6 +59,21 @@ pub struct AutoPrivacyTxContext {
     pub recipient: Option<String>,
     pub from_network: Option<String>,
     pub to_network: Option<String>,
+    // Optional V3 context bindings used by the real prover.
+    pub note_version: Option<String>,
+    pub root: Option<String>,
+    pub intent_hash: Option<String>,
+    pub action_hash: Option<String>,
+    pub action_target: Option<String>,
+    pub action_selector: Option<String>,
+    pub calldata_hash: Option<String>,
+    pub approval_token: Option<String>,
+    pub payout_token: Option<String>,
+    pub min_payout: Option<String>,
+    pub note_commitment: Option<String>,
+    pub denom_id: Option<String>,
+    pub spendable_at_unix: Option<u64>,
+    pub nullifier: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,6 +81,16 @@ pub struct AutoPrivacyPayloadResponse {
     pub verifier: String,
     pub nullifier: String,
     pub commitment: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_commitment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub denom_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spendable_at_unix: Option<u64>,
     pub proof: Vec<String>,
     pub public_inputs: Vec<String>,
 }
@@ -823,6 +848,11 @@ async fn load_auto_garaga_payload_from_prover_cmd(
 
     let proof = extract_hex_array(&raw, &["proof", "full_proof_with_hints"], "proof")?;
     let public_inputs = extract_hex_array(&raw, &["public_inputs"], "public_inputs")?;
+    let root = extract_optional_string(&raw, &["root"]);
+    let note_version = extract_optional_string(&raw, &["note_version"]);
+    let note_commitment = extract_optional_string(&raw, &["note_commitment"]);
+    let denom_id = extract_optional_string(&raw, &["denom_id"]);
+    let spendable_at_unix = extract_optional_u64(&raw, &["spendable_at_unix"]);
     if proof.is_empty() || public_inputs.is_empty() {
         return Err(AppError::BadRequest(
             "Auto Garaga prover response has empty proof/public_inputs".to_string(),
@@ -834,17 +864,41 @@ async fn load_auto_garaga_payload_from_prover_cmd(
                 .to_string(),
         ));
     }
-    ensure_public_inputs_bind_nullifier_commitment(
-        &nullifier,
-        &commitment,
-        &public_inputs,
-        "auto Garaga prover response",
-    )?;
+    let is_v3_payload = note_version
+        .as_deref()
+        .map(|value| value.trim().eq_ignore_ascii_case("v3"))
+        .unwrap_or(false)
+        || root.is_some();
+    if is_v3_payload {
+        let payload_root = root.as_deref().ok_or_else(|| {
+            AppError::BadRequest(
+                "Auto Garaga prover response V3 must contain non-empty 'root'".to_string(),
+            )
+        })?;
+        ensure_public_inputs_bind_root_nullifier(
+            payload_root,
+            &nullifier,
+            &public_inputs,
+            "auto Garaga prover response",
+        )?;
+    } else {
+        ensure_public_inputs_bind_nullifier_commitment(
+            &nullifier,
+            &commitment,
+            &public_inputs,
+            "auto Garaga prover response",
+        )?;
+    }
 
     Ok(AutoPrivacyPayloadResponse {
         verifier: verifier.to_string(),
         nullifier,
         commitment,
+        root,
+        note_version,
+        note_commitment,
+        denom_id,
+        spendable_at_unix,
         proof,
         public_inputs,
     })
@@ -880,6 +934,38 @@ fn extract_hex_array(value: &Value, keys: &[&str], field_label: &str) -> Result<
         "Auto Garaga '{}' is missing in configured file",
         field_label
     )))
+}
+
+fn extract_optional_string(value: &Value, keys: &[&str]) -> Option<String> {
+    let object = value.as_object()?;
+    for key in keys {
+        let raw = object.get(*key)?;
+        let text = raw.as_str()?.trim();
+        if !text.is_empty() {
+            return Some(text.to_string());
+        }
+    }
+    None
+}
+
+fn extract_optional_u64(value: &Value, keys: &[&str]) -> Option<u64> {
+    let object = value.as_object()?;
+    for key in keys {
+        let raw = object.get(*key)?;
+        if let Some(val) = raw.as_u64() {
+            return Some(val);
+        }
+        if let Some(text) = raw.as_str() {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(parsed) = trimmed.parse::<u64>() {
+                return Some(parsed);
+            }
+        }
+    }
+    None
 }
 
 /// Verifies that `public_inputs` bind the submitted `nullifier` and `commitment`.
@@ -928,6 +1014,40 @@ pub(crate) fn ensure_public_inputs_bind_nullifier_commitment(
             source_label,
             nullifier_index,
             commitment_index
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_public_inputs_bind_root_nullifier(
+    root: &str,
+    nullifier: &str,
+    public_inputs: &[String],
+    source_label: &str,
+) -> Result<()> {
+    let root_index = privacy_binding_index("GARAGA_ROOT_PUBLIC_INPUT_INDEX", 0)?;
+    let nullifier_index = privacy_binding_index("GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX_V3", 1)?;
+    let required_len = std::cmp::max(root_index, nullifier_index) + 1;
+
+    if public_inputs.len() < required_len {
+        return Err(AppError::BadRequest(format!(
+            "{} must expose root/nullifier in public_inputs indexes [{}, {}], but public_inputs length is {}",
+            source_label,
+            root_index,
+            nullifier_index,
+            public_inputs.len()
+        )));
+    }
+
+    let expected_root = parse_felt(root)?;
+    let expected_nullifier = parse_felt(nullifier)?;
+    let bound_root = parse_felt(public_inputs[root_index].trim())?;
+    let bound_nullifier = parse_felt(public_inputs[nullifier_index].trim())?;
+
+    if bound_root != expected_root || bound_nullifier != expected_nullifier {
+        return Err(AppError::BadRequest(format!(
+            "{} public_inputs binding mismatch: expected public_inputs[{}]==root and public_inputs[{}]==nullifier",
+            source_label, root_index, nullifier_index
         )));
     }
     Ok(())

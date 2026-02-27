@@ -178,8 +178,13 @@ pub struct LimitOrder {
 #[derive(Debug, Deserialize)]
 pub struct PrivacyVerificationPayload {
     pub verifier: Option<String>,
+    pub note_version: Option<String>,
+    pub root: Option<String>,
     pub nullifier: Option<String>,
     pub commitment: Option<String>,
+    pub note_commitment: Option<String>,
+    pub denom_id: Option<String>,
+    pub spendable_at_unix: Option<u64>,
     pub proof: Option<Vec<String>>,
     pub public_inputs: Option<Vec<String>>,
 }

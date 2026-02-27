@@ -717,6 +717,11 @@ fn parse_or_generate_payload_from_request(
             .filter(|value| !value.is_empty())
             .unwrap_or("0x0")
             .to_string(),
+        root: None,
+        note_version: None,
+        note_commitment: None,
+        denom_id: None,
+        spendable_at_unix: None,
         proof,
         public_inputs,
     })
@@ -754,6 +759,7 @@ async fn resolve_battleship_payload(
                     recipient: None,
                     from_network: Some("starknet".to_string()),
                     to_network: Some("starknet".to_string()),
+                    ..Default::default()
                 }),
             )
             .await?

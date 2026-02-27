@@ -115,7 +115,7 @@ fn setup_private_executor() -> (
 
 #[test]
 fn test_private_action_executor_submit_and_execute_swap() {
-    let (executor, target, _, relayer) = setup_private_executor();
+    let (executor, target, _admin, relayer) = setup_private_executor();
     let nullifier: felt252 = 0x1111;
     let commitment: felt252 = 0x2222;
     let selector = selector!("mark");
@@ -124,7 +124,9 @@ fn test_private_action_executor_submit_and_execute_swap() {
 
     let proof = array![nullifier, commitment, intent_hash];
     let public_inputs = array![nullifier, commitment, intent_hash];
+    start_cheat_caller_address(executor.contract_address, relayer);
     executor.submit_private_intent(nullifier, commitment, proof.span(), public_inputs.span());
+    stop_cheat_caller_address(executor.contract_address);
 
     assert(executor.is_nullifier_used(nullifier), 'NULL_USED');
     assert(!executor.is_commitment_executed(commitment), 'COMMIT_PENDING');
@@ -139,7 +141,7 @@ fn test_private_action_executor_submit_and_execute_swap() {
 
 #[test]
 fn test_private_action_executor_submit_and_execute_limit_order() {
-    let (executor, target, _, relayer) = setup_private_executor();
+    let (executor, target, _admin, relayer) = setup_private_executor();
     let nullifier: felt252 = 0x3333;
     let commitment: felt252 = 0x4444;
     let selector = selector!("mark");
@@ -148,7 +150,9 @@ fn test_private_action_executor_submit_and_execute_limit_order() {
 
     let proof = array![nullifier, commitment, intent_hash];
     let public_inputs = array![nullifier, commitment, intent_hash];
+    start_cheat_caller_address(executor.contract_address, relayer);
     executor.submit_private_intent(nullifier, commitment, proof.span(), public_inputs.span());
+    stop_cheat_caller_address(executor.contract_address);
 
     start_cheat_caller_address(executor.contract_address, relayer);
     executor.execute_private_limit_order(commitment, selector, calldata.span());
@@ -160,7 +164,7 @@ fn test_private_action_executor_submit_and_execute_limit_order() {
 
 #[test]
 fn test_private_action_executor_submit_and_execute_stake() {
-    let (executor, target, _, relayer) = setup_private_executor();
+    let (executor, target, _admin, relayer) = setup_private_executor();
     let nullifier: felt252 = 0x5555;
     let commitment: felt252 = 0x6666;
     let selector = selector!("mark");
@@ -169,7 +173,9 @@ fn test_private_action_executor_submit_and_execute_stake() {
 
     let proof = array![nullifier, commitment, intent_hash];
     let public_inputs = array![nullifier, commitment, intent_hash];
+    start_cheat_caller_address(executor.contract_address, relayer);
     executor.submit_private_intent(nullifier, commitment, proof.span(), public_inputs.span());
+    stop_cheat_caller_address(executor.contract_address);
 
     start_cheat_caller_address(executor.contract_address, relayer);
     executor.execute_private_stake(commitment, selector, calldata.span());
@@ -181,7 +187,7 @@ fn test_private_action_executor_submit_and_execute_stake() {
 
 #[test]
 fn test_private_action_executor_submitter_can_execute_without_relayer() {
-    let (executor, target, _, _) = setup_private_executor();
+    let (executor, target, admin, _relayer) = setup_private_executor();
     let submitter: ContractAddress = 0x333.try_into().unwrap();
     let nullifier: felt252 = 0x7711;
     let commitment: felt252 = 0x7722;
@@ -190,6 +196,10 @@ fn test_private_action_executor_submitter_can_execute_without_relayer() {
     let intent_hash = executor.preview_swap_intent_hash(selector, calldata.span());
     let proof = array![nullifier, commitment, intent_hash];
     let public_inputs = array![nullifier, commitment, intent_hash];
+
+    start_cheat_caller_address(executor.contract_address, admin);
+    executor.set_intermediary(submitter);
+    stop_cheat_caller_address(executor.contract_address);
 
     start_cheat_caller_address(executor.contract_address, submitter);
     executor.submit_private_intent(nullifier, commitment, proof.span(), public_inputs.span());
@@ -203,7 +213,7 @@ fn test_private_action_executor_submitter_can_execute_without_relayer() {
 #[test]
 #[should_panic(expected: "Nullifier already used")]
 fn test_private_action_executor_rejects_reused_nullifier() {
-    let (executor, _, _, _) = setup_private_executor();
+    let (executor, _, _admin, relayer) = setup_private_executor();
     let nullifier: felt252 = 0xaaaa;
     let commitment_a: felt252 = 0xbbbb;
     let commitment_b: felt252 = 0xcccc;
@@ -213,19 +223,20 @@ fn test_private_action_executor_rejects_reused_nullifier() {
     let intent_hash_a = executor.preview_swap_intent_hash(selector, calldata.span());
     let proof_a = array![nullifier, commitment_a, intent_hash_a];
     let public_inputs_a = array![nullifier, commitment_a, intent_hash_a];
+    start_cheat_caller_address(executor.contract_address, relayer);
     executor.submit_private_intent(nullifier, commitment_a, proof_a.span(), public_inputs_a.span());
 
     let intent_hash_b = executor.preview_swap_intent_hash(selector, calldata.span());
     let proof_b = array![nullifier, commitment_b, intent_hash_b];
     let public_inputs_b = array![nullifier, commitment_b, intent_hash_b];
     executor.submit_private_intent(nullifier, commitment_b, proof_b.span(), public_inputs_b.span());
+    stop_cheat_caller_address(executor.contract_address);
 }
 
 #[test]
 #[should_panic(expected: "Only relayer/admin/owner")]
 fn test_private_action_executor_blocks_unauthorized_execute() {
-    let (executor, _, _, _) = setup_private_executor();
-    let submitter: ContractAddress = 0x333.try_into().unwrap();
+    let (executor, _, _admin, relayer) = setup_private_executor();
     let intruder: ContractAddress = 0x444.try_into().unwrap();
     let nullifier: felt252 = 0x111;
     let commitment: felt252 = 0x222;
@@ -235,7 +246,7 @@ fn test_private_action_executor_blocks_unauthorized_execute() {
     let proof = array![nullifier, commitment, intent_hash];
     let public_inputs = array![nullifier, commitment, intent_hash];
 
-    start_cheat_caller_address(executor.contract_address, submitter);
+    start_cheat_caller_address(executor.contract_address, relayer);
     executor.submit_private_intent(nullifier, commitment, proof.span(), public_inputs.span());
     stop_cheat_caller_address(executor.contract_address);
 
@@ -247,7 +258,7 @@ fn test_private_action_executor_blocks_unauthorized_execute() {
 #[test]
 #[should_panic(expected: "Commitment already executed")]
 fn test_private_action_executor_blocks_double_execute() {
-    let (executor, _, _, relayer) = setup_private_executor();
+    let (executor, _, _admin, relayer) = setup_private_executor();
     let nullifier: felt252 = 0x9911;
     let commitment: felt252 = 0x9922;
     let selector = selector!("mark");
@@ -256,6 +267,7 @@ fn test_private_action_executor_blocks_double_execute() {
 
     let proof = array![nullifier, commitment, intent_hash];
     let public_inputs = array![nullifier, commitment, intent_hash];
+    start_cheat_caller_address(executor.contract_address, relayer);
     executor.submit_private_intent(nullifier, commitment, proof.span(), public_inputs.span());
 
     start_cheat_caller_address(executor.contract_address, relayer);

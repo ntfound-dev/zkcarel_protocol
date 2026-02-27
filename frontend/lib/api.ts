@@ -465,6 +465,11 @@ export interface PrivacyAutoSubmitResponse {
     verifier: string
     nullifier: string
     commitment: string
+    root?: string
+    note_version?: string
+    note_commitment?: string
+    denom_id?: string
+    spendable_at_unix?: number
     proof: string[]
     public_inputs: string[]
   }
@@ -476,6 +481,11 @@ export interface PrivacyPreparePrivateExecutionResponse {
     verifier: string
     nullifier: string
     commitment: string
+    root?: string
+    note_version?: string
+    note_commitment?: string
+    denom_id?: string
+    spendable_at_unix?: number
     proof: string[]
     public_inputs: string[]
   }
@@ -526,8 +536,14 @@ export type PrivacyRelayerExecutePayload = {
 
 export type PrivacyVerificationPayload = {
   verifier?: string
+  note_version?: string
+  root?: string
   nullifier?: string
   commitment?: string
+  recipient?: string
+  note_commitment?: string
+  denom_id?: string
+  spendable_at_unix?: number
   proof?: string[]
   public_inputs?: string[]
 }
@@ -2374,6 +2390,20 @@ export async function autoSubmitPrivacyAction(payload?: {
     recipient?: string
     from_network?: string
     to_network?: string
+    note_version?: string
+    root?: string
+    intent_hash?: string
+    action_hash?: string
+    action_target?: string
+    action_selector?: string
+    calldata_hash?: string
+    approval_token?: string
+    payout_token?: string
+    min_payout?: string
+    note_commitment?: string
+    denom_id?: string
+    spendable_at_unix?: number
+    nullifier?: string
   }
 }) {
   return apiFetch<PrivacyAutoSubmitResponse>("/api/v1/privacy/auto-submit", {
@@ -2412,6 +2442,20 @@ export async function preparePrivateExecution(payload: {
     recipient?: string
     from_network?: string
     to_network?: string
+    note_version?: string
+    root?: string
+    intent_hash?: string
+    action_hash?: string
+    action_target?: string
+    action_selector?: string
+    calldata_hash?: string
+    approval_token?: string
+    payout_token?: string
+    min_payout?: string
+    note_commitment?: string
+    denom_id?: string
+    spendable_at_unix?: number
+    nullifier?: string
   }
 }) {
   return apiFetch<PrivacyPreparePrivateExecutionResponse>(

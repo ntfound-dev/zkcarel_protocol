@@ -3,6 +3,9 @@ account = "sepolia"
 # Visit https://foundry-rs.github.io/starknet-foundry/appendix/snfoundry-toml.html
 # and https://foundry-rs.github.io/starknet-foundry/projects/configuration.html for more information
 
+[sncast.sepolia]
+account = "sepolia"
+
 # [sncast.default]                                         # Define a profile name
 # url = "https://api.zan.top/public/starknet-sepolia/rpc/v0_10" # Url of the RPC provider
 # accounts-file = "../account-file"                        # Path to the file with the account data

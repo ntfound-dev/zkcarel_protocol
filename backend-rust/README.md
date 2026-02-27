@@ -172,7 +172,10 @@ Minimum required groups:
   - `PRIVACY_INTERMEDIARY_ADDRESS`
   - `HIDE_BALANCE_RELAYER_POOL_ENABLED=true`
   - `HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true`
-  - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2`
+  - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
+  - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
+  - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
+  - `HIDE_BALANCE_MIN_NOTE_AGE_SECS=3600`
   - `ZK_PRIVACY_ROUTER_ADDRESS`
 
 Recommended optional:
@@ -188,6 +191,13 @@ Real prover command (production testnet):
 - `GARAGA_REAL_PROVER_CMD="python3 /opt/garaga-real-prover/prove.py --context \"$GARAGA_CONTEXT_PATH\" --proof \"$GARAGA_PROOF_PATH\" --public-inputs \"$GARAGA_PUBLIC_INPUTS_PATH\""`
 - Local WSL/dev example: `GARAGA_REAL_PROVER_CMD="python3 ./garaga-real-prover/prove.py --context \"$GARAGA_CONTEXT_PATH\" --proof \"$GARAGA_PROOF_PATH\" --public-inputs \"$GARAGA_PUBLIC_INPUTS_PATH\""`
 - Pastikan file prover real benar-benar ada; jika lokasi berbeda, ganti path `/opt/garaga-real-prover/prove.py` sesuai host/container Anda.
+
+Dual-pool migration (V2 -> V3):
+- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
+- `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
+- `HIDE_BALANCE_V2_REDEEM_ONLY=true` (V2 hanya redeem note lama; no new deposit)
+- Keep V2 contract deployed sementara grace period berlangsung.
+- Frontend harus kirim `note_version=v3`, `root`, `nullifier`, `proof`, `public_inputs` untuk flow baru.
 
 ## Environment Audit Split
 Audit ini memisahkan variabel dari `backend-rust/.env` berdasarkan pemakaian kode runtime saat ini.

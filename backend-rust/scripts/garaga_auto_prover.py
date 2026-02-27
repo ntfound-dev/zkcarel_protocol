@@ -23,12 +23,25 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Mapping, NoReturn, NotRequired, TypedDict, cast
 
 STARKNET_PRIME = (1 << 251) + (17 << 192) + 1
 
 
-def fail(message: str, code: int = 1) -> None:
+class GaragaPayload(TypedDict):
+    nullifier: str
+    commitment: str
+    intent_hash: str
+    proof: list[str]
+    public_inputs: list[str]
+    note_version: NotRequired[str]
+    root: NotRequired[str]
+    note_commitment: NotRequired[str]
+    denom_id: NotRequired[str]
+    spendable_at_unix: NotRequired[int]
+
+
+def fail(message: str, code: int = 1) -> NoReturn:
     print(message, file=sys.stderr)
     raise SystemExit(code)
 
@@ -37,24 +50,31 @@ def warn(message: str) -> None:
     print(f"[garaga-auto-prover] {message}", file=sys.stderr)
 
 
+def getenv_clean(name: str, default: str = "") -> str:
+    value = os.getenv(name, default).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1].strip()
+    return value
+
+
 def getenv_required(name: str) -> str:
-    value = os.getenv(name, "").strip()
+    value = getenv_clean(name)
     if not value:
         fail(f"Missing required env: {name}")
     return value
 
 
-def parse_stdin_payload() -> dict[str, Any]:
+def parse_stdin_payload() -> dict[str, object]:
     raw = sys.stdin.read().strip()
     if not raw:
         return {}
     try:
-        value = json.loads(raw)
+        value: object = json.loads(raw)
     except json.JSONDecodeError as exc:
         fail(f"Invalid stdin JSON: {exc}")
     if not isinstance(value, dict):
         fail("stdin JSON must be an object")
-    return value
+    return cast(dict[str, object], value)
 
 
 def run_shell(
@@ -80,7 +100,8 @@ def run_shell(
         fail(f"Failed to run command: {command}\n{exc}")
 
 
-def to_hex_felt(value: Any) -> str:
+def to_hex_felt(value: object) -> str:
+    intval: int
     if isinstance(value, str):
         raw = value.strip()
         if not raw:
@@ -101,20 +122,21 @@ def parse_json_array_file(path: Path, expected_key: str | None = None) -> list[s
     if not path.exists():
         fail(f"File not found: {path}")
     try:
-        obj = json.loads(path.read_text())
+        obj: object = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
         fail(f"Invalid JSON in {path}: {exc}")
 
-    payload: Any
+    payload: object
     if isinstance(obj, list):
         payload = obj
     elif isinstance(obj, dict):
-        if expected_key and expected_key in obj:
-            payload = obj[expected_key]
-        elif "public_inputs" in obj:
-            payload = obj["public_inputs"]
-        elif "proof" in obj:
-            payload = obj["proof"]
+        obj_map = cast(dict[str, object], obj)
+        if expected_key and expected_key in obj_map:
+            payload = obj_map[expected_key]
+        elif "public_inputs" in obj_map:
+            payload = obj_map["public_inputs"]
+        elif "proof" in obj_map:
+            payload = obj_map["proof"]
         else:
             fail(f"JSON object in {path} does not contain expected array field")
     else:
@@ -125,10 +147,10 @@ def parse_json_array_file(path: Path, expected_key: str | None = None) -> list[s
     return [to_hex_felt(item) for item in payload]
 
 
-def _looks_like_groth16_proof_dict(value: Any) -> bool:
+def _looks_like_groth16_proof_dict(value: object) -> bool:
     if not isinstance(value, dict):
         return False
-    keys = {str(key).strip().lower() for key in value.keys()}
+    keys = {str(key).strip().lower() for key in value}
     has_a = "a" in keys or "pi_a" in keys or "ar" in keys
     has_b = "b" in keys or "pi_b" in keys or "bs" in keys
     has_c = "c" in keys or "pi_c" in keys or "krs" in keys
@@ -139,7 +161,7 @@ def validate_proof_json_file(path: Path) -> None:
     if not path.exists():
         fail(f"File not found: {path}")
     try:
-        obj = json.loads(path.read_text())
+        obj: object = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
         fail(f"Invalid JSON in {path}: {exc}")
 
@@ -147,11 +169,12 @@ def validate_proof_json_file(path: Path) -> None:
     if isinstance(obj, list) and obj:
         return
     if isinstance(obj, dict):
-        proof_value = obj.get("proof")
+        obj_map = cast(dict[str, object], obj)
+        proof_value = obj_map.get("proof")
         if isinstance(proof_value, list) and proof_value:
             return
         # Real Groth16 JSON formats (snarkjs/gnark-like) consumed by `garaga calldata`.
-        if _looks_like_groth16_proof_dict(obj):
+        if _looks_like_groth16_proof_dict(obj_map):
             return
         if _looks_like_groth16_proof_dict(proof_value):
             return
@@ -162,7 +185,7 @@ def validate_proof_json_file(path: Path) -> None:
 
 
 def parse_index(name: str, default: int) -> int:
-    raw = os.getenv(name, str(default)).strip()
+    raw = getenv_clean(name, str(default))
     try:
         parsed = int(raw)
     except ValueError:
@@ -188,13 +211,13 @@ def bind_nullifier_commitment_from_public_inputs(public_inputs: list[str]) -> tu
 
 
 def bool_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name, "").strip().lower()
+    raw = getenv_clean(name).lower()
     if not raw:
         return default
     return raw in {"1", "true", "yes", "on"}
 
 
-def _tx_field(tx_context: dict[str, Any], *keys: str) -> str:
+def _tx_field(tx_context: Mapping[str, object], *keys: str) -> str:
     for key in keys:
         value = tx_context.get(key)
         if value is None:
@@ -205,9 +228,13 @@ def _tx_field(tx_context: dict[str, Any], *keys: str) -> str:
     return ""
 
 
-def compute_intent_hash(stdin_payload: dict[str, Any]) -> tuple[str, str]:
+def compute_intent_hash(stdin_payload: Mapping[str, object]) -> tuple[str, str]:
     tx_context_raw = stdin_payload.get("tx_context")
-    tx_context = tx_context_raw if isinstance(tx_context_raw, dict) else {}
+    tx_context: dict[str, object]
+    if isinstance(tx_context_raw, dict):
+        tx_context = cast(dict[str, object], tx_context_raw)
+    else:
+        tx_context = {}
     flow = _tx_field(tx_context, "flow", "action_type").lower()
     user_address = str(stdin_payload.get("user_address", "")).strip().lower()
     nonce = _tx_field(tx_context, "nonce")
@@ -248,7 +275,7 @@ def compute_intent_hash(stdin_payload: dict[str, Any]) -> tuple[str, str]:
 
 
 def make_dynamic_binding(
-    stdin_payload: dict[str, Any],
+    stdin_payload: Mapping[str, object],
     intent_hash: str,
     nonce: str,
 ) -> tuple[str, str]:
@@ -342,7 +369,7 @@ def redis_cli(
 
 
 def acquire_prover_queue_slot(job_timeout_secs: int) -> RedisQueueLease:
-    redis_url = os.getenv("GARAGA_REDIS_URL", "").strip() or os.getenv("REDIS_URL", "").strip()
+    redis_url = getenv_clean("GARAGA_REDIS_URL") or getenv_clean("REDIS_URL")
     fail_open = bool_env("GARAGA_PROVER_QUEUE_FAIL_OPEN", True)
     if not redis_url:
         if fail_open:
@@ -353,14 +380,14 @@ def acquire_prover_queue_slot(job_timeout_secs: int) -> RedisQueueLease:
             return RedisQueueLease(redis_url="", key="", acquired=False)
         fail("Missing REDIS_URL (or GARAGA_REDIS_URL) for Garaga prover Redis queue.")
 
-    max_concurrent = int(os.getenv("GARAGA_PROVER_MAX_CONCURRENT", "2").strip() or "2")
-    queue_timeout_secs = int(os.getenv("GARAGA_PROVER_QUEUE_TIMEOUT_SECS", "30").strip() or "30")
+    max_concurrent = int(getenv_clean("GARAGA_PROVER_MAX_CONCURRENT", "2") or "2")
+    queue_timeout_secs = int(getenv_clean("GARAGA_PROVER_QUEUE_TIMEOUT_SECS", "30") or "30")
     slot_ttl_default = max(job_timeout_secs + 30, 60)
     slot_ttl_secs = int(
-        os.getenv("GARAGA_PROVER_QUEUE_SLOT_TTL_SECS", str(slot_ttl_default)).strip()
+        getenv_clean("GARAGA_PROVER_QUEUE_SLOT_TTL_SECS", str(slot_ttl_default))
         or str(slot_ttl_default)
     )
-    key = os.getenv("GARAGA_PROVER_QUEUE_KEY", "garaga:prover:active").strip() or "garaga:prover:active"
+    key = getenv_clean("GARAGA_PROVER_QUEUE_KEY", "garaga:prover:active") or "garaga:prover:active"
 
     lease = RedisQueueLease(redis_url=redis_url, key=key, acquired=False)
     deadline = time.monotonic() + queue_timeout_secs
@@ -386,21 +413,25 @@ def acquire_prover_queue_slot(job_timeout_secs: int) -> RedisQueueLease:
         expire_raw = redis_cli(
             redis_url,
             ["EXPIRE", key, str(slot_ttl_secs)],
-            hard_fail=not fail_open,
+            hard_fail=False,
         )
-        if not expire_raw and fail_open:
+        if not expire_raw:
             # Undo slot increment when TTL refresh fails, then continue without queue gating.
             redis_cli(redis_url, ["DECR", key], hard_fail=False)
-            warn("Redis queue EXPIRE failed; continuing prover without queue lock.")
-            return RedisQueueLease(redis_url="", key="", acquired=False)
+            if fail_open:
+                warn("Redis queue EXPIRE failed; continuing prover without queue lock.")
+                return RedisQueueLease(redis_url="", key="", acquired=False)
+            fail("Redis queue EXPIRE failed while queue lock is mandatory.")
         if current <= max_concurrent:
             lease.acquired = True
             return lease
 
-        decr_raw = redis_cli(redis_url, ["DECR", key], hard_fail=not fail_open)
-        if not decr_raw and fail_open:
-            warn("Redis queue DECR failed; continuing prover without queue lock.")
-            return RedisQueueLease(redis_url="", key="", acquired=False)
+        decr_raw = redis_cli(redis_url, ["DECR", key], hard_fail=False)
+        if not decr_raw:
+            if fail_open:
+                warn("Redis queue DECR failed; continuing prover without queue lock.")
+                return RedisQueueLease(redis_url="", key="", acquired=False)
+            fail("Redis queue DECR failed while queue lock is mandatory.")
         if time.monotonic() >= deadline:
             if fail_open:
                 warn(
@@ -418,7 +449,7 @@ def acquire_prover_queue_slot(job_timeout_secs: int) -> RedisQueueLease:
 
 def maybe_run_external_prover(
     prove_cmd: str | None,
-    stdin_payload: dict[str, Any],
+    stdin_payload: Mapping[str, object],
     output_dir: Path,
     proof_path: Path,
     public_inputs_path: Path | None,
@@ -491,7 +522,7 @@ def generate_full_proof_with_hints(
     if not raw:
         fail("garaga calldata returned empty stdout")
     try:
-        values = ast.literal_eval(raw)
+        values: object = ast.literal_eval(raw)
     except Exception as exc:  # noqa: BLE001
         fail(f"Unable to parse garaga calldata output as array: {exc}\nraw={raw[:200]}...")
     if not isinstance(values, list) or not values:
@@ -509,7 +540,6 @@ def resolve_public_inputs(public_inputs_path: Path | None, proof_path: Path) -> 
         fail(
             "public_inputs not found. Set GARAGA_PUBLIC_INPUTS_PATH, or include public_inputs inside proof JSON."
         )
-    return []
 
 
 def maybe_load_precomputed_payload(path: Path | None) -> tuple[list[str], list[str]] | None:
@@ -520,21 +550,25 @@ def maybe_load_precomputed_payload(path: Path | None) -> tuple[list[str], list[s
     return proof, public_inputs
 
 
-def build_payload(stdin_payload: dict[str, Any]) -> dict[str, Any]:
-    uvx_cmd = os.getenv("GARAGA_UVX_CMD", "uvx --python 3.10").strip()
-    system = os.getenv("GARAGA_SYSTEM", "groth16").strip() or "groth16"
-    timeout_secs = int(os.getenv("GARAGA_TIMEOUT_SECS", "45"))
+def build_payload(stdin_payload: Mapping[str, object]) -> GaragaPayload:
+    uvx_cmd = getenv_clean("GARAGA_UVX_CMD", "uvx --python 3.10")
+    system = getenv_clean("GARAGA_SYSTEM", "groth16") or "groth16"
+    timeout_secs = int(getenv_clean("GARAGA_TIMEOUT_SECS", "90") or "90")
+    calldata_timeout_secs = int(
+        getenv_clean("GARAGA_CALLDATA_TIMEOUT_SECS", str(max(timeout_secs, 90)))
+        or str(max(timeout_secs, 90))
+    )
 
-    vk_raw = os.getenv("GARAGA_VK_PATH", "").strip()
-    proof_raw = os.getenv("GARAGA_PROOF_PATH", "").strip()
+    vk_raw = getenv_clean("GARAGA_VK_PATH")
+    proof_raw = getenv_clean("GARAGA_PROOF_PATH")
     proof_path = (
         Path(proof_raw).expanduser()
         if proof_raw
         else Path("/tmp/garaga_auto_prover/proof.json")
     )
-    public_inputs_raw = os.getenv("GARAGA_PUBLIC_INPUTS_PATH", "").strip()
+    public_inputs_raw = getenv_clean("GARAGA_PUBLIC_INPUTS_PATH")
     public_inputs_path = Path(public_inputs_raw).expanduser() if public_inputs_raw else None
-    precomputed_payload_raw = os.getenv("GARAGA_PRECOMPUTED_PAYLOAD_PATH", "").strip()
+    precomputed_payload_raw = getenv_clean("GARAGA_PRECOMPUTED_PAYLOAD_PATH")
     precomputed_payload_path = (
         Path(precomputed_payload_raw).expanduser() if precomputed_payload_raw else None
     )
@@ -547,7 +581,7 @@ def build_payload(stdin_payload: dict[str, Any]) -> dict[str, Any]:
         )
     precomputed_payload = maybe_load_precomputed_payload(precomputed_payload_path)
 
-    prove_cmd = os.getenv("GARAGA_PROVE_CMD", "").strip()
+    prove_cmd = getenv_clean("GARAGA_PROVE_CMD")
     if not prove_cmd and precomputed_payload is None:
         fail(
             "Missing required env: GARAGA_PROVE_CMD. "
@@ -555,9 +589,18 @@ def build_payload(stdin_payload: dict[str, Any]) -> dict[str, Any]:
         )
     if not proof_raw and precomputed_payload is None:
         fail("Missing required env: GARAGA_PROOF_PATH")
-    output_dir = Path(os.getenv("GARAGA_OUTPUT_DIR", "/tmp/garaga_auto_prover")).expanduser()
+    output_dir = Path(getenv_clean("GARAGA_OUTPUT_DIR", "/tmp/garaga_auto_prover")).expanduser()
     request_temp_dir: Path | None = None
     keep_temp_files = bool_env("GARAGA_KEEP_TEMP_FILES", False)
+    tx_context_raw = stdin_payload.get("tx_context")
+    tx_context = tx_context_raw if isinstance(tx_context_raw, Mapping) else {}
+    note_version = (
+        getenv_clean("GARAGA_NOTE_VERSION")
+        or str(tx_context.get("note_version", "")).strip()
+        or str(stdin_payload.get("note_version", "")).strip()
+        or getenv_clean("HIDE_BALANCE_POOL_VERSION_DEFAULT")
+    ).strip().lower()
+    is_v3 = note_version == "v3"
     try:
         if prove_cmd:
             # Isolate per-request prover outputs to avoid cross-request overwrite races on shared paths.
@@ -588,7 +631,7 @@ def build_payload(stdin_payload: dict[str, Any]) -> dict[str, Any]:
                 vk_path=vk_path,
                 proof_path=proof_path,
                 public_inputs_path=public_inputs_path,
-                timeout_secs=timeout_secs,
+                timeout_secs=calldata_timeout_secs,
             )
             public_inputs = resolve_public_inputs(
                 public_inputs_path=public_inputs_path,
@@ -596,35 +639,82 @@ def build_payload(stdin_payload: dict[str, Any]) -> dict[str, Any]:
             )
 
         intent_hash, nonce = compute_intent_hash(stdin_payload)
-        if bool_env("GARAGA_DYNAMIC_BINDING", False):
+        root: str | None = None
+        note_commitment: str | None = None
+        denom_id: str | None = None
+        spendable_at_unix: int | None = None
+
+        if is_v3:
+            root_idx = parse_index("GARAGA_ROOT_PUBLIC_INPUT_INDEX", 0)
+            nullifier_idx = parse_index("GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX_V3", 1)
+            required_len = max(root_idx, nullifier_idx) + 1
+            if len(public_inputs) < required_len:
+                fail(
+                    "public_inputs too short to bind V3 root/nullifier: "
+                    f"len={len(public_inputs)}, required>={required_len}, "
+                    f"root_idx={root_idx}, nullifier_idx={nullifier_idx}"
+                )
+            root = to_hex_felt(public_inputs[root_idx])
+            nullifier = to_hex_felt(public_inputs[nullifier_idx])
+            commitment_seed = f"{root}|{nullifier}|{intent_hash}|{nonce}".encode("utf-8")
+            commitment = to_hex_felt(
+                int.from_bytes(hashlib.sha256(commitment_seed).digest(), byteorder="big")
+            )
+            note_commitment_raw = str(tx_context.get("note_commitment", "")).strip()
+            note_commitment = note_commitment_raw if note_commitment_raw else commitment
+            denom_raw = str(tx_context.get("denom_id", "")).strip() or getenv_clean("GARAGA_DENOM_ID")
+            denom_id = denom_raw or None
+            spendable_raw = (
+                str(tx_context.get("spendable_at_unix", "")).strip()
+                or getenv_clean("GARAGA_SPENDABLE_AT_UNIX")
+            )
+            if spendable_raw:
+                try:
+                    spendable_at_unix = int(spendable_raw)
+                except ValueError:
+                    spendable_at_unix = None
+        elif bool_env("GARAGA_DYNAMIC_BINDING", False):
             nullifier, commitment = make_dynamic_binding(stdin_payload, intent_hash, nonce)
             public_inputs = apply_binding_to_public_inputs(public_inputs, nullifier, commitment)
         else:
             nullifier, commitment = bind_nullifier_commitment_from_public_inputs(public_inputs)
 
-        return {
+        payload: GaragaPayload = {
             "nullifier": nullifier,
             "commitment": commitment,
             "intent_hash": intent_hash,
             "proof": proof,
             "public_inputs": public_inputs,
         }
+        if is_v3:
+            payload["note_version"] = "v3"
+            if root:
+                payload["root"] = root
+            if note_commitment:
+                payload["note_commitment"] = note_commitment
+            if denom_id:
+                payload["denom_id"] = denom_id
+            if spendable_at_unix is not None and spendable_at_unix > 0:
+                payload["spendable_at_unix"] = spendable_at_unix
+        return payload
     finally:
         if request_temp_dir is not None and not keep_temp_files:
             shutil.rmtree(request_temp_dir, ignore_errors=True)
 
 
 def run_prove_mode() -> None:
-    real_cmd = resolve_real_prover_cmd(os.getenv("GARAGA_REAL_PROVER_CMD", "").strip())
+    real_cmd = resolve_real_prover_cmd(getenv_clean("GARAGA_REAL_PROVER_CMD"))
     if not real_cmd:
         fail(
             "Missing GARAGA_REAL_PROVER_CMD for --prove mode. "
             "Configure real prover command to generate fresh proof files per request."
         )
     # Force-resolve expected env placeholders to avoid shell quoting/env expansion ambiguity.
-    context_raw = os.getenv("GARAGA_CONTEXT_PATH", "").strip()
+    context_raw = getenv_clean("GARAGA_CONTEXT_PATH")
     proof_path = Path(getenv_required("GARAGA_PROOF_PATH")).expanduser()
     public_inputs_path = Path(getenv_required("GARAGA_PUBLIC_INPUTS_PATH")).expanduser()
+    proof_path.parent.mkdir(parents=True, exist_ok=True)
+    public_inputs_path.parent.mkdir(parents=True, exist_ok=True)
     for env_name, env_value in (
         ("GARAGA_CONTEXT_PATH", context_raw),
         ("GARAGA_PROOF_PATH", str(proof_path)),
@@ -634,7 +724,7 @@ def run_prove_mode() -> None:
             real_cmd = real_cmd.replace(f"${env_name}", env_value)
             real_cmd = real_cmd.replace(f"${{{env_name}}}", env_value)
 
-    timeout_secs = int(os.getenv("GARAGA_REAL_PROVER_TIMEOUT_SECS", "45"))
+    timeout_secs = int(getenv_clean("GARAGA_REAL_PROVER_TIMEOUT_SECS", "45") or "45")
     result = run_shell(real_cmd, timeout_secs=timeout_secs)
     if result.returncode != 0:
         fail(
@@ -692,17 +782,17 @@ def run_prove_mode() -> None:
 
 
 def run_warmup_mode() -> None:
-    base_timeout_secs = int(os.getenv("GARAGA_TIMEOUT_SECS", "45"))
-    warmup_timeout_raw = os.getenv("GARAGA_WARMUP_TIMEOUT_SECS", "").strip()
+    base_timeout_secs = int(getenv_clean("GARAGA_TIMEOUT_SECS", "45") or "45")
+    warmup_timeout_raw = getenv_clean("GARAGA_WARMUP_TIMEOUT_SECS")
     if warmup_timeout_raw:
         timeout_secs = int(warmup_timeout_raw)
     else:
         timeout_secs = max(base_timeout_secs, 120)
-    uvx_cmd = os.getenv("GARAGA_UVX_CMD", "uvx --python 3.10").strip()
-    system = os.getenv("GARAGA_SYSTEM", "groth16").strip() or "groth16"
+    uvx_cmd = getenv_clean("GARAGA_UVX_CMD", "uvx --python 3.10")
+    system = getenv_clean("GARAGA_SYSTEM", "groth16") or "groth16"
     vk_path = Path(getenv_required("GARAGA_VK_PATH")).expanduser()
     proof_path = Path(getenv_required("GARAGA_PROOF_PATH")).expanduser()
-    public_inputs_raw = os.getenv("GARAGA_PUBLIC_INPUTS_PATH", "").strip()
+    public_inputs_raw = getenv_clean("GARAGA_PUBLIC_INPUTS_PATH")
     public_inputs_path = Path(public_inputs_raw).expanduser() if public_inputs_raw else None
 
     if not vk_path.exists():
@@ -739,7 +829,7 @@ def resolve_real_prover_cmd(raw_cmd: str) -> str:
         Path("backend-rust/garaga-real-prover/prove.py"),
         Path("/app/garaga-real-prover/prove.py"),
     ]
-    fallback_path = next(
+    fallback_path: str | None = next(
         (str(candidate.resolve()) for candidate in fallback_candidates if candidate.is_file()),
         None,
     )
@@ -761,7 +851,13 @@ def resolve_real_prover_cmd(raw_cmd: str) -> str:
             f"using '{fallback_path}'",
             file=sys.stderr,
         )
-        cmd = cmd.replace(path_literal, fallback_path)
+        replacement_path = fallback_path
+        if replacement_path is None:
+            fail(
+                "GARAGA_REAL_PROVER_CMD points to missing prover script path "
+                f"'{path_literal}', and no local fallback was found."
+            )
+        cmd = cmd.replace(path_literal, replacement_path)
 
     for bad_path in (
         "/PATH/ASLI/garaga-real-prover/prove.py",
@@ -776,7 +872,7 @@ def resolve_real_prover_cmd(raw_cmd: str) -> str:
 
 
 def run_test_mode() -> None:
-    sample_a = {
+    sample_a: dict[str, object] = {
         "user_address": "0x111",
         "verifier": "garaga",
         "requested_at_unix": int(time.time()),
@@ -788,7 +884,7 @@ def run_test_mode() -> None:
             "nonce": "n1",
         },
     }
-    sample_b = {
+    sample_b: dict[str, object] = {
         "user_address": "0x222",
         "verifier": "garaga",
         "requested_at_unix": int(time.time()) + 1,

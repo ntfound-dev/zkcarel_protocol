@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::privacy::{
     bind_intent_hash_into_payload, ensure_public_inputs_bind_nullifier_commitment,
-    generate_auto_garaga_payload, AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
+    ensure_public_inputs_bind_root_nullifier, generate_auto_garaga_payload,
+    AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
 };
 use super::swap::{parse_decimal_to_u256_parts, token_decimals};
 use crate::services::notification_service::{NotificationService, NotificationType};
@@ -260,10 +261,26 @@ fn hide_balance_limit_order_relayer_pool_enabled() -> bool {
         && env_flag("HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED", false)
 }
 
+fn hide_balance_strict_privacy_mode_enabled() -> bool {
+    env_flag("HIDE_BALANCE_STRICT_PRIVACY_MODE", false)
+}
+
+fn hide_balance_v2_redeem_only_enabled() -> bool {
+    env_flag("HIDE_BALANCE_V2_REDEEM_ONLY", false)
+}
+
+fn hide_balance_min_note_age_secs() -> u64 {
+    std::env::var("HIDE_BALANCE_MIN_NOTE_AGE_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(3600)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HideExecutorKind {
     PrivateActionExecutorV1,
     ShieldedPoolV2,
+    ShieldedPoolV3,
 }
 
 // Internal helper that supports `hide_executor_kind` operations in the limit-order flow.
@@ -273,11 +290,47 @@ fn hide_executor_kind() -> HideExecutorKind {
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    if matches!(raw.as_str(), "shielded_pool_v2" | "shielded-v2" | "v2") {
+    if matches!(raw.as_str(), "shielded_pool_v3" | "shielded-v3" | "v3") {
+        HideExecutorKind::ShieldedPoolV3
+    } else if matches!(raw.as_str(), "shielded_pool_v2" | "shielded-v2" | "v2") {
         HideExecutorKind::ShieldedPoolV2
     } else {
         HideExecutorKind::PrivateActionExecutorV1
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HidePoolVersion {
+    V2,
+    V3,
+}
+
+fn hide_balance_pool_version_default() -> HidePoolVersion {
+    let raw = std::env::var("HIDE_BALANCE_POOL_VERSION_DEFAULT")
+        .unwrap_or_else(|_| "v2".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    if raw == "v3" {
+        HidePoolVersion::V3
+    } else {
+        HidePoolVersion::V2
+    }
+}
+
+fn resolve_hide_pool_version(payload: Option<&ModelPrivacyVerificationPayload>) -> HidePoolVersion {
+    if let Some(note_version) = payload
+        .and_then(|value| value.note_version.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if note_version.eq_ignore_ascii_case("v3") {
+            return HidePoolVersion::V3;
+        }
+        if note_version.eq_ignore_ascii_case("v2") {
+            return HidePoolVersion::V2;
+        }
+    }
+    hide_balance_pool_version_default()
 }
 
 // Internal helper that fetches data for `resolve_private_action_executor_felt` in the limit-order flow.
@@ -332,10 +385,15 @@ fn payload_from_request(
 ) -> Option<AutoPrivacyPayloadResponse> {
     let payload = payload?;
     let nullifier = payload.nullifier.as_deref()?.trim();
-    let commitment = payload.commitment.as_deref()?.trim();
-    if nullifier.is_empty() || commitment.is_empty() {
+    if nullifier.is_empty() {
         return None;
     }
+    let commitment = payload
+        .commitment
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("0x0");
     let proof = normalize_hex_items(payload.proof.as_ref()?);
     let public_inputs = normalize_hex_items(payload.public_inputs.as_ref()?);
     if proof.is_empty() || public_inputs.is_empty() {
@@ -358,9 +416,44 @@ fn payload_from_request(
             .to_string(),
         nullifier: nullifier.to_string(),
         commitment: commitment.to_string(),
+        root: payload
+            .root
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        note_version: payload
+            .note_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        note_commitment: payload
+            .note_commitment
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        denom_id: payload
+            .denom_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        spendable_at_unix: payload.spendable_at_unix,
         proof,
         public_inputs,
     })
+}
+
+struct LimitActionCallInput<'a> {
+    action_target: Felt,
+    action_selector: Felt,
+    action_calldata: &'a [Felt],
+    approval_token: Felt,
+    payout_token: Felt,
+    min_payout_low: Felt,
+    min_payout_high: Felt,
 }
 
 // Internal helper that supports `compute_limit_intent_hash_on_executor` operations in the limit-order flow.
@@ -368,27 +461,31 @@ fn payload_from_request(
 async fn compute_limit_intent_hash_on_executor(
     state: &AppState,
     executor: Felt,
-    action_target: Felt,
-    action_selector: Felt,
-    action_calldata: &[Felt],
-    approval_token: Felt,
+    input: &LimitActionCallInput<'_>,
 ) -> Result<String> {
     let reader = OnchainReader::from_config(&state.config)?;
     let selector_name = match hide_executor_kind() {
         HideExecutorKind::PrivateActionExecutorV1 => "preview_limit_intent_hash",
         HideExecutorKind::ShieldedPoolV2 => "preview_limit_action_hash",
+        HideExecutorKind::ShieldedPoolV3 => "preview_limit_action_hash",
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let mut calldata: Vec<Felt> = Vec::with_capacity(5 + action_calldata.len());
-    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-        calldata.push(action_target);
+    let kind = hide_executor_kind();
+    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
+    if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.action_target);
     }
-    calldata.push(action_selector);
-    calldata.push(Felt::from(action_calldata.len() as u64));
-    calldata.extend_from_slice(action_calldata);
-    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-        calldata.push(approval_token);
+    calldata.push(input.action_selector);
+    calldata.push(Felt::from(input.action_calldata.len() as u64));
+    calldata.extend_from_slice(input.action_calldata);
+    if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.approval_token);
+    }
+    if kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.payout_token);
+        calldata.push(input.min_payout_low);
+        calldata.push(input.min_payout_high);
     }
 
     let out = reader
@@ -412,9 +509,11 @@ fn build_submit_private_intent_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
 ) -> Result<Call> {
-    let selector_name = match hide_executor_kind() {
+    let kind = hide_executor_kind();
+    let selector_name = match kind {
         HideExecutorKind::PrivateActionExecutorV1 => "submit_private_intent",
         HideExecutorKind::ShieldedPoolV2 => "submit_private_action",
+        HideExecutorKind::ShieldedPoolV3 => "submit_private_limit",
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
@@ -423,19 +522,31 @@ fn build_submit_private_intent_call(
         .iter()
         .map(|felt| parse_felt(felt))
         .collect::<Result<Vec<_>>>()?;
-    let public_inputs: Vec<Felt> = payload
-        .public_inputs
-        .iter()
-        .map(|felt| parse_felt(felt))
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut calldata: Vec<Felt> = Vec::with_capacity(4 + proof.len() + public_inputs.len());
-    calldata.push(parse_felt(payload.nullifier.trim())?);
-    calldata.push(parse_felt(payload.commitment.trim())?);
-    calldata.push(Felt::from(proof.len() as u64));
-    calldata.extend(proof);
-    calldata.push(Felt::from(public_inputs.len() as u64));
-    calldata.extend(public_inputs);
+    let calldata = if kind == HideExecutorKind::ShieldedPoolV3 {
+        let root = payload.root.as_deref().ok_or_else(|| {
+            crate::error::AppError::BadRequest("Hide Balance V3 requires privacy.root".to_string())
+        })?;
+        let mut calldata: Vec<Felt> = Vec::with_capacity(3 + proof.len());
+        calldata.push(parse_felt(root.trim())?);
+        calldata.push(parse_felt(payload.nullifier.trim())?);
+        calldata.push(Felt::from(proof.len() as u64));
+        calldata.extend(proof);
+        calldata
+    } else {
+        let public_inputs: Vec<Felt> = payload
+            .public_inputs
+            .iter()
+            .map(|felt| parse_felt(felt))
+            .collect::<Result<Vec<_>>>()?;
+        let mut calldata: Vec<Felt> = Vec::with_capacity(4 + proof.len() + public_inputs.len());
+        calldata.push(parse_felt(payload.nullifier.trim())?);
+        calldata.push(parse_felt(payload.commitment.trim())?);
+        calldata.push(Felt::from(proof.len() as u64));
+        calldata.extend(proof);
+        calldata.push(Felt::from(public_inputs.len() as u64));
+        calldata.extend(public_inputs);
+        calldata
+    };
 
     Ok(Call {
         to: executor,
@@ -449,23 +560,35 @@ fn build_submit_private_intent_call(
 fn build_execute_private_limit_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
-    action_target: Felt,
-    action_selector: Felt,
-    action_calldata: &[Felt],
-    approval_token: Felt,
+    input: &LimitActionCallInput<'_>,
 ) -> Result<Call> {
-    let selector = get_selector_from_name("execute_private_limit_order")
+    let kind = hide_executor_kind();
+    let selector_name = match kind {
+        HideExecutorKind::PrivateActionExecutorV1 => "execute_private_limit_order",
+        HideExecutorKind::ShieldedPoolV2 => "execute_private_limit_order",
+        HideExecutorKind::ShieldedPoolV3 => "execute_private_limit_with_payout",
+    };
+    let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let mut calldata: Vec<Felt> = Vec::with_capacity(6 + action_calldata.len());
-    calldata.push(parse_felt(payload.commitment.trim())?);
-    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-        calldata.push(action_target);
+    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
+    if kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(parse_felt(payload.nullifier.trim())?);
+    } else {
+        calldata.push(parse_felt(payload.commitment.trim())?);
     }
-    calldata.push(action_selector);
-    calldata.push(Felt::from(action_calldata.len() as u64));
-    calldata.extend_from_slice(action_calldata);
-    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-        calldata.push(approval_token);
+    if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.action_target);
+    }
+    calldata.push(input.action_selector);
+    calldata.push(Felt::from(input.action_calldata.len() as u64));
+    calldata.extend_from_slice(input.action_calldata);
+    if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.approval_token);
+    }
+    if kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.payout_token);
+        calldata.push(input.min_payout_low);
+        calldata.push(input.min_payout_high);
     }
 
     Ok(Call {
@@ -528,6 +651,50 @@ async fn shielded_note_registered(
         .await?;
     let flag = out.first().copied().unwrap_or(Felt::ZERO);
     Ok(flag != Felt::ZERO)
+}
+
+async fn shielded_note_deposit_timestamp(
+    state: &AppState,
+    executor: Felt,
+    note_commitment: Felt,
+) -> Result<u64> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let selector = get_selector_from_name("get_note_deposit_timestamp")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: executor,
+            entry_point_selector: selector,
+            calldata: vec![note_commitment],
+        })
+        .await?;
+    let raw = out.first().copied().unwrap_or(Felt::ZERO);
+    let value = felt_to_u128(&raw).map_err(|_| {
+        crate::error::AppError::BadRequest(
+            "Invalid note timestamp returned by shielded pool".to_string(),
+        )
+    })?;
+    Ok(value as u64)
+}
+
+async fn shielded_current_root(state: &AppState, executor: Felt) -> Result<Felt> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let selector = get_selector_from_name("get_root")
+        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address: executor,
+            entry_point_selector: selector,
+            calldata: vec![],
+        })
+        .await?;
+    let root = out.first().copied().unwrap_or(Felt::ZERO);
+    if root == Felt::ZERO {
+        return Err(crate::error::AppError::BadRequest(
+            "ShieldedPoolV3 root belum diinisialisasi (get_root=0).".to_string(),
+        ));
+    }
+    Ok(root)
 }
 
 // Internal helper that supports `shielded_fixed_amount` operations in the limit-order flow.
@@ -700,6 +867,30 @@ pub async fn create_order(
 
     ensure_supported_limit_order_pair(&req.from_token, &req.to_token)?;
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
+    let strict_privacy_mode = should_hide && hide_balance_strict_privacy_mode_enabled();
+    let hide_pool_version = if should_hide {
+        Some(resolve_hide_pool_version(req.privacy.as_ref()))
+    } else {
+        None
+    };
+    if should_hide {
+        match (hide_executor_kind(), hide_pool_version) {
+            (HideExecutorKind::ShieldedPoolV3, Some(HidePoolVersion::V2)) => {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance config mismatch: executor is V3 but payload/version resolved to V2."
+                        .to_string(),
+                ));
+            }
+            (HideExecutorKind::ShieldedPoolV2, Some(HidePoolVersion::V3))
+            | (HideExecutorKind::PrivateActionExecutorV1, Some(HidePoolVersion::V3)) => {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V3 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3."
+                        .to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
     let expiry_duration = expiry_duration_for(&req.expiry);
     let now = chrono::Utc::now();
     let expiry = now + expiry_duration;
@@ -725,35 +916,6 @@ pub async fn create_order(
                 .as_ref()
                 .and_then(|payload| payload.verifier.as_deref()),
         )?;
-        let mut payload = if let Some(request_payload) =
-            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
-        {
-            request_payload
-        } else {
-            let tx_context = AutoPrivacyTxContext {
-                flow: Some("limit_order".to_string()),
-                from_token: Some(req.from_token.clone()),
-                to_token: Some(req.to_token.clone()),
-                amount: Some(req.amount.clone()),
-                recipient: req.recipient.clone(),
-                from_network: Some("starknet".to_string()),
-                to_network: Some("starknet".to_string()),
-            };
-            generate_auto_garaga_payload(
-                &state.config,
-                &user_address,
-                verifier_kind.as_str(),
-                Some(&tx_context),
-            )
-            .await?
-        };
-        ensure_public_inputs_bind_nullifier_commitment(
-            &payload.nullifier,
-            &payload.commitment,
-            &payload.public_inputs,
-            "limit order hide payload",
-        )?;
-
         let from_token = token_address_for(&req.from_token)
             .ok_or(crate::error::AppError::InvalidToken)
             .and_then(parse_felt)?;
@@ -776,13 +938,107 @@ pub async fn create_order(
             price_high,
             Felt::from(expiry_ts as u64),
         ];
+        let limit_input = LimitActionCallInput {
+            action_target,
+            action_selector,
+            action_calldata: &action_calldata,
+            approval_token: from_token,
+            payout_token: to_token,
+            min_payout_low: Felt::ZERO,
+            min_payout_high: Felt::ZERO,
+        };
+        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+        let payload_from_auto = request_payload.is_none();
+        let mut payload = if let Some(request_payload) = request_payload {
+            request_payload
+        } else {
+            let mut tx_context = AutoPrivacyTxContext {
+                flow: Some("limit_order".to_string()),
+                from_token: Some(req.from_token.clone()),
+                to_token: Some(req.to_token.clone()),
+                amount: Some(req.amount.clone()),
+                recipient: req.recipient.clone(),
+                from_network: Some("starknet".to_string()),
+                to_network: Some("starknet".to_string()),
+                note_version: if hide_pool_version == Some(HidePoolVersion::V3) {
+                    Some("v3".to_string())
+                } else {
+                    None
+                },
+                ..Default::default()
+            };
+            if hide_pool_version == Some(HidePoolVersion::V3) {
+                tx_context.note_commitment =
+                    req.privacy.as_ref().and_then(|value| value.note_commitment.clone());
+                tx_context.denom_id = req.privacy.as_ref().and_then(|value| value.denom_id.clone());
+                tx_context.nullifier = req.privacy.as_ref().and_then(|value| value.nullifier.clone());
+            }
+            generate_auto_garaga_payload(
+                &state.config,
+                &user_address,
+                verifier_kind.as_str(),
+                Some(&tx_context),
+            )
+            .await?
+        };
+
         let mut relayer_calls: Vec<Call> = Vec::new();
-        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
+        if hide_pool_version == Some(HidePoolVersion::V3) {
+            let note_commitment_raw = payload
+                .note_commitment
+                .as_deref()
+                .or_else(|| {
+                    if payload.commitment.trim().is_empty()
+                        || payload.commitment.trim().eq_ignore_ascii_case("0x0")
+                    {
+                        None
+                    } else {
+                        Some(payload.commitment.as_str())
+                    }
+                })
+                .ok_or_else(|| {
+                    crate::error::AppError::BadRequest(
+                        "Hide Balance V3 requires privacy.note_commitment in payload".to_string(),
+                    )
+                })?;
+            let note_commitment_felt = parse_felt(note_commitment_raw.trim())?;
+            let deposit_ts =
+                shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
+            if deposit_ts == 0 {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu lalu tunggu mixing window."
+                        .to_string(),
+                ));
+            }
+            let min_age_secs = hide_balance_min_note_age_secs();
+            let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
+            let spendable_at = deposit_ts.saturating_add(min_age_secs);
+            payload.spendable_at_unix = Some(spendable_at);
+            if now_unix < spendable_at {
+                let remaining = spendable_at - now_unix;
+                return Err(crate::error::AppError::BadRequest(format!(
+                    "Hide Balance mixing window aktif: note age belum memenuhi minimum {} detik. Coba lagi dalam {} detik.",
+                    min_age_secs, remaining
+                )));
+            }
+        } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
             let note_registered =
                 shielded_note_registered(&state, executor, commitment_felt).await?;
             if !note_registered {
+                if hide_balance_v2_redeem_only_enabled() {
+                    return Err(crate::error::AppError::BadRequest(
+                        "Hide Balance V2 is redeem-only. Deposit note baru ke V2 diblok; gunakan V3 untuk note baru."
+                            .to_string(),
+                    ));
+                }
+                if strict_privacy_mode {
+                    return Err(crate::error::AppError::BadRequest(
+                        "Hide Balance strict mode blocks inline deposit+execute in one tx. Pre-fund shielded note first."
+                            .to_string(),
+                    ));
+                }
                 let (fixed_low, fixed_high) =
                     shielded_fixed_amount(&state, executor, from_token).await?;
                 if fixed_low != amount_low || fixed_high != amount_high {
@@ -836,33 +1092,65 @@ pub async fn create_order(
             }
         }
 
-        let intent_hash = compute_limit_intent_hash_on_executor(
-            &state,
-            executor,
-            action_target,
-            action_selector,
-            &action_calldata,
-            from_token,
-        )
-        .await?;
+        let intent_hash = compute_limit_intent_hash_on_executor(&state, executor, &limit_input).await?;
+        if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
+            let root = shielded_current_root(&state, executor).await?;
+            let tx_context = AutoPrivacyTxContext {
+                flow: Some("limit_order".to_string()),
+                from_token: Some(req.from_token.clone()),
+                to_token: Some(req.to_token.clone()),
+                amount: Some(req.amount.clone()),
+                recipient: req.recipient.clone(),
+                from_network: Some("starknet".to_string()),
+                to_network: Some("starknet".to_string()),
+                note_version: Some("v3".to_string()),
+                root: Some(format!("{root:#x}")),
+                intent_hash: Some(intent_hash.clone()),
+                action_hash: Some(intent_hash.clone()),
+                action_target: Some(format!("{action_target:#x}")),
+                action_selector: Some(format!("{action_selector:#x}")),
+                approval_token: Some(format!("{from_token:#x}")),
+                payout_token: Some(format!("{to_token:#x}")),
+                min_payout: Some("0x0:0x0".to_string()),
+                note_commitment: req.privacy.as_ref().and_then(|value| value.note_commitment.clone()),
+                denom_id: req.privacy.as_ref().and_then(|value| value.denom_id.clone()),
+                nullifier: req.privacy.as_ref().and_then(|value| value.nullifier.clone()),
+                ..Default::default()
+            };
+            payload = generate_auto_garaga_payload(
+                &state.config,
+                &user_address,
+                verifier_kind.as_str(),
+                Some(&tx_context),
+            )
+            .await?;
+        }
         bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
-        ensure_public_inputs_bind_nullifier_commitment(
-            &payload.nullifier,
-            &payload.commitment,
-            &payload.public_inputs,
-            "limit order hide payload (bound)",
-        )?;
+        if hide_pool_version == Some(HidePoolVersion::V3) {
+            payload.note_version = Some("v3".to_string());
+            let root = payload.root.as_deref().ok_or_else(|| {
+                crate::error::AppError::BadRequest(
+                    "Hide Balance V3 requires privacy.root in prover payload".to_string(),
+                )
+            })?;
+            ensure_public_inputs_bind_root_nullifier(
+                root,
+                &payload.nullifier,
+                &payload.public_inputs,
+                "limit order hide payload (bound)",
+            )?;
+        } else {
+            ensure_public_inputs_bind_nullifier_commitment(
+                &payload.nullifier,
+                &payload.commitment,
+                &payload.public_inputs,
+                "limit order hide payload (bound)",
+            )?;
+        }
 
         let relayer = RelayerService::from_config(&state.config)?;
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call = build_execute_private_limit_call(
-            executor,
-            &payload,
-            action_target,
-            action_selector,
-            &action_calldata,
-            from_token,
-        )?;
+        let execute_call = build_execute_private_limit_call(executor, &payload, &limit_input)?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
         let submitted = relayer.submit_calls(relayer_calls).await?;
@@ -1032,6 +1320,30 @@ pub async fn cancel_order(
         .expire_limit_orders_for_owner(&user_address)
         .await?;
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
+    let strict_privacy_mode = should_hide && hide_balance_strict_privacy_mode_enabled();
+    let hide_pool_version = if should_hide {
+        Some(resolve_hide_pool_version(req.privacy.as_ref()))
+    } else {
+        None
+    };
+    if should_hide {
+        match (hide_executor_kind(), hide_pool_version) {
+            (HideExecutorKind::ShieldedPoolV3, Some(HidePoolVersion::V2)) => {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance config mismatch: executor is V3 but payload/version resolved to V2."
+                        .to_string(),
+                ));
+            }
+            (HideExecutorKind::ShieldedPoolV2, Some(HidePoolVersion::V3))
+            | (HideExecutorKind::PrivateActionExecutorV1, Some(HidePoolVersion::V3)) => {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V3 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3."
+                        .to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
     let order = state
         .db
         .get_limit_order(&order_id)
@@ -1066,31 +1378,6 @@ pub async fn cancel_order(
                 .as_ref()
                 .and_then(|payload| payload.verifier.as_deref()),
         )?;
-        let mut payload = if let Some(request_payload) =
-            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
-        {
-            request_payload
-        } else {
-            let tx_context = AutoPrivacyTxContext {
-                flow: Some("limit_order_cancel".to_string()),
-                from_network: Some("starknet".to_string()),
-                to_network: Some("starknet".to_string()),
-                ..Default::default()
-            };
-            generate_auto_garaga_payload(
-                &state.config,
-                &user_address,
-                verifier_kind.as_str(),
-                Some(&tx_context),
-            )
-            .await?
-        };
-        ensure_public_inputs_bind_nullifier_commitment(
-            &payload.nullifier,
-            &payload.commitment,
-            &payload.public_inputs,
-            "limit cancel hide payload",
-        )?;
         let action_selector = get_selector_from_name("cancel_limit_order")
             .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
         let action_calldata = vec![parse_felt(&order_id)?];
@@ -1101,29 +1388,153 @@ pub async fn cancel_order(
         } else {
             Felt::ZERO
         };
-        let intent_hash = compute_limit_intent_hash_on_executor(
-            &state,
-            executor,
+        let limit_input = LimitActionCallInput {
             action_target,
             action_selector,
-            &action_calldata,
+            action_calldata: &action_calldata,
             approval_token,
-        )
-        .await?;
+            payout_token: Felt::ZERO,
+            min_payout_low: Felt::ZERO,
+            min_payout_high: Felt::ZERO,
+        };
+        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+        let payload_from_auto = request_payload.is_none();
+        let mut payload = if let Some(request_payload) = request_payload {
+            request_payload
+        } else {
+            let mut tx_context = AutoPrivacyTxContext {
+                flow: Some("limit_order_cancel".to_string()),
+                from_network: Some("starknet".to_string()),
+                to_network: Some("starknet".to_string()),
+                note_version: if hide_pool_version == Some(HidePoolVersion::V3) {
+                    Some("v3".to_string())
+                } else {
+                    None
+                },
+                ..Default::default()
+            };
+            if hide_pool_version == Some(HidePoolVersion::V3) {
+                tx_context.note_commitment =
+                    req.privacy.as_ref().and_then(|value| value.note_commitment.clone());
+                tx_context.denom_id = req.privacy.as_ref().and_then(|value| value.denom_id.clone());
+                tx_context.nullifier = req.privacy.as_ref().and_then(|value| value.nullifier.clone());
+            }
+            generate_auto_garaga_payload(
+                &state.config,
+                &user_address,
+                verifier_kind.as_str(),
+                Some(&tx_context),
+            )
+            .await?
+        };
+        let intent_hash = compute_limit_intent_hash_on_executor(&state, executor, &limit_input).await?;
+        if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
+            let root = shielded_current_root(&state, executor).await?;
+            let tx_context = AutoPrivacyTxContext {
+                flow: Some("limit_order_cancel".to_string()),
+                from_network: Some("starknet".to_string()),
+                to_network: Some("starknet".to_string()),
+                note_version: Some("v3".to_string()),
+                root: Some(format!("{root:#x}")),
+                intent_hash: Some(intent_hash.clone()),
+                action_hash: Some(intent_hash.clone()),
+                action_target: Some(format!("{action_target:#x}")),
+                action_selector: Some(format!("{action_selector:#x}")),
+                approval_token: Some(format!("{approval_token:#x}")),
+                payout_token: Some("0x0".to_string()),
+                min_payout: Some("0x0:0x0".to_string()),
+                note_commitment: req.privacy.as_ref().and_then(|value| value.note_commitment.clone()),
+                denom_id: req.privacy.as_ref().and_then(|value| value.denom_id.clone()),
+                nullifier: req.privacy.as_ref().and_then(|value| value.nullifier.clone()),
+                ..Default::default()
+            };
+            payload = generate_auto_garaga_payload(
+                &state.config,
+                &user_address,
+                verifier_kind.as_str(),
+                Some(&tx_context),
+            )
+            .await?;
+        }
         bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
-        ensure_public_inputs_bind_nullifier_commitment(
-            &payload.nullifier,
-            &payload.commitment,
-            &payload.public_inputs,
-            "limit cancel hide payload (bound)",
-        )?;
+        if hide_pool_version == Some(HidePoolVersion::V3) {
+            payload.note_version = Some("v3".to_string());
+            let root = payload.root.as_deref().ok_or_else(|| {
+                crate::error::AppError::BadRequest(
+                    "Hide Balance V3 requires privacy.root in prover payload".to_string(),
+                )
+            })?;
+            ensure_public_inputs_bind_root_nullifier(
+                root,
+                &payload.nullifier,
+                &payload.public_inputs,
+                "limit cancel hide payload (bound)",
+            )?;
+        } else {
+            ensure_public_inputs_bind_nullifier_commitment(
+                &payload.nullifier,
+                &payload.commitment,
+                &payload.public_inputs,
+                "limit cancel hide payload (bound)",
+            )?;
+        }
         let mut relayer_calls: Vec<Call> = Vec::new();
-        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
+        if hide_pool_version == Some(HidePoolVersion::V3) {
+            let note_commitment_raw = payload
+                .note_commitment
+                .as_deref()
+                .or_else(|| {
+                    if payload.commitment.trim().is_empty()
+                        || payload.commitment.trim().eq_ignore_ascii_case("0x0")
+                    {
+                        None
+                    } else {
+                        Some(payload.commitment.as_str())
+                    }
+                })
+                .ok_or_else(|| {
+                    crate::error::AppError::BadRequest(
+                        "Hide Balance V3 requires privacy.note_commitment in payload".to_string(),
+                    )
+                })?;
+            let note_commitment_felt = parse_felt(note_commitment_raw.trim())?;
+            let deposit_ts =
+                shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
+            if deposit_ts == 0 {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu lalu tunggu mixing window."
+                        .to_string(),
+                ));
+            }
+            let min_age_secs = hide_balance_min_note_age_secs();
+            let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
+            let spendable_at = deposit_ts.saturating_add(min_age_secs);
+            payload.spendable_at_unix = Some(spendable_at);
+            if now_unix < spendable_at {
+                let remaining = spendable_at - now_unix;
+                return Err(crate::error::AppError::BadRequest(format!(
+                    "Hide Balance mixing window aktif: note age belum memenuhi minimum {} detik. Coba lagi dalam {} detik.",
+                    min_age_secs, remaining
+                )));
+            }
+        } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
             let note_registered =
                 shielded_note_registered(&state, executor, commitment_felt).await?;
             if !note_registered {
+                if hide_balance_v2_redeem_only_enabled() {
+                    return Err(crate::error::AppError::BadRequest(
+                        "Hide Balance V2 is redeem-only. Deposit note baru ke V2 diblok; gunakan V3 untuk note baru."
+                            .to_string(),
+                    ));
+                }
+                if strict_privacy_mode {
+                    return Err(crate::error::AppError::BadRequest(
+                        "Hide Balance strict mode blocks inline deposit+execute in one tx. Pre-fund shielded note first."
+                            .to_string(),
+                    ));
+                }
                 let (mut note_amount_low, mut note_amount_high) =
                     shielded_fixed_amount(&state, executor, approval_token).await?;
                 if note_amount_low == Felt::ZERO && note_amount_high == Felt::ZERO {
@@ -1183,14 +1594,7 @@ pub async fn cancel_order(
         }
         let relayer = RelayerService::from_config(&state.config)?;
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call = build_execute_private_limit_call(
-            executor,
-            &payload,
-            action_target,
-            action_selector,
-            &action_calldata,
-            approval_token,
-        )?;
+        let execute_call = build_execute_private_limit_call(executor, &payload, &limit_input)?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
         let submitted = relayer.submit_calls(relayer_calls).await?;
@@ -1233,6 +1637,47 @@ pub async fn cancel_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_hide_pool_version_prefers_note_version_field() {
+        let payload_v3 = ModelPrivacyVerificationPayload {
+            verifier: None,
+            note_version: Some("v3".to_string()),
+            root: None,
+            nullifier: None,
+            commitment: None,
+            note_commitment: None,
+            denom_id: None,
+            spendable_at_unix: None,
+            proof: None,
+            public_inputs: None,
+        };
+        let payload_v2 = ModelPrivacyVerificationPayload {
+            verifier: None,
+            note_version: Some("v2".to_string()),
+            root: None,
+            nullifier: None,
+            commitment: None,
+            note_commitment: None,
+            denom_id: None,
+            spendable_at_unix: None,
+            proof: None,
+            public_inputs: None,
+        };
+        assert!(matches!(
+            resolve_hide_pool_version(Some(&payload_v3)),
+            HidePoolVersion::V3
+        ));
+        assert!(matches!(
+            resolve_hide_pool_version(Some(&payload_v2)),
+            HidePoolVersion::V2
+        ));
+    }
+
+    #[test]
+    fn hide_balance_min_note_age_default_is_one_hour() {
+        assert_eq!(hide_balance_min_note_age_secs(), 3600);
+    }
 
     #[test]
     // Internal helper that supports `expiry_duration_for_defaults_to_7d` operations in the limit-order flow.

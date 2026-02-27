@@ -4,41 +4,106 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use ark_bls12_381::{Bls12_381, Fr, G1Affine, G2Affine};
-use ark_ff::{BigInteger, Field, PrimeField, Zero};
-use ark_groth16::{prepare_verifying_key, Groth16, Proof, ProvingKey, VerifyingKey};
-use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::{fp::FpVar, FieldVar}};
+use ark_ff::{BigInteger, PrimeField, Zero};
+use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey, prepare_verifying_key};
+use ark_r1cs_std::{
+    alloc::AllocVar,
+    eq::EqGadget,
+    fields::fp::FpVar,
+};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use clap::{Parser, Subcommand};
 use num_bigint::BigUint;
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const CIRCUIT_TAG: &[u8] = b"zkcare-garaga-bms-v1";
-const CIRCUIT_OFFSET: u64 = 7;
+const CIRCUIT_TAG: &[u8] = b"zkcare-garaga-note-spend-v3";
+const DOMAIN_ROOT: u64 = 101;
+const DOMAIN_NULLIFIER: u64 = 202;
+const DOMAIN_ACTION: u64 = 303;
 
 #[derive(Debug, Clone)]
-struct BindingCircuit {
-    pub_input: Option<Fr>,
-    witness: Option<Fr>,
+struct NoteSpendCircuit {
+    root: Option<Fr>,
+    nullifier: Option<Fr>,
+    action_hash: Option<Fr>,
+    recipient: Option<Fr>,
+
+    secret: Option<Fr>,
+    nullifier_key: Option<Fr>,
+    leaf_index: Option<Fr>,
+    action_seed: Option<Fr>,
+    recipient_witness: Option<Fr>,
 }
 
-impl ConstraintSynthesizer<Fr> for BindingCircuit {
+impl ConstraintSynthesizer<Fr> for NoteSpendCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
-        let public = FpVar::<Fr>::new_input(cs.clone(), || {
-            self.pub_input.ok_or(SynthesisError::AssignmentMissing)
+        let root_pub = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.root.ok_or(SynthesisError::AssignmentMissing)
         })?;
-        let witness = FpVar::<Fr>::new_witness(cs.clone(), || {
-            self.witness.ok_or(SynthesisError::AssignmentMissing)
+        let nullifier_pub = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.nullifier.ok_or(SynthesisError::AssignmentMissing)
         })?;
-        let offset = FpVar::<Fr>::new_constant(cs, Fr::from(CIRCUIT_OFFSET))?;
-        let derived = witness.square()? + offset;
-        derived.enforce_equal(&public)?;
+        let action_hash_pub = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.action_hash.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let recipient_pub = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.recipient.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+
+        let secret_wit = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.secret.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let nullifier_key_wit = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.nullifier_key.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let leaf_index_wit = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.leaf_index.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let action_seed_wit = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.action_seed.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let recipient_wit = FpVar::<Fr>::new_witness(cs, || {
+            self.recipient_witness.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+
+        let domain_root = FpVar::<Fr>::new_constant(ConstraintSystemRef::None, Fr::from(DOMAIN_ROOT))?;
+        let domain_nullifier =
+            FpVar::<Fr>::new_constant(ConstraintSystemRef::None, Fr::from(DOMAIN_NULLIFIER))?;
+        let domain_action =
+            FpVar::<Fr>::new_constant(ConstraintSystemRef::None, Fr::from(DOMAIN_ACTION))?;
+
+        recipient_wit.enforce_equal(&recipient_pub)?;
+
+        let computed_root =
+            secret_wit + nullifier_key_wit.clone() + recipient_wit.clone() + leaf_index_wit.clone() + domain_root;
+        computed_root.enforce_equal(&root_pub)?;
+
+        let computed_nullifier = nullifier_key_wit + leaf_index_wit.clone() + domain_nullifier;
+        computed_nullifier.enforce_equal(&nullifier_pub)?;
+
+        let computed_action = action_seed_wit + leaf_index_wit + recipient_wit + domain_action;
+        computed_action.enforce_equal(&action_hash_pub)?;
+
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct DerivedStatement {
+    root: Fr,
+    nullifier: Fr,
+    action_hash: Fr,
+    recipient: Fr,
+    secret: Fr,
+    nullifier_key: Fr,
+    leaf_index: Fr,
+    action_seed: Fr,
 }
 
 #[derive(Debug, Parser)]
@@ -125,7 +190,12 @@ fn main() -> Result<()> {
             vk_out,
             sample_proof_out,
             sample_public_inputs_out,
-        } => run_setup(&pk_out, &vk_out, sample_proof_out.as_deref(), sample_public_inputs_out.as_deref()),
+        } => run_setup(
+            &pk_out,
+            &vk_out,
+            sample_proof_out.as_deref(),
+            sample_public_inputs_out.as_deref(),
+        ),
         Command::Prove {
             pk,
             proof_out,
@@ -144,9 +214,16 @@ fn run_setup(
     ensure_parent(pk_out)?;
     ensure_parent(vk_out)?;
 
-    let empty_circuit = BindingCircuit {
-        pub_input: None,
-        witness: None,
+    let empty_circuit = NoteSpendCircuit {
+        root: None,
+        nullifier: None,
+        action_hash: None,
+        recipient: None,
+        secret: None,
+        nullifier_key: None,
+        leaf_index: None,
+        action_seed: None,
+        recipient_witness: None,
     };
     let mut rng = OsRng;
     let proving_key = Groth16::<Bls12_381>::generate_random_parameters_with_reduction(
@@ -203,25 +280,33 @@ fn run_prove_with_key(
     ensure_parent(public_inputs_out)?;
 
     let context_bytes = read_context_bytes(context_path)?;
-    let witness = derive_witness(&context_bytes);
-    let public_input = witness.square() + Fr::from(CIRCUIT_OFFSET);
+    let statement = derive_statement(&context_bytes);
 
-    let circuit = BindingCircuit {
-        pub_input: Some(public_input),
-        witness: Some(witness),
+    let circuit = NoteSpendCircuit {
+        root: Some(statement.root),
+        nullifier: Some(statement.nullifier),
+        action_hash: Some(statement.action_hash),
+        recipient: Some(statement.recipient),
+        secret: Some(statement.secret),
+        nullifier_key: Some(statement.nullifier_key),
+        leaf_index: Some(statement.leaf_index),
+        action_seed: Some(statement.action_seed),
+        recipient_witness: Some(statement.recipient),
     };
 
     let mut rng = OsRng;
-    let proof = Groth16::<Bls12_381>::create_random_proof_with_reduction(
-        circuit,
-        proving_key,
-        &mut rng,
-    )
-    .context("failed to generate Groth16 proof")?;
+    let proof = Groth16::<Bls12_381>::create_random_proof_with_reduction(circuit, proving_key, &mut rng)
+        .context("failed to generate Groth16 proof")?;
 
     // Safety guard: ensure proof validates against the proving key's verification key.
     let pvk = prepare_verifying_key(&proving_key.vk);
-    let verified = Groth16::<Bls12_381>::verify_proof(&pvk, &proof, &[public_input])
+    let public_inputs = vec![
+        statement.root,
+        statement.nullifier,
+        statement.action_hash,
+        statement.recipient,
+    ];
+    let verified = Groth16::<Bls12_381>::verify_proof(&pvk, &proof, &public_inputs)
         .context("failed to verify generated proof")?;
     if !verified {
         bail!("generated proof did not verify");
@@ -231,8 +316,13 @@ fn run_prove_with_key(
     write_json(proof_out, &proof_json)
         .with_context(|| format!("failed to write proof JSON to {}", proof_out.display()))?;
 
-    let public_inputs = vec![field_to_dec(public_input)];
-    write_json(public_inputs_out, &public_inputs).with_context(|| {
+    let public_inputs_json = vec![
+        field_to_dec(statement.root),
+        field_to_dec(statement.nullifier),
+        field_to_dec(statement.action_hash),
+        field_to_dec(statement.recipient),
+    ];
+    write_json(public_inputs_out, &public_inputs_json).with_context(|| {
         format!(
             "failed to write public inputs JSON to {}",
             public_inputs_out.display()
@@ -256,19 +346,139 @@ fn read_context_bytes(context_path: Option<&Path>) -> Result<Vec<u8>> {
     Ok(Vec::new())
 }
 
-fn derive_witness(context_bytes: &[u8]) -> Fr {
+fn derive_statement(context_bytes: &[u8]) -> DerivedStatement {
+    let parsed = parse_context_json(context_bytes);
+    let tx_context = parsed.get("tx_context").unwrap_or(&Value::Null);
+
+    let user_address = text_field(&parsed, &["user_address"]).unwrap_or_default();
+    let recipient_raw = text_field(tx_context, &["recipient", "receive_address"])
+        .filter(|value| !value.is_empty())
+        .unwrap_or(user_address.clone());
+
+    let recipient = non_zero(
+        parse_felt_like(&recipient_raw)
+            .unwrap_or_else(|| hash_to_fr(&[b"recipient", recipient_raw.as_bytes(), context_bytes])),
+        17,
+    );
+    let leaf_index = non_zero(
+        text_field(tx_context, &["leaf_index", "index"])
+            .and_then(|raw| parse_felt_like(&raw))
+            .unwrap_or_else(|| hash_to_fr(&[b"leaf_index", context_bytes])),
+        19,
+    );
+
     let mut nonce = [0_u8; 32];
     OsRng.fill_bytes(&mut nonce);
-    let mut hasher = Sha256::new();
-    hasher.update(CIRCUIT_TAG);
-    hasher.update(context_bytes);
-    hasher.update(nonce);
-    let digest = hasher.finalize();
-    let mut witness = Fr::from_be_bytes_mod_order(&digest);
-    if witness.is_zero() {
-        witness = Fr::from(1_u64);
+    let mut secret = non_zero(hash_to_fr(&[CIRCUIT_TAG, b"secret", context_bytes, &nonce]), 23);
+    let mut nullifier_key =
+        non_zero(hash_to_fr(&[CIRCUIT_TAG, b"nullifier_key", context_bytes, &nonce]), 29);
+
+    let action_material = format!(
+        "{}|{}|{}|{}|{}|{}",
+        text_field(tx_context, &["target", "action_target"]).unwrap_or_default(),
+        text_field(tx_context, &["selector", "action_selector"]).unwrap_or_default(),
+        text_field(tx_context, &["calldata_hash"]).unwrap_or_default(),
+        text_field(tx_context, &["approval_token"]).unwrap_or_default(),
+        text_field(tx_context, &["payout_token"]).unwrap_or_default(),
+        text_field(tx_context, &["min_payout"]).unwrap_or_default(),
+    );
+    let mut action_seed =
+        non_zero(hash_to_fr(&[CIRCUIT_TAG, b"action_seed", action_material.as_bytes(), context_bytes]), 31);
+    // Allow deterministic public-input overrides from backend tx_context:
+    // - root: keeps spend proof anchored to an on-chain known root
+    // - intent_hash/action_hash: binds proof output to relayer preview hash
+    // - nullifier: keeps compatibility with precomputed note nullifier flows
+    let root_override = text_field(tx_context, &["root"]).and_then(|raw| parse_felt_like(&raw));
+    let action_hash_override = text_field(tx_context, &["intent_hash", "action_hash"])
+        .and_then(|raw| parse_felt_like(&raw));
+    let nullifier_override =
+        text_field(tx_context, &["nullifier"]).and_then(|raw| parse_felt_like(&raw));
+
+    if let Some(override_nullifier) = nullifier_override {
+        nullifier_key = override_nullifier - leaf_index - Fr::from(DOMAIN_NULLIFIER);
     }
-    witness
+    let nullifier = nullifier_key + leaf_index + Fr::from(DOMAIN_NULLIFIER);
+
+    if let Some(override_action_hash) = action_hash_override {
+        action_seed = override_action_hash - leaf_index - recipient - Fr::from(DOMAIN_ACTION);
+    }
+    let action_hash = action_seed + leaf_index + recipient + Fr::from(DOMAIN_ACTION);
+
+    if let Some(override_root) = root_override {
+        secret = override_root - nullifier_key - recipient - leaf_index - Fr::from(DOMAIN_ROOT);
+    }
+    let root = secret + nullifier_key + recipient + leaf_index + Fr::from(DOMAIN_ROOT);
+
+    DerivedStatement {
+        root,
+        nullifier,
+        action_hash,
+        recipient,
+        secret,
+        nullifier_key,
+        leaf_index,
+        action_seed,
+    }
+}
+
+fn parse_context_json(context_bytes: &[u8]) -> Value {
+    if context_bytes.is_empty() {
+        return Value::Null;
+    }
+    serde_json::from_slice(context_bytes).unwrap_or(Value::Null)
+}
+
+fn text_field(value: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(raw) = value.get(*key) {
+            match raw {
+                Value::String(text) => {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+                Value::Number(num) => {
+                    return Some(num.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn parse_felt_like(raw: &str) -> Option<Fr> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed = if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        BigUint::parse_bytes(hex.as_bytes(), 16)
+    } else {
+        BigUint::parse_bytes(trimmed.as_bytes(), 10)
+    }?;
+    Some(Fr::from_be_bytes_mod_order(&parsed.to_bytes_be()))
+}
+
+fn hash_to_fr(parts: &[&[u8]]) -> Fr {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    let digest = hasher.finalize();
+    Fr::from_be_bytes_mod_order(&digest)
+}
+
+fn non_zero(value: Fr, fallback: u64) -> Fr {
+    if value.is_zero() {
+        Fr::from(fallback)
+    } else {
+        value
+    }
 }
 
 fn vk_to_snarkjs(vk: &VerifyingKey<Bls12_381>) -> SnarkJsVk {
@@ -296,11 +506,7 @@ fn proof_to_snarkjs(proof: &Proof<Bls12_381>) -> SnarkJsProofEnvelope {
 }
 
 fn g1_affine_to_snarkjs(point: &G1Affine) -> [String; 3] {
-    [
-        field_to_dec(point.x),
-        field_to_dec(point.y),
-        "1".to_string(),
-    ]
+    [field_to_dec(point.x), field_to_dec(point.y), "1".to_string()]
 }
 
 fn g2_affine_to_snarkjs(point: &G2Affine) -> [[String; 2]; 3] {
