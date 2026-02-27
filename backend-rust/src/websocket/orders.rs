@@ -78,31 +78,24 @@ pub async fn handler(
         Err(err) => return err.into_response(),
     };
 
-    let db = state.db.clone();
-    let user_address_for_touch = user_address.clone();
-    tokio::spawn(async move {
-        match timeout(
-            Duration::from_millis(2500),
-            db.touch_user(&user_address_for_touch),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                tracing::warn!(
-                    "orders websocket touch_user failed for {}: {}",
-                    user_address_for_touch,
-                    err
-                );
-            }
-            Err(_) => {
-                tracing::warn!(
-                    "orders websocket touch_user timed out for {}",
-                    user_address_for_touch
-                );
-            }
+    match timeout(
+        Duration::from_millis(1200),
+        state.db.touch_user(&user_address),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "orders websocket touch_user failed for {}: {}",
+                user_address,
+                err
+            );
         }
-    });
+        Err(_) => {
+            tracing::warn!("orders websocket touch_user timed out for {}", user_address);
+        }
+    }
 
     ws.on_upgrade(|socket| handle_socket(socket, state, user_address))
 }

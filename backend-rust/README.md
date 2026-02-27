@@ -118,21 +118,6 @@ cp .env.testnet.example .env
 cargo run
 ```
 
-Jika shell Anda pernah `export` env lama (mis. `RUST_LOG`, `DATABASE_URL`, endpoint RPC), nilai shell akan override `.env`.
-Untuk start bersih sesuai file `.env`, jalankan:
-```bash
-cd backend-rust
-env -i HOME="$HOME" PATH="$PATH" TERM="$TERM" bash -lc 'set -a; source .env; set +a; cargo run'
-```
-
-Catatan binary:
-- Binary utama runtime API adalah `carel-backend` (default untuk `cargo run`).
-- `src/bin/ai_e2e_tools.rs` adalah utility CLI internal untuk tooling tanda tangan AI E2E, bukan server backend.
-- Jika perlu explicit:
-```bash
-cargo run --bin carel-backend
-```
-
 Default bind:
 - `HOST=0.0.0.0`
 - `PORT` default template: `3000`
@@ -170,8 +155,6 @@ Minimum required groups:
 - Hide mode bindings:
   - `PRIVATE_ACTION_EXECUTOR_ADDRESS`
   - `PRIVACY_INTERMEDIARY_ADDRESS`
-  - `HIDE_BALANCE_RELAYER_POOL_ENABLED=true`
-  - `HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true`
   - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2`
   - `ZK_PRIVACY_ROUTER_ADDRESS`
 
@@ -180,13 +163,11 @@ Recommended optional:
 - `PRIVACY_AUTO_GARAGA_PROVER_CMD`
 - `GARAGA_DYNAMIC_BINDING=true`
 - `GARDEN_APP_ID`
-- `AI_LEVEL3_BRIDGE_ENABLED=true` (only if you want bridge commands allowed at AI Level 3)
 
 Real prover command (production testnet):
 - `GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=false`
 - `GARAGA_PROVE_CMD="python3 scripts/garaga_auto_prover.py --prove"`
 - `GARAGA_REAL_PROVER_CMD="python3 /opt/garaga-real-prover/prove.py --context \"$GARAGA_CONTEXT_PATH\" --proof \"$GARAGA_PROOF_PATH\" --public-inputs \"$GARAGA_PUBLIC_INPUTS_PATH\""`
-- Local WSL/dev example: `GARAGA_REAL_PROVER_CMD="python3 ./garaga-real-prover/prove.py --context \"$GARAGA_CONTEXT_PATH\" --proof \"$GARAGA_PROOF_PATH\" --public-inputs \"$GARAGA_PUBLIC_INPUTS_PATH\""`
 - Pastikan file prover real benar-benar ada; jika lokasi berbeda, ganti path `/opt/garaga-real-prover/prove.py` sesuai host/container Anda.
 
 ## Environment Audit Split

@@ -2,7 +2,6 @@
 name = "carel-backend"
 version = "0.1.0"
 edition = "2021"
-default-run = "carel-backend"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -44,7 +44,7 @@ use tokio::time::{timeout, Duration};
 use crate::config::Config;
 use crate::db::Database;
 
-const USER_TOUCH_TIMEOUT_MS: u64 = 2500;
+const USER_TOUCH_TIMEOUT_MS: u64 = 1200;
 const USER_TOUCH_MIN_INTERVAL_SECS: u64 = 30;
 const USER_TOUCH_CACHE_MAX_ENTRIES: usize = 200_000;
 const USER_TOUCH_CACHE_RETENTION_SECS: u64 = 600;
@@ -120,27 +120,20 @@ pub async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<Strin
 
     let user_address = auth::extract_user_from_token(token, &state.config.jwt_secret).await?;
     if should_touch_user(&user_address).await {
-        let db = state.db.clone();
-        let user_address_for_touch = user_address.clone();
-        tokio::spawn(async move {
-            match timeout(
-                Duration::from_millis(USER_TOUCH_TIMEOUT_MS),
-                db.touch_user(&user_address_for_touch),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => tracing::warn!(
-                    "require_user touch_user failed for {}: {}",
-                    user_address_for_touch,
-                    err
-                ),
-                Err(_) => tracing::warn!(
-                    "require_user touch_user timed out for {}",
-                    user_address_for_touch
-                ),
-            }
-        });
+        match timeout(
+            Duration::from_millis(USER_TOUCH_TIMEOUT_MS),
+            state.db.touch_user(&user_address),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::warn!(
+                "require_user touch_user failed for {}: {}",
+                user_address,
+                err
+            ),
+            Err(_) => tracing::warn!("require_user touch_user timed out for {}", user_address),
+        }
     }
     Ok(user_address)
 }

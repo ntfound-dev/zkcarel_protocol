@@ -78,15 +78,12 @@ Declare and deploy verifier:
 cd smartcontract/garaga_real_bls
 SN=/home/frend/.local/bin/sncast
 RPC=https://api.zan.top/public/starknet-sepolia/rpc/v0_10
-SCARB=/home/frend/.asdf/installs/scarb/2.11.4/bin/scarb
-USC=/home/frend/.local/bin/universal-sierra-compiler
-PATH=/home/frend/.asdf/installs/starknet-foundry/0.56.0/bin:/home/frend/.asdf/installs/scarb/2.11.4/bin:/home/frend/.local/bin:$PATH
 
-env SCARB="$SCARB" UNIVERSAL_SIERRA_COMPILER="$USC" $SN --wait -a sepolia -p sepolia declare \
+$SN --wait -a sepolia -p sepolia declare \
   --contract-name Groth16VerifierBLS12_381 \
   --url "$RPC"
 
-env SCARB="$SCARB" UNIVERSAL_SIERRA_COMPILER="$USC" $SN --wait -a sepolia -p sepolia deploy \
+$SN --wait -a sepolia -p sepolia deploy \
   --class-hash 0x<CLASS_HASH_FROM_DECLARE> \
   --url "$RPC"
 ```
@@ -116,12 +113,6 @@ $SN --wait -a sepolia -p sepolia invoke \
   --calldata "$GARAGA_ADAPTER" \
   --url "$RPC"
 ```
-
-Latest successful redeploy (27 Feb 2026):
-- Class hash: `0x3c304b6fbde499591d6b79b6e3eb525a5673e1de9c02d46c575492065ed996a`
-- Verifier address: `0x04bc6f22779e528785ee27b844b93e92cf92d8ff0b6bed2f9b5cf41ee467ff45`
-- Declare tx: `0x3077ad4d20d1b9acc70fc18af1be0356b3e2c5a803f3ac4b83766523616b51f`
-- Deploy tx: `0x0261ba1337d96733010f049591f5c65a3f33a080006d76f7dca4de958e8b0b66`
 
 ## Export Addresses
 Use this JSON template to populate `backend-rust/.env`:

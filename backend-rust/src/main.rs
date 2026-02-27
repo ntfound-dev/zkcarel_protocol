@@ -38,58 +38,6 @@ fn install_rustls_crypto_provider() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Internal helper that supports `spawn_auto_garaga_warmup` operations.
-fn spawn_auto_garaga_warmup(config: &Config) {
-    let Some(cmd) = config
-        .privacy_auto_garaga_prover_cmd
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-
-    // Only warm up bundled script flow to avoid mutating custom external prover commands.
-    if !cmd.contains("garaga_auto_prover.py") {
-        return;
-    }
-
-    let warmup_cmd = format!("{cmd} --warmup");
-    tokio::spawn(async move {
-        tracing::info!("Starting Garaga calldata warmup...");
-        let child = match tokio::process::Command::new("sh")
-            .arg("-lc")
-            .arg(&warmup_cmd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(err) => {
-                tracing::warn!("Garaga warmup spawn failed: {}", err);
-                return;
-            }
-        };
-
-        match tokio::time::timeout(Duration::from_secs(180), child.wait_with_output()).await {
-            Ok(Ok(output)) => {
-                if output.status.success() {
-                    tracing::info!("Garaga warmup completed");
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    tracing::warn!("Garaga warmup failed: {}", stderr.trim());
-                }
-            }
-            Ok(Err(err)) => {
-                tracing::warn!("Garaga warmup process error: {}", err);
-            }
-            Err(_) => {
-                tracing::warn!("Garaga warmup timed out after 180s");
-            }
-        }
-    });
-}
-
 #[tokio::main]
 // Internal helper that supports `main` operations.
 async fn main() -> anyhow::Result<()> {
@@ -97,9 +45,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| {
-                    "carel_backend=info,tower_http=warn,sqlx::query=error,sqlx::pool::acquire=error,rustls_platform_verifier=error".into()
-                }),
+                .unwrap_or_else(|_| "carel_backend=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -154,7 +100,6 @@ async fn main() -> anyhow::Result<()> {
         "Swap Contract Configured: {}",
         swap_contract.as_ref().is_some()
     );
-    spawn_auto_garaga_warmup(&config);
 
     // Initialize database
     let db = Database::new(&config).await?;

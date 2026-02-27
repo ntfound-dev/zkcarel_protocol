@@ -51,21 +51,12 @@ asdf exec snforge test
 - Pastikan `sncast` tersedia.
 - Declare dan deploy class verifier terlebih dulu.
 - Wiring adapter/router dilakukan via script deploy/wiring di `smartcontract/scripts/`.
-- Untuk environment Windows + WSL, jalankan deploy dari Windows dengan helper:
-  `smartcontract/scripts/deploy_garaga_verifier_windows.ps1 -UseWsl`.
-- Jika `sncast` gagal menemukan `scarb` / `universal-sierra-compiler`, pastikan env ini terpasang:
-  - `SCARB=/home/frend/.asdf/installs/scarb/2.11.4/bin/scarb`
-  - `UNIVERSAL_SIERRA_COMPILER=/home/frend/.local/bin/universal-sierra-compiler`
 
 ## Env Integration
 Minimal env yang harus benar:
 - `GARAGA_VERIFIER_ADDRESS=<alamat verifier real>`
 - `GARAGA_VERIFICATION_MODE=5`
 - `PRIVACY_VERIFIER_KIND=garaga`
-
-Sepolia (latest, 27 Feb 2026):
-- `GARAGA_VERIFIER_ADDRESS=0x04bc6f22779e528785ee27b844b93e92cf92d8ff0b6bed2f9b5cf41ee467ff45`
-- `ClassHash=0x3c304b6fbde499591d6b79b6e3eb525a5673e1de9c02d46c575492065ed996a`
 
 Re-wire adapter/router via:
 - `smartcontract/scripts/04_deploy_adapters.sh`
