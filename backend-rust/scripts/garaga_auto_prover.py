@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -555,49 +556,62 @@ def build_payload(stdin_payload: dict[str, Any]) -> dict[str, Any]:
     if not proof_raw and precomputed_payload is None:
         fail("Missing required env: GARAGA_PROOF_PATH")
     output_dir = Path(os.getenv("GARAGA_OUTPUT_DIR", "/tmp/garaga_auto_prover")).expanduser()
-    if prove_cmd:
-        maybe_run_external_prover(
-            prove_cmd=prove_cmd,
-            stdin_payload=stdin_payload,
-            output_dir=output_dir,
-            proof_path=proof_path,
-            public_inputs_path=public_inputs_path,
-            timeout_secs=timeout_secs,
-        )
+    request_temp_dir: Path | None = None
+    keep_temp_files = bool_env("GARAGA_KEEP_TEMP_FILES", False)
+    try:
+        if prove_cmd:
+            # Isolate per-request prover outputs to avoid cross-request overwrite races on shared paths.
+            output_dir.mkdir(parents=True, exist_ok=True)
+            request_temp_dir = Path(
+                tempfile.mkdtemp(prefix="garaga_req_", dir=str(output_dir))
+            )
+            proof_path = request_temp_dir / "proof.json"
+            public_inputs_path = request_temp_dir / "public_inputs.json"
+            maybe_run_external_prover(
+                prove_cmd=prove_cmd,
+                stdin_payload=stdin_payload,
+                output_dir=output_dir,
+                proof_path=proof_path,
+                public_inputs_path=public_inputs_path,
+                timeout_secs=timeout_secs,
+            )
 
-    if precomputed_payload is not None:
-        proof, public_inputs = precomputed_payload
-    else:
-        if not vk_raw:
-            fail("Missing required env: GARAGA_VK_PATH")
-        vk_path = Path(vk_raw).expanduser()
-        proof = generate_full_proof_with_hints(
-            uvx_cmd=uvx_cmd,
-            system=system,
-            vk_path=vk_path,
-            proof_path=proof_path,
-            public_inputs_path=public_inputs_path,
-            timeout_secs=timeout_secs,
-        )
-        public_inputs = resolve_public_inputs(
-            public_inputs_path=public_inputs_path,
-            proof_path=proof_path,
-        )
+        if precomputed_payload is not None:
+            proof, public_inputs = precomputed_payload
+        else:
+            if not vk_raw:
+                fail("Missing required env: GARAGA_VK_PATH")
+            vk_path = Path(vk_raw).expanduser()
+            proof = generate_full_proof_with_hints(
+                uvx_cmd=uvx_cmd,
+                system=system,
+                vk_path=vk_path,
+                proof_path=proof_path,
+                public_inputs_path=public_inputs_path,
+                timeout_secs=timeout_secs,
+            )
+            public_inputs = resolve_public_inputs(
+                public_inputs_path=public_inputs_path,
+                proof_path=proof_path,
+            )
 
-    intent_hash, nonce = compute_intent_hash(stdin_payload)
-    if bool_env("GARAGA_DYNAMIC_BINDING", False):
-        nullifier, commitment = make_dynamic_binding(stdin_payload, intent_hash, nonce)
-        public_inputs = apply_binding_to_public_inputs(public_inputs, nullifier, commitment)
-    else:
-        nullifier, commitment = bind_nullifier_commitment_from_public_inputs(public_inputs)
+        intent_hash, nonce = compute_intent_hash(stdin_payload)
+        if bool_env("GARAGA_DYNAMIC_BINDING", False):
+            nullifier, commitment = make_dynamic_binding(stdin_payload, intent_hash, nonce)
+            public_inputs = apply_binding_to_public_inputs(public_inputs, nullifier, commitment)
+        else:
+            nullifier, commitment = bind_nullifier_commitment_from_public_inputs(public_inputs)
 
-    return {
-        "nullifier": nullifier,
-        "commitment": commitment,
-        "intent_hash": intent_hash,
-        "proof": proof,
-        "public_inputs": public_inputs,
-    }
+        return {
+            "nullifier": nullifier,
+            "commitment": commitment,
+            "intent_hash": intent_hash,
+            "proof": proof,
+            "public_inputs": public_inputs,
+        }
+    finally:
+        if request_temp_dir is not None and not keep_temp_files:
+            shutil.rmtree(request_temp_dir, ignore_errors=True)
 
 
 def run_prove_mode() -> None:
