@@ -621,6 +621,19 @@ def run_prove_mode() -> None:
             "Missing GARAGA_REAL_PROVER_CMD for --prove mode. "
             "Configure real prover command to generate fresh proof files per request."
         )
+    # Force-resolve expected env placeholders to avoid shell quoting/env expansion ambiguity.
+    context_raw = os.getenv("GARAGA_CONTEXT_PATH", "").strip()
+    proof_path = Path(getenv_required("GARAGA_PROOF_PATH")).expanduser()
+    public_inputs_path = Path(getenv_required("GARAGA_PUBLIC_INPUTS_PATH")).expanduser()
+    for env_name, env_value in (
+        ("GARAGA_CONTEXT_PATH", context_raw),
+        ("GARAGA_PROOF_PATH", str(proof_path)),
+        ("GARAGA_PUBLIC_INPUTS_PATH", str(public_inputs_path)),
+    ):
+        if env_value:
+            real_cmd = real_cmd.replace(f"${env_name}", env_value)
+            real_cmd = real_cmd.replace(f"${{{env_name}}}", env_value)
+
     timeout_secs = int(os.getenv("GARAGA_REAL_PROVER_TIMEOUT_SECS", "45"))
     result = run_shell(real_cmd, timeout_secs=timeout_secs)
     if result.returncode != 0:
@@ -631,8 +644,47 @@ def run_prove_mode() -> None:
             f"stderr:\n{result.stderr}"
         )
 
-    proof_path = Path(getenv_required("GARAGA_PROOF_PATH")).expanduser()
-    public_inputs_path = Path(getenv_required("GARAGA_PUBLIC_INPUTS_PATH")).expanduser()
+    if not proof_path.is_file() or not public_inputs_path.is_file():
+        fallback_candidates = [
+            Path("./garaga-real-prover/prove.py"),
+            Path("backend-rust/garaga-real-prover/prove.py"),
+            Path("/app/garaga-real-prover/prove.py"),
+        ]
+        fallback_script = next(
+            (candidate.resolve() for candidate in fallback_candidates if candidate.is_file()),
+            None,
+        )
+        if fallback_script is None:
+            fail(
+                "GARAGA_REAL_PROVER_CMD succeeded but output files are missing.\n"
+                f"expected_proof={proof_path}\n"
+                f"expected_public_inputs={public_inputs_path}\n"
+                "No local fallback prove.py was found."
+            )
+        warn(
+            "GARAGA_REAL_PROVER_CMD did not produce expected files; "
+            f"retrying with fallback script {fallback_script}"
+        )
+        fallback_cmd_parts = [
+            "python3",
+            shlex.quote(str(fallback_script)),
+            "--proof",
+            shlex.quote(str(proof_path)),
+            "--public-inputs",
+            shlex.quote(str(public_inputs_path)),
+        ]
+        if context_raw:
+            fallback_cmd_parts.extend(["--context", shlex.quote(context_raw)])
+        fallback_cmd = " ".join(fallback_cmd_parts)
+        fallback_result = run_shell(fallback_cmd, timeout_secs=timeout_secs)
+        if fallback_result.returncode != 0:
+            fail(
+                "Fallback prove.py execution failed.\n"
+                f"command: {fallback_cmd}\n"
+                f"stdout:\n{fallback_result.stdout}\n"
+                f"stderr:\n{fallback_result.stderr}"
+            )
+
     validate_proof_json_file(proof_path)
     _ = parse_json_array_file(public_inputs_path, expected_key="public_inputs")
 
