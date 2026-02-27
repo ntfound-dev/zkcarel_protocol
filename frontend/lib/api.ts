@@ -429,12 +429,11 @@ export interface AiExecutorReadyResponse {
 }
 
 export interface PrepareAiActionResponse {
-  tx_hash: string
   action_type: number
   params: string
-  hashes_prepared: number
-  from_timestamp: number
-  to_timestamp: number
+  nonce: number
+  message_hash: string
+  typed_data: Record<string, unknown>
 }
 
 export interface AiLevelResponse {
@@ -482,6 +481,47 @@ export interface PrivacyPreparePrivateExecutionResponse {
   }
   intent_hash: string
   onchain_calls: StarknetWalletCall[]
+  relayer?: {
+    user: string
+    token: string
+    amount_low: string
+    amount_high: string
+    signature_selector: string
+    submit_selector: string
+    execute_selector: string
+    nullifier: string
+    commitment: string
+    action_selector: string
+    nonce: string
+    deadline: number
+    proof: string[]
+    public_inputs: string[]
+    action_calldata: string[]
+    message_hash: string
+  }
+}
+
+export interface PrivacyRelayerExecuteResponse {
+  tx_hash: string
+}
+
+export type PrivacyRelayerExecutePayload = {
+  user: string
+  token: string
+  amount_low: string
+  amount_high: string
+  signature: string[]
+  signature_selector: string
+  submit_selector: string
+  execute_selector: string
+  nullifier: string
+  commitment: string
+  action_selector: string
+  nonce: string
+  deadline: number
+  proof: string[]
+  public_inputs: string[]
+  action_calldata: string[]
 }
 
 export type PrivacyVerificationPayload = {
@@ -2289,14 +2329,13 @@ export async function upgradeAiLevel(payload: { target_level: number; onchain_tx
 export async function prepareAiAction(payload: {
   level: number
   context?: string
-  window_seconds?: number
 }) {
   return apiFetch<PrepareAiActionResponse>("/api/v1/ai/prepare-action", {
     method: "POST",
     body: JSON.stringify(payload),
     context: "AI prepare action",
     suppressErrorNotification: true,
-    // Preparing signature window can take longer on busy RPCs.
+    // Preparing typed-data challenge can take longer on busy RPCs.
     timeoutMs: 180000,
   })
 }
@@ -2359,6 +2398,12 @@ export async function preparePrivateExecution(payload: {
   flow: "swap" | "limit" | "stake"
   action_entrypoint: string
   action_calldata: string[]
+  token?: string
+  amount_low?: string
+  amount_high?: string
+  signature_selector?: string
+  nonce?: string
+  deadline?: number
   tx_context?: {
     flow?: string
     from_token?: string
@@ -2379,6 +2424,16 @@ export async function preparePrivateExecution(payload: {
       timeoutMs: 120000,
     }
   )
+}
+
+export async function relayPrivateExecution(payload: PrivacyRelayerExecutePayload) {
+  return apiFetch<PrivacyRelayerExecuteResponse>("/api/v1/privacy/relayer-execute", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Relayer private execution",
+    suppressErrorNotification: true,
+    timeoutMs: 120000,
+  })
 }
 
 /**

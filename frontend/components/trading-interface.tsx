@@ -38,6 +38,7 @@ import {
   toHexFelt,
   unitNumberToScaledBigInt,
 } from "@/lib/onchain-trade"
+import { executeHideViaRelayer } from "@/lib/privacy-relayer"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -145,8 +146,6 @@ const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
     "true" && PRIVATE_ACTION_EXECUTOR_ADDRESS.length > 0
 const HIDE_BALANCE_RELAYER_POOL_ENABLED =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true"
-const HIDE_BALANCE_RELAYER_APPROVE_MAX =
-  (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_APPROVE_MAX || "false").toLowerCase() === "true"
 const HIDE_BALANCE_EXECUTOR_KIND = (
   process.env.NEXT_PUBLIC_HIDE_BALANCE_EXECUTOR_KIND || ""
 )
@@ -2471,58 +2470,6 @@ export function TradingInterface() {
     ]
   )
 
-  const fundRelayerHideNoteForSwap = React.useCallback(
-    async (_privacyPayload: PrivacyVerificationPayload) => {
-      const tokenAddress = resolveTokenAddress(fromToken.symbol).trim()
-      if (!tokenAddress) {
-        throw new Error(
-          `Token address for ${fromToken.symbol} is not configured for hide-mode relayer funding.`
-        )
-      }
-
-      const executorRaw =
-        PRIVATE_ACTION_EXECUTOR_ADDRESS.trim() || STARKNET_ZK_PRIVACY_ROUTER_ADDRESS.trim()
-      const executorAddress = normalizeFeltAddress(executorRaw)
-      if (!executorAddress) {
-        throw new Error(
-          "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS is not configured for shielded relayer mode."
-        )
-      }
-
-      const decimals = resolveTokenDecimals(fromToken.symbol)
-      const [amountLow, amountHigh] = decimalToU256Parts(fromAmount, decimals)
-      const [approvalLow, approvalHigh] = HIDE_BALANCE_RELAYER_APPROVE_MAX
-        ? [U256_MAX_LOW_HEX, U256_MAX_HIGH_HEX]
-        : [amountLow, amountHigh]
-      const approvalCall = {
-        contractAddress: tokenAddress,
-        entrypoint: "approve",
-        calldata: [executorAddress, approvalLow, approvalHigh],
-      }
-
-      notifications.addNotification({
-        type: "info",
-        title: "Wallet signature required",
-        message: HIDE_BALANCE_RELAYER_APPROVE_MAX
-          ? `Approve one-time ${fromToken.symbol} spending limit for private relayer funding.`
-          : `Approve ${fromAmount} ${fromToken.symbol} for private relayer note funding.`,
-      })
-
-      const txHash = await invokeStarknetCallsFromWallet([approvalCall], starknetProviderHint)
-      notifications.addNotification({
-        type: "success",
-        title: "Allowance approved",
-        message: HIDE_BALANCE_RELAYER_APPROVE_MAX
-          ? `Relayer allowance for ${fromToken.symbol} is now active (one-time setup).`
-          : `Relayer can now fund private note from your ${fromToken.symbol} balance.`,
-        txHash,
-        txNetwork: "starknet",
-      })
-      return txHash
-    },
-    [fromAmount, fromToken.symbol, notifications, starknetProviderHint]
-  )
-
   const submitOnchainBridgeTx = React.useCallback(async () => {
     const fromChain = chainFromNetwork(fromToken.network)
     const toChain = chainFromNetwork(toToken.network)
@@ -3372,6 +3319,66 @@ export function TradingInterface() {
             message: "Submitting hide-mode swap through Starknet relayer pool.",
           })
           try {
+            const fromTokenAddress = resolveTokenAddress(fromToken.symbol).trim()
+            if (!fromTokenAddress) {
+              throw new Error(
+                `Token address for ${fromToken.symbol} is not configured for hide-mode relayer execution.`
+              )
+            }
+            const currentCalls =
+              quote?.type === "swap" && Array.isArray(quote.onchainCalls) ? quote.onchainCalls : []
+            let swapActionCall = currentCalls.find((call) => call.entrypoint === "execute_swap")
+            if (!swapActionCall) {
+              const refreshedQuote = await getSwapQuote({
+                from_token: fromToken.symbol,
+                to_token: toToken.symbol,
+                amount: fromAmount,
+                slippage: slippageValue,
+                mode: mevProtection ? "private" : "transparent",
+              })
+              const refreshedCalls = Array.isArray(refreshedQuote.onchain_calls)
+                ? refreshedQuote.onchain_calls
+                    .filter(
+                      (call) =>
+                        call &&
+                        typeof call.contract_address === "string" &&
+                        typeof call.entrypoint === "string" &&
+                        Array.isArray(call.calldata)
+                    )
+                    .map((call) => ({
+                      contractAddress: call.contract_address.trim(),
+                      entrypoint: call.entrypoint.trim(),
+                      calldata: call.calldata.map((item) => String(item)),
+                    }))
+                : []
+              swapActionCall = refreshedCalls.find((call) => call.entrypoint === "execute_swap")
+            }
+            if (!swapActionCall) {
+              throw new Error("Unable to build execute_swap calldata for hide relayer path.")
+            }
+
+            const relayed = await executeHideViaRelayer({
+              flow: "swap",
+              actionCall: swapActionCall,
+              tokenAddress: fromTokenAddress,
+              amount: fromAmount,
+              tokenDecimals: TOKEN_DECIMALS[fromToken.symbol.toUpperCase()] ?? 18,
+              providerHint: starknetProviderHint,
+              verifier: (submittedPrivacyPayload?.verifier || "garaga").trim() || "garaga",
+              deadline,
+              txContext: {
+                flow: "swap",
+                from_token: fromToken.symbol,
+                to_token: toToken.symbol,
+                amount: fromAmount,
+                recipient,
+                from_network: fromToken.network,
+                to_network: toToken.network,
+              },
+            })
+            persistTradePrivacyPayload(relayed.privacyPayload)
+            setHasTradePrivacyPayload(true)
+
             response = await executeSwap({
               from_token: fromToken.symbol,
               to_token: toToken.symbol,
@@ -3380,12 +3387,13 @@ export function TradingInterface() {
               slippage: slippageValue,
               deadline,
               recipient,
+              onchain_tx_hash: relayed.txHash,
               mode: mevProtection ? "private" : "transparent",
               hide_balance: true,
-              privacy: submittedPrivacyPayload,
+              privacy: relayed.privacyPayload,
             })
             finalTxHash = response.tx_hash
-            submittedSwapTxHash = response.tx_hash || null
+            submittedSwapTxHash = response.tx_hash || relayed.txHash || null
             if (finalTxHash) {
               notifications.addNotification({
                 type: "info",
@@ -3407,97 +3415,9 @@ export function TradingInterface() {
                 "Backend relayer hide-mode belum aktif (masih minta onchain_tx_hash). Set HIDE_BALANCE_RELAYER_POOL_ENABLED=true lalu restart backend."
               )
             }
-            if (
-              HIDE_BALANCE_SHIELDED_POOL_V2 &&
-              /(requested entrypoint does not exist|entrypoint does not exist|entry point .* not found|entrypoint .* not found|entry_point_not_found)/i.test(
-                message
-              )
-            ) {
-              throw new Error(
-                `ShieldedPoolV2 executor terdeteksi versi lama (entrypoint deposit_fixed_for belum ada). Detail backend: ${message}`
-              )
-            }
-            const shouldFundShieldedNote =
-              HIDE_BALANCE_SHIELDED_POOL_V2 &&
-              /(note is not funded|insufficient allowance|deposit_fixed_for|approve\(|u256_sub overflow|u256_sub)/i.test(
-                message
-              )
-            if (shouldFundShieldedNote && submittedPrivacyPayload) {
-              await fundRelayerHideNoteForSwap(submittedPrivacyPayload)
-              response = await executeSwap({
-                from_token: fromToken.symbol,
-                to_token: toToken.symbol,
-                amount: fromAmount,
-                min_amount_out: minAmountOut,
-                slippage: slippageValue,
-                deadline,
-                recipient,
-                mode: mevProtection ? "private" : "transparent",
-                hide_balance: true,
-                privacy: submittedPrivacyPayload,
-              })
-              finalTxHash = response.tx_hash
-              submittedSwapTxHash = response.tx_hash || null
-              if (finalTxHash) {
-                notifications.addNotification({
-                  type: "info",
-                  title: "Private swap pending",
-                  message: `Hide swap ${fromAmount} ${fromToken.symbol} submitted (${finalTxHash.slice(0, 10)}...).`,
-                  txHash: finalTxHash,
-                  txNetwork: "starknet",
-                })
-              }
-            } else {
-              if (HIDE_BALANCE_SHIELDED_POOL_V2) {
-                throw new Error(
-                  `Hide relayer unavailable. Wallet fallback diblok di shielded_pool_v2 agar detail swap tidak bocor di explorer. Detail: ${message}`
-                )
-              }
-              const shouldFallbackToWalletHidePath = /(relayer|privateactionexecutor|not configured|executor|submit_private)/i.test(
-                message
-              )
-              if (!shouldFallbackToWalletHidePath) {
-                throw error
-              }
-
-              notifications.addNotification({
-                type: "warning",
-                title: "Relayer unavailable",
-                message:
-                  "Hide relayer is not ready. Switching to wallet-signed Hide Balance transaction.",
-              })
-              notifications.addNotification({
-                type: "info",
-                title: "Wallet signature required",
-                message: "Confirm private swap transaction in your Starknet wallet.",
-              })
-
-              const onchainTxHash = await submitOnchainSwapTx(tradePrivacyPayload, true)
-              submittedSwapTxHash = onchainTxHash
-              finalTxHash = onchainTxHash
-
-              notifications.addNotification({
-                type: "info",
-                title: "Private swap pending",
-                message: `Hide swap ${fromAmount} ${fromToken.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
-                txHash: onchainTxHash,
-                txNetwork: "starknet",
-              })
-
-              response = await executeSwap({
-                from_token: fromToken.symbol,
-                to_token: toToken.symbol,
-                amount: fromAmount,
-                min_amount_out: minAmountOut,
-                slippage: slippageValue,
-                deadline,
-                recipient,
-                onchain_tx_hash: onchainTxHash || undefined,
-                mode: mevProtection ? "private" : "transparent",
-                hide_balance: true,
-                privacy: submittedPrivacyPayload,
-              })
-            }
+            throw new Error(
+              `Hide relayer unavailable. Wallet fallback diblok agar detail swap tidak bocor di explorer. Detail: ${message}`
+            )
           }
         } else {
           notifications.addNotification({

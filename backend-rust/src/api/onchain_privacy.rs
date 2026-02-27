@@ -325,7 +325,7 @@ async fn resolve_allowed_senders(
     let mut out: Vec<Felt> = Vec::new();
     for candidate in [resolved_starknet_user, auth_subject] {
         if let Ok(felt) = parse_felt(candidate) {
-            if !out.iter().any(|existing| *existing == felt) {
+            if !out.contains(&felt) {
                 out.push(felt);
             }
         }
@@ -337,7 +337,7 @@ async fn resolve_allowed_senders(
                 continue;
             }
             if let Ok(felt) = parse_felt(wallet.wallet_address.trim()) {
-                if !out.iter().any(|existing| *existing == felt) {
+                if !out.contains(&felt) {
                     out.push(felt);
                 }
             }
@@ -360,7 +360,7 @@ fn verify_sender_matches_invoke_payload(tx: &Transaction, allowed_senders: &[Fel
         ));
     }
     let (sender, _) = extract_invoke_sender_and_calldata(tx)?;
-    if allowed_senders.iter().any(|candidate| *candidate == sender) {
+    if allowed_senders.contains(&sender) {
         return Ok(());
     }
     let expected = allowed_senders
@@ -375,15 +375,19 @@ fn verify_sender_matches_invoke_payload(tx: &Transaction, allowed_senders: &[Fel
 }
 
 // Internal helper that supports `verify_hide_balance_privacy_call_in_invoke_payload` operations.
-fn verify_hide_balance_privacy_call_in_invoke_payload(
-    tx: &Transaction,
+struct HideBalanceCallExpectation<'a> {
     expected_router: Felt,
     expected_private_executor: Option<Felt>,
     flow: Option<HideBalanceFlow>,
     expected_nullifier: Felt,
     expected_commitment: Felt,
-    expected_proof: &[Felt],
-    expected_public_inputs: &[Felt],
+    expected_proof: &'a [Felt],
+    expected_public_inputs: &'a [Felt],
+}
+
+fn verify_hide_balance_privacy_call_in_invoke_payload(
+    tx: &Transaction,
+    expected: &HideBalanceCallExpectation<'_>,
 ) -> Result<()> {
     let submit_selector = get_selector_from_name("submit_private_action")
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
@@ -397,17 +401,18 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
 
     let v1_matched = calls
         .into_iter()
-        .find(|call| call.to == expected_router && call.selector == submit_selector)
+        .find(|call| call.to == expected.expected_router && call.selector == submit_selector)
         .map(|matched| {
-            let mut expected =
-                Vec::with_capacity(4 + expected_proof.len() + expected_public_inputs.len());
-            expected.push(expected_nullifier);
-            expected.push(expected_commitment);
-            expected.push(Felt::from(expected_proof.len() as u64));
-            expected.extend_from_slice(expected_proof);
-            expected.push(Felt::from(expected_public_inputs.len() as u64));
-            expected.extend_from_slice(expected_public_inputs);
-            matched.calldata == expected
+            let mut expected_calldata = Vec::with_capacity(
+                4 + expected.expected_proof.len() + expected.expected_public_inputs.len(),
+            );
+            expected_calldata.push(expected.expected_nullifier);
+            expected_calldata.push(expected.expected_commitment);
+            expected_calldata.push(Felt::from(expected.expected_proof.len() as u64));
+            expected_calldata.extend_from_slice(expected.expected_proof);
+            expected_calldata.push(Felt::from(expected.expected_public_inputs.len() as u64));
+            expected_calldata.extend_from_slice(expected.expected_public_inputs);
+            matched.calldata == expected_calldata
         })
         .unwrap_or(false);
 
@@ -415,13 +420,13 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
         return Ok(());
     }
 
-    let Some(private_executor) = expected_private_executor else {
+    let Some(private_executor) = expected.expected_private_executor else {
         return Err(AppError::BadRequest(
             "onchain_tx_hash does not include submit_private_action call to configured privacy router"
                 .to_string(),
         ));
     };
-    let Some(flow) = flow else {
+    let Some(flow) = expected.flow else {
         return Err(AppError::BadRequest(
             "onchain_tx_hash privacy call payload does not match submitted Hide Balance proof payload"
                 .to_string(),
@@ -479,14 +484,15 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
         }
     };
 
-    let mut expected_submit =
-        Vec::with_capacity(4 + expected_proof.len() + expected_public_inputs.len());
-    expected_submit.push(expected_nullifier);
-    expected_submit.push(expected_commitment);
-    expected_submit.push(Felt::from(expected_proof.len() as u64));
-    expected_submit.extend_from_slice(expected_proof);
-    expected_submit.push(Felt::from(expected_public_inputs.len() as u64));
-    expected_submit.extend_from_slice(expected_public_inputs);
+    let mut expected_submit = Vec::with_capacity(
+        4 + expected.expected_proof.len() + expected.expected_public_inputs.len(),
+    );
+    expected_submit.push(expected.expected_nullifier);
+    expected_submit.push(expected.expected_commitment);
+    expected_submit.push(Felt::from(expected.expected_proof.len() as u64));
+    expected_submit.extend_from_slice(expected.expected_proof);
+    expected_submit.push(Felt::from(expected.expected_public_inputs.len() as u64));
+    expected_submit.extend_from_slice(expected.expected_public_inputs);
 
     if submit_call.calldata != expected_submit {
         return Err(AppError::BadRequest(submit_mismatch_err));
@@ -504,13 +510,179 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
             ))
         })?;
 
-    if execute_call.calldata.is_empty() || execute_call.calldata[0] != expected_commitment {
+    if execute_call.calldata.is_empty() || execute_call.calldata[0] != expected.expected_commitment
+    {
         return Err(AppError::BadRequest(
             "onchain_tx_hash private executor action does not bind the same commitment".to_string(),
         ));
     }
 
     Ok(())
+}
+
+// Internal helper that supports `configured_privacy_intermediary` operations.
+fn configured_privacy_intermediary() -> Option<Felt> {
+    for key in [
+        "PRIVACY_INTERMEDIARY_ADDRESS",
+        "NEXT_PUBLIC_PRIVACY_INTERMEDIARY_ADDRESS",
+    ] {
+        let Some(raw) = std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        match parse_felt(&raw) {
+            Ok(parsed) => return Some(parsed),
+            Err(err) => {
+                tracing::warn!("Ignoring invalid {} address '{}': {}", key, raw, err);
+            }
+        }
+    }
+    None
+}
+
+fn verify_hide_balance_privacy_call_via_intermediary(
+    tx: &Transaction,
+    intermediary: Felt,
+    allowed_users: &[Felt],
+    expected_nullifier: Felt,
+    expected_commitment: Felt,
+    expected_proof: &[Felt],
+    expected_public_inputs: &[Felt],
+) -> Result<bool> {
+    let execute_selector =
+        get_selector_from_name("execute").map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let (_, calldata) = extract_invoke_sender_and_calldata(tx)?;
+    let calls = parse_execute_calls(calldata).map_err(|err| {
+        AppError::BadRequest(format!(
+            "Failed to parse invoke calldata for intermediary verification: {}",
+            err
+        ))
+    })?;
+
+    let Some(call) = calls
+        .iter()
+        .find(|call| call.to == intermediary && call.selector == execute_selector)
+    else {
+        return Ok(false);
+    };
+
+    // PrivacyIntermediary.execute calldata format:
+    // user, token, amount_low, amount_high,
+    // signature_len, signature...,
+    // signature_selector, submit_selector, execute_selector,
+    // nullifier, commitment, action_selector, nonce, deadline,
+    // proof_len, proof..., public_inputs_len, public_inputs..., action_calldata_len, action_calldata...
+    let data = &call.calldata;
+    if data.len() < 16 {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash intermediary execute calldata too short".to_string(),
+        ));
+    }
+
+    let user = data[0];
+    if allowed_users.is_empty() || !allowed_users.contains(&user) {
+        let expected = allowed_users
+            .iter()
+            .map(|felt| felt.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::BadRequest(format!(
+            "onchain_tx_hash intermediary user does not match authenticated Starknet user (expected one of [{}], got {})",
+            expected, user
+        )));
+    }
+
+    let mut cursor = 4usize;
+    let signature_len = felt_to_usize(data.get(cursor).ok_or_else(|| {
+        AppError::BadRequest("onchain_tx_hash intermediary calldata missing signature_len".to_string())
+    })?, "signature_len")?;
+    cursor += 1;
+    let signature_end = cursor.checked_add(signature_len).ok_or_else(|| {
+        AppError::BadRequest("onchain_tx_hash intermediary signature length overflow".to_string())
+    })?;
+    if signature_end > data.len() {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash intermediary signature out of bounds".to_string(),
+        ));
+    }
+    cursor = signature_end;
+
+    let params_fields_needed = 8usize;
+    if cursor + params_fields_needed > data.len() {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash intermediary params header is incomplete".to_string(),
+        ));
+    }
+
+    // Skip signature_selector, submit_selector, execute_selector.
+    cursor += 3;
+    let nullifier = data[cursor];
+    cursor += 1;
+    let commitment = data[cursor];
+    cursor += 1;
+    // Skip action_selector, nonce, deadline.
+    cursor += 3;
+
+    if nullifier != expected_nullifier || commitment != expected_commitment {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash intermediary payload does not bind expected nullifier/commitment"
+                .to_string(),
+        ));
+    }
+
+    let proof_len = felt_to_usize(
+        data.get(cursor).ok_or_else(|| {
+            AppError::BadRequest("onchain_tx_hash intermediary missing proof_len".to_string())
+        })?,
+        "proof_len",
+    )?;
+    cursor += 1;
+    let proof_end = cursor.checked_add(proof_len).ok_or_else(|| {
+        AppError::BadRequest("onchain_tx_hash intermediary proof length overflow".to_string())
+    })?;
+    if proof_end > data.len() {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash intermediary proof out of bounds".to_string(),
+        ));
+    }
+    if data[cursor..proof_end] != expected_proof[..] {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash intermediary proof payload does not match submitted Hide Balance proof payload"
+                .to_string(),
+        ));
+    }
+    cursor = proof_end;
+
+    let public_len = felt_to_usize(
+        data.get(cursor).ok_or_else(|| {
+            AppError::BadRequest(
+                "onchain_tx_hash intermediary missing public_inputs_len".to_string(),
+            )
+        })?,
+        "public_inputs_len",
+    )?;
+    cursor += 1;
+    let public_end = cursor.checked_add(public_len).ok_or_else(|| {
+        AppError::BadRequest(
+            "onchain_tx_hash intermediary public_inputs length overflow".to_string(),
+        )
+    })?;
+    if public_end > data.len() {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash intermediary public_inputs out of bounds".to_string(),
+        ));
+    }
+    if data[cursor..public_end] != expected_public_inputs[..] {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash intermediary public_inputs payload does not match submitted Hide Balance proof payload"
+                .to_string(),
+        ));
+    }
+
+    Ok(true)
 }
 
 // Internal helper that supports `configured_private_action_executor` operations.
@@ -573,6 +745,7 @@ pub async fn verify_onchain_hide_balance_invoke_tx(
         .map(|value| parse_felt(value))
         .collect::<Result<Vec<_>>>()?;
     let expected_private_executor = configured_private_action_executor();
+    let expected_intermediary = configured_privacy_intermediary();
 
     let reader = OnchainReader::from_config(&state.config)?;
     let tx_hash_felt = parse_felt(tx_hash)?;
@@ -591,17 +764,33 @@ pub async fn verify_onchain_hide_balance_invoke_tx(
             }
         };
 
-        verify_sender_matches_invoke_payload(&tx, &allowed_senders)?;
-        verify_hide_balance_privacy_call_in_invoke_payload(
-            &tx,
-            expected_router,
-            expected_private_executor,
-            flow,
-            expected_nullifier,
-            expected_commitment,
-            &expected_proof,
-            &expected_public_inputs,
-        )?;
+        let matched_intermediary = if let Some(intermediary) = expected_intermediary {
+            verify_hide_balance_privacy_call_via_intermediary(
+                &tx,
+                intermediary,
+                &allowed_senders,
+                expected_nullifier,
+                expected_commitment,
+                &expected_proof,
+                &expected_public_inputs,
+            )?
+        } else {
+            false
+        };
+
+        if !matched_intermediary {
+            verify_sender_matches_invoke_payload(&tx, &allowed_senders)?;
+            let expectation = HideBalanceCallExpectation {
+                expected_router,
+                expected_private_executor,
+                flow,
+                expected_nullifier,
+                expected_commitment,
+                expected_proof: &expected_proof,
+                expected_public_inputs: &expected_public_inputs,
+            };
+            verify_hide_balance_privacy_call_in_invoke_payload(&tx, &expectation)?;
+        }
 
         match reader.get_transaction_receipt(&tx_hash_felt).await {
             Ok(receipt) => {

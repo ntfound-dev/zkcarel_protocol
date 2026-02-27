@@ -6,7 +6,7 @@ use sqlx::FromRow;
 use std::collections::HashMap;
 
 use crate::services::onchain::{
-    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
+    felt_to_u128, parse_felt, u256_from_felts, OnchainReader,
 };
 use crate::{
     constants::{
@@ -28,6 +28,7 @@ use crate::{
         symbol_candidates_for,
     },
     services::privacy_verifier::parse_privacy_verifier_kind,
+    services::relayer::RelayerService,
 };
 use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
@@ -128,8 +129,8 @@ const STARKNET_ONCHAIN_STAKE_POOLS: &[&str] = &["CAREL", "USDC", "USDT", "WBTC",
 const BTC_GARDEN_POOL: &str = "BTC";
 const WBTC_STAKING_NOT_REGISTERED_MSG: &str =
     "WBTC staking token is not registered on StakingBTC yet. Admin must call add_btc_token first.";
-const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
-const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
+const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 20.0;
+const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 40.0;
 
 // Internal helper that supports `min_stake_for_pool_token` operations.
 fn min_stake_for_pool_token(token: &str, is_testnet: bool) -> Option<f64> {
@@ -362,15 +363,11 @@ fn is_starknet_onchain_pool(token: &str) -> bool {
 fn parse_pool_from_position_id(position_id: &str) -> Option<String> {
     // New format: POS_<POOL>_<HASH>
     let mut parts = position_id.splitn(3, '_');
-    let Some(prefix) = parts.next() else {
-        return None;
-    };
+    let prefix = parts.next()?;
     if prefix != "POS" {
         return None;
     }
-    let Some(pool) = parts.next() else {
-        return None;
-    };
+    let pool = parts.next()?;
     resolve_pool_token(pool).map(|token| token.to_string())
 }
 
@@ -1061,49 +1058,54 @@ async fn read_erc20_allowance_parts(
     Ok((out[0], out[1]))
 }
 
-// Internal helper that supports `append_shielded_note_registration_calls` operations.
-async fn append_shielded_note_registration_calls(
-    state: &AppState,
-    relayer_calls: &mut Vec<Call>,
+struct ShieldedNoteRegistrationInput<'a> {
     executor: Felt,
     depositor: Felt,
     commitment: Felt,
     note_token: Felt,
     amount_low: Felt,
     amount_high: Felt,
-    symbol: &str,
-    amount_text: &str,
+    symbol: &'a str,
+    amount_text: &'a str,
+}
+
+// Internal helper that supports `append_shielded_note_registration_calls` operations.
+async fn append_shielded_note_registration_calls(
+    state: &AppState,
+    relayer_calls: &mut Vec<Call>,
+    input: &ShieldedNoteRegistrationInput<'_>,
 ) -> Result<()> {
-    if note_token == Felt::ZERO {
+    if input.note_token == Felt::ZERO {
         return Err(crate::error::AppError::BadRequest(
             "ShieldedPoolV2 requires non-zero note token".to_string(),
         ));
     }
-    if amount_low == Felt::ZERO && amount_high == Felt::ZERO {
+    if input.amount_low == Felt::ZERO && input.amount_high == Felt::ZERO {
         return Err(crate::error::AppError::BadRequest(
             "ShieldedPoolV2 requires non-zero note amount".to_string(),
         ));
     }
-    let note_registered = shielded_note_registered(state, executor, commitment).await?;
+    let note_registered = shielded_note_registered(state, input.executor, input.commitment).await?;
     if note_registered {
         return Ok(());
     }
 
-    let (fixed_low, fixed_high) = shielded_fixed_amount(state, executor, note_token).await?;
-    if fixed_low != amount_low || fixed_high != amount_high {
+    let (fixed_low, fixed_high) =
+        shielded_fixed_amount(state, input.executor, input.note_token).await?;
+    if fixed_low != input.amount_low || fixed_high != input.amount_high {
         relayer_calls.push(build_shielded_set_asset_rule_call(
-            executor,
-            note_token,
-            amount_low,
-            amount_high,
+            input.executor,
+            input.note_token,
+            input.amount_low,
+            input.amount_high,
         )?);
     }
     let reader = OnchainReader::from_config(&state.config)?;
     let (balance_low, balance_high) =
-        read_erc20_balance_parts(&reader, note_token, depositor).await?;
+        read_erc20_balance_parts(&reader, input.note_token, input.depositor).await?;
     if u256_is_greater(
-        amount_low,
-        amount_high,
+        input.amount_low,
+        input.amount_high,
         balance_low,
         balance_high,
         "requested hide deposit",
@@ -1111,15 +1113,16 @@ async fn append_shielded_note_registration_calls(
     )? {
         return Err(crate::error::AppError::BadRequest(format!(
             "Shielded note funding failed: insufficient {} balance. Needed {}.",
-            symbol.to_ascii_uppercase(),
-            amount_text
+            input.symbol.to_ascii_uppercase(),
+            input.amount_text
         )));
     }
     let (allowance_low, allowance_high) =
-        read_erc20_allowance_parts(&reader, note_token, depositor, executor).await?;
+        read_erc20_allowance_parts(&reader, input.note_token, input.depositor, input.executor)
+            .await?;
     if u256_is_greater(
-        amount_low,
-        amount_high,
+        input.amount_low,
+        input.amount_high,
         allowance_low,
         allowance_high,
         "requested hide deposit",
@@ -1127,13 +1130,16 @@ async fn append_shielded_note_registration_calls(
     )? {
         return Err(crate::error::AppError::BadRequest(format!(
             "Shielded note funding failed: insufficient allowance. Approve {} {} to executor {} first.",
-            amount_text,
-            symbol.to_ascii_uppercase(),
-            format!("{:#x}", executor)
+            input.amount_text,
+            input.symbol.to_ascii_uppercase(),
+            format_args!("{:#x}", input.executor)
         )));
     }
     relayer_calls.push(build_shielded_deposit_fixed_for_call(
-        executor, depositor, note_token, commitment,
+        input.executor,
+        input.depositor,
+        input.note_token,
+        input.commitment,
     )?);
     Ok(())
 }
@@ -1453,7 +1459,9 @@ pub async fn deposit(
     }
 
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
-    let use_relayer_pool_hide = should_hide && hide_balance_relayer_pool_enabled();
+    let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let use_relayer_pool_hide =
+        should_hide && hide_balance_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
 
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
@@ -1511,30 +1519,25 @@ pub async fn deposit(
             "stake hide payload (bound)",
         )?;
 
-        let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-            return Err(crate::error::AppError::BadRequest(
-                "On-chain relayer account is not configured for hide mode".to_string(),
-            ));
-        };
+        let relayer = RelayerService::from_config(&state.config)?;
         let mut relayer_calls: Vec<Call> = Vec::new();
         if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
             let (note_amount_low, note_amount_high) =
                 parse_decimal_to_u256_parts(&req.amount, token_decimals(pool_token))?;
-            append_shielded_note_registration_calls(
-                &state,
-                &mut relayer_calls,
+            let shielded_input = ShieldedNoteRegistrationInput {
                 executor,
-                user_felt,
-                commitment_felt,
-                approval_token,
-                note_amount_low,
-                note_amount_high,
-                pool_token,
-                &req.amount,
-            )
-            .await?;
+                depositor: user_felt,
+                commitment: commitment_felt,
+                note_token: approval_token,
+                amount_low: note_amount_low,
+                amount_high: note_amount_high,
+                symbol: pool_token,
+                amount_text: &req.amount,
+            };
+            append_shielded_note_registration_calls(&state, &mut relayer_calls, &shielded_input)
+                .await?;
         }
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
         let execute_call = build_execute_private_stake_call(
@@ -1548,12 +1551,11 @@ pub async fn deposit(
         )?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
-        let tx_hash_felt = invoker.invoke_many(relayer_calls).await?;
-        format!("{:#x}", tx_hash_felt)
+        let submitted = relayer.submit_calls(relayer_calls).await?;
+        submitted.tx_hash
     } else {
         let auth_subject = require_user(&headers, &state).await?;
-        let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-        let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        let tx_hash = normalized_onchain_tx_hash.ok_or_else(|| {
             crate::error::AppError::BadRequest(
                 "Stake requires onchain_tx_hash from user-signed Starknet transaction".to_string(),
             )
@@ -1683,7 +1685,9 @@ pub async fn withdraw(
     }
 
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
-    let use_relayer_pool_hide = should_hide && hide_balance_relayer_pool_enabled();
+    let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let use_relayer_pool_hide =
+        should_hide && hide_balance_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
         let verifier_kind = parse_privacy_verifier_kind(
@@ -1740,30 +1744,25 @@ pub async fn withdraw(
             "unstake hide payload (bound)",
         )?;
 
-        let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-            return Err(crate::error::AppError::BadRequest(
-                "On-chain relayer account is not configured for hide mode".to_string(),
-            ));
-        };
+        let relayer = RelayerService::from_config(&state.config)?;
         let mut relayer_calls: Vec<Call> = Vec::new();
         if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
             let (note_amount_low, note_amount_high) =
                 parse_decimal_to_u256_parts(&req.amount, token_decimals(&pool_token))?;
-            append_shielded_note_registration_calls(
-                &state,
-                &mut relayer_calls,
+            let shielded_input = ShieldedNoteRegistrationInput {
                 executor,
-                user_felt,
-                commitment_felt,
-                approval_token,
-                note_amount_low,
-                note_amount_high,
-                &pool_token,
-                &req.amount,
-            )
-            .await?;
+                depositor: user_felt,
+                commitment: commitment_felt,
+                note_token: approval_token,
+                amount_low: note_amount_low,
+                amount_high: note_amount_high,
+                symbol: &pool_token,
+                amount_text: &req.amount,
+            };
+            append_shielded_note_registration_calls(&state, &mut relayer_calls, &shielded_input)
+                .await?;
         }
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
         let execute_call = build_execute_private_stake_call(
@@ -1777,12 +1776,11 @@ pub async fn withdraw(
         )?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
-        let tx_hash_felt = invoker.invoke_many(relayer_calls).await?;
-        format!("{:#x}", tx_hash_felt)
+        let submitted = relayer.submit_calls(relayer_calls).await?;
+        submitted.tx_hash
     } else {
         let auth_subject = require_user(&headers, &state).await?;
-        let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-        let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        let tx_hash = normalized_onchain_tx_hash.ok_or_else(|| {
             crate::error::AppError::BadRequest(
                 "Unstake requires onchain_tx_hash from user-signed Starknet transaction"
                     .to_string(),
@@ -1883,7 +1881,9 @@ pub async fn claim(
     }
 
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
-    let use_relayer_pool_hide = should_hide && hide_balance_relayer_pool_enabled();
+    let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let use_relayer_pool_hide =
+        should_hide && hide_balance_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
         let verifier_kind = parse_privacy_verifier_kind(
@@ -1940,11 +1940,7 @@ pub async fn claim(
             "stake claim hide payload (bound)",
         )?;
 
-        let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-            return Err(crate::error::AppError::BadRequest(
-                "On-chain relayer account is not configured for hide mode".to_string(),
-            ));
-        };
+        let relayer = RelayerService::from_config(&state.config)?;
         let mut relayer_calls: Vec<Call> = Vec::new();
         if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
@@ -1955,19 +1951,18 @@ pub async fn claim(
                 note_amount_low = Felt::from(1_u8);
                 note_amount_high = Felt::ZERO;
             }
-            append_shielded_note_registration_calls(
-                &state,
-                &mut relayer_calls,
+            let shielded_input = ShieldedNoteRegistrationInput {
                 executor,
-                user_felt,
-                commitment_felt,
-                approval_token,
-                note_amount_low,
-                note_amount_high,
-                &pool_token,
-                "required note amount",
-            )
-            .await?;
+                depositor: user_felt,
+                commitment: commitment_felt,
+                note_token: approval_token,
+                amount_low: note_amount_low,
+                amount_high: note_amount_high,
+                symbol: &pool_token,
+                amount_text: "required note amount",
+            };
+            append_shielded_note_registration_calls(&state, &mut relayer_calls, &shielded_input)
+                .await?;
         }
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
         let execute_call = build_execute_private_stake_call(
@@ -1981,12 +1976,11 @@ pub async fn claim(
         )?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
-        let tx_hash_felt = invoker.invoke_many(relayer_calls).await?;
-        format!("{:#x}", tx_hash_felt)
+        let submitted = relayer.submit_calls(relayer_calls).await?;
+        submitted.tx_hash
     } else {
         let auth_subject = require_user(&headers, &state).await?;
-        let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-        let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        let tx_hash = normalized_onchain_tx_hash.ok_or_else(|| {
             crate::error::AppError::BadRequest(
                 "Claim requires onchain_tx_hash from user-signed Starknet transaction".to_string(),
             )

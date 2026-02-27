@@ -26,6 +26,7 @@ type InjectedStarknet = {
   account?: {
     address?: string
     execute?: (calls: unknown) => Promise<unknown>
+    signMessage?: (typedData: Record<string, unknown>) => Promise<unknown>
     getChainId?: () => Promise<unknown> | unknown
   }
   provider?: {
@@ -43,6 +44,19 @@ export type StarknetInvokeCall = {
   contractAddress: string
   entrypoint: string
   calldata: Array<string | number | bigint>
+}
+
+export type StarknetInvokeReadableMetadata = {
+  action_type?: string
+  from_token?: string
+  to_token?: string
+  amount?: string
+  fee?: string
+  privacy?: string
+}
+
+export type StarknetInvokeOptions = {
+  readableMetadata?: StarknetInvokeReadableMetadata
 }
 
 const BIGINT_ZERO = BigInt(0)
@@ -74,7 +88,8 @@ function normalizeSelectorLikeValue(value: string): string {
  */
 export async function invokeStarknetCallsFromWallet(
   calls: StarknetInvokeCall[],
-  providerHint: StarknetWalletHint = "starknet"
+  providerHint: StarknetWalletHint = "starknet",
+  options?: StarknetInvokeOptions
 ): Promise<string> {
   if (!Array.isArray(calls) || calls.length === 0) {
     throw new Error("No Starknet calls to execute.")
@@ -194,6 +209,7 @@ export async function invokeStarknetCallsFromWallet(
   const invokeCallsMixedTo = executeCallsMixedTo
   const invokeCallsEntrypointCamel = executeCallsEntrypointCamel
   const invokeCallsEntrypointSnake = executeCallsEntrypointSnake
+  const readableMetadata = normalizeReadableInvokeMetadata(options?.readableMetadata)
   const attemptErrors: string[] = []
   const walletIdAlias = normalizeAlias(injected.id)
   const walletNameAlias = normalizeAlias(injected.name)
@@ -235,6 +251,50 @@ export async function invokeStarknetCallsFromWallet(
   }
 
   const requestPayloads: Array<{ type: string; params: unknown }> = [
+    ...(readableMetadata
+      ? [
+          {
+            type: "wallet_addInvokeTransaction",
+            params: {
+              calls: invokeCallsEntrypointSnake,
+              readable_metadata: readableMetadata,
+              tx_metadata: readableMetadata,
+              transaction_metadata: readableMetadata,
+            },
+          },
+          {
+            type: "wallet_addInvokeTransaction",
+            params: [
+              {
+                calls: invokeCallsEntrypointSnake,
+                readable_metadata: readableMetadata,
+                tx_metadata: readableMetadata,
+                transaction_metadata: readableMetadata,
+              },
+            ],
+          },
+          {
+            type: "starknet_addInvokeTransaction",
+            params: {
+              calls: invokeCallsEntrypointSnake,
+              readable_metadata: readableMetadata,
+              tx_metadata: readableMetadata,
+              transaction_metadata: readableMetadata,
+            },
+          },
+          {
+            type: "starknet_addInvokeTransaction",
+            params: [
+              {
+                calls: invokeCallsEntrypointSnake,
+                readable_metadata: readableMetadata,
+                tx_metadata: readableMetadata,
+                transaction_metadata: readableMetadata,
+              },
+            ],
+          },
+        ]
+      : []),
     { type: "wallet_addInvokeTransaction", params: invokeCallsEntrypointSnake },
     { type: "wallet_addInvokeTransaction", params: [invokeCallsEntrypointSnake] },
     { type: "wallet_addInvokeTransaction", params: invokeCallsEntrypointCamel },
@@ -309,6 +369,30 @@ export async function invokeStarknetCallsFromWallet(
   throw new Error("Failed to submit Starknet transaction from wallet.")
 }
 
+// Internal helper that normalizes optional readable metadata for wallet invoke requests.
+function normalizeReadableInvokeMetadata(
+  metadata?: StarknetInvokeReadableMetadata
+): StarknetInvokeReadableMetadata | null {
+  if (!metadata || typeof metadata !== "object") return null
+  const normalized: StarknetInvokeReadableMetadata = {}
+  const fields: Array<keyof StarknetInvokeReadableMetadata> = [
+    "action_type",
+    "from_token",
+    "to_token",
+    "amount",
+    "fee",
+    "privacy",
+  ]
+  for (const field of fields) {
+    const value = metadata[field]
+    if (typeof value !== "string") continue
+    const cleaned = value.trim()
+    if (!cleaned) continue
+    normalized[field] = cleaned
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null
+}
+
 /**
  * Runs `invokeStarknetCallFromWallet` and handles related side effects.
  *
@@ -320,6 +404,253 @@ export async function invokeStarknetCallFromWallet(
   providerHint: StarknetWalletHint = "starknet"
 ): Promise<string> {
   return invokeStarknetCallsFromWallet([call], providerHint)
+}
+
+/**
+ * Runs `signStarknetTypedDataFromWallet` and handles related side effects.
+ *
+ * @param typedData - Input used by `signStarknetTypedDataFromWallet` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
+export async function signStarknetTypedDataFromWallet(
+  typedData: Record<string, unknown>,
+  providerHint: StarknetWalletHint = "starknet"
+): Promise<string[]> {
+  if (!typedData || typeof typedData !== "object") {
+    throw new Error("Typed data payload is required for Starknet signature.")
+  }
+
+  const injected = getInjectedStarknet(providerHint)
+  if (!injected) {
+    throw new Error("No Starknet wallet detected. Install Braavos or ArgentX.")
+  }
+
+  await ensureStarknetAccounts(injected)
+  const chainId = await ensureStarknetSepolia(injected)
+  if (!isStarknetSepolia(chainId)) {
+    const normalized = normalizeStarknetChainValue(chainId || "")
+    throw new Error(
+      `Please switch wallet network to Starknet Sepolia before signing message. Current network: ${
+        normalized || "unknown"
+      }.`
+    )
+  }
+
+  const signerAddress = (injected.selectedAddress || injected.account?.address || "").trim()
+  const signatureErrors: string[] = []
+
+  if (injected.request) {
+    const requestPayloads: Array<{ type: string; params: unknown }> = [
+      { type: "wallet_signTypedData", params: typedData },
+      { type: "wallet_signTypedData", params: [typedData] },
+      { type: "wallet_signTypedData", params: { typedData } },
+      { type: "starknet_signTypedData", params: typedData },
+      { type: "starknet_signTypedData", params: [typedData] },
+      { type: "signTypedData", params: typedData },
+      { type: "signTypedData", params: [typedData] },
+    ]
+    if (signerAddress) {
+      requestPayloads.push(
+        { type: "wallet_signTypedData", params: [signerAddress, typedData] },
+        { type: "starknet_signTypedData", params: [signerAddress, typedData] },
+        { type: "signTypedData", params: [signerAddress, typedData] }
+      )
+    }
+    for (const payload of requestPayloads) {
+      try {
+        const result = await requestStarknet(injected, payload)
+        const signature = parseStarknetSignature(result)
+        if (signature && signature.length > 0) return signature
+        signatureErrors.push(`${payload.type} returned without valid signature`)
+      } catch (error) {
+        if (isWalletUserRejectedError(error)) {
+          throw new Error("Wallet signature was rejected.")
+        }
+        signatureErrors.push(`${payload.type} failed: ${walletErrorMessage(error)}`)
+      }
+    }
+  }
+
+  if (typeof injected.account?.signMessage === "function") {
+    try {
+      const result = await injected.account.signMessage(typedData)
+      const signature = parseStarknetSignature(result)
+      if (signature && signature.length > 0) return signature
+      signatureErrors.push("account.signMessage returned without valid signature")
+    } catch (error) {
+      if (isWalletUserRejectedError(error)) {
+        throw new Error("Wallet signature was rejected.")
+      }
+      signatureErrors.push(`account.signMessage failed: ${walletErrorMessage(error)}`)
+    }
+  }
+
+  const meaningfulErrors = signatureErrors.filter(
+    (item) => !/unknown request type|unsupported request type|method not found/i.test(item)
+  )
+  const detail =
+    meaningfulErrors[meaningfulErrors.length - 1] ||
+    (signatureErrors.length > 0 ? signatureErrors[signatureErrors.length - 1] : null)
+  if (detail) {
+    throw new Error(`Failed to sign Starknet typed data from wallet. ${detail}`)
+  }
+  throw new Error("Failed to sign Starknet typed data from wallet.")
+}
+
+export function buildErc20ApproveCall(
+  tokenAddress: string,
+  spenderAddress: string,
+  amountLow: string | number | bigint,
+  amountHigh: string | number | bigint
+): StarknetInvokeCall {
+  const token = tokenAddress.trim()
+  const spender = spenderAddress.trim()
+  if (!token || !spender) {
+    throw new Error("Token and spender address are required for ERC20 approve.")
+  }
+  return {
+    contractAddress: token,
+    entrypoint: "approve",
+    calldata: [spender, amountLow, amountHigh],
+  }
+}
+
+export async function signPrivacyParamsForRelayer(
+  typedData: Record<string, unknown>,
+  providerHint: StarknetWalletHint = "starknet"
+): Promise<string[]> {
+  return signStarknetTypedDataFromWallet(typedData, providerHint)
+}
+
+export async function signStarknetMessageHashFromWallet(
+  messageHash: string,
+  providerHint: StarknetWalletHint = "starknet"
+): Promise<string[]> {
+  const normalizedHash = toHexFelt(messageHash)
+  const injected = getInjectedStarknet(providerHint)
+  if (!injected) {
+    throw new Error("No Starknet wallet detected. Install Braavos or ArgentX.")
+  }
+
+  await ensureStarknetAccounts(injected)
+  const chainId = await ensureStarknetSepolia(injected)
+  if (!isStarknetSepolia(chainId)) {
+    const normalized = normalizeStarknetChainValue(chainId || "")
+    throw new Error(
+      `Please switch wallet network to Starknet Sepolia before signing message. Current network: ${
+        normalized || "unknown"
+      }.`
+    )
+  }
+
+  const signerAddress = (injected.selectedAddress || injected.account?.address || "").trim()
+  const signatureErrors: string[] = []
+
+  if (injected.request) {
+    const requestPayloads: Array<{ type: string; params: unknown }> = [
+      { type: "wallet_signMessage", params: { message: normalizedHash } },
+      { type: "wallet_signMessage", params: [{ message: normalizedHash }] },
+      { type: "wallet_signMessage", params: [normalizedHash] },
+      { type: "starknet_signMessage", params: { message: normalizedHash } },
+      { type: "starknet_signMessage", params: [{ message: normalizedHash }] },
+      { type: "starknet_signMessage", params: [normalizedHash] },
+      { type: "signMessage", params: { message: normalizedHash } },
+      { type: "signMessage", params: [normalizedHash] },
+    ]
+    if (signerAddress) {
+      requestPayloads.push(
+        { type: "wallet_signMessage", params: [signerAddress, normalizedHash] },
+        { type: "starknet_signMessage", params: [signerAddress, normalizedHash] },
+        { type: "signMessage", params: [signerAddress, normalizedHash] }
+      )
+    }
+    for (const payload of requestPayloads) {
+      try {
+        const result = await requestStarknet(injected, payload)
+        const signature = parseStarknetSignature(result)
+        if (signature && signature.length > 0) return signature
+        signatureErrors.push(`${payload.type} returned without valid signature`)
+      } catch (error) {
+        if (isWalletUserRejectedError(error)) {
+          throw new Error("Wallet signature was rejected.")
+        }
+        signatureErrors.push(`${payload.type} failed: ${walletErrorMessage(error)}`)
+      }
+    }
+  }
+
+  if (typeof injected.account?.signMessage === "function") {
+    const accountPayloads: Array<unknown> = [
+      { message: normalizedHash },
+      normalizedHash,
+      [normalizedHash],
+    ]
+    for (const payload of accountPayloads) {
+      try {
+        const result = await injected.account.signMessage(payload as Record<string, unknown>)
+        const signature = parseStarknetSignature(result)
+        if (signature && signature.length > 0) return signature
+        signatureErrors.push("account.signMessage returned without valid signature")
+      } catch (error) {
+        if (isWalletUserRejectedError(error)) {
+          throw new Error("Wallet signature was rejected.")
+        }
+        signatureErrors.push(`account.signMessage failed: ${walletErrorMessage(error)}`)
+      }
+    }
+  }
+
+  const meaningfulErrors = signatureErrors.filter(
+    (item) => !/unknown request type|unsupported request type|method not found/i.test(item)
+  )
+  const detail =
+    meaningfulErrors[meaningfulErrors.length - 1] ||
+    (signatureErrors.length > 0 ? signatureErrors[signatureErrors.length - 1] : null)
+  if (detail) {
+    throw new Error(`Failed to sign Starknet message hash from wallet. ${detail}`)
+  }
+  throw new Error("Failed to sign Starknet message hash from wallet.")
+}
+
+export async function submitSignedPrivacyParamsToRelayer(options: {
+  endpoint: string
+  payload: Record<string, unknown>
+  authToken?: string
+}): Promise<Record<string, unknown>> {
+  const endpoint = options.endpoint.trim()
+  if (!endpoint) {
+    throw new Error("Relayer endpoint is required.")
+  }
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  }
+  if (options.authToken && options.authToken.trim()) {
+    headers.Authorization = `Bearer ${options.authToken.trim()}`
+  }
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(options.payload),
+  })
+  const raw = await response.text()
+  let parsed: Record<string, unknown> = {}
+  if (raw.trim()) {
+    try {
+      parsed = JSON.parse(raw) as Record<string, unknown>
+    } catch {
+      throw new Error(`Relayer returned non-JSON response (${response.status}).`)
+    }
+  }
+  if (!response.ok) {
+    const message =
+      typeof parsed?.message === "string" && parsed.message.trim()
+        ? parsed.message.trim()
+        : `Relayer request failed (${response.status}).`
+    throw new Error(message)
+  }
+  return parsed
 }
 
 /**
@@ -1311,6 +1642,111 @@ async function requestStarknet(
     }
   }
   throw lastTypeError || lastError || new Error("Starknet wallet request failed.")
+}
+
+/**
+ * Parses or transforms values for `normalizeSignatureFelt`.
+ *
+ * @param value - Input used by `normalizeSignatureFelt` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
+function normalizeSignatureFelt(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (/^0x[0-9a-fA-F]+$/.test(trimmed) || /^\d+$/.test(trimmed)) {
+      try {
+        return toHexFelt(trimmed)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0) return null
+    return toHexFelt(value)
+  }
+  if (typeof value === "bigint") {
+    if (value < BIGINT_ZERO) return null
+    return toHexFelt(value)
+  }
+  return null
+}
+
+/**
+ * Parses or transforms values for `parseStarknetSignature`.
+ *
+ * @param value - Input used by `parseStarknetSignature` to compute state, payload, or request behavior.
+ *
+ * @returns Result consumed by caller flow, UI state updates, or async chaining.
+ * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
+ */
+function parseStarknetSignature(value: unknown): string[] | null {
+  if (Array.isArray(value)) {
+    const parsed = value.map((item) => normalizeSignatureFelt(item)).filter((item): item is string => !!item)
+    if (parsed.length > 0) return parsed
+    return null
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const decoded = JSON.parse(trimmed)
+        return parseStarknetSignature(decoded)
+      } catch {
+        // continue fallback parsing
+      }
+    }
+    if (trimmed.includes(",")) {
+      const parsed = trimmed
+        .split(",")
+        .map((item) => normalizeSignatureFelt(item))
+        .filter((item): item is string => !!item)
+      if (parsed.length > 0) return parsed
+    }
+    const single = normalizeSignatureFelt(trimmed)
+    return single ? [single] : null
+  }
+  if (typeof value === "object" && value) {
+    const anyValue = value as {
+      r?: unknown
+      s?: unknown
+      signature?: unknown
+      signatures?: unknown
+      sig?: unknown
+      result?: unknown
+      data?: unknown
+    }
+    const r = normalizeSignatureFelt(anyValue.r)
+    const s = normalizeSignatureFelt(anyValue.s)
+    if (r && s) return [r, s]
+
+    const numericKeys = Object.keys(anyValue).filter((key) => /^\d+$/.test(key))
+    if (numericKeys.length > 0) {
+      const orderedValues = numericKeys
+        .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10))
+        .map((key) => (anyValue as Record<string, unknown>)[key])
+      const parsedNumeric = parseStarknetSignature(orderedValues)
+      if (parsedNumeric && parsedNumeric.length > 0) return parsedNumeric
+    }
+
+    const nestedCandidates = [
+      anyValue.signature,
+      anyValue.signatures,
+      anyValue.sig,
+      anyValue.result,
+      anyValue.data,
+    ]
+    for (const nested of nestedCandidates) {
+      const parsed = parseStarknetSignature(nested)
+      if (parsed && parsed.length > 0) return parsed
+    }
+  }
+  return null
 }
 
 /**

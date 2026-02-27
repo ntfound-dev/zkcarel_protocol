@@ -39,8 +39,12 @@ import {
   invokeStarknetCallFromWallet,
   invokeStarknetCallsFromWallet,
   sendEvmTransactionFromWallet,
+  signStarknetTypedDataFromWallet,
   toHexFelt,
+  type StarknetInvokeCall,
+  type StarknetInvokeReadableMetadata,
 } from "@/lib/onchain-trade"
+import { executeHideViaRelayer } from "@/lib/privacy-relayer"
 import {
   BTC_TESTNET_EXPLORER_BASE_URL,
   ETHERSCAN_SEPOLIA_BASE_URL,
@@ -256,18 +260,15 @@ const AI_SETUP_NONCE_RETRY_DELAY_MS = readMsEnv(
   process.env.NEXT_PUBLIC_AI_SETUP_NONCE_RETRY_DELAY_MS,
   1_500
 )
+const AI_PREPARE_DEBOUNCE_MS = 500
+const AI_PREPARE_CACHE_MAX_AGE_MS = readMsEnv(
+  process.env.NEXT_PUBLIC_AI_PREPARE_CACHE_MAX_AGE_MS,
+  225_000
+)
 const AI_EXECUTOR_PREFLIGHT_CACHE_MS = readMsEnv(
   process.env.NEXT_PUBLIC_AI_EXECUTOR_PREFLIGHT_CACHE_MS,
   90_000
 )
-const AI_SETUP_SIGNATURE_WINDOW_SECONDS = (() => {
-  const raw = Number.parseInt(
-    process.env.NEXT_PUBLIC_AI_SETUP_SIGNATURE_WINDOW_SECONDS || "180",
-    10
-  )
-  if (!Number.isFinite(raw)) return 180
-  return Math.min(300, Math.max(60, raw))
-})()
 const AI_REQUIRE_FRESH_SETUP_PER_EXECUTION =
   (process.env.NEXT_PUBLIC_AI_REQUIRE_FRESH_SETUP_PER_EXECUTION || "false").toLowerCase() ===
   "true"
@@ -670,6 +671,102 @@ function executionBurnAmountCarel(tier: number): number {
   return tier >= 3 ? 2 : 1
 }
 
+// Internal helper that builds readable wallet metadata for L3 Garaga submit transactions.
+function buildL3GaragaSubmitReadableMetadata(params: {
+  actionType: "ZK Swap" | "ZK Stake" | "ZK Limit Order"
+  fromToken: string
+  amount: string
+  toToken?: string
+}): StarknetInvokeReadableMetadata {
+  const base: StarknetInvokeReadableMetadata = {
+    action_type: params.actionType,
+    from_token: params.fromToken,
+    amount: params.amount,
+    fee: "2 CAREL (burn)",
+    privacy: "Garaga ZK",
+  }
+  const toToken = (params.toToken || "").trim()
+  if (toToken) {
+    base.to_token = toToken
+  }
+  return base
+}
+
+// Internal helper that checks conditions for `isPreparedActionCacheValid`.
+function isPreparedActionCacheValid(
+  cache: PreparedActionCache | null,
+  level: number,
+  context: string
+): boolean {
+  if (!cache) return false
+  if (cache.level !== level || cache.context !== context) return false
+  return Date.now() - cache.preparedAt <= AI_PREPARE_CACHE_MAX_AGE_MS
+}
+
+// Internal helper that supports lightweight optimistic points estimate for preview rendering.
+function estimateOptimisticPoints(amountText: string, tier: number): string {
+  const amount = Number.parseFloat(amountText)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return tier >= 3 ? "~1.40 pts" : "~1.20 pts"
+  }
+  const base = Math.max(1, amount)
+  const multiplier = tier >= 3 ? 1.4 : 1.2
+  return `~${(base * multiplier).toFixed(2)} pts`
+}
+
+// Internal helper that builds TX preview details while user is typing.
+function buildOptimisticExecutionPreview(command: string, tier: number): OptimisticExecutionPreview | null {
+  if (tier < 2) return null
+  const normalized = normalizeAiCommandInput(command)
+  if (!normalized) return null
+
+  const swap = parseSwapTokensFromCommand(normalized)
+  if (swap && swap.amountText) {
+    return {
+      title: "Swap Preview",
+      fromToken: swap.fromToken,
+      toToken: swap.toToken,
+      amountText: swap.amountText,
+      estimatedPoints: estimateOptimisticPoints(swap.amountText, tier),
+    }
+  }
+
+  const bridge = parseBridgeTokensFromCommand(normalized)
+  if (bridge && bridge.amountText) {
+    return {
+      title: "Bridge Preview",
+      fromToken: bridge.fromToken,
+      toToken: bridge.toToken,
+      amountText: bridge.amountText,
+      estimatedPoints: estimateOptimisticPoints(bridge.amountText, tier),
+    }
+  }
+
+  const stake = parseStakeTokenAmountFromCommand(normalized)
+  if (stake && stake.amountText) {
+    return {
+      title: "Stake Preview",
+      fromToken: stake.token,
+      toToken: stake.token,
+      amountText: stake.amountText,
+      estimatedPoints: estimateOptimisticPoints(stake.amountText, tier),
+    }
+  }
+
+  const limit = parseLimitOrderIntentFromCommand(normalized)
+  if (limit && limit.amountText) {
+    return {
+      title: "Limit Order Preview",
+      fromToken: limit.fromToken,
+      toToken: limit.toToken,
+      amountText: limit.amountText,
+      estimatedPoints: estimateOptimisticPoints(limit.amountText, tier),
+    }
+  }
+
+  return null
+}
+
 // Internal helper that supports `formatSwapMinAmountOut` operations.
 function formatSwapMinAmountOut(quotedOutRaw: string, slippagePercent: number): string {
   const quotedOut = Number.parseFloat(String(quotedOutRaw || "0"))
@@ -754,6 +851,57 @@ function parseBridgeTokensFromCommand(
     const toToken = (withoutAmount[2] || "").trim().toUpperCase()
     if (fromToken && toToken) {
       return { fromToken, toToken, amountText: "" }
+    }
+  }
+  return null
+}
+
+// Internal helper that parses token/amount from swap commands.
+function parseSwapTokensFromCommand(
+  command: string
+): { fromToken: string; toToken: string; amountText: string } | null {
+  const normalized = normalizeMessageText(command).replace(/[,()]/g, " ")
+  const amountFirst = normalized.match(
+    /\b(?:please\s+)?(?:(?:hide|private)\s+)?(?:swap|tukar)\b\s+([0-9]+(?:\.[0-9]+)?)\s*([a-z0-9]{2,12})\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i
+  )
+  if (amountFirst) {
+    const amountText = (amountFirst[1] || "").trim()
+    const fromToken = (amountFirst[2] || "").trim().toUpperCase()
+    const toToken = (amountFirst[3] || "").trim().toUpperCase()
+    if (fromToken && toToken && amountText) {
+      return { fromToken, toToken, amountText }
+    }
+  }
+
+  const tokenFirst = normalized.match(
+    /\b(?:please\s+)?(?:(?:hide|private)\s+)?(?:swap|tukar)\b\s+([a-z0-9]{2,12})\s+([0-9]+(?:\.[0-9]+)?)\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i
+  )
+  if (tokenFirst) {
+    const fromToken = (tokenFirst[1] || "").trim().toUpperCase()
+    const amountText = (tokenFirst[2] || "").trim()
+    const toToken = (tokenFirst[3] || "").trim().toUpperCase()
+    if (fromToken && toToken && amountText) {
+      return { fromToken, toToken, amountText }
+    }
+  }
+  return null
+}
+
+// Internal helper that parses token pair/amount from limit-order commands.
+function parseLimitOrderIntentFromCommand(
+  command: string
+): { fromToken: string; toToken: string; amountText: string; priceText: string; expiry: string } | null {
+  const normalized = normalizeMessageText(command).replace(/[,()]/g, " ")
+  const pairFormat = normalized.match(
+    /\b(?:(?:hide|private)\s+)?limit(?:\s|-)?order\b\s+([a-z0-9]{2,12})\s*\/\s*([a-z0-9]{2,12})\s+(?:amount\s+)?([0-9]+(?:\.[0-9]+)?)\s+(?:at|price)\s+([0-9]+(?:\.[0-9]+)?)(?:\s+expiry\s+([a-z0-9]+))?/i
+  )
+  if (pairFormat) {
+    return {
+      fromToken: (pairFormat[1] || "").trim().toUpperCase(),
+      toToken: (pairFormat[2] || "").trim().toUpperCase(),
+      amountText: (pairFormat[3] || "").trim(),
+      priceText: (pairFormat[4] || "").trim(),
+      expiry: ((pairFormat[5] || "7d").trim() || "7d").toLowerCase(),
     }
   }
   return null
@@ -1033,6 +1181,21 @@ interface ExecutorPreflightCache {
   burnerRoleGranted: boolean
   message: string
   expiresAt: number
+}
+
+interface PreparedActionCache {
+  level: number
+  context: string
+  preparedAt: number
+  response: Awaited<ReturnType<typeof prepareAiAction>>
+}
+
+interface OptimisticExecutionPreview {
+  title: string
+  fromToken: string
+  toToken: string
+  amountText: string
+  estimatedPoints: string
 }
 
 type AIData = Record<string, unknown> | null | undefined
@@ -1354,7 +1517,12 @@ export function FloatingAIAssistant() {
   const [isAutoPreparingAction, setIsAutoPreparingAction] = React.useState(false)
   const [runtimeExecutorAddress, setRuntimeExecutorAddress] = React.useState("")
   const [isResolvingExecutor, setIsResolvingExecutor] = React.useState(false)
+  const [preparedActionCache, setPreparedActionCache] = React.useState<PreparedActionCache | null>(
+    null
+  )
+  const [isBackgroundPreparingAction, setIsBackgroundPreparingAction] = React.useState(false)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
+  const backgroundPrepareRequestSeqRef = React.useRef(0)
   const setupSubmitCooldownUntilRef = React.useRef(0)
   const lastSetupFailureRef = React.useRef("")
   const lastSetupSubmitAtRef = React.useRef(0)
@@ -1380,9 +1548,20 @@ export function FloatingAIAssistant() {
     message: "",
     expiresAt: 0,
   })
+  const normalizedInput = React.useMemo(() => normalizeAiCommandInput(input), [input])
   const parsedActionId = Number(actionId)
   const hasValidActionId = Number.isFinite(parsedActionId) && parsedActionId > 0
-  const commandNeedsAction = requiresOnchainActionForCommand(selectedTier, input)
+  const commandNeedsAction = requiresOnchainActionForCommand(selectedTier, normalizedInput)
+  const prepareContext = React.useMemo(() => `tier:${selectedTier}`, [selectedTier])
+  const hasPreparedActionReady = isPreparedActionCacheValid(
+    preparedActionCache,
+    selectedTier,
+    prepareContext
+  )
+  const optimisticPreview = React.useMemo(
+    () => buildOptimisticExecutionPreview(normalizedInput, selectedTier),
+    [normalizedInput, selectedTier]
+  )
   const canTogglePromptExamples = selectedTier >= 2
   const shouldShowPromptExamples = selectedTier === 1 || showPromptExamples
   const messages = messagesByTier[selectedTier] || []
@@ -1445,6 +1624,64 @@ export function FloatingAIAssistant() {
   React.useEffect(() => {
     setShowPromptExamples(selectedTier === 1)
   }, [selectedTier])
+
+  React.useEffect(() => {
+    if (selectedTier < 2) {
+      setPreparedActionCache(null)
+      setIsBackgroundPreparingAction(false)
+    }
+  }, [selectedTier])
+
+  React.useEffect(() => {
+    if (!isOpen || selectedTier < 2 || !commandNeedsAction || !normalizedInput) {
+      setIsBackgroundPreparingAction(false)
+      return
+    }
+    if (hasPreparedActionReady) {
+      setIsBackgroundPreparingAction(false)
+      return
+    }
+
+    let cancelled = false
+    const requestSeq = backgroundPrepareRequestSeqRef.current + 1
+    backgroundPrepareRequestSeqRef.current = requestSeq
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return
+      setIsBackgroundPreparingAction(true)
+      void prepareAiAction({
+        level: selectedTier,
+        context: prepareContext,
+      })
+        .then((prepared) => {
+          if (cancelled || backgroundPrepareRequestSeqRef.current !== requestSeq) return
+          setPreparedActionCache({
+            level: selectedTier,
+            context: prepareContext,
+            preparedAt: Date.now(),
+            response: prepared,
+          })
+        })
+        .catch(() => {
+          // Silent fallback: execute path will prepare on demand when needed.
+        })
+        .finally(() => {
+          if (cancelled || backgroundPrepareRequestSeqRef.current !== requestSeq) return
+          setIsBackgroundPreparingAction(false)
+        })
+    }, AI_PREPARE_DEBOUNCE_MS)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [
+    commandNeedsAction,
+    hasPreparedActionReady,
+    isOpen,
+    normalizedInput,
+    prepareContext,
+    selectedTier,
+  ])
 
   React.useEffect(() => {
     const handleOpenAssistant = () => {
@@ -2136,6 +2373,7 @@ export function FloatingAIAssistant() {
   const handleSend = async () => {
     let command = normalizeAiCommandInput(input)
     if (!command || isSending || isUpgradingTier || isLoadingTier) return
+    if (commandNeedsAction && isBackgroundPreparingAction && !hasPreparedActionReady) return
     const activeTier = selectedTier
     let confirmedPendingExecution = false
     if (activeTier > unlockedTier) {
@@ -2770,64 +3008,54 @@ export function FloatingAIAssistant() {
                 title: "Submitting private swap",
                 message: "Submitting hide-mode swap through Starknet relayer pool.",
               })
+              const fundingToken = (AI_TOKEN_ADDRESS_MAP[fromToken] || "").trim()
+              if (!fundingToken) {
+                throw new Error(
+                  `Token address for ${fromToken} is not configured for hide-mode relayer execution.`
+                )
+              }
+              const swapActionCall = onchainCalls.find((call) => call.entrypoint === "execute_swap")
+              if (!swapActionCall) {
+                throw new Error("Unable to build execute_swap calldata for hide relayer path.")
+              }
+              const deadline = Math.floor(Date.now() / 1000) + 60 * 20
+              const relayed = await executeHideViaRelayer({
+                flow: "swap",
+                actionCall: swapActionCall,
+                tokenAddress: fundingToken,
+                amount: amountText,
+                tokenDecimals: AI_TOKEN_DECIMALS[fromToken] ?? 18,
+                providerHint,
+                verifier: (privacyPayload.verifier || "garaga").trim() || "garaga",
+                deadline,
+                txContext: {
+                  flow: "swap",
+                  from_token: fromToken,
+                  to_token: toToken,
+                  amount: amountText,
+                  from_network: "starknet",
+                  to_network: "starknet",
+                },
+              })
+              privacyPayload = relayed.privacyPayload
               swapResult = await executeSwap({
                 from_token: fromToken,
                 to_token: toToken,
                 amount: amountText,
                 min_amount_out: minAmountOut,
                 slippage,
-                deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+                deadline,
+                onchain_tx_hash: relayed.txHash,
                 mode,
                 hide_balance: true,
                 privacy: privacyPayload,
               })
-              finalTxHash = swapResult.tx_hash || ""
+              finalTxHash = swapResult.tx_hash || relayed.txHash || ""
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error ?? "")
-              const requiresOnchainTx = /requires onchain_tx_hash/i.test(message)
-              const relayerUnavailable =
-                /(relayer|privateactionexecutor|not configured|executor|submit_private|hide relayer)/i.test(
-                  message
-                )
-              if (HIDE_BALANCE_SHIELDED_POOL_V2 && (requiresOnchainTx || relayerUnavailable)) {
-                throw new Error(
-                  `Hide relayer unavailable. Wallet fallback is blocked in shielded_pool_v2 so swap details do not leak in explorer. Detail: ${message}`
-                )
-              }
-              if (!requiresOnchainTx && !relayerUnavailable) {
-                throw error
-              }
-              if (!onchainCalls.length) {
-                throw new Error(
-                  "Swap quote does not include on-chain calldata for wallet fallback."
-                )
-              }
-              const txCalls = [buildHideBalancePrivacyCall(privacyPayload), ...onchainCalls]
-              notifications.addNotification({
-                type: "warning",
-                title: "Relayer unavailable",
-                message:
-                  "Hide relayer is unavailable. Falling back to wallet-signed hide transaction.",
-              })
-              notifications.addNotification({
-                type: "info",
-                title: "Wallet signature required",
-                message: `Confirm Garaga private swap ${amountText} ${fromToken} -> ${toToken} in your wallet.`,
-              })
-              const onchainTxHash = await invokeStarknetCallsFromWallet(txCalls, providerHint)
-              swapResult = await executeSwap({
-                from_token: fromToken,
-                to_token: toToken,
-                amount: amountText,
-                min_amount_out: minAmountOut,
-                slippage,
-                deadline: Math.floor(Date.now() / 1000) + 60 * 20,
-                onchain_tx_hash: onchainTxHash,
-                mode,
-                hide_balance: true,
-                privacy: privacyPayload,
-              })
-              finalTxHash = swapResult.tx_hash || onchainTxHash
+              throw new Error(
+                `Hide relayer unavailable. Wallet fallback is disabled so swap details never leak in explorer. Detail: ${message}`
+              )
             }
           } else {
             if (!onchainCalls.length) {
@@ -3324,45 +3552,42 @@ export function FloatingAIAssistant() {
           let txHash = ""
           if (tierUsesGaraga) {
             try {
+              const stakeCalls = buildStakeWalletCalls(token, amountText)
+              const fundingToken = (stakeCalls[0]?.contractAddress || "").trim()
+              const actionCall = stakeCalls[stakeCalls.length - 1]
+              if (!fundingToken || !actionCall) {
+                throw new Error("Unable to build stake calldata for hide relayer path.")
+              }
+              const relayed = await executeHideViaRelayer({
+                flow: "stake",
+                actionCall,
+                tokenAddress: fundingToken,
+                amount: amountText,
+                tokenDecimals: AI_TOKEN_DECIMALS[token] ?? 18,
+                providerHint,
+                verifier: "garaga",
+                txContext: {
+                  flow: "stake",
+                  from_token: token,
+                  to_token: token,
+                  amount: amountText,
+                  from_network: "starknet",
+                  to_network: "starknet",
+                },
+              })
+              txHash = relayed.txHash
               stakeResult = await stakeDeposit({
                 pool_id: token,
                 amount: amountText,
+                onchain_tx_hash: relayed.txHash,
                 hide_balance: true,
+                privacy: relayed.privacyPayload,
               })
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error ?? "")
-              if (HIDE_BALANCE_RELAYER_POOL_ENABLED && isRelayerAllowanceErrorMessage(message)) {
-                await approveRelayerFundingForStake(token, amountText)
-                stakeResult = await stakeDeposit({
-                  pool_id: token,
-                  amount: amountText,
-                  hide_balance: true,
-                })
-              } else {
-                if (!/requires onchain_tx_hash/i.test(message)) {
-                  throw error
-                }
-                if (HIDE_BALANCE_SHIELDED_POOL_V2) {
-                  throw new Error(
-                    `Hide relayer unavailable. Wallet fallback is blocked in shielded_pool_v2 so stake details do not leak in explorer. Detail: ${message}`
-                  )
-                }
-                const privacyPayload = await requestGaragaPayload("stake", token, token, amountText)
-                const calls = [buildHideBalancePrivacyCall(privacyPayload), ...buildStakeWalletCalls(token, amountText)]
-                notifications.addNotification({
-                  type: "info",
-                  title: "Wallet signature required",
-                  message: `Confirm Garaga private stake ${amountText} ${token} in your wallet.`,
-                })
-                txHash = await invokeStarknetCallsFromWallet(calls, providerHint)
-                stakeResult = await stakeDeposit({
-                  pool_id: token,
-                  amount: amountText,
-                  onchain_tx_hash: txHash,
-                  hide_balance: true,
-                  privacy: privacyPayload,
-                })
-              }
+              throw new Error(
+                `Hide relayer unavailable. Wallet fallback is disabled so stake details never leak in explorer. Detail: ${message}`
+              )
             }
           } else {
             const calls = buildStakeWalletCalls(token, amountText)
@@ -3459,30 +3684,9 @@ export function FloatingAIAssistant() {
                 if (!/requires onchain_tx_hash/i.test(message)) {
                   throw error
                 }
-                if (HIDE_BALANCE_SHIELDED_POOL_V2) {
-                  throw new Error(
-                    `Hide relayer unavailable. Wallet fallback is blocked in shielded_pool_v2 so claim details do not leak in explorer. Detail: ${message}`
-                  )
-                }
-                const claimToken = resolveStakeTokenSymbol(candidate.token)
-                const privacyPayload = await requestGaragaPayload(
-                  "stake_claim",
-                  claimToken,
-                  claimToken
+                throw new Error(
+                  `Hide relayer unavailable. Wallet fallback is disabled so claim details never leak in explorer. Detail: ${message}`
                 )
-                const calls = [buildHideBalancePrivacyCall(privacyPayload), ...buildClaimWalletCalls(claimToken)]
-                notifications.addNotification({
-                  type: "info",
-                  title: "Wallet signature required",
-                  message: `Confirm Garaga private claim for ${claimToken} in your wallet.`,
-                })
-                txHash = await invokeStarknetCallsFromWallet(calls, providerHint)
-                claimResult = await stakeClaim({
-                  position_id: candidate.position_id,
-                  onchain_tx_hash: txHash,
-                  hide_balance: true,
-                  privacy: privacyPayload,
-                })
               }
             }
           } else {
@@ -3573,6 +3777,24 @@ export function FloatingAIAssistant() {
               )
             }
             try {
+              const relayed = await executeHideViaRelayer({
+                flow: "limit",
+                actionCall: createOrderCall,
+                tokenAddress: fromAddress,
+                amount: amountText,
+                tokenDecimals: AI_TOKEN_DECIMALS[fromToken] ?? 18,
+                providerHint,
+                verifier: "garaga",
+                txContext: {
+                  flow: "limit_order",
+                  from_token: fromToken,
+                  to_token: toToken,
+                  amount: amountText,
+                  from_network: "starknet",
+                  to_network: "starknet",
+                },
+              })
+              txHash = relayed.txHash
               limitResult = await createLimitOrder({
                 from_token: fromToken,
                 to_token: toToken,
@@ -3581,57 +3803,15 @@ export function FloatingAIAssistant() {
                 expiry,
                 recipient: null,
                 client_order_id: clientOrderId,
+                onchain_tx_hash: relayed.txHash,
                 hide_balance: true,
+                privacy: relayed.privacyPayload,
               })
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error ?? "")
-              if (HIDE_BALANCE_RELAYER_POOL_ENABLED && isRelayerAllowanceErrorMessage(message)) {
-                await approveRelayerFundingForStake(fromToken, amountText)
-                limitResult = await createLimitOrder({
-                  from_token: fromToken,
-                  to_token: toToken,
-                  amount: amountText,
-                  price: priceText,
-                  expiry,
-                  recipient: null,
-                  client_order_id: clientOrderId,
-                  hide_balance: true,
-                })
-              } else {
-                if (!/requires onchain_tx_hash/i.test(message)) {
-                  throw error
-                }
-                if (HIDE_BALANCE_SHIELDED_POOL_V2) {
-                  throw new Error(
-                    `Hide limit-order relayer is unavailable (or disabled). In shielded_pool_v2, wallet fallback is blocked to avoid leaking details in explorer. Enable HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true on backend and retry. Detail: ${message}`
-                  )
-                }
-                const privacyPayload = await requestGaragaPayload(
-                  "limit_order",
-                  fromToken,
-                  toToken,
-                  amountText
-                )
-                const calls = [buildHideBalancePrivacyCall(privacyPayload), createOrderCall]
-                notifications.addNotification({
-                  type: "info",
-                  title: "Wallet signature required",
-                  message: `Confirm Garaga private limit order ${amountText} ${fromToken} -> ${toToken}.`,
-                })
-                txHash = await invokeStarknetCallsFromWallet(calls, providerHint)
-                limitResult = await createLimitOrder({
-                  from_token: fromToken,
-                  to_token: toToken,
-                  amount: amountText,
-                  price: priceText,
-                  expiry,
-                  recipient: null,
-                  client_order_id: clientOrderId,
-                  onchain_tx_hash: txHash,
-                  hide_balance: true,
-                  privacy: privacyPayload,
-                })
-              }
+              throw new Error(
+                `Hide limit-order relayer unavailable. Wallet fallback is disabled so order details never leak in explorer. Detail: ${message}`
+              )
             }
           } else {
             notifications.addNotification({
@@ -3966,13 +4146,32 @@ export function FloatingAIAssistant() {
         18
       )
 
-      const prepareWindowWithRetry = async () => {
-        try {
-          return await prepareAiAction({
+      const prepareChallengeWithRetry = async (options?: { forceFresh?: boolean }) => {
+        const forceFresh = options?.forceFresh === true
+        if (
+          !forceFresh &&
+          isPreparedActionCacheValid(preparedActionCache, selectedTier, payload) &&
+          preparedActionCache
+        ) {
+          return preparedActionCache.response
+        }
+
+        const fetchPrepared = async () => {
+          const prepared = await prepareAiAction({
             level: selectedTier,
             context: payload,
-            window_seconds: AI_SETUP_SIGNATURE_WINDOW_SECONDS,
           })
+          setPreparedActionCache({
+            level: selectedTier,
+            context: payload,
+            preparedAt: Date.now(),
+            response: prepared,
+          })
+          return prepared
+        }
+
+        try {
+          return await fetchPrepared()
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error ?? "")
           if (!/request timeout|network error|timed out|timeout/i.test(message.toLowerCase())) {
@@ -3980,29 +4179,75 @@ export function FloatingAIAssistant() {
           }
           notifications.addNotification({
             type: "info",
-            title: "Preparing setup window",
+            title: "Preparing setup challenge",
             message:
-              "Backend is still preparing AI signature hashes. Retrying once before opening wallet popup.",
+              "Backend is still preparing AI typed-data challenge. Retrying once before opening wallet popup.",
           })
           await waitMs(1200)
-          return prepareAiAction({
-            level: selectedTier,
-            context: payload,
-            window_seconds: AI_SETUP_SIGNATURE_WINDOW_SECONDS,
-          })
+          return fetchPrepared()
         }
       }
 
-      const prepareResponse = await prepareWindowWithRetry()
-      notifications.addNotification({
-        type: "info",
-        title: "AI signature window prepared",
-        message: `Window ${prepareResponse.from_timestamp}-${prepareResponse.to_timestamp} prepared.`,
-        txHash: prepareResponse.tx_hash,
-        txNetwork: "starknet",
-      })
+      const buildSetupCalls = async (options?: { forceFreshPrepare?: boolean }): Promise<StarknetInvokeCall[]> => {
+        const prepareResponse = await prepareChallengeWithRetry({
+          forceFresh: options?.forceFreshPrepare === true,
+        })
+        const preparedActionType = Number.isFinite(prepareResponse.action_type)
+          ? prepareResponse.action_type
+          : actionType
+        const preparedParams =
+          typeof prepareResponse.params === "string" && prepareResponse.params.trim()
+            ? prepareResponse.params
+            : payload
+        const messageHash = toHexFelt(prepareResponse.message_hash || "0x0")
+        const typedData =
+          prepareResponse.typed_data && typeof prepareResponse.typed_data === "object"
+            ? (prepareResponse.typed_data as Record<string, unknown>)
+            : null
+        if (!typedData) {
+          throw new Error("Backend did not return AI setup typed-data payload.")
+        }
 
-      await waitMs(AI_SETUP_PRE_WALLET_DELAY_MS)
+        notifications.addNotification({
+          type: "info",
+          title: "AI setup challenge ready",
+          message: `Nonce ${prepareResponse.nonce} prepared. Confirm wallet message signature.`,
+        })
+
+        await waitMs(AI_SETUP_PRE_WALLET_DELAY_MS)
+        const userSignature = await signStarknetTypedDataFromWallet(typedData, providerHint)
+        if (!Array.isArray(userSignature) || userSignature.length === 0) {
+          throw new Error("Wallet returned empty AI setup signature.")
+        }
+
+        const submitCalldata = [
+          preparedActionType,
+          ...encodeShortByteArray(preparedParams),
+          messageHash,
+          userSignature.length,
+          ...userSignature,
+        ]
+        return AI_SETUP_SKIP_APPROVE
+          ? [
+              {
+                contractAddress: executorAddress,
+                entrypoint: "submit_action",
+                calldata: submitCalldata,
+              },
+            ]
+          : [
+              {
+                contractAddress: staticCarelTokenAddress,
+                entrypoint: "approve",
+                calldata: [executorAddress, approveAmountLow, approveAmountHigh],
+              },
+              {
+                contractAddress: executorAddress,
+                entrypoint: "submit_action",
+                calldata: submitCalldata,
+              },
+            ]
+      }
 
       /**
        * Runs `submitOnchainAction` and handles related side effects.
@@ -4010,28 +4255,10 @@ export function FloatingAIAssistant() {
        * @returns Result consumed by caller flow, UI state updates, or async chaining.
        * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
        */
-      const setupCalls = AI_SETUP_SKIP_APPROVE
-        ? [
-            {
-              contractAddress: executorAddress,
-              entrypoint: "submit_action",
-              calldata: [actionType, ...encodeShortByteArray(payload), 0],
-            },
-          ]
-        : [
-            {
-              contractAddress: staticCarelTokenAddress,
-              entrypoint: "approve",
-              calldata: [executorAddress, approveAmountLow, approveAmountHigh],
-            },
-            {
-              contractAddress: executorAddress,
-              entrypoint: "submit_action",
-              calldata: [actionType, ...encodeShortByteArray(payload), 0],
-            },
-          ]
-
-      const submitOnchainAction = async (forceSequential = false) => {
+      const submitOnchainAction = async (
+        setupCalls: StarknetInvokeCall[],
+        forceSequential = false
+      ) => {
         if (forceSequential && setupCalls.length > 1) {
           let lastTxHash = ""
           for (const call of setupCalls) {
@@ -4057,6 +4284,7 @@ export function FloatingAIAssistant() {
         return /invalid transaction nonce|invalid nonce|nonce too low/i.test(message.toLowerCase())
       }
 
+      let setupCalls = await buildSetupCalls()
       notifications.addNotification({
         type: "info",
         title: "Wallet signature required",
@@ -4066,7 +4294,7 @@ export function FloatingAIAssistant() {
       })
       let onchainTxHash: string
       try {
-        onchainTxHash = await submitOnchainAction()
+        onchainTxHash = await submitOnchainAction(setupCalls)
       } catch (firstError) {
         const firstMessage =
           firstError instanceof Error ? firstError.message : String(firstError ?? "")
@@ -4078,20 +4306,17 @@ export function FloatingAIAssistant() {
             type: "info",
             title: "Refreshing setup signature",
             message:
-              "Detected wallet signature mismatch. Refreshing setup window and retrying with split signatures.",
+              "Detected wallet signature mismatch. Refreshing typed-data challenge and retrying with split signatures.",
           })
           await waitMs(AI_SETUP_NONCE_RETRY_DELAY_MS)
-          // Retry once by refreshing the validity window.
-          const retryPrepared = await prepareWindowWithRetry()
+          // Retry once by refreshing typed-data challenge and wallet signature.
+          setupCalls = await buildSetupCalls({ forceFreshPrepare: true })
           notifications.addNotification({
             type: "info",
-            title: "Retrying with refreshed window",
-            message: "Signature window refreshed. Confirm the transaction one more time.",
-            txHash: retryPrepared.tx_hash,
-            txNetwork: "starknet",
+            title: "Retrying with refreshed signature",
+            message: "Typed-data signature refreshed. Confirm the transaction one more time.",
           })
-          await waitMs(AI_SETUP_PRE_WALLET_DELAY_MS)
-          onchainTxHash = await submitOnchainAction(true)
+          onchainTxHash = await submitOnchainAction(setupCalls, true)
         } else if (isWalletNonceError(firstError)) {
           notifications.addNotification({
             type: "info",
@@ -4100,11 +4325,12 @@ export function FloatingAIAssistant() {
               "Previous wallet nonce is still pending. Waiting briefly, then retrying setup once.",
           })
           await waitMs(AI_SETUP_NONCE_RETRY_DELAY_MS)
-          onchainTxHash = await submitOnchainAction()
+          onchainTxHash = await submitOnchainAction(setupCalls)
         } else {
           throw firstError
         }
       }
+      setPreparedActionCache(null)
 
       notifications.addNotification({
         type: "info",
@@ -4253,7 +4479,7 @@ export function FloatingAIAssistant() {
         : /rate limit exceeded/i.test(rawMessage)
           ? "AI executor daily on-chain rate limit reached. Ask admin to increase `set_rate_limit` (for example 1000), or wait until UTC day reset."
         : /request timeout|network error|timed out|timeout/i.test(lowerRaw)
-          ? "AI setup preparation timed out before wallet popup appeared. Usually backend/RPC is still busy preparing signature hashes. Retry once."
+          ? "AI setup preparation timed out before wallet popup appeared. Usually backend/RPC is still busy preparing typed-data challenge. Retry once."
         : /insufficient allowance/i.test(rawMessage)
           ? "Demo setup is skipping approve, but contract still requires allowance. Disable AI setup fee (fee_enabled=false) or disable NEXT_PUBLIC_AI_SETUP_SKIP_APPROVE."
         : rawMessage
@@ -4279,6 +4505,8 @@ export function FloatingAIAssistant() {
   const hasSetupReady = AI_REQUIRE_FRESH_SETUP_PER_EXECUTION
     ? false
     : hasValidActionId || pendingActions.length > 0
+  const isExecuteButtonBlockedByPrepare =
+    commandNeedsAction && isBackgroundPreparingAction && !hasPreparedActionReady
 
   const handleAutoSetup = async () => {
     setIsAutoPreparingAction(true)
@@ -4717,6 +4945,35 @@ export function FloatingAIAssistant() {
                 </div>
               )}
 
+              {optimisticPreview && (
+                <div className="mb-2 rounded-xl border border-[#1f3a5a] bg-[#0b1828] px-3 py-2">
+                  <div className="flex items-center justify-between">
+                    <p className={cn(spaceMono.className, "text-[10px] font-semibold text-[#67e8f9]")}>
+                      {optimisticPreview.title}
+                    </p>
+                    <p className={cn(spaceMono.className, "text-[10px] text-[#94a3b8]")}>
+                      Fee {executionBurnAmountCarel(selectedTier)} CAREL
+                    </p>
+                  </div>
+                  <p className={cn(spaceMono.className, "mt-1 text-[10px] text-[#cbd5e1]")}>
+                    {optimisticPreview.fromToken} {"->"} {optimisticPreview.toToken}
+                  </p>
+                  <p className={cn(spaceMono.className, "text-[10px] text-[#94a3b8]")}>
+                    Est. amount: {optimisticPreview.amountText}
+                  </p>
+                  <p className={cn(spaceMono.className, "text-[10px] text-[#94a3b8]")}>
+                    Est. points: {optimisticPreview.estimatedPoints}
+                  </p>
+                  <p className={cn(spaceMono.className, "mt-1 text-[10px] text-[#67e8f9]")}>
+                    {isBackgroundPreparingAction && !hasPreparedActionReady
+                      ? "Preparing execution setup in background..."
+                      : hasPreparedActionReady
+                        ? "Execution setup prebuilt. Execute is ready."
+                        : "Execution setup will auto-prepare when needed."}
+                  </p>
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <input
                   type="text"
@@ -4733,7 +4990,7 @@ export function FloatingAIAssistant() {
                 <Button
                   onClick={handleSend}
                   size="sm"
-                  disabled={isSending || !input.trim() || isWidgetBusy}
+                  disabled={isSending || !input.trim() || isWidgetBusy || isExecuteButtonBlockedByPrepare}
                   className={cn(
                     "h-10 w-10 rounded-xl border-0 bg-[#06b6d4] p-0 text-[#03131f]",
                     "shadow-[0_0_16px_rgba(6,182,212,0.45)] transition hover:brightness-110 active:scale-95"
@@ -4752,6 +5009,10 @@ export function FloatingAIAssistant() {
                 <p className={cn(spaceMono.className, "mt-1 text-[10px] text-[#475569]")}>
                   🔒 This action requires wallet signature and burns{" "}
                   {executionBurnAmountCarel(selectedTier)} CAREL.
+                </p>
+              ) : isExecuteButtonBlockedByPrepare ? (
+                <p className={cn(spaceMono.className, "mt-1 text-[10px] text-[#475569]")}>
+                  Preparing execution setup in background...
                 </p>
               ) : null}
             </div>

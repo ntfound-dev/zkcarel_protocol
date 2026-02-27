@@ -11,8 +11,9 @@ use super::privacy::{
 };
 use super::swap::{parse_decimal_to_u256_parts, token_decimals};
 use crate::services::notification_service::{NotificationService, NotificationType};
-use crate::services::onchain::{felt_to_u128, parse_felt, OnchainInvoker, OnchainReader};
+use crate::services::onchain::{felt_to_u128, parse_felt, OnchainReader};
 use crate::services::privacy_verifier::parse_privacy_verifier_kind;
+use crate::services::relayer::RelayerService;
 use crate::{
     // 1. Import modul hash agar terpakai
     constants::{
@@ -43,8 +44,8 @@ use super::{
     require_starknet_user, require_user, AppState,
 };
 
-const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 2.0;
-const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 5.0;
+const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 20.0;
+const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 40.0;
 
 #[derive(Debug, Serialize)]
 pub struct CreateOrderResponse {
@@ -713,7 +714,9 @@ pub async fn create_order(
             now.timestamp(),
         )
     });
-    let use_relayer_pool_hide = should_hide && hide_balance_limit_order_relayer_pool_enabled();
+    let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let use_relayer_pool_hide =
+        should_hide && hide_balance_limit_order_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
         let action_target = resolve_limit_order_target_felt(&state)?;
@@ -821,7 +824,7 @@ pub async fn create_order(
                         "Shielded note funding failed: insufficient allowance. Approve {} {} to executor {} first.",
                         req.amount,
                         req.from_token.to_ascii_uppercase(),
-                        format!("{:#x}", executor)
+                        format_args!("{executor:#x}")
                     )));
                 }
                 relayer_calls.push(build_shielded_deposit_fixed_for_call(
@@ -850,11 +853,7 @@ pub async fn create_order(
             "limit order hide payload (bound)",
         )?;
 
-        let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-            return Err(crate::error::AppError::BadRequest(
-                "On-chain relayer account is not configured for hide mode".to_string(),
-            ));
-        };
+        let relayer = RelayerService::from_config(&state.config)?;
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
         let execute_call = build_execute_private_limit_call(
             executor,
@@ -866,11 +865,10 @@ pub async fn create_order(
         )?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
-        let tx_hash_felt = invoker.invoke_many(relayer_calls).await?;
-        format!("{:#x}", tx_hash_felt)
+        let submitted = relayer.submit_calls(relayer_calls).await?;
+        submitted.tx_hash
     } else {
-        let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-        let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        let tx_hash = normalized_onchain_tx_hash.ok_or_else(|| {
             crate::error::AppError::BadRequest(
                 "Create order requires onchain_tx_hash from user-signed Starknet transaction"
                     .to_string(),
@@ -1057,7 +1055,9 @@ pub async fn cancel_order(
         ));
     }
 
-    let use_relayer_pool_hide = should_hide && hide_balance_limit_order_relayer_pool_enabled();
+    let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
+    let use_relayer_pool_hide =
+        should_hide && hide_balance_limit_order_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
         let action_target = resolve_limit_order_target_felt(&state)?;
@@ -1170,7 +1170,7 @@ pub async fn cancel_order(
                     return Err(crate::error::AppError::BadRequest(format!(
                         "Shielded note funding failed: insufficient allowance. Approve one-time spending limit for token {} to executor {} first.",
                         order.from_token.to_ascii_uppercase(),
-                        format!("{:#x}", executor)
+                        format_args!("{executor:#x}")
                     )));
                 }
                 relayer_calls.push(build_shielded_deposit_fixed_for_call(
@@ -1181,11 +1181,7 @@ pub async fn cancel_order(
                 )?);
             }
         }
-        let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-            return Err(crate::error::AppError::BadRequest(
-                "On-chain relayer account is not configured for hide mode".to_string(),
-            ));
-        };
+        let relayer = RelayerService::from_config(&state.config)?;
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
         let execute_call = build_execute_private_limit_call(
             executor,
@@ -1197,11 +1193,10 @@ pub async fn cancel_order(
         )?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
-        let tx_hash_felt = invoker.invoke_many(relayer_calls).await?;
-        format!("{:#x}", tx_hash_felt)
+        let submitted = relayer.submit_calls(relayer_calls).await?;
+        submitted.tx_hash
     } else {
-        let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-        let tx_hash = onchain_tx_hash.ok_or_else(|| {
+        let tx_hash = normalized_onchain_tx_hash.ok_or_else(|| {
             crate::error::AppError::BadRequest(
                 "Cancel order requires onchain_tx_hash from user-signed Starknet transaction"
                     .to_string(),

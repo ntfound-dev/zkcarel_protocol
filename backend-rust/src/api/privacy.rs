@@ -1,7 +1,10 @@
 use crate::{
     error::{AppError, Result},
     models::{ApiResponse, StarknetWalletCall},
-    services::onchain::{parse_felt, OnchainInvoker},
+    services::{
+        onchain::parse_felt,
+        relayer::RelayerService,
+    },
     services::privacy_verifier::{
         parse_privacy_verifier_kind, resolve_privacy_router_for_verifier,
     },
@@ -11,10 +14,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
+use starknet_crypto::poseidon_hash_many;
 use std::{process::Stdio, time::Duration};
 use tokio::{io::AsyncWriteExt, process::Command};
 
-use super::{require_user, AppState};
+use super::{require_starknet_user, require_user, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct PrivacyActionRequest {
@@ -79,8 +83,34 @@ pub struct PreparePrivateExecutionRequest {
     pub flow: String,
     pub action_entrypoint: String,
     pub action_calldata: Vec<String>,
+    pub token: Option<String>,
+    pub amount_low: Option<String>,
+    pub amount_high: Option<String>,
+    pub signature_selector: Option<String>,
+    pub nonce: Option<String>,
+    pub deadline: Option<u64>,
     #[serde(default)]
     pub tx_context: Option<AutoPrivacyTxContext>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PreparePrivateExecutionRelayerDraft {
+    pub user: String,
+    pub token: String,
+    pub amount_low: String,
+    pub amount_high: String,
+    pub signature_selector: String,
+    pub submit_selector: String,
+    pub execute_selector: String,
+    pub nullifier: String,
+    pub commitment: String,
+    pub action_selector: String,
+    pub nonce: String,
+    pub deadline: u64,
+    pub proof: Vec<String>,
+    pub public_inputs: Vec<String>,
+    pub action_calldata: Vec<String>,
+    pub message_hash: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -88,6 +118,33 @@ pub struct PreparePrivateExecutionResponse {
     pub payload: AutoPrivacyPayloadResponse,
     pub intent_hash: String,
     pub onchain_calls: Vec<StarknetWalletCall>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relayer: Option<PreparePrivateExecutionRelayerDraft>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RelayerPrivateExecutionRequest {
+    pub user: String,
+    pub token: String,
+    pub amount_low: String,
+    pub amount_high: String,
+    pub signature: Vec<String>,
+    pub signature_selector: String,
+    pub submit_selector: String,
+    pub execute_selector: String,
+    pub nullifier: String,
+    pub commitment: String,
+    pub action_selector: String,
+    pub nonce: String,
+    pub deadline: u64,
+    pub proof: Vec<String>,
+    pub public_inputs: Vec<String>,
+    pub action_calldata: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RelayerPrivateExecutionResponse {
+    pub tx_hash: String,
 }
 
 #[derive(Clone, Copy)]
@@ -231,7 +288,7 @@ pub async fn prepare_private_execution(
     headers: HeaderMap,
     Json(req): Json<PreparePrivateExecutionRequest>,
 ) -> Result<Json<ApiResponse<PreparePrivateExecutionResponse>>> {
-    let user_address = require_user(&headers, &state).await?;
+    let user_address = require_starknet_user(&headers, &state).await?;
     let verifier_kind = parse_privacy_verifier_kind(req.verifier.as_deref())?;
     let flow = PrivateExecutionFlow::parse(&req.flow)?;
     if req.action_calldata.is_empty() {
@@ -275,13 +332,121 @@ pub async fn prepare_private_execution(
         &payload,
     )?;
 
+    let relayer = match (
+        req.token.as_deref(),
+        req.amount_low.as_deref(),
+        req.amount_high.as_deref(),
+    ) {
+        (Some(token), Some(amount_low), Some(amount_high)) => Some(
+            build_relayer_private_execution_draft(
+                &state,
+                &user_address,
+                token,
+                amount_low,
+                amount_high,
+                req.signature_selector.as_deref(),
+                req.nonce.as_deref(),
+                req.deadline,
+                flow,
+                action_selector,
+                &req.action_calldata,
+                &payload,
+            )?,
+        ),
+        _ => None,
+    };
+
     Ok(Json(ApiResponse::success(
         PreparePrivateExecutionResponse {
             payload,
             intent_hash,
             onchain_calls,
+            relayer,
         },
     )))
+}
+
+pub async fn relay_private_execution(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RelayerPrivateExecutionRequest>,
+) -> Result<Json<ApiResponse<RelayerPrivateExecutionResponse>>> {
+    let signed_user = require_starknet_user(&headers, &state).await?;
+    let signed_user_felt = parse_felt(&signed_user)?;
+    let req_user_felt = parse_felt(&req.user)?;
+    if signed_user_felt != req_user_felt {
+        return Err(AppError::BadRequest(
+            "signed params user does not match authenticated Starknet wallet".to_string(),
+        ));
+    }
+
+    if req.signature.is_empty() || req.proof.is_empty() || req.public_inputs.is_empty() {
+        return Err(AppError::BadRequest(
+            "signature/proof/public_inputs must be non-empty".to_string(),
+        ));
+    }
+
+    let intermediary_address = std::env::var("PRIVACY_INTERMEDIARY_ADDRESS")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "PRIVACY_INTERMEDIARY_ADDRESS is not configured for relayer execution".to_string(),
+            )
+        })?;
+
+    let to = parse_felt(&intermediary_address)?;
+    let selector = get_selector_from_name("execute")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let mut calldata = vec![
+        parse_felt(&req.user)?,
+        parse_felt(&req.token)?,
+        parse_felt(&req.amount_low)?,
+        parse_felt(&req.amount_high)?,
+    ];
+
+    calldata.push(Felt::from(req.signature.len() as u64));
+    for value in &req.signature {
+        calldata.push(parse_felt(value)?);
+    }
+
+    calldata.push(parse_felt(&req.signature_selector)?);
+    calldata.push(parse_felt(&req.submit_selector)?);
+    calldata.push(parse_felt(&req.execute_selector)?);
+    calldata.push(parse_felt(&req.nullifier)?);
+    calldata.push(parse_felt(&req.commitment)?);
+    calldata.push(parse_felt(&req.action_selector)?);
+    calldata.push(parse_felt(&req.nonce)?);
+    calldata.push(Felt::from(req.deadline));
+
+    calldata.push(Felt::from(req.proof.len() as u64));
+    for value in &req.proof {
+        calldata.push(parse_felt(value)?);
+    }
+
+    calldata.push(Felt::from(req.public_inputs.len() as u64));
+    for value in &req.public_inputs {
+        calldata.push(parse_felt(value)?);
+    }
+
+    calldata.push(Felt::from(req.action_calldata.len() as u64));
+    for value in &req.action_calldata {
+        calldata.push(parse_felt(value)?);
+    }
+
+    let relayer = RelayerService::from_config(&state.config)?;
+    let submitted = relayer.submit_call(Call {
+        to,
+        selector,
+        calldata,
+    })
+    .await?;
+
+    Ok(Json(ApiResponse::success(RelayerPrivateExecutionResponse {
+        tx_hash: submitted.tx_hash,
+    })))
 }
 
 // Routes privacy submissions to V1 (`submit_private_action`) or V2 (`submit_action`) based on payload shape.
@@ -357,11 +522,7 @@ async fn submit_private_action_internal(
         )?;
     }
 
-    let Some(invoker) = OnchainInvoker::from_config(&state.config).ok().flatten() else {
-        return Err(crate::error::AppError::BadRequest(
-            "On-chain invoker not configured".into(),
-        ));
-    };
+    let relayer = RelayerService::from_config(&state.config)?;
 
     let call = if wants_v2 {
         if !has_v2 {
@@ -373,7 +534,7 @@ async fn submit_private_action_internal(
             "Submitting privacy action via V2 router with verifier={}",
             verifier_kind.as_str()
         );
-        build_submit_call_v2(router_v2, &req)?
+        build_submit_call_v2(router_v2, req)?
     } else {
         let router_v1 = if has_v1 {
             resolve_privacy_router_for_verifier(&state.config, verifier_kind)?
@@ -386,10 +547,10 @@ async fn submit_private_action_internal(
             "Submitting privacy action via V1 router with verifier={}",
             verifier_kind.as_str()
         );
-        build_submit_call_v1(&router_v1, &req)?
+        build_submit_call_v1(&router_v1, req)?
     };
-    let tx_hash = invoker.invoke(call).await?;
-    Ok(tx_hash.to_string())
+    let submitted = relayer.submit_call(call).await?;
+    Ok(submitted.tx_hash)
 }
 
 // Detects mock placeholder payloads (`proof=[0x1]`, `public_inputs=[0x1]`) and rejects them in real Hide Mode.
@@ -921,6 +1082,111 @@ fn build_private_executor_wallet_calls(
     ])
 }
 
+// Builds relayer draft payload (including message hash) so frontend can sign and submit via
+// `/api/v1/privacy/relayer-execute`.
+fn build_relayer_private_execution_draft(
+    state: &AppState,
+    user_address: &str,
+    token: &str,
+    amount_low: &str,
+    amount_high: &str,
+    signature_selector_raw: Option<&str>,
+    nonce_raw: Option<&str>,
+    deadline_raw: Option<u64>,
+    flow: PrivateExecutionFlow,
+    action_selector: Felt,
+    action_calldata: &[String],
+    payload: &AutoPrivacyPayloadResponse,
+) -> Result<PreparePrivateExecutionRelayerDraft> {
+    let executor = resolve_private_action_executor_address(&state.config)?;
+    let executor_felt = parse_felt(&executor)?;
+    let user_felt = parse_felt(user_address)?;
+    let token_felt = parse_felt(token)?;
+    let amount_low_felt = parse_felt(amount_low)?;
+    let amount_high_felt = parse_felt(amount_high)?;
+
+    let signature_selector = if let Some(raw) = signature_selector_raw {
+        parse_selector_or_felt(raw)?
+    } else {
+        get_selector_from_name("is_valid_signature")
+            .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?
+    };
+    let submit_selector = get_selector_from_name("submit_private_intent")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let execute_selector = get_selector_from_name(flow.execute_entrypoint())
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let nullifier = parse_felt(&payload.nullifier)?;
+    let commitment = parse_felt(&payload.commitment)?;
+    let nonce = if let Some(raw) = nonce_raw {
+        parse_felt(raw)?
+    } else {
+        Felt::from(chrono::Utc::now().timestamp_millis() as u64)
+    };
+    let deadline = deadline_raw.unwrap_or_else(|| (chrono::Utc::now().timestamp() as u64) + 1200);
+    let deadline_felt = Felt::from(deadline);
+
+    let proof_felts: Vec<Felt> = payload
+        .proof
+        .iter()
+        .map(|value| parse_felt(value))
+        .collect::<Result<Vec<_>>>()?;
+    let public_inputs_felts: Vec<Felt> = payload
+        .public_inputs
+        .iter()
+        .map(|value| parse_felt(value))
+        .collect::<Result<Vec<_>>>()?;
+    let action_calldata_felts: Vec<Felt> = action_calldata
+        .iter()
+        .map(|value| parse_felt(value))
+        .collect::<Result<Vec<_>>>()?;
+
+    let proof_hash = parse_felt(&format!("{:#x}", poseidon_hash_many(&proof_felts)))?;
+    let public_inputs_hash =
+        parse_felt(&format!("{:#x}", poseidon_hash_many(&public_inputs_felts)))?;
+    let action_calldata_hash =
+        parse_felt(&format!("{:#x}", poseidon_hash_many(&action_calldata_felts)))?;
+
+    let message_hash = parse_felt(&format!(
+        "{:#x}",
+        poseidon_hash_many(&[
+            user_felt,
+            token_felt,
+            amount_low_felt,
+            amount_high_felt,
+            executor_felt,
+            submit_selector,
+            execute_selector,
+            nullifier,
+            commitment,
+            action_selector,
+            nonce,
+            deadline_felt,
+            proof_hash,
+            public_inputs_hash,
+            action_calldata_hash,
+        ])
+    ))?;
+
+    Ok(PreparePrivateExecutionRelayerDraft {
+        user: user_felt.to_string(),
+        token: token_felt.to_string(),
+        amount_low: amount_low_felt.to_string(),
+        amount_high: amount_high_felt.to_string(),
+        signature_selector: signature_selector.to_string(),
+        submit_selector: submit_selector.to_string(),
+        execute_selector: execute_selector.to_string(),
+        nullifier: nullifier.to_string(),
+        commitment: commitment.to_string(),
+        action_selector: action_selector.to_string(),
+        nonce: nonce.to_string(),
+        deadline,
+        proof: payload.proof.clone(),
+        public_inputs: payload.public_inputs.clone(),
+        action_calldata: action_calldata.to_vec(),
+        message_hash: message_hash.to_string(),
+    })
+}
+
 // Reads numeric binding indexes from env and validates they are usable for payload integrity checks.
 fn privacy_binding_index(env_key: &str, default_value: usize) -> Result<usize> {
     let raw = std::env::var(env_key).unwrap_or_else(|_| default_value.to_string());
@@ -936,7 +1202,7 @@ fn privacy_binding_index(env_key: &str, default_value: usize) -> Result<usize> {
 // Parses textual felt lists (comma/newline-delimited) from prover outputs.
 fn parse_hex_string(raw: &str, field_label: &str) -> Result<Vec<String>> {
     let values: Vec<String> = raw
-        .split(|c| c == ',' || c == '\n')
+        .split([',', '\n'])
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .map(ToOwned::to_owned)
