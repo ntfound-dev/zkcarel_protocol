@@ -3008,49 +3008,64 @@ export function FloatingAIAssistant() {
                 title: "Submitting private swap",
                 message: "Submitting hide-mode swap through Starknet relayer pool.",
               })
-              const fundingToken = (AI_TOKEN_ADDRESS_MAP[fromToken] || "").trim()
-              if (!fundingToken) {
-                throw new Error(
-                  `Token address for ${fromToken} is not configured for hide-mode relayer execution.`
-                )
-              }
-              const swapActionCall = onchainCalls.find((call) => call.entrypoint === "execute_swap")
-              if (!swapActionCall) {
-                throw new Error("Unable to build execute_swap calldata for hide relayer path.")
-              }
               const deadline = Math.floor(Date.now() / 1000) + 60 * 20
-              const relayed = await executeHideViaRelayer({
-                flow: "swap",
-                actionCall: swapActionCall,
-                tokenAddress: fundingToken,
-                amount: amountText,
-                tokenDecimals: AI_TOKEN_DECIMALS[fromToken] ?? 18,
-                providerHint,
-                verifier: (privacyPayload.verifier || "garaga").trim() || "garaga",
-                deadline,
-                txContext: {
-                  flow: "swap",
+              if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+                swapResult = await executeSwap({
                   from_token: fromToken,
                   to_token: toToken,
                   amount: amountText,
-                  from_network: "starknet",
-                  to_network: "starknet",
-                },
-              })
-              privacyPayload = relayed.privacyPayload
-              swapResult = await executeSwap({
-                from_token: fromToken,
-                to_token: toToken,
-                amount: amountText,
-                min_amount_out: minAmountOut,
-                slippage,
-                deadline,
-                onchain_tx_hash: relayed.txHash,
-                mode,
-                hide_balance: true,
-                privacy: privacyPayload,
-              })
-              finalTxHash = swapResult.tx_hash || relayed.txHash || ""
+                  min_amount_out: minAmountOut,
+                  slippage,
+                  deadline,
+                  mode,
+                  hide_balance: true,
+                  privacy: privacyPayload,
+                })
+                finalTxHash = swapResult.tx_hash || ""
+              } else {
+                const fundingToken = (AI_TOKEN_ADDRESS_MAP[fromToken] || "").trim()
+                if (!fundingToken) {
+                  throw new Error(
+                    `Token address for ${fromToken} is not configured for hide-mode relayer execution.`
+                  )
+                }
+                const swapActionCall = onchainCalls.find((call) => call.entrypoint === "execute_swap")
+                if (!swapActionCall) {
+                  throw new Error("Unable to build execute_swap calldata for hide relayer path.")
+                }
+                const relayed = await executeHideViaRelayer({
+                  flow: "swap",
+                  actionCall: swapActionCall,
+                  tokenAddress: fundingToken,
+                  amount: amountText,
+                  tokenDecimals: AI_TOKEN_DECIMALS[fromToken] ?? 18,
+                  providerHint,
+                  verifier: (privacyPayload.verifier || "garaga").trim() || "garaga",
+                  deadline,
+                  txContext: {
+                    flow: "swap",
+                    from_token: fromToken,
+                    to_token: toToken,
+                    amount: amountText,
+                    from_network: "starknet",
+                    to_network: "starknet",
+                  },
+                })
+                privacyPayload = relayed.privacyPayload
+                swapResult = await executeSwap({
+                  from_token: fromToken,
+                  to_token: toToken,
+                  amount: amountText,
+                  min_amount_out: minAmountOut,
+                  slippage,
+                  deadline,
+                  onchain_tx_hash: relayed.txHash,
+                  mode,
+                  hide_balance: true,
+                  privacy: privacyPayload,
+                })
+                finalTxHash = swapResult.tx_hash || relayed.txHash || ""
+              }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error ?? "")
               throw new Error(
