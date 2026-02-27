@@ -596,6 +596,13 @@ const formatTokenAmount = (value: number, maxFractionDigits = 8) => {
   })
 }
 
+const shortenAddress = (addr?: string | null) => {
+  const value = (addr || "").trim()
+  if (!value) return "-"
+  if (value.length <= 14) return value
+  return `${value.slice(0, 8)}...${value.slice(-6)}`
+}
+
 const formatRemainingDuration = (remainingMs: number) => {
   const totalSec = Math.max(0, Math.ceil(remainingMs / 1000))
   const hours = Math.floor(totalSec / 3600)
