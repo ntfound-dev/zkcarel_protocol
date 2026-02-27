@@ -1321,7 +1321,7 @@ export function TradingInterface() {
       setHasTradePrivacyPayload(true)
       return cachedPayload
     }
-    const recipientForPayload = (receiveAddress || preferredReceiveAddress).trim() || undefined
+    const recipientForPayload = (receiveAddress || "").trim() || undefined
 
     if (autoPrivacyPayloadPromiseRef.current) {
       return autoPrivacyPayloadPromiseRef.current
@@ -1458,7 +1458,6 @@ export function TradingInterface() {
     fromToken.symbol,
     hideStrkDenomEnabled,
     notifications,
-    preferredReceiveAddress,
     receiveAddress,
     selectedHideStrkDenom.id,
     toToken.network,
