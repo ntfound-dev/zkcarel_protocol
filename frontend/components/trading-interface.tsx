@@ -3483,10 +3483,7 @@ export function TradingInterface() {
         const recipient = (receiveAddress || preferredReceiveAddress).trim() || undefined
         const submittedPrivacyPayload =
           effectiveHideBalance ? loadTradePrivacyPayload() || tradePrivacyPayload : undefined
-        const isV3HidePayload =
-          effectiveHideBalance &&
-          (((submittedPrivacyPayload?.note_version || "").trim().toLowerCase() === "v3") ||
-            HIDE_BALANCE_SHIELDED_POOL_V3)
+        const swapRequestRecipient = effectiveHideBalance ? undefined : recipient
         let response: Awaited<ReturnType<typeof executeSwap>>
         let finalTxHash: string | undefined
 
@@ -3505,7 +3502,7 @@ export function TradingInterface() {
                 min_amount_out: minAmountOut,
                 slippage: slippageValue,
                 deadline,
-                recipient: isV3HidePayload ? undefined : recipient,
+                recipient: swapRequestRecipient,
                 mode: mevProtection ? "private" : "transparent",
                 hide_balance: true,
                 privacy: submittedPrivacyPayload,
@@ -3587,7 +3584,7 @@ export function TradingInterface() {
                 min_amount_out: minAmountOut,
                 slippage: slippageValue,
                 deadline,
-                recipient: isV3HidePayload ? undefined : recipient,
+                recipient: swapRequestRecipient,
                 onchain_tx_hash: relayed.txHash,
                 mode: mevProtection ? "private" : "transparent",
                 hide_balance: true,
@@ -3646,7 +3643,7 @@ export function TradingInterface() {
             min_amount_out: minAmountOut,
             slippage: slippageValue,
             deadline,
-            recipient: isV3HidePayload ? undefined : recipient,
+            recipient: swapRequestRecipient,
             onchain_tx_hash: onchainTxHash || undefined,
             mode: mevProtection ? "private" : "transparent",
             hide_balance: effectiveHideBalance,

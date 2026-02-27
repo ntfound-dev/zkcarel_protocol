@@ -1596,9 +1596,14 @@ export async function executeSwap(payload: {
   privacy?: PrivacyVerificationPayload
   mode: string
 }) {
+  const isHideV3Request =
+    payload.hide_balance === true &&
+    ((payload.privacy?.note_version || "").trim().toLowerCase() === "v3")
+  const sanitizedPayload = isHideV3Request ? { ...payload, recipient: undefined } : payload
+
   return apiFetch<ExecuteSwapResponse>("/api/v1/swap/execute", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(sanitizedPayload),
     context: "Swap execute",
     suppressErrorNotification: true,
     timeoutMs: 120000,
