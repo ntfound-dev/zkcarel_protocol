@@ -3319,81 +3319,98 @@ export function TradingInterface() {
             message: "Submitting hide-mode swap through Starknet relayer pool.",
           })
           try {
-            const fromTokenAddress = resolveTokenAddress(fromToken.symbol).trim()
-            if (!fromTokenAddress) {
-              throw new Error(
-                `Token address for ${fromToken.symbol} is not configured for hide-mode relayer execution.`
-              )
-            }
-            const currentCalls =
-              quote?.type === "swap" && Array.isArray(quote.onchainCalls) ? quote.onchainCalls : []
-            let swapActionCall = currentCalls.find((call) => call.entrypoint === "execute_swap")
-            if (!swapActionCall) {
-              const refreshedQuote = await getSwapQuote({
+            if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+              response = await executeSwap({
                 from_token: fromToken.symbol,
                 to_token: toToken.symbol,
                 amount: fromAmount,
+                min_amount_out: minAmountOut,
                 slippage: slippageValue,
+                deadline,
+                recipient,
                 mode: mevProtection ? "private" : "transparent",
+                hide_balance: true,
+                privacy: submittedPrivacyPayload,
               })
-              const refreshedCalls = Array.isArray(refreshedQuote.onchain_calls)
-                ? refreshedQuote.onchain_calls
-                    .filter(
-                      (call) =>
-                        call &&
-                        typeof call.contract_address === "string" &&
-                        typeof call.entrypoint === "string" &&
-                        Array.isArray(call.calldata)
-                    )
-                    .map((call) => ({
-                      contractAddress: call.contract_address.trim(),
-                      entrypoint: call.entrypoint.trim(),
-                      calldata: call.calldata.map((item) => String(item)),
-                    }))
-                : []
-              swapActionCall = refreshedCalls.find((call) => call.entrypoint === "execute_swap")
-            }
-            if (!swapActionCall) {
-              throw new Error("Unable to build execute_swap calldata for hide relayer path.")
-            }
+              finalTxHash = response.tx_hash
+              submittedSwapTxHash = response.tx_hash || null
+            } else {
+              const fromTokenAddress = resolveTokenAddress(fromToken.symbol).trim()
+              if (!fromTokenAddress) {
+                throw new Error(
+                  `Token address for ${fromToken.symbol} is not configured for hide-mode relayer execution.`
+                )
+              }
+              const currentCalls =
+                quote?.type === "swap" && Array.isArray(quote.onchainCalls) ? quote.onchainCalls : []
+              let swapActionCall = currentCalls.find((call) => call.entrypoint === "execute_swap")
+              if (!swapActionCall) {
+                const refreshedQuote = await getSwapQuote({
+                  from_token: fromToken.symbol,
+                  to_token: toToken.symbol,
+                  amount: fromAmount,
+                  slippage: slippageValue,
+                  mode: mevProtection ? "private" : "transparent",
+                })
+                const refreshedCalls = Array.isArray(refreshedQuote.onchain_calls)
+                  ? refreshedQuote.onchain_calls
+                      .filter(
+                        (call) =>
+                          call &&
+                          typeof call.contract_address === "string" &&
+                          typeof call.entrypoint === "string" &&
+                          Array.isArray(call.calldata)
+                      )
+                      .map((call) => ({
+                        contractAddress: call.contract_address.trim(),
+                        entrypoint: call.entrypoint.trim(),
+                        calldata: call.calldata.map((item) => String(item)),
+                      }))
+                  : []
+                swapActionCall = refreshedCalls.find((call) => call.entrypoint === "execute_swap")
+              }
+              if (!swapActionCall) {
+                throw new Error("Unable to build execute_swap calldata for hide relayer path.")
+              }
 
-            const relayed = await executeHideViaRelayer({
-              flow: "swap",
-              actionCall: swapActionCall,
-              tokenAddress: fromTokenAddress,
-              amount: fromAmount,
-              tokenDecimals: TOKEN_DECIMALS[fromToken.symbol.toUpperCase()] ?? 18,
-              providerHint: starknetProviderHint,
-              verifier: (submittedPrivacyPayload?.verifier || "garaga").trim() || "garaga",
-              deadline,
-              txContext: {
+              const relayed = await executeHideViaRelayer({
                 flow: "swap",
+                actionCall: swapActionCall,
+                tokenAddress: fromTokenAddress,
+                amount: fromAmount,
+                tokenDecimals: TOKEN_DECIMALS[fromToken.symbol.toUpperCase()] ?? 18,
+                providerHint: starknetProviderHint,
+                verifier: (submittedPrivacyPayload?.verifier || "garaga").trim() || "garaga",
+                deadline,
+                txContext: {
+                  flow: "swap",
+                  from_token: fromToken.symbol,
+                  to_token: toToken.symbol,
+                  amount: fromAmount,
+                  recipient,
+                  from_network: fromToken.network,
+                  to_network: toToken.network,
+                },
+              })
+              persistTradePrivacyPayload(relayed.privacyPayload)
+              setHasTradePrivacyPayload(true)
+
+              response = await executeSwap({
                 from_token: fromToken.symbol,
                 to_token: toToken.symbol,
                 amount: fromAmount,
+                min_amount_out: minAmountOut,
+                slippage: slippageValue,
+                deadline,
                 recipient,
-                from_network: fromToken.network,
-                to_network: toToken.network,
-              },
-            })
-            persistTradePrivacyPayload(relayed.privacyPayload)
-            setHasTradePrivacyPayload(true)
-
-            response = await executeSwap({
-              from_token: fromToken.symbol,
-              to_token: toToken.symbol,
-              amount: fromAmount,
-              min_amount_out: minAmountOut,
-              slippage: slippageValue,
-              deadline,
-              recipient,
-              onchain_tx_hash: relayed.txHash,
-              mode: mevProtection ? "private" : "transparent",
-              hide_balance: true,
-              privacy: relayed.privacyPayload,
-            })
-            finalTxHash = response.tx_hash
-            submittedSwapTxHash = response.tx_hash || relayed.txHash || null
+                onchain_tx_hash: relayed.txHash,
+                mode: mevProtection ? "private" : "transparent",
+                hide_balance: true,
+                privacy: relayed.privacyPayload,
+              })
+              finalTxHash = response.tx_hash
+              submittedSwapTxHash = response.tx_hash || relayed.txHash || null
+            }
             if (finalTxHash) {
               notifications.addNotification({
                 type: "info",

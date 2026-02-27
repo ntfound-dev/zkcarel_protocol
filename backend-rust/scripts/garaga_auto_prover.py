@@ -120,6 +120,42 @@ def parse_json_array_file(path: Path, expected_key: str | None = None) -> list[s
     return [to_hex_felt(item) for item in payload]
 
 
+def _looks_like_groth16_proof_dict(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    keys = {str(key).strip().lower() for key in value.keys()}
+    has_a = "a" in keys or "pi_a" in keys or "ar" in keys
+    has_b = "b" in keys or "pi_b" in keys or "bs" in keys
+    has_c = "c" in keys or "pi_c" in keys or "krs" in keys
+    return has_a and has_b and has_c
+
+
+def validate_proof_json_file(path: Path) -> None:
+    if not path.exists():
+        fail(f"File not found: {path}")
+    try:
+        obj = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        fail(f"Invalid JSON in {path}: {exc}")
+
+    # Legacy bridge format: direct array or object field that already contains felt array.
+    if isinstance(obj, list) and obj:
+        return
+    if isinstance(obj, dict):
+        proof_value = obj.get("proof")
+        if isinstance(proof_value, list) and proof_value:
+            return
+        # Real Groth16 JSON formats (snarkjs/gnark-like) consumed by `garaga calldata`.
+        if _looks_like_groth16_proof_dict(obj):
+            return
+        if _looks_like_groth16_proof_dict(proof_value):
+            return
+    fail(
+        "Unsupported proof JSON format. Expected felt-array format or a Groth16 proof object "
+        f"(snarkjs/gnark style). file={path}"
+    )
+
+
 def parse_index(name: str, default: int) -> int:
     raw = os.getenv(name, str(default)).strip()
     try:
@@ -497,7 +533,7 @@ def build_payload(stdin_payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_prove_mode() -> None:
-    real_cmd = os.getenv("GARAGA_REAL_PROVER_CMD", "").strip()
+    real_cmd = resolve_real_prover_cmd(os.getenv("GARAGA_REAL_PROVER_CMD", "").strip())
     if not real_cmd:
         fail(
             "Missing GARAGA_REAL_PROVER_CMD for --prove mode. "
@@ -515,10 +551,94 @@ def run_prove_mode() -> None:
 
     proof_path = Path(getenv_required("GARAGA_PROOF_PATH")).expanduser()
     public_inputs_path = Path(getenv_required("GARAGA_PUBLIC_INPUTS_PATH")).expanduser()
-    _ = parse_json_array_file(proof_path, expected_key="proof")
+    validate_proof_json_file(proof_path)
     _ = parse_json_array_file(public_inputs_path, expected_key="public_inputs")
 
     sys.stdout.write(json.dumps({"ok": True}))
+
+
+def run_warmup_mode() -> None:
+    base_timeout_secs = int(os.getenv("GARAGA_TIMEOUT_SECS", "45"))
+    warmup_timeout_raw = os.getenv("GARAGA_WARMUP_TIMEOUT_SECS", "").strip()
+    if warmup_timeout_raw:
+        timeout_secs = int(warmup_timeout_raw)
+    else:
+        timeout_secs = max(base_timeout_secs, 120)
+    uvx_cmd = os.getenv("GARAGA_UVX_CMD", "uvx --python 3.10").strip()
+    system = os.getenv("GARAGA_SYSTEM", "groth16").strip() or "groth16"
+    vk_path = Path(getenv_required("GARAGA_VK_PATH")).expanduser()
+    proof_path = Path(getenv_required("GARAGA_PROOF_PATH")).expanduser()
+    public_inputs_raw = os.getenv("GARAGA_PUBLIC_INPUTS_PATH", "").strip()
+    public_inputs_path = Path(public_inputs_raw).expanduser() if public_inputs_raw else None
+
+    if not vk_path.exists():
+        fail(f"GARAGA warmup skipped: VK not found at {vk_path}")
+    validate_proof_json_file(proof_path)
+    _ = resolve_public_inputs(public_inputs_path=public_inputs_path, proof_path=proof_path)
+
+    calldata = generate_full_proof_with_hints(
+        uvx_cmd=uvx_cmd,
+        system=system,
+        vk_path=vk_path,
+        proof_path=proof_path,
+        public_inputs_path=public_inputs_path,
+        timeout_secs=timeout_secs,
+    )
+    sys.stdout.write(
+        json.dumps(
+            {
+                "ok": True,
+                "warmed": True,
+                "proof_len": len(calldata),
+            }
+        )
+    )
+
+
+def resolve_real_prover_cmd(raw_cmd: str) -> str:
+    cmd = raw_cmd.strip()
+    if not cmd:
+        return cmd
+
+    fallback_candidates = [
+        Path("./garaga-real-prover/prove.py"),
+        Path("backend-rust/garaga-real-prover/prove.py"),
+        Path("/app/garaga-real-prover/prove.py"),
+    ]
+    fallback_path = next(
+        (str(candidate.resolve()) for candidate in fallback_candidates if candidate.is_file()),
+        None,
+    )
+
+    def replace_path_if_missing(path_literal: str) -> None:
+        nonlocal cmd
+        if path_literal not in cmd:
+            return
+        if Path(path_literal).expanduser().is_file():
+            return
+        if not fallback_path:
+            fail(
+                "GARAGA_REAL_PROVER_CMD points to missing prover script path "
+                f"'{path_literal}', and no local fallback was found. "
+                "Set GARAGA_REAL_PROVER_CMD to a valid prove.py location."
+            )
+        print(
+            f"[garaga-auto-prover] GARAGA_REAL_PROVER_CMD path '{path_literal}' not found; "
+            f"using '{fallback_path}'",
+            file=sys.stderr,
+        )
+        cmd = cmd.replace(path_literal, fallback_path)
+
+    for bad_path in (
+        "/PATH/ASLI/garaga-real-prover/prove.py",
+        "/abs/path/to/garaga-real-prover/prove.py",
+        "/opt/garaga-real-prover/prove.py",
+        "./garaga-real-prover/prove.py",
+        "backend-rust/garaga-real-prover/prove.py",
+    ):
+        replace_path_if_missing(bad_path)
+
+    return cmd
 
 
 def run_test_mode() -> None:
@@ -573,8 +693,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--prove", action="store_true")
     parser.add_argument("--test", action="store_true")
+    parser.add_argument("--warmup", action="store_true")
     args, _unknown = parser.parse_known_args()
 
+    if args.warmup:
+        run_warmup_mode()
+        return
     if args.prove:
         run_prove_mode()
         return

@@ -22,6 +22,7 @@ Deploy:
 - `04_deploy_adapters.sh` Deploy adapter dan registry terkait privacy/verifier.
 - `05_deploy_price_oracle.sh` Deploy price oracle.
 - `06_deploy_remaining.sh` Deploy kontrak utama yang tersisa.
+- `deploy_garaga_verifier_windows.ps1` Deploy khusus verifier Garaga real + wiring adapter/router (Windows + WSL helper).
 - `10_redeploy_ai_executor.sh` Redeploy AIExecutor saat perlu upgrade API/ABI.
 - `11_deploy_privacy_intermediary.sh` Deploy `PrivacyIntermediary` + sinkron env FE/BE/SC.
 - `deploy.sh` Shortcut deploy minimal.
@@ -68,3 +69,7 @@ Utilities:
 - Jika dipakai untuk demo runtime frontend/backend, sinkronkan hasil deploy ke:
   - `backend-rust/.env`
   - `frontend/.env.local`
+- Khusus `deploy_garaga_verifier_windows.ps1` mode `-UseWsl`, pastikan path ini valid:
+  - `WslSncastPath` (default: `/home/frend/.asdf/installs/starknet-foundry/0.56.0/bin/sncast`)
+  - `WslScarbPath` (default: `/home/frend/.asdf/installs/scarb/2.11.4/bin/scarb`)
+  - `WslUscPath` (default: `/home/frend/.local/bin/universal-sierra-compiler`)

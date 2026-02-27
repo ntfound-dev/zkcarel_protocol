@@ -247,7 +247,7 @@ Sumber: `smartcontract/.env` (catalog profile).
 | PrivacyRouter (V2) | `PRIVACY_ROUTER_ADDRESS` | `0x0133e0c11f4df0a77d6a3b46e301f402c6fa6817e9a8d79c2dc0cd45f244c364` |
 | VerifierRegistry | `VERIFIER_REGISTRY_ADDRESS` | `0x02e3aa26983b1c9cca8f8092b59eb18ba4877ed27eb6a80b36ef09175f352046` |
 | Garaga Adapter | `GARAGA_ADAPTER_ADDRESS` | `0x07dc2000785cd8a8a1f8435b386d2fdf1a9f2b23c66670ea87bdd59e3c3c2d03` |
-| Garaga Verifier | `GARAGA_VERIFIER_ADDRESS` | `0x0590a20b1dd4780104ddecd64abc7e20e135cc92ac61e449342ead831aadb261` |
+| Garaga Verifier | `GARAGA_VERIFIER_ADDRESS` | `0x04bc6f22779e528785ee27b844b93e92cf92d8ff0b6bed2f9b5cf41ee467ff45` |
 | PrivacyIntermediary | `PRIVACY_INTERMEDIARY_ADDRESS` | `0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab` |
 | ShieldedPoolV2 (Hide Executor) | `PRIVATE_ACTION_EXECUTOR_ADDRESS` | `0x060549e87e71903ffe1e6449aaa1e77d941de1a5117be3beabd0026d847c61fb` |
 | ShieldedVault | `SHIELDED_VAULT_ADDRESS` | `0x07e09754f159ee7bce0b1d297315eea6bb22bc912e92741a7e8c793ef24a6abb` |
@@ -256,6 +256,10 @@ Sumber: `smartcontract/.env` (catalog profile).
 
 Catatan runtime:
 - Untuk jalur bukti MVP aktif (frontend/backend), router yang dipakai saat ini adalah `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f`.
+- Rotasi verifier Garaga terakhir: 27 Feb 2026.
+- Class hash verifier BLS baru: `0x3c304b6fbde499591d6b79b6e3eb525a5673e1de9c02d46c575492065ed996a`.
+- Tx declare: `0x3077ad4d20d1b9acc70fc18af1be0356b3e2c5a803f3ac4b83766523616b51f`.
+- Tx deploy: `0x0261ba1337d96733010f049591f5c65a3f33a080006d76f7dca4de958e8b0b66`.
 
 ### AI
 | Contract | Env Key | Address |
