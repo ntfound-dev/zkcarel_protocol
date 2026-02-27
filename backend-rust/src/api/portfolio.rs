@@ -967,59 +967,96 @@ async fn merge_onchain_holdings(
         .as_ref()
         .and_then(|map| map.get("WBTC").copied().flatten());
 
-    if starknet_strk.is_none() {
-        if let (Some(addr), Some(token)) =
-            (starknet_address.as_deref(), starknet_strk_token.as_deref())
-        {
-            starknet_strk = fetch_optional_balance_with_timeout(
-                "starknet STRK fallback",
-                fetch_starknet_erc20_balance(&state.config, addr, token),
-            )
-            .await;
+    if let Some(addr) = starknet_address.as_deref() {
+        let strk_fallback_fut = async {
+            if starknet_strk.is_none() {
+                if let Some(token) = starknet_strk_token.as_deref() {
+                    return fetch_optional_balance_with_timeout(
+                        "starknet STRK fallback",
+                        fetch_starknet_erc20_balance(&state.config, addr, token),
+                    )
+                    .await;
+                }
+            }
+            None
+        };
+        let carel_fallback_fut = async {
+            if starknet_carel.is_none() {
+                if let Some(token) = starknet_carel_token.as_deref() {
+                    return fetch_optional_balance_with_timeout(
+                        "starknet CAREL fallback",
+                        fetch_starknet_erc20_balance(&state.config, addr, token),
+                    )
+                    .await;
+                }
+            }
+            None
+        };
+        let usdc_fallback_fut = async {
+            if starknet_usdc.is_none() {
+                if let Some(token) = starknet_usdc_token.as_deref() {
+                    return fetch_optional_balance_with_timeout(
+                        "starknet USDC fallback",
+                        fetch_starknet_erc20_balance(&state.config, addr, token),
+                    )
+                    .await;
+                }
+            }
+            None
+        };
+        let usdt_fallback_fut = async {
+            if starknet_usdt.is_none() {
+                if let Some(token) = starknet_usdt_token.as_deref() {
+                    return fetch_optional_balance_with_timeout(
+                        "starknet USDT fallback",
+                        fetch_starknet_erc20_balance(&state.config, addr, token),
+                    )
+                    .await;
+                }
+            }
+            None
+        };
+        let wbtc_fallback_fut = async {
+            if starknet_wbtc.is_none() {
+                if let Some(token) = starknet_wbtc_token.as_deref() {
+                    return fetch_optional_balance_with_timeout(
+                        "starknet WBTC fallback",
+                        fetch_starknet_erc20_balance(&state.config, addr, token),
+                    )
+                    .await;
+                }
+            }
+            None
+        };
+
+        let (
+            strk_fallback,
+            carel_fallback,
+            usdc_fallback,
+            usdt_fallback,
+            wbtc_fallback,
+        ) = tokio::join!(
+            strk_fallback_fut,
+            carel_fallback_fut,
+            usdc_fallback_fut,
+            usdt_fallback_fut,
+            wbtc_fallback_fut
+        );
+
+        if starknet_strk.is_none() {
+            starknet_strk = strk_fallback;
         }
-    }
-    if starknet_carel.is_none() {
-        if let (Some(addr), Some(token)) =
-            (starknet_address.as_deref(), starknet_carel_token.as_deref())
-        {
-            starknet_carel = fetch_optional_balance_with_timeout(
-                "starknet CAREL fallback",
-                fetch_starknet_erc20_balance(&state.config, addr, token),
-            )
-            .await;
+        if starknet_carel.is_none() {
+            starknet_carel = carel_fallback;
         }
-    }
-    if starknet_usdc.is_none() {
-        if let (Some(addr), Some(token)) =
-            (starknet_address.as_deref(), starknet_usdc_token.as_deref())
-        {
-            starknet_usdc = fetch_optional_balance_with_timeout(
-                "starknet USDC fallback",
-                fetch_starknet_erc20_balance(&state.config, addr, token),
-            )
-            .await;
+        if starknet_usdc.is_none() {
+            starknet_usdc = usdc_fallback;
         }
-    }
-    if starknet_usdt.is_none() {
-        if let (Some(addr), Some(token)) =
-            (starknet_address.as_deref(), starknet_usdt_token.as_deref())
-        {
-            starknet_usdt = fetch_optional_balance_with_timeout(
-                "starknet USDT fallback",
-                fetch_starknet_erc20_balance(&state.config, addr, token),
-            )
-            .await;
+        if starknet_usdt.is_none() {
+            starknet_usdt = usdt_fallback;
         }
-    }
-    if starknet_wbtc.is_none() {
-        if let (Some(addr), Some(token)) =
-            (starknet_address.as_deref(), starknet_wbtc_token.as_deref())
-        {
-            starknet_wbtc = fetch_optional_balance_with_timeout(
-                "starknet WBTC fallback",
-                fetch_starknet_erc20_balance(&state.config, addr, token),
-            )
-            .await;
+        if starknet_wbtc.is_none() {
+            starknet_wbtc = wbtc_fallback;
         }
     }
 

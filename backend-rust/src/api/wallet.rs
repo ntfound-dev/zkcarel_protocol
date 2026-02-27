@@ -1225,6 +1225,7 @@ pub(crate) async fn fetch_btc_balance(config: &Config, address: &str) -> Result<
     let unisat_api_key = std::env::var("UNISAT_API_KEY").ok();
     let xverse_api_url = config.xverse_api_url.trim().to_string();
     let xverse_api_key = config.xverse_api_key.clone();
+    let blockstream_enabled = env_flag("BTC_BALANCE_ENABLE_BLOCKSTREAM_TESTNET", false);
 
     let source_priority = if config.is_testnet() {
         let (
@@ -1249,7 +1250,18 @@ pub(crate) async fn fetch_btc_balance(config: &Config, address: &str) -> Result<
             ),
             fetch_btc_balance_from_mempool(&client, "https://mempool.space/testnet4", address),
             fetch_btc_balance_from_mempool(&client, "https://mempool.space/testnet", address),
-            fetch_btc_balance_from_mempool(&client, "https://blockstream.info/testnet", address),
+            async {
+                if blockstream_enabled {
+                    fetch_btc_balance_from_mempool(
+                        &client,
+                        "https://blockstream.info/testnet",
+                        address,
+                    )
+                    .await
+                } else {
+                    None
+                }
+            },
             fetch_btc_balance_from_xverse(
                 &client,
                 &xverse_api_url,
@@ -1423,6 +1435,19 @@ fn json_as_f64(value: &serde_json::Value) -> Option<f64> {
         .as_f64()
         .or_else(|| value.as_i64().map(|v| v as f64))
         .or_else(|| value.as_u64().map(|v| v as f64))
+}
+
+// Internal helper that supports `env_flag` operations.
+fn env_flag(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
 }
 
 // Internal helper that parses or transforms values for `scale_u128`.
