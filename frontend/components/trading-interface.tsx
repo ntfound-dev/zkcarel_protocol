@@ -2706,16 +2706,12 @@ export function TradingInterface() {
       notifications.addNotification({
         type: "info",
         title: "Wallet signature required",
-        message: `Confirm hide note approval ${denomAmountText} ${tokenSymbol}.`,
+        message: `Confirm hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`,
       })
-      await invokeStarknetCallsFromWallet([approvalCall], starknetProviderHint)
-
-      notifications.addNotification({
-        type: "info",
-        title: "Wallet signature required",
-        message: "Confirm hide note deposit transaction.",
-      })
-      const depositTxHash = await invokeStarknetCallsFromWallet([depositCall], starknetProviderHint)
+      const depositTxHash = await invokeStarknetCallsFromWallet(
+        [approvalCall, depositCall],
+        starknetProviderHint
+      )
 
       const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
       persistTradePrivacyPayload({
