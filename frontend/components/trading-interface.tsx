@@ -5111,19 +5111,39 @@ export function TradingInterface() {
                         variant="secondary"
                         className="h-8 text-[11px]"
                         disabled={swapState !== "idle"}
-                        onClick={() => {
+                        onClick={async () => {
+                          const currentPayload = loadTradePrivacyPayload()
+                          const currentCommitment = (
+                            currentPayload?.note_commitment ||
+                            currentPayload?.commitment ||
+                            ""
+                          )
+                            .trim()
+                            .toLowerCase()
+                          const selectedCommitment = noteCommitment.trim().toLowerCase()
+                          const isSameActiveNote =
+                            !!currentCommitment && currentCommitment === selectedCommitment
+                          const currentProof = normalizeHexArray(currentPayload?.proof)
+                          const currentPublicInputs = normalizeHexArray(currentPayload?.public_inputs)
                           persistTradePrivacyPayload({
-                            verifier: "garaga",
+                            verifier:
+                              (currentPayload?.verifier || "garaga").trim() || "garaga",
                             note_version: "v3",
                             executor_address:
                               note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
                             note_commitment: noteCommitment,
                             commitment: noteCommitment,
-                            nullifier: note.nullifier,
+                            nullifier: note.nullifier || currentPayload?.nullifier,
                             denom_id: note.denom_id,
                             spendable_at_unix: note.spendable_at_unix,
-                            proof: [],
-                            public_inputs: [],
+                            root:
+                              (currentPayload?.root || "").trim() ||
+                              inferV3RootFromPublicInputs(currentPublicInputs),
+                            proof: isSameActiveNote && currentProof.length > 0 ? currentProof : undefined,
+                            public_inputs:
+                              isSameActiveNote && currentPublicInputs.length > 0
+                                ? currentPublicInputs
+                                : undefined,
                           })
                           setHasTradePrivacyPayload(true)
                           notifications.addNotification({
@@ -5132,7 +5152,18 @@ export function TradingInterface() {
                             message:
                               "Active note diganti ke pending note terpilih. Lanjut Execute Private Swap.",
                           })
-                          void resolveHideBalancePrivacyPayload()
+                          try {
+                            await resolveHideBalancePrivacyPayload()
+                          } catch (error) {
+                            notifications.addNotification({
+                              type: "warning",
+                              title: "Hide note selected",
+                              message:
+                                error instanceof Error
+                                  ? `Payload refresh akan dilanjutkan saat Execute: ${error.message}`
+                                  : "Payload refresh akan dilanjutkan saat Execute.",
+                            })
+                          }
                         }}
                       >
                         Use For Swap
