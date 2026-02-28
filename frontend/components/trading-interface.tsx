@@ -331,6 +331,15 @@ const normalizeHexArray = (value: unknown): string[] => {
     .filter((item) => item.length > 0)
 }
 
+const inferHideStrkDenomIdFromAmount = (amountText: string): string | undefined => {
+  const parsed = Number.parseFloat((amountText || "").trim())
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined
+  const matched = HIDE_STRK_DENOM_OPTIONS.find(
+    (option) => Math.abs(Number.parseFloat(option.amount) - parsed) < 1e-9
+  )
+  return matched?.id
+}
+
 const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
   if (typeof window === "undefined") return undefined
   const raw = window.localStorage.getItem(TRADE_PRIVACY_PAYLOAD_KEY)
@@ -1294,6 +1303,11 @@ export function TradingInterface() {
   const selectedHideStrkDenom =
     HIDE_STRK_DENOM_OPTIONS.find((option) => option.id === hideStrkDenomId) ||
     HIDE_STRK_DENOM_OPTIONS[0]
+  const inferredHideDenomId = React.useMemo(() => {
+    if (fromToken.symbol.toUpperCase() !== "STRK") return undefined
+    if (hideStrkDenomEnabled) return selectedHideStrkDenom.id
+    return inferHideStrkDenomIdFromAmount(fromAmount)
+  }, [fromAmount, fromToken.symbol, hideStrkDenomEnabled, selectedHideStrkDenom.id])
   
   // Settings state
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -1372,7 +1386,7 @@ export function TradingInterface() {
             from_network: fromToken.network,
             to_network: toToken.network,
             note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
-            denom_id: hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined,
+            denom_id: inferredHideDenomId,
           },
         })
         const payload: PrivacyVerificationPayload = {
@@ -1385,7 +1399,7 @@ export function TradingInterface() {
           note_commitment: response.payload?.note_commitment?.trim() || undefined,
           denom_id:
             response.payload?.denom_id?.trim() ||
-            (hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined),
+            inferredHideDenomId,
           spendable_at_unix:
             typeof response.payload?.spendable_at_unix === "number" &&
             Number.isFinite(response.payload.spendable_at_unix)
@@ -1463,10 +1477,9 @@ export function TradingInterface() {
     fromAmount,
     fromToken.network,
     fromToken.symbol,
-    hideStrkDenomEnabled,
+    inferredHideDenomId,
     notifications,
     receiveAddress,
-    selectedHideStrkDenom.id,
     toToken.network,
     toToken.symbol,
     wallet.isConnected,
@@ -2480,7 +2493,7 @@ export function TradingInterface() {
                 note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
                 denom_id:
                   resolvedPayload?.denom_id ||
-                  (hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined),
+                  inferredHideDenomId,
                 note_commitment: resolvedPayload?.note_commitment,
                 spendable_at_unix: resolvedPayload?.spendable_at_unix,
                 nullifier: resolvedPayload?.nullifier,
@@ -2499,7 +2512,7 @@ export function TradingInterface() {
               note_commitment: preparedPrivate.payload?.note_commitment?.trim() || undefined,
               denom_id:
                 preparedPrivate.payload?.denom_id?.trim() ||
-                (hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined),
+                inferredHideDenomId,
               spendable_at_unix:
                 typeof preparedPrivate.payload?.spendable_at_unix === "number" &&
                 Number.isFinite(preparedPrivate.payload.spendable_at_unix)
@@ -2656,7 +2669,9 @@ export function TradingInterface() {
 
       const denomId = (
         payload.denom_id ||
-        (hideStrkDenomEnabled ? selectedHideStrkDenom.id : "")
+        inferredHideDenomId ||
+        inferHideStrkDenomIdFromAmount(fromAmount) ||
+        ""
       ).trim()
       if (!denomId) {
         throw new Error("Hide denom_id missing in privacy payload.")
@@ -2716,9 +2731,8 @@ export function TradingInterface() {
     [
       fromAmount,
       fromToken.symbol,
-      hideStrkDenomEnabled,
+      inferredHideDenomId,
       notifications,
-      selectedHideStrkDenom.id,
       starknetProviderHint,
     ]
   )
@@ -3664,7 +3678,7 @@ export function TradingInterface() {
                   note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
                   denom_id:
                     submittedPrivacyPayload?.denom_id ||
-                    (hideStrkDenomEnabled ? selectedHideStrkDenom.id : undefined),
+                    inferredHideDenomId,
                   note_commitment: submittedPrivacyPayload?.note_commitment,
                   spendable_at_unix: submittedPrivacyPayload?.spendable_at_unix,
                   nullifier: submittedPrivacyPayload?.nullifier,
