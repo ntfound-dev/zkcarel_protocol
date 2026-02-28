@@ -3714,17 +3714,19 @@ export function TradingInterface() {
                 "Backend relayer hide-mode belum aktif (masih minta onchain_tx_hash). Set HIDE_BALANCE_RELAYER_POOL_ENABLED=true lalu restart backend."
               )
             }
+            const noteDepositPayload =
+              submittedPrivacyPayload || tradePrivacyPayload || loadTradePrivacyPayload()
             const payloadLooksV3 =
-              (submittedPrivacyPayload?.note_version || "").trim().toLowerCase() === "v3"
+              (noteDepositPayload?.note_version || "").trim().toLowerCase() === "v3"
             if (
               (HIDE_BALANCE_SHIELDED_POOL_V3 ||
                 payloadLooksV3 ||
                 /hide balance v3/i.test(message)) &&
               /note belum terdaftar/i.test(message) &&
-              submittedPrivacyPayload
+              noteDepositPayload
             ) {
               try {
-                const spendableAtUnix = await ensureHideV3NoteDeposited(submittedPrivacyPayload)
+                const spendableAtUnix = await ensureHideV3NoteDeposited(noteDepositPayload)
                 const remainingMs = Math.max(0, spendableAtUnix * 1000 - Date.now())
                 throw new Error(
                   `Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
