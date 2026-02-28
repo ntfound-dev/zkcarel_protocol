@@ -176,6 +176,7 @@ Minimum required groups:
   - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
   - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
   - `HIDE_BALANCE_MIN_NOTE_AGE_SECS=3600`
+  - `HIDE_BALANCE_MAX_USES_PER_DAY=3` (0 untuk tanpa limit harian)
   - `ZK_PRIVACY_ROUTER_ADDRESS`
 
 Recommended optional:
