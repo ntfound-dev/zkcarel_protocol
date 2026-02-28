@@ -239,11 +239,26 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onEvent("auth:expired", () => {
+    const unsubscribe = onEvent("auth:expired", (payload?: unknown) => {
+      const currentToken =
+        wallet.token ||
+        (typeof window !== "undefined"
+          ? window.localStorage.getItem(STORAGE_KEYS.token)
+          : null)
+      const eventToken =
+        payload &&
+        typeof payload === "object" &&
+        "token" in payload &&
+        typeof (payload as { token?: unknown }).token === "string"
+          ? ((payload as { token?: string }).token || "").trim()
+          : ""
+      if (eventToken && currentToken && eventToken !== currentToken) {
+        return
+      }
       resetWalletSession()
     })
     return () => unsubscribe()
-  }, [resetWalletSession])
+  }, [resetWalletSession, wallet.token])
 
   useEffect(() => {
     portfolioBalanceHintRef.current = { ...wallet.balance }
@@ -410,11 +425,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // after a fresh outgoing BTC transaction.
       if (wallet.btcAddress) {
         let directBtcBalance: number | null = null
-        const injectedBtc =
-          getInjectedBtc(wallet.btcProvider || "unisat") ||
-          getInjectedBtc("unisat") ||
-          getInjectedBtc("xverse") ||
-          getInjectedBtc("braavos_btc")
+        const shouldUseInjectedBtc =
+          wallet.network === "bitcoin" &&
+          !!wallet.btcProvider
+        const injectedBtc = shouldUseInjectedBtc
+          ? getInjectedBtc(wallet.btcProvider || "unisat")
+          : null
         if (injectedBtc) {
           directBtcBalance = await fetchBtcBalance(injectedBtc, wallet.btcAddress)
           if (typeof directBtcBalance === "number" && Number.isFinite(directBtcBalance)) {
@@ -1048,15 +1064,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
 
     let btcBalance: number | null = null
-    const injected =
-      getInjectedBtc("braavos_btc") ||
-      getInjectedBtc("xverse") ||
-      getInjectedBtc("unisat")
+    const shouldUseInjectedBtc =
+      wallet.network === "bitcoin" &&
+      !!wallet.btcProvider
+    const injected = shouldUseInjectedBtc
+      ? getInjectedBtc(wallet.btcProvider || "unisat")
+      : null
     if (injected) {
       btcBalance = await fetchBtcBalance(injected, btcAddress)
       if (btcBalance === null) {
         btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
       }
+      if (btcBalance === null) {
+        btcBalance = 0
+      }
+    } else {
+      btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
       if (btcBalance === null) {
         btcBalance = 0
       }

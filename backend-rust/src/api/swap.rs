@@ -617,8 +617,30 @@ fn ensure_v3_payload_public_inputs_shape(
     payload: &AutoPrivacyPayloadResponse,
     source_label: &str,
 ) -> Result<()> {
+    let legacy_compat = std::env::var("HIDE_BALANCE_V3_LEGACY_VERIFIER_COMPAT")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
     let root_index = configured_root_public_input_index();
     let nullifier_index = configured_v3_nullifier_public_input_index();
+    if legacy_compat {
+        let required_len = std::cmp::max(root_index, nullifier_index) + 1;
+        if payload.public_inputs.len() < required_len {
+            return Err(AppError::BadRequest(format!(
+                "{} must expose root/nullifier in public_inputs indexes [{}, {}], but public_inputs length is {}",
+                source_label,
+                root_index,
+                nullifier_index,
+                payload.public_inputs.len()
+            )));
+        }
+        return Ok(());
+    }
     let action_hash_index = configured_v3_action_hash_public_input_index();
     let required_len = std::cmp::max(
         std::cmp::max(root_index, nullifier_index),

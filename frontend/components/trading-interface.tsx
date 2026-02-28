@@ -5294,6 +5294,18 @@ export function TradingInterface() {
                             proof: selectedProof,
                             public_inputs: selectedPublicInputs,
                           })
+                          const selectedTokenSymbol = (note.token_symbol || "").trim().toUpperCase()
+                          const currentFromSymbol = fromToken.symbol.toUpperCase()
+                          const selectedAmountText = (note.amount || "").trim()
+                          if (
+                            selectedAmountText &&
+                            (!selectedTokenSymbol || selectedTokenSymbol === currentFromSymbol)
+                          ) {
+                            setFromAmount(selectedAmountText)
+                          }
+                          if (currentFromSymbol === "STRK" && (note.denom_id || "").trim()) {
+                            setHideStrkDenomId((note.denom_id || "").trim())
+                          }
                           setHasTradePrivacyPayload(true)
                           notifications.addNotification({
                             type: "info",

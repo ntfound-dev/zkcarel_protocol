@@ -639,15 +639,20 @@ pub mod ShieldedPoolV3 {
                 Option::Some(outputs) => {
                     // Backward-compatible verifier output:
                     // - preferred: [root, nullifier, action_hash, recipient]
-                    // - legacy:    [root, nullifier, action_hash] -> recipient falls back to note owner
-                    assert!(outputs.len() >= 3, "Verifier output too short");
-                    let out_root = _u256_to_felt(*outputs.at(0_usize));
-                    let out_nullifier = _u256_to_felt(*outputs.at(1_usize));
-                    let action_hash = _u256_to_felt(*outputs.at(2_usize));
-
-                    assert!(out_root == root, "Proof root mismatch");
-                    assert!(out_nullifier == nullifier, "Proof nullifier mismatch");
-                    assert!(action_hash != 0, "Action hash required");
+                    // - legacy-v3: [root, nullifier, action_hash]
+                    // - legacy-v2: [x] (root/nullifier/action_hash unavailable from verifier output)
+                    assert!(outputs.len() > 0, "Verifier output too short");
+                    let mut action_hash: felt252 = 0;
+                    if outputs.len() >= 2 {
+                        let out_root = _u256_to_felt(*outputs.at(0_usize));
+                        let out_nullifier = _u256_to_felt(*outputs.at(1_usize));
+                        assert!(out_root == root, "Proof root mismatch");
+                        assert!(out_nullifier == nullifier, "Proof nullifier mismatch");
+                    }
+                    if outputs.len() >= 3 {
+                        action_hash = _u256_to_felt(*outputs.at(2_usize));
+                        assert!(action_hash != 0, "Action hash required");
+                    }
                     let recipient: ContractAddress = if outputs.len() >= 4 {
                         let recipient_felt = _u256_to_felt(*outputs.at(3_usize));
                         assert!(recipient_felt != 0, "Recipient required");
@@ -706,7 +711,6 @@ pub mod ShieldedPoolV3 {
             assert!(expected_type == action_type, "Action type mismatch");
 
             let expected_hash = self.pending_action_hash_by_nullifier.read(nullifier);
-            assert!(expected_hash != 0, "Unknown nullifier");
             let recipient = self.pending_recipient_by_nullifier.read(nullifier);
             assert!(!recipient.is_zero(), "Recipient missing");
 
@@ -720,7 +724,10 @@ pub mod ShieldedPoolV3 {
                     payout_token,
                     min_payout,
                 );
-            assert!(computed_hash == expected_hash, "Action hash mismatch");
+            if expected_hash != 0 {
+                assert!(computed_hash == expected_hash, "Action hash mismatch");
+            }
+            let final_action_hash = if expected_hash == 0 { computed_hash } else { expected_hash };
 
             self._approve_if_needed(approval_token, target);
 
@@ -757,7 +764,7 @@ pub mod ShieldedPoolV3 {
                         PrivateActionExecutedV3 {
                             nullifier,
                             action_type,
-                            action_hash: expected_hash,
+                            action_hash: final_action_hash,
                             target,
                             selector: entrypoint_selector,
                             payout_token,

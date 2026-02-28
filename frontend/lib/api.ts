@@ -880,7 +880,7 @@ function isInvalidOrExpiredAuth(status: number, message: string, hasAuthorizatio
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-function emitAuthExpired(message: string, path: string) {
+function emitAuthExpired(message: string, path: string, token?: string | null) {
   const now = Date.now()
   if (now - lastAuthExpiredEmitAt < AUTH_EXPIRED_EMIT_DEDUPE_MS) return
   lastAuthExpiredEmitAt = now
@@ -888,6 +888,7 @@ function emitAuthExpired(message: string, path: string) {
     reason: "invalid_or_expired_token",
     message,
     path,
+    token: token || null,
   })
 }
 
@@ -959,6 +960,25 @@ async function refreshTokenOnce(refreshToken: string): Promise<string | null> {
  * @remarks Applies auth token headers, timeout handling, retry policy, and normalized API errors.
  */
 async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T> {
+  if (typeof window !== "undefined") {
+    const isRemotePage =
+      window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1"
+    const isLocalBackendFallback =
+      API_BASE_URL.startsWith("http://localhost:") ||
+      API_BASE_URL.startsWith("https://localhost:") ||
+      API_BASE_URL.startsWith("http://127.0.0.1:") ||
+      API_BASE_URL.startsWith("https://127.0.0.1:")
+    if (isRemotePage && isLocalBackendFallback) {
+      throw new ApiError(
+        "Frontend production masih pakai localhost backend. Set NEXT_PUBLIC_BACKEND_URL/NEXT_PUBLIC_BACKEND_WS_URL ke URL backend publik (mis. ngrok), lalu redeploy Vercel.",
+        {
+          code: "BACKEND_URL_MISCONFIG",
+          path,
+          method: init.method || "GET",
+        }
+      )
+    }
+  }
   const {
     timeoutMs = DEFAULT_TIMEOUT_MS,
     context,
@@ -1040,7 +1060,11 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
 
       if (isAuthExpired) {
         clearStoredAuthToken()
-        emitAuthExpired(message, path)
+        emitAuthExpired(
+          message,
+          path,
+          tokenFromAuthorizationHeader(headers.get("Authorization"))
+        )
       }
 
       const error = new ApiError(message, {
