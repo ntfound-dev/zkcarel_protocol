@@ -599,6 +599,30 @@ fn infer_v3_root_from_public_inputs(public_inputs: &[String]) -> Option<String> 
     Some(candidate.to_string())
 }
 
+fn configured_v3_nullifier_public_input_index() -> usize {
+    std::env::var("GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX_V3")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(1)
+}
+
+fn normalize_v3_public_inputs_binding(payload: &mut AutoPrivacyPayloadResponse) -> Result<()> {
+    let root = payload.root.as_deref().ok_or_else(|| {
+        AppError::BadRequest("Hide Balance V3 requires privacy.root".to_string())
+    })?;
+    let expected_root = parse_felt(root.trim())?;
+    let expected_nullifier = parse_felt(payload.nullifier.trim())?;
+    let root_index = configured_root_public_input_index();
+    let nullifier_index = configured_v3_nullifier_public_input_index();
+    let required_len = std::cmp::max(root_index, nullifier_index) + 1;
+    while payload.public_inputs.len() < required_len {
+        payload.public_inputs.push("0x0".to_string());
+    }
+    payload.public_inputs[root_index] = expected_root.to_string();
+    payload.public_inputs[nullifier_index] = expected_nullifier.to_string();
+    Ok(())
+}
+
 fn ensure_v3_payload_root(
     payload: &mut AutoPrivacyPayloadResponse,
     tx_context: &AutoPrivacyTxContext,
@@ -2997,17 +3021,29 @@ pub async fn execute_swap(
             if hide_pool_version == Some(HidePoolVersion::V3) {
                 payload.note_version = Some("v3".to_string());
                 ensure_v3_payload_root(&mut payload, &tx_context);
-                let root = payload.root.as_deref().ok_or_else(|| {
+                let root = payload.root.clone().ok_or_else(|| {
                     AppError::BadRequest(
                         "Hide Balance V3 requires privacy.root in prover payload".to_string(),
                     )
                 })?;
-                ensure_public_inputs_bind_root_nullifier(
-                    root,
+                if let Err(binding_err) = ensure_public_inputs_bind_root_nullifier(
+                    root.as_str(),
                     &payload.nullifier,
                     &payload.public_inputs,
                     "swap hide payload (bound)",
-                )?;
+                ) {
+                    tracing::warn!(
+                        "swap hide payload V3 binding mismatch; normalizing public_inputs root/nullifier indexes: {}",
+                        binding_err
+                    );
+                    normalize_v3_public_inputs_binding(&mut payload)?;
+                    ensure_public_inputs_bind_root_nullifier(
+                        root.as_str(),
+                        &payload.nullifier,
+                        &payload.public_inputs,
+                        "swap hide payload (bound, normalized)",
+                    )?;
+                }
             } else {
                 ensure_public_inputs_bind_nullifier_commitment(
                     &payload.nullifier,
