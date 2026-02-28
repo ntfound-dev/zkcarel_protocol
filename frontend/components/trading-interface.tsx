@@ -2775,8 +2775,19 @@ export function TradingInterface() {
   )
 
   const handleCancelHideNoteWithdraw = React.useCallback(async () => {
-    if (!hideBalanceOnchain || !HIDE_BALANCE_SHIELDED_POOL_V3) return
     const payload = loadTradePrivacyPayload()
+    const payloadIsV3 =
+      ((payload?.note_version || "").trim().toLowerCase() === "v3") ||
+      HIDE_BALANCE_SHIELDED_POOL_V3
+    if (!hideBalanceOnchain || !payloadIsV3) {
+      notifications.addNotification({
+        type: "warning",
+        title: "Withdraw unavailable",
+        message:
+          "Cancel & Withdraw hanya aktif untuk note Hide Balance V3 yang sedang aktif.",
+      })
+      return
+    }
     if (!payload) {
       notifications.addNotification({
         type: "warning",
