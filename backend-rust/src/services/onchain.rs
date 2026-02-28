@@ -800,18 +800,38 @@ pub fn parse_chain_id(chain_id: &str) -> Result<Felt> {
 /// # Notes
 /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn parse_felt(value: &str) -> Result<Felt> {
-    let trimmed = value.trim();
+    let trimmed = value.trim().trim_matches('"').trim_matches('\'');
     if trimmed.is_empty() {
         return Err(crate::error::AppError::Internal(
             "Empty field element".to_string(),
         ));
     }
-    if trimmed.starts_with("0x") {
-        return Felt::from_hex(trimmed)
-            .map_err(|e| crate::error::AppError::Internal(format!("Invalid felt hex: {}", e)));
+    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+        let normalized = if trimmed.starts_with("0X") {
+            format!("0x{}", &trimmed[2..])
+        } else {
+            trimmed.to_string()
+        };
+        return Felt::from_hex(&normalized).map_err(|e| {
+            crate::error::AppError::Internal(format!(
+                "Invalid felt hex '{}': {}",
+                normalized, e
+            ))
+        });
     }
-    Felt::from_dec_str(trimmed)
-        .map_err(|e| crate::error::AppError::Internal(format!("Invalid felt dec: {}", e)))
+    // Some payload producers return hex without `0x` prefix.
+    if trimmed.chars().any(|ch| ch.is_ascii_alphabetic())
+        && trimmed.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        let normalized = format!("0x{}", trimmed);
+        if let Ok(parsed) = Felt::from_hex(&normalized) {
+            return Ok(parsed);
+        }
+    }
+    let dec = trimmed.replace('_', "");
+    Felt::from_dec_str(&dec).map_err(|e| {
+        crate::error::AppError::Internal(format!("Invalid felt dec '{}': {}", trimmed, e))
+    })
 }
 
 /// Handles `felt_to_u128` logic.
