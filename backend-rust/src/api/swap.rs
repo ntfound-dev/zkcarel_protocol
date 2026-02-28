@@ -627,16 +627,8 @@ fn ensure_v3_payload_root(
     payload: &mut AutoPrivacyPayloadResponse,
     tx_context: &AutoPrivacyTxContext,
 ) {
-    let has_root = payload
-        .root
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some();
-    if has_root {
-        return;
-    }
-
+    // For V3 spend flows, always prefer the executor on-chain root captured in tx_context.
+    // This prevents stale/off-by-one roots from cached frontend payloads or prover output.
     if let Some(root) = tx_context
         .root
         .as_deref()
@@ -644,6 +636,16 @@ fn ensure_v3_payload_root(
         .filter(|value| !value.is_empty())
     {
         payload.root = Some(root.to_string());
+        return;
+    }
+
+    let has_root = payload
+        .root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    if has_root {
         return;
     }
 
