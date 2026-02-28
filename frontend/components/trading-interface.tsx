@@ -162,8 +162,6 @@ const HIDE_BALANCE_SHIELDED_POOL_V3 =
 const HIDE_BALANCE_SHIELDED_POOL = HIDE_BALANCE_SHIELDED_POOL_V2 || HIDE_BALANCE_SHIELDED_POOL_V3
 const HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW =
   process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS || ""
-const HIDE_BALANCE_MIN_NOTE_AGE_CONFIGURED =
-  HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW.trim().length > 0
 const HIDE_BALANCE_MIN_NOTE_AGE_SECS = Number.parseInt(
   HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW || "3600",
   10
@@ -335,6 +333,16 @@ const normalizeHexArray = (value: unknown): string[] => {
     .filter((item) => item.length > 0)
 }
 
+const inferV3RootFromPublicInputs = (publicInputs: string[]): string | undefined => {
+  const root = publicInputs[0]?.trim()
+  return root && root.length > 0 ? root : undefined
+}
+
+const isV3Payload = (payload: PrivacyVerificationPayload | undefined): boolean =>
+  ((payload?.note_version || "").trim().toLowerCase() === "v3") ||
+  (HIDE_BALANCE_SHIELDED_POOL_V3 &&
+    !!(payload?.executor_address || "").trim())
+
 const inferHideStrkDenomIdFromAmount = (amountText: string): string | undefined => {
   const parsed = Number.parseFloat((amountText || "").trim())
   if (!Number.isFinite(parsed) || parsed <= 0) return undefined
@@ -355,7 +363,16 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
     }
     const proof = normalizeHexArray(parsed.proof)
     const publicInputs = normalizeHexArray(parsed.public_inputs)
-    if (!proof.length || !publicInputs.length) return undefined
+    const inferredNoteVersion =
+      typeof parsed.note_version === "string" && parsed.note_version.trim().length > 0
+        ? parsed.note_version.trim()
+        : undefined
+    const inferredV3 =
+      (inferredNoteVersion || "").toLowerCase() === "v3" ||
+      ((parsed.executor_address || "").trim().length > 0 &&
+        ((parsed.root || "").trim().length > 0 ||
+          (parsed.note_commitment || parsed.commitment || "").trim().length > 0))
+    if ((!proof.length || !publicInputs.length) && !inferredV3) return undefined
     const nullifierCandidates = normalizeHexArray(parsed.nullifiers)
     const commitmentCandidates = normalizeHexArray(parsed.commitments)
     const nullifier = parsed.nullifier?.trim() || nullifierCandidates[0] || undefined
@@ -372,10 +389,7 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
     }
     return {
       verifier: (parsed.verifier || "garaga").trim() || "garaga",
-      note_version:
-        typeof parsed.note_version === "string" && parsed.note_version.trim().length > 0
-          ? parsed.note_version.trim()
-          : undefined,
+      note_version: inferredNoteVersion || (inferredV3 ? "v3" : undefined),
       executor_address:
         typeof parsed.executor_address === "string" && parsed.executor_address.trim().length > 0
           ? parsed.executor_address.trim()
@@ -383,7 +397,7 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
       root:
         typeof parsed.root === "string" && parsed.root.trim().length > 0
           ? parsed.root.trim()
-          : undefined,
+          : inferV3RootFromPublicInputs(publicInputs),
       nullifier,
       commitment,
       recipient:
@@ -393,6 +407,8 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
       note_commitment:
         typeof parsed.note_commitment === "string" && parsed.note_commitment.trim().length > 0
           ? parsed.note_commitment.trim()
+          : inferredV3 && commitment
+          ? commitment
           : undefined,
       denom_id:
         typeof parsed.denom_id === "string" && parsed.denom_id.trim().length > 0
@@ -423,12 +439,39 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
 const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
   if (typeof window === "undefined") return
   const normalizedPayload: PrivacyVerificationPayload = { ...payload }
-  if (
-    HIDE_BALANCE_SHIELDED_POOL_V3 &&
-    normalizedPayload.note_version?.trim().toLowerCase() === "v3" &&
-    typeof normalizedPayload.spendable_at_unix !== "number"
-  ) {
-    normalizedPayload.spendable_at_unix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+  if (isV3Payload(normalizedPayload) && typeof normalizedPayload.spendable_at_unix !== "number") {
+    const existing = loadTradePrivacyPayload()
+    const currentNoteCommitment = (
+      normalizedPayload.note_commitment ||
+      normalizedPayload.commitment ||
+      ""
+    )
+      .trim()
+      .toLowerCase()
+    const currentNullifier = (normalizedPayload.nullifier || "").trim().toLowerCase()
+    const existingNoteCommitment = (
+      existing?.note_commitment ||
+      existing?.commitment ||
+      ""
+    )
+      .trim()
+      .toLowerCase()
+    const existingNullifier = (existing?.nullifier || "").trim().toLowerCase()
+    const sameNote =
+      !!currentNoteCommitment &&
+      currentNoteCommitment === existingNoteCommitment &&
+      !!currentNullifier &&
+      currentNullifier === existingNullifier
+    if (
+      sameNote &&
+      typeof existing?.spendable_at_unix === "number" &&
+      Number.isFinite(existing.spendable_at_unix) &&
+      existing.spendable_at_unix > 0
+    ) {
+      normalizedPayload.spendable_at_unix = Math.floor(existing.spendable_at_unix)
+    } else {
+      normalizedPayload.spendable_at_unix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+    }
   }
   window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(normalizedPayload))
   window.dispatchEvent(new Event("trade-privacy-payload-updated"))
@@ -1347,7 +1390,12 @@ export function TradingInterface() {
   }, [])
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
     const cachedPayload = loadTradePrivacyPayload()
-    if (cachedPayload) {
+    const cachedPayloadIsV3 = isV3Payload(cachedPayload)
+    if (cachedPayload && !cachedPayloadIsV3) {
+      setHasTradePrivacyPayload(true)
+      return cachedPayload
+    }
+    if (cachedPayload && !wallet.isConnected) {
       setHasTradePrivacyPayload(true)
       return cachedPayload
     }
@@ -1395,28 +1443,46 @@ export function TradingInterface() {
             from_network: fromToken.network,
             to_network: toToken.network,
             note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
-            denom_id: inferredHideDenomId,
+            denom_id: inferredHideDenomId || cachedPayload?.denom_id,
+            note_commitment: cachedPayload?.note_commitment || cachedPayload?.commitment,
+            nullifier: cachedPayload?.nullifier,
+            root: cachedPayload?.root,
+            spendable_at_unix: cachedPayload?.spendable_at_unix,
           },
         })
+        const responseProof = normalizeHexArray(response.payload?.proof)
+        const responsePublicInputs = normalizeHexArray(response.payload?.public_inputs)
+        const responseRoot =
+          response.payload?.root?.trim() || inferV3RootFromPublicInputs(responsePublicInputs)
         const payload: PrivacyVerificationPayload = {
           verifier: (response.payload?.verifier || "garaga").trim() || "garaga",
-          note_version: response.payload?.note_version?.trim() || undefined,
+          note_version:
+            response.payload?.note_version?.trim() ||
+            cachedPayload?.note_version?.trim() ||
+            (HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined),
           executor_address: response.payload?.executor_address?.trim() || undefined,
-          root: response.payload?.root?.trim() || undefined,
-          nullifier: response.payload?.nullifier?.trim(),
-          commitment: response.payload?.commitment?.trim(),
+          root: responseRoot || cachedPayload?.root?.trim() || undefined,
+          nullifier: response.payload?.nullifier?.trim() || cachedPayload?.nullifier?.trim(),
+          commitment: response.payload?.commitment?.trim() || cachedPayload?.commitment?.trim(),
           recipient: response.payload?.recipient?.trim() || recipientForPayload,
-          note_commitment: response.payload?.note_commitment?.trim() || undefined,
+          note_commitment:
+            response.payload?.note_commitment?.trim() ||
+            cachedPayload?.note_commitment?.trim() ||
+            cachedPayload?.commitment?.trim() ||
+            undefined,
           denom_id:
             response.payload?.denom_id?.trim() ||
+            cachedPayload?.denom_id?.trim() ||
             inferredHideDenomId,
           spendable_at_unix:
             typeof response.payload?.spendable_at_unix === "number" &&
             Number.isFinite(response.payload.spendable_at_unix)
               ? Math.floor(response.payload.spendable_at_unix)
+              : typeof cachedPayload?.spendable_at_unix === "number"
+              ? Math.floor(cachedPayload.spendable_at_unix)
               : undefined,
-          proof: normalizeHexArray(response.payload?.proof),
-          public_inputs: normalizeHexArray(response.payload?.public_inputs),
+          proof: responseProof,
+          public_inputs: responsePublicInputs,
         }
         const proof = normalizeHexArray(payload.proof)
         const publicInputs = normalizeHexArray(payload.public_inputs)
@@ -1472,6 +1538,9 @@ export function TradingInterface() {
               ? error.message
               : "Gagal menyiapkan payload Garaga otomatis.",
         })
+        if (cachedPayload && !cachedPayloadIsV3) {
+          return cachedPayload
+        }
         return undefined
       } finally {
         setIsAutoPrivacyProvisioning(false)
@@ -2525,28 +2594,47 @@ export function TradingInterface() {
                 nullifier: resolvedPayload?.nullifier,
               },
             })
+            const preparedProof = normalizeHexArray(preparedPrivate.payload?.proof)
+            const preparedPublicInputs = normalizeHexArray(preparedPrivate.payload?.public_inputs)
             const preparedPayload: PrivacyVerificationPayload = {
               verifier: (preparedPrivate.payload?.verifier || "garaga").trim() || "garaga",
-              note_version: preparedPrivate.payload?.note_version?.trim() || undefined,
+              note_version:
+                preparedPrivate.payload?.note_version?.trim() ||
+                resolvedPayload?.note_version?.trim() ||
+                undefined,
               executor_address: preparedPrivate.payload?.executor_address?.trim() || undefined,
-              root: preparedPrivate.payload?.root?.trim() || undefined,
-              nullifier: preparedPrivate.payload?.nullifier?.trim(),
-              commitment: preparedPrivate.payload?.commitment?.trim(),
+              root:
+                preparedPrivate.payload?.root?.trim() ||
+                inferV3RootFromPublicInputs(preparedPublicInputs) ||
+                resolvedPayload?.root?.trim() ||
+                undefined,
+              nullifier:
+                preparedPrivate.payload?.nullifier?.trim() ||
+                resolvedPayload?.nullifier?.trim(),
+              commitment:
+                preparedPrivate.payload?.commitment?.trim() ||
+                resolvedPayload?.commitment?.trim(),
               recipient:
                 resolvedPayload?.recipient ||
                 (receiveAddress || preferredReceiveAddress).trim() ||
                 undefined,
-              note_commitment: preparedPrivate.payload?.note_commitment?.trim() || undefined,
+              note_commitment:
+                preparedPrivate.payload?.note_commitment?.trim() ||
+                resolvedPayload?.note_commitment?.trim() ||
+                undefined,
               denom_id:
                 preparedPrivate.payload?.denom_id?.trim() ||
+                resolvedPayload?.denom_id?.trim() ||
                 inferredHideDenomId,
               spendable_at_unix:
                 typeof preparedPrivate.payload?.spendable_at_unix === "number" &&
                 Number.isFinite(preparedPrivate.payload.spendable_at_unix)
                   ? Math.floor(preparedPrivate.payload.spendable_at_unix)
+                  : typeof resolvedPayload?.spendable_at_unix === "number"
+                  ? Math.floor(resolvedPayload.spendable_at_unix)
                   : undefined,
-              proof: normalizeHexArray(preparedPrivate.payload?.proof),
-              public_inputs: normalizeHexArray(preparedPrivate.payload?.public_inputs),
+              proof: preparedProof,
+              public_inputs: preparedPublicInputs,
             }
             persistTradePrivacyPayload(preparedPayload)
             setHasTradePrivacyPayload(true)
@@ -2666,6 +2754,7 @@ export function TradingInterface() {
       preferredReceiveAddress,
       quote,
       receiveAddress,
+      inferredHideDenomId,
       selectedHideStrkDenom.id,
       starknetProviderHint,
       toToken.network,
@@ -2742,28 +2831,24 @@ export function TradingInterface() {
         starknetProviderHint
       )
 
-      const spendableAtUnix = HIDE_BALANCE_MIN_NOTE_AGE_CONFIGURED
-        ? Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
-        : undefined
+      const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
       persistTradePrivacyPayload({
         ...payload,
         note_version: "v3",
         note_commitment: noteCommitment,
         denom_id: denomId,
-        spendable_at_unix: spendableAtUnix || undefined,
+        spendable_at_unix: spendableAtUnix,
       })
       setHasTradePrivacyPayload(true)
 
       notifications.addNotification({
         type: "success",
         title: "Hide note deposited",
-        message: HIDE_BALANCE_MIN_NOTE_AGE_CONFIGURED
-          ? `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Tunggu mixing window sebelum swap hide.`
-          : `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Retry private swap, backend akan enforce mixing window aktual.`,
+        message: `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Tunggu mixing window sebelum swap hide.`,
         txHash: depositTxHash,
         txNetwork: "starknet",
       })
-      return spendableAtUnix || 0
+      return spendableAtUnix
     },
     [
       fromAmount,
