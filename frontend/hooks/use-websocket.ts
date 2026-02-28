@@ -73,7 +73,14 @@ export function useWebSocket(options: WebSocketOptions) {
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) return
 
       setStatus("connecting")
-      const ws = new WebSocket(url, protocols)
+      let ws: WebSocket
+      try {
+        ws = new WebSocket(url.trim(), protocols)
+      } catch {
+        setStatus("error")
+        handlersRef.current.onError?.(new Event("error"))
+        return
+      }
       socketRef.current = ws
 
       ws.onopen = () => {

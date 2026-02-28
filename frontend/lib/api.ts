@@ -1,8 +1,14 @@
 import { ApiError } from "@/lib/errors"
 import { emitEvent } from "@/lib/events"
 
-export const API_BASE_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080").replace(/\/$/, "")
-export const WS_BASE_URL = (process.env.NEXT_PUBLIC_BACKEND_WS_URL || API_BASE_URL).replace(/^http/, "ws")
+const RAW_API_BASE_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080").trim()
+const RAW_WS_BASE_URL = (
+  process.env.NEXT_PUBLIC_BACKEND_WS_URL ||
+  RAW_API_BASE_URL.replace(/^http/i, "ws")
+).trim()
+
+export const API_BASE_URL = RAW_API_BASE_URL.replace(/\/$/, "")
+export const WS_BASE_URL = RAW_WS_BASE_URL.replace(/\/$/, "")
 
 export interface ApiResponse<T> {
   success: boolean
