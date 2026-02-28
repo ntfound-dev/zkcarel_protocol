@@ -59,7 +59,7 @@ pub mod MockPoolVerifierV3 {
             if self.should_fail.read() {
                 return Option::None;
             }
-            assert!(full_proof_with_hints.len() >= 4, "mock proof too short");
+            assert!(full_proof_with_hints.len() >= 3, "mock proof too short");
 
             let mut out: Array<u256> = array![];
             let mut i = 0_usize;
@@ -274,6 +274,57 @@ fn test_v3_swap_payout_uses_recipient_from_proof() {
     assert(pool.is_nullifier_used(nullifier), 'NULL_SPENT');
     assert(!pool.is_pending_swap(nullifier), 'NO_PENDING');
     assert(token_out.balance_of(recipient) == payout_amount, 'RECIPIENT_PAID');
+}
+
+#[test]
+fn test_v3_swap_payout_legacy_three_outputs_fallbacks_to_note_owner() {
+    let (pool, token_in, token_out, swap, _admin, relayer, user, root) = setup_pool_v3();
+    let note_commitment: felt252 = 0xaaab;
+    let nullifier: felt252 = 0xaaac;
+    let selector = selector!("fill_payout");
+    let payout_amount: u256 = 66_u256;
+    let min_payout: u256 = 60_u256;
+    let payout_token_felt: felt252 = token_out.contract_address.into();
+    let calldata = array![payout_token_felt, payout_amount.low.into(), payout_amount.high.into()];
+
+    start_cheat_caller_address(token_in.contract_address, user);
+    token_in.approve(pool.contract_address, 100_u256);
+    stop_cheat_caller_address(token_in.contract_address);
+    start_cheat_caller_address(pool.contract_address, user);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment, nullifier);
+    stop_cheat_caller_address(pool.contract_address);
+
+    let action_hash = pool
+        .preview_swap_action_hash(
+            swap.contract_address,
+            selector,
+            calldata.span(),
+            token_in.contract_address,
+            token_out.contract_address,
+            min_payout,
+        );
+    // Legacy verifier output format: no recipient in output
+    let legacy_proof = array![root, nullifier, action_hash];
+
+    start_cheat_caller_address(pool.contract_address, user);
+    pool.submit_private_swap(root, nullifier, legacy_proof.span());
+    stop_cheat_caller_address(pool.contract_address);
+
+    start_cheat_caller_address(pool.contract_address, relayer);
+    pool
+        .execute_private_swap_with_payout(
+            nullifier,
+            swap.contract_address,
+            selector,
+            calldata.span(),
+            token_in.contract_address,
+            token_out.contract_address,
+            min_payout,
+        );
+    stop_cheat_caller_address(pool.contract_address);
+
+    assert(pool.is_nullifier_used(nullifier), 'NULL_SPENT_LEGACY');
+    assert(token_out.balance_of(user) == payout_amount, 'OWNER_PAID_LEGACY');
 }
 
 #[test]

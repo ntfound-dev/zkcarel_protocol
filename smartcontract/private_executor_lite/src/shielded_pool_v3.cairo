@@ -637,19 +637,28 @@ pub mod ShieldedPoolV3 {
             let verification = dispatcher.verify_groth16_proof_bls12_381(proof);
             match verification {
                 Option::Some(outputs) => {
-                    assert!(outputs.len() >= 4, "Verifier output too short");
+                    // Backward-compatible verifier output:
+                    // - preferred: [root, nullifier, action_hash, recipient]
+                    // - legacy:    [root, nullifier, action_hash] -> recipient falls back to note owner
+                    assert!(outputs.len() >= 3, "Verifier output too short");
                     let out_root = _u256_to_felt(*outputs.at(0_usize));
                     let out_nullifier = _u256_to_felt(*outputs.at(1_usize));
                     let action_hash = _u256_to_felt(*outputs.at(2_usize));
-                    let recipient_felt = _u256_to_felt(*outputs.at(3_usize));
 
                     assert!(out_root == root, "Proof root mismatch");
                     assert!(out_nullifier == nullifier, "Proof nullifier mismatch");
                     assert!(action_hash != 0, "Action hash required");
-                    assert!(recipient_felt != 0, "Recipient required");
-
-                    let recipient: ContractAddress = recipient_felt.try_into().unwrap();
-                    assert!(!recipient.is_zero(), "Recipient required");
+                    let recipient: ContractAddress = if outputs.len() >= 4 {
+                        let recipient_felt = _u256_to_felt(*outputs.at(3_usize));
+                        assert!(recipient_felt != 0, "Recipient required");
+                        let recipient_from_output: ContractAddress = recipient_felt.try_into().unwrap();
+                        assert!(!recipient_from_output.is_zero(), "Recipient required");
+                        recipient_from_output
+                    } else {
+                        let fallback_recipient = self.note_owner_by_commitment.read(note_commitment);
+                        assert!(!fallback_recipient.is_zero(), "Recipient fallback missing");
+                        fallback_recipient
+                    };
 
                     let submitted_at = get_block_timestamp();
                     self.pending_action_exists_by_nullifier.write(nullifier, true);

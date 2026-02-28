@@ -99,6 +99,18 @@ type PendingBtcDepositState = {
   lastUpdatedAt?: number
 }
 
+type PendingHideNoteRecord = {
+  note_version: "v3"
+  note_commitment: string
+  nullifier?: string
+  executor_address?: string
+  denom_id?: string
+  token_symbol?: string
+  amount?: string
+  deposited_at_unix: number
+  spendable_at_unix?: number
+}
+
 type GardenOrderProgress = {
   status: string
   sourceInitiateTxHash: string
@@ -134,6 +146,8 @@ const STARKNET_STRK_GAS_RESERVE = 0.02
 const QUOTE_CACHE_TTL_MS = 20_000
 const MAX_QUOTE_CACHE_ENTRIES = 120
 const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v2"
+const TRADE_PRIVACY_PENDING_NOTES_KEY = "trade_privacy_pending_notes_v3"
+const TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT = "trade-privacy-pending-notes-updated"
 const DEV_AUTO_GARAGA_PAYLOAD_ENABLED =
   process.env.NODE_ENV !== "production" &&
   (process.env.NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL || "false").toLowerCase() === "true"
@@ -503,6 +517,91 @@ const clearTradePrivacyPayload = () => {
   if (typeof window === "undefined") return
   window.localStorage.removeItem(TRADE_PRIVACY_PAYLOAD_KEY)
   window.dispatchEvent(new Event("trade-privacy-payload-updated"))
+}
+
+const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
+  if (typeof window === "undefined") return []
+  const raw = window.localStorage.getItem(TRADE_PRIVACY_PENDING_NOTES_KEY)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((item) => {
+        if (!item || typeof item !== "object") return null
+        const noteCommitment =
+          typeof item.note_commitment === "string" ? item.note_commitment.trim() : ""
+        if (!noteCommitment) return null
+        const depositedAt =
+          typeof item.deposited_at_unix === "number" && Number.isFinite(item.deposited_at_unix)
+            ? Math.floor(item.deposited_at_unix)
+            : Math.floor(Date.now() / 1000)
+        const spendableAt =
+          typeof item.spendable_at_unix === "number" && Number.isFinite(item.spendable_at_unix)
+            ? Math.floor(item.spendable_at_unix)
+            : undefined
+        return {
+          note_version: "v3" as const,
+          note_commitment: noteCommitment,
+          nullifier: typeof item.nullifier === "string" ? item.nullifier.trim() || undefined : undefined,
+          executor_address:
+            typeof item.executor_address === "string"
+              ? item.executor_address.trim() || undefined
+              : undefined,
+          denom_id: typeof item.denom_id === "string" ? item.denom_id.trim() || undefined : undefined,
+          token_symbol:
+            typeof item.token_symbol === "string" ? item.token_symbol.trim() || undefined : undefined,
+          amount: typeof item.amount === "string" ? item.amount.trim() || undefined : undefined,
+          deposited_at_unix: depositedAt,
+          spendable_at_unix: spendableAt,
+        }
+      })
+      .filter((item): item is PendingHideNoteRecord => item !== null)
+      .sort((a, b) => b.deposited_at_unix - a.deposited_at_unix)
+  } catch {
+    return []
+  }
+}
+
+const persistPendingHideNotes = (items: PendingHideNoteRecord[]) => {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(TRADE_PRIVACY_PENDING_NOTES_KEY, JSON.stringify(items))
+  window.dispatchEvent(new Event(TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT))
+}
+
+const upsertPendingHideNote = (note: PendingHideNoteRecord) => {
+  const items = loadPendingHideNotes()
+  const normalizedCommitment = note.note_commitment.trim().toLowerCase()
+  const normalizedNullifier = (note.nullifier || "").trim().toLowerCase()
+  const next = [
+    note,
+    ...items.filter((item) => {
+      const sameCommitment = item.note_commitment.trim().toLowerCase() === normalizedCommitment
+      const sameNullifier =
+        normalizedNullifier.length > 0 &&
+        (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+      return !(sameCommitment || sameNullifier)
+    }),
+  ]
+  persistPendingHideNotes(next)
+}
+
+const removePendingHideNote = (noteCommitment?: string, nullifier?: string) => {
+  if (typeof window === "undefined") return
+  const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+  const normalizedNullifier = (nullifier || "").trim().toLowerCase()
+  if (!normalizedCommitment && !normalizedNullifier) return
+  const items = loadPendingHideNotes()
+  const next = items.filter((item) => {
+    const sameCommitment =
+      normalizedCommitment.length > 0 &&
+      item.note_commitment.trim().toLowerCase() === normalizedCommitment
+    const sameNullifier =
+      normalizedNullifier.length > 0 &&
+      (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+    return !(sameCommitment || sameNullifier)
+  })
+  persistPendingHideNotes(next)
 }
 
 /**
@@ -1356,6 +1455,7 @@ export function TradingInterface() {
   // Unified privacy toggle: UI masking and on-chain hide-balance flow.
   const [balanceHidden, setBalanceHidden] = React.useState(false)
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
+  const [pendingHideNotes, setPendingHideNotes] = React.useState<PendingHideNoteRecord[]>([])
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const [isCancellingHideNote, setIsCancellingHideNote] = React.useState(false)
   const [nowMs, setNowMs] = React.useState(() => Date.now())
@@ -1403,6 +1503,9 @@ export function TradingInterface() {
   }, [hideStrkDenomEnabled, selectedHideStrkDenom.amount, fromAmount])
   const refreshTradePrivacyPayload = React.useCallback(() => {
     setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
+  }, [])
+  const refreshPendingHideNotes = React.useCallback(() => {
+    setPendingHideNotes(loadPendingHideNotes())
   }, [])
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
     const cachedPayload = loadTradePrivacyPayload()
@@ -1696,15 +1799,22 @@ export function TradingInterface() {
      * @returns Result consumed by caller flow, UI state updates, or async chaining.
      * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
      */
-    const syncPayload = () => refreshTradePrivacyPayload()
+    const syncPayload = () => {
+      refreshTradePrivacyPayload()
+      refreshPendingHideNotes()
+    }
     syncPayload()
     window.addEventListener("focus", syncPayload)
     window.addEventListener("trade-privacy-payload-updated", syncPayload)
+    window.addEventListener(TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT, syncPayload)
+    window.addEventListener("storage", syncPayload)
     return () => {
       window.removeEventListener("focus", syncPayload)
       window.removeEventListener("trade-privacy-payload-updated", syncPayload)
+      window.removeEventListener(TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT, syncPayload)
+      window.removeEventListener("storage", syncPayload)
     }
-  }, [refreshTradePrivacyPayload])
+  }, [refreshPendingHideNotes, refreshTradePrivacyPayload])
 
   React.useEffect(() => {
     let active = true
@@ -2388,6 +2498,20 @@ export function TradingInterface() {
       (activeTradePrivacyPayload.note_commitment || "").trim() ||
       (activeTradePrivacyPayload.commitment || "").trim()
     )
+  const pendingHideNotesActive = React.useMemo(() => {
+    return pendingHideNotes.filter((note) => {
+      const commitment = (note.note_commitment || "").trim()
+      if (!commitment) return false
+      const spendableAtMs =
+        typeof note.spendable_at_unix === "number" && Number.isFinite(note.spendable_at_unix)
+          ? note.spendable_at_unix * 1000
+          : 0
+      const expiredByLocalClock =
+        spendableAtMs > 0 &&
+        nowMs - spendableAtMs > 12 * 60 * 60 * 1000
+      return !expiredByLocalClock
+    })
+  }, [nowMs, pendingHideNotes])
   const executeDisabledReason =
     !wallet.isConnected
       ? "Connect your wallet first."
@@ -2857,6 +2981,7 @@ export function TradingInterface() {
         starknetProviderHint
       )
 
+      const depositedAtUnix = Math.floor(Date.now() / 1000)
       const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
       persistTradePrivacyPayload({
         ...payload,
@@ -2865,7 +2990,19 @@ export function TradingInterface() {
         denom_id: denomId,
         spendable_at_unix: spendableAtUnix,
       })
+      upsertPendingHideNote({
+        note_version: "v3",
+        note_commitment: noteCommitment,
+        nullifier,
+        executor_address: executorAddress,
+        denom_id: denomId,
+        token_symbol: tokenSymbol,
+        amount: denomAmountText,
+        deposited_at_unix: depositedAtUnix,
+        spendable_at_unix: spendableAtUnix,
+      })
       setHasTradePrivacyPayload(true)
+      setPendingHideNotes(loadPendingHideNotes())
 
       notifications.addNotification({
         type: "success",
@@ -2885,12 +3022,22 @@ export function TradingInterface() {
     ]
   )
 
-  const handleCancelHideNoteWithdraw = React.useCallback(async () => {
-    const payload = loadTradePrivacyPayload()
+  const handleCancelHideNoteWithdraw = React.useCallback(async (noteOverride?: PendingHideNoteRecord) => {
+    const payload = noteOverride
+      ? {
+          note_version: "v3",
+          executor_address: noteOverride.executor_address,
+          note_commitment: noteOverride.note_commitment,
+          commitment: noteOverride.note_commitment,
+          nullifier: noteOverride.nullifier,
+          spendable_at_unix: noteOverride.spendable_at_unix,
+        }
+      : loadTradePrivacyPayload()
     const payloadIsV3 =
+      noteOverride !== undefined ||
       ((payload?.note_version || "").trim().toLowerCase() === "v3") ||
       HIDE_BALANCE_SHIELDED_POOL_V3
-    if (!hideBalanceOnchain || !payloadIsV3) {
+    if (!noteOverride && (!hideBalanceOnchain || !payloadIsV3)) {
       notifications.addNotification({
         type: "warning",
         title: "Withdraw unavailable",
@@ -2919,6 +3066,7 @@ export function TradingInterface() {
       return
     }
     const noteCommitment = (payload.note_commitment || payload.commitment || "").trim()
+    const noteNullifier = (payload.nullifier || "").trim()
     if (!noteCommitment) {
       notifications.addNotification({
         type: "error",
@@ -2946,8 +3094,20 @@ export function TradingInterface() {
         ],
         starknetProviderHint
       )
-      clearTradePrivacyPayload()
-      setHasTradePrivacyPayload(false)
+      removePendingHideNote(noteCommitment, noteNullifier)
+      setPendingHideNotes(loadPendingHideNotes())
+      const activePayload = loadTradePrivacyPayload()
+      const activeCommitment = (
+        activePayload?.note_commitment ||
+        activePayload?.commitment ||
+        ""
+      )
+        .trim()
+        .toLowerCase()
+      if (activeCommitment === noteCommitment.trim().toLowerCase()) {
+        clearTradePrivacyPayload()
+        setHasTradePrivacyPayload(false)
+      }
       notifications.addNotification({
         type: "success",
         title: "Hide note withdrawn",
@@ -3969,19 +4129,9 @@ export function TradingInterface() {
               /note belum terdaftar/i.test(message) &&
               noteDepositPayload
             ) {
+              let spendableAtUnix = 0
               try {
-                const spendableAtUnix = await ensureHideV3NoteDeposited(noteDepositPayload)
-                if (spendableAtUnix > 0) {
-                  const remainingMs = Math.max(0, spendableAtUnix * 1000 - Date.now())
-                  throw new Error(
-                    `Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
-                      remainingMs
-                    )} sebelum retry private swap.`
-                  )
-                }
-                throw new Error(
-                  "Hide note berhasil dideposit. Retry private swap; backend akan enforce mixing window aktual."
-                )
+                spendableAtUnix = await ensureHideV3NoteDeposited(noteDepositPayload)
               } catch (depositError) {
                 const depositMessage =
                   depositError instanceof Error ? depositError.message : String(depositError || "")
@@ -3989,6 +4139,17 @@ export function TradingInterface() {
                   `Hide note belum terdaftar dan auto-deposit gagal. Detail: ${depositMessage}`
                 )
               }
+              if (spendableAtUnix > 0) {
+                const remainingMs = Math.max(0, spendableAtUnix * 1000 - Date.now())
+                throw new Error(
+                  `HIDE_NOTE_WAIT::Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
+                    remainingMs
+                  )} sebelum retry private swap.`
+                )
+              }
+              throw new Error(
+                "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private swap; backend akan enforce mixing window aktual."
+              )
             }
             throw new Error(
               `Hide relayer unavailable. Wallet fallback diblok agar detail swap tidak bocor di explorer. Detail: ${message}`
@@ -4029,6 +4190,20 @@ export function TradingInterface() {
 
         if (effectiveHideBalance) {
           shouldClearTradePrivacyPayload = true
+          const spentNoteCommitment = (
+            submittedPrivacyPayload?.note_commitment ||
+            submittedPrivacyPayload?.commitment ||
+            tradePrivacyPayload?.note_commitment ||
+            tradePrivacyPayload?.commitment ||
+            ""
+          ).trim()
+          const spentNullifier = (
+            submittedPrivacyPayload?.nullifier ||
+            tradePrivacyPayload?.nullifier ||
+            ""
+          ).trim()
+          removePendingHideNote(spentNoteCommitment, spentNullifier)
+          setPendingHideNotes(loadPendingHideNotes())
         }
         notifications.addNotification({
           type: "success",
@@ -4087,6 +4262,25 @@ export function TradingInterface() {
         setSwapState("success")
       }
     } catch (error) {
+      const rawErrorMessage = error instanceof Error ? error.message : "Failed to execute trade"
+      if (rawErrorMessage.startsWith("HIDE_NOTE_WAIT::")) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Hide note deposited",
+          message: rawErrorMessage.replace("HIDE_NOTE_WAIT::", "").trim(),
+        })
+        setSwapState("idle")
+        return
+      }
+      if (rawErrorMessage.startsWith("HIDE_NOTE_READY::")) {
+        notifications.addNotification({
+          type: "info",
+          title: "Hide note deposited",
+          message: rawErrorMessage.replace("HIDE_NOTE_READY::", "").trim(),
+        })
+        setSwapState("idle")
+        return
+      }
       if (isCrossChain && error instanceof Error && error.message.toLowerCase().includes("xverse")) {
         notifications.addNotification({
           type: "error",
@@ -4119,7 +4313,7 @@ export function TradingInterface() {
       notifications.addNotification({
         type: "error",
         title: "Trade failed",
-        message: error instanceof Error ? error.message : "Failed to execute trade",
+        message: rawErrorMessage,
       })
       setSwapState("error")
     } finally {
@@ -4882,6 +5076,81 @@ export function TradingInterface() {
             {swapState === "idle" && executeDisabledReason && (
               <p className="text-center text-xs text-warning">{executeDisabledReason}</p>
             )}
+          </div>
+        )}
+
+        {hideBalanceOnchain && pendingHideNotesActive.length > 0 && (
+          <div className="mt-3 p-3 rounded-xl border border-border/70 bg-surface/40 space-y-2">
+            <p className="text-xs font-semibold text-foreground">
+              Pending Hide Notes ({pendingHideNotesActive.length})
+            </p>
+            <div className="space-y-2 max-h-40 overflow-auto pr-1">
+              {pendingHideNotesActive.map((note) => {
+                const noteCommitment = (note.note_commitment || "").trim()
+                const noteRemainingMs =
+                  typeof note.spendable_at_unix === "number" && Number.isFinite(note.spendable_at_unix)
+                    ? Math.max(0, note.spendable_at_unix * 1000 - nowMs)
+                    : 0
+                return (
+                  <div
+                    key={`${noteCommitment}:${note.nullifier || ""}`}
+                    className="rounded-lg border border-border/60 bg-background/40 p-2"
+                  >
+                    <p className="text-[11px] text-muted-foreground break-all">
+                      {noteCommitment.slice(0, 12)}...{noteCommitment.slice(-6)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {note.amount || "?"} {note.token_symbol || "STRK"} •{" "}
+                      {noteRemainingMs > 0
+                        ? `Ready in ${formatRemainingDuration(noteRemainingMs)}`
+                        : "Ready now"}
+                    </p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="h-8 text-[11px]"
+                        disabled={swapState !== "idle"}
+                        onClick={() => {
+                          persistTradePrivacyPayload({
+                            verifier: "garaga",
+                            note_version: "v3",
+                            executor_address:
+                              note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
+                            note_commitment: noteCommitment,
+                            commitment: noteCommitment,
+                            nullifier: note.nullifier,
+                            denom_id: note.denom_id,
+                            spendable_at_unix: note.spendable_at_unix,
+                            proof: [],
+                            public_inputs: [],
+                          })
+                          setHasTradePrivacyPayload(true)
+                          notifications.addNotification({
+                            type: "info",
+                            title: "Hide note selected",
+                            message:
+                              "Active note diganti ke pending note terpilih. Lanjut Execute Private Swap.",
+                          })
+                          void resolveHideBalancePrivacyPayload()
+                        }}
+                      >
+                        Use For Swap
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-8 text-[11px]"
+                        disabled={isCancellingHideNote || swapState !== "idle"}
+                        onClick={() => void handleCancelHideNoteWithdraw(note)}
+                      >
+                        Withdraw
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 
