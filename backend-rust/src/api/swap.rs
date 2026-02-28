@@ -411,6 +411,18 @@ fn is_transient_probe_error(message: &str) -> bool {
         || lower.contains("network")
 }
 
+// Internal helper that checks whether an RPC error is a contract-side revert during selector probing.
+// Such errors still indicate the selector exists and should be treated as "supported".
+fn is_contract_revert_probe_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("contracterror")
+        || lower.contains("contract error")
+        || lower.contains("revert_error")
+        || lower.contains("execution_error")
+        || lower.contains("innercontractexecutionerror")
+        || lower.contains("sender required")
+}
+
 // Internal helper that supports `shielded_executor_supports_deposit_fixed_for` operations in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 async fn shielded_executor_supports_deposit_fixed_for(
@@ -432,6 +444,13 @@ async fn shielded_executor_supports_deposit_fixed_for(
         Err(AppError::BlockchainRPC(message)) => {
             if is_missing_entrypoint_error(&message) {
                 Ok(false)
+            } else if is_contract_revert_probe_error(&message) {
+                tracing::info!(
+                    "ShieldedPoolV2 probe for executor {} returned contract revert (treated as supported): {}",
+                    executor,
+                    message
+                );
+                Ok(true)
             } else if is_transient_probe_error(&message) {
                 Err(AppError::BlockchainRPC(format!(
                     "Failed to probe ShieldedPoolV2 executor {}: {}",
@@ -470,6 +489,13 @@ async fn shielded_executor_supports_deposit_fixed_v3(
         Err(AppError::BlockchainRPC(message)) => {
             if is_missing_entrypoint_error(&message) {
                 Ok(false)
+            } else if is_contract_revert_probe_error(&message) {
+                tracing::info!(
+                    "ShieldedPoolV3 probe for executor {} returned contract revert (treated as supported): {}",
+                    executor,
+                    message
+                );
+                Ok(true)
             } else if is_transient_probe_error(&message) {
                 Err(AppError::BlockchainRPC(format!(
                     "Failed to probe ShieldedPoolV3 executor {}: {}",
