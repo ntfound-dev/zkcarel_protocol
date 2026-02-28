@@ -2262,27 +2262,32 @@ export function TradingInterface() {
     Number.isFinite(fromToken.balance) && fromToken.balance > 0
   const activeTradePrivacyPayload = hideBalanceOnchain ? loadTradePrivacyPayload() : undefined
   const activeHideRecipient =
-    HIDE_BALANCE_SHIELDED_POOL_V3 && hideBalanceOnchain
+    hideBalanceOnchain &&
+    (HIDE_BALANCE_SHIELDED_POOL_V3 ||
+      (activeTradePrivacyPayload?.note_version || "").trim().toLowerCase() === "v3")
       ? (activeTradePrivacyPayload?.recipient || "").trim()
       : ""
   const activeHideRecipientMismatched =
     !!activeHideRecipient &&
     !!resolvedReceiveAddress &&
     normalizeFeltAddress(activeHideRecipient) !== normalizeFeltAddress(resolvedReceiveAddress)
+  const activeHidePayloadIsV3 =
+    hideBalanceOnchain &&
+    ((activeTradePrivacyPayload?.note_version || "").trim().toLowerCase() === "v3" ||
+      HIDE_BALANCE_SHIELDED_POOL_V3)
   const privacySpendableAtMs =
     typeof activeTradePrivacyPayload?.spendable_at_unix === "number" &&
     Number.isFinite(activeTradePrivacyPayload.spendable_at_unix)
       ? activeTradePrivacyPayload.spendable_at_unix * 1000
       : null
   const hideMixingWindowRemainingMs =
-    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && privacySpendableAtMs
+    activeHidePayloadIsV3 && privacySpendableAtMs
       ? Math.max(0, privacySpendableAtMs - nowMs)
       : 0
   const hideMixingWindowBlocked =
-    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && hideMixingWindowRemainingMs > 0
+    activeHidePayloadIsV3 && hideMixingWindowRemainingMs > 0
   const hasActiveHideV3Note =
-    hideBalanceOnchain &&
-    HIDE_BALANCE_SHIELDED_POOL_V3 &&
+    activeHidePayloadIsV3 &&
     !!activeTradePrivacyPayload &&
     !!(
       (activeTradePrivacyPayload.note_commitment || "").trim() ||
