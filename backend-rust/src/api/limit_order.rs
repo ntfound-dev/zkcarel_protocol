@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::privacy::{
     bind_intent_hash_into_payload, ensure_public_inputs_bind_nullifier_commitment,
-    ensure_public_inputs_bind_root_nullifier, generate_auto_garaga_payload,
+    ensure_public_inputs_bind_root_nullifier, ensure_public_inputs_bind_v3_shape,
+    generate_auto_garaga_payload,
     AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
 };
 use super::swap::{parse_decimal_to_u256_parts, token_decimals};
@@ -948,7 +949,14 @@ pub async fn create_order(
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
         };
-        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
+            tracing::info!(
+                "Ignoring client-provided Hide Balance V3 proof/public_inputs for limit order create; regenerating payload server-side"
+            );
+            None
+        } else {
+            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
+        };
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
             request_payload
@@ -1137,6 +1145,10 @@ pub async fn create_order(
             ensure_public_inputs_bind_root_nullifier(
                 root,
                 &payload.nullifier,
+                &payload.public_inputs,
+                "limit order hide payload (bound)",
+            )?;
+            ensure_public_inputs_bind_v3_shape(
                 &payload.public_inputs,
                 "limit order hide payload (bound)",
             )?;
@@ -1398,7 +1410,14 @@ pub async fn cancel_order(
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
         };
-        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
+            tracing::info!(
+                "Ignoring client-provided Hide Balance V3 proof/public_inputs for limit order cancel; regenerating payload server-side"
+            );
+            None
+        } else {
+            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
+        };
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
             request_payload
@@ -1468,6 +1487,10 @@ pub async fn cancel_order(
             ensure_public_inputs_bind_root_nullifier(
                 root,
                 &payload.nullifier,
+                &payload.public_inputs,
+                "limit cancel hide payload (bound)",
+            )?;
+            ensure_public_inputs_bind_v3_shape(
                 &payload.public_inputs,
                 "limit cancel hide payload (bound)",
             )?;

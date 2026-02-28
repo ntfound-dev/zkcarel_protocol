@@ -887,6 +887,7 @@ async fn load_auto_garaga_payload_from_prover_cmd(
             &public_inputs,
             "auto Garaga prover response",
         )?;
+        ensure_public_inputs_bind_v3_shape(&public_inputs, "auto Garaga prover response")?;
     } else {
         ensure_public_inputs_bind_nullifier_commitment(
             &nullifier,
@@ -1057,6 +1058,32 @@ pub(crate) fn ensure_public_inputs_bind_root_nullifier(
             source_label, root_index, nullifier_index
         )));
     }
+    Ok(())
+}
+
+pub(crate) fn ensure_public_inputs_bind_v3_shape(
+    public_inputs: &[String],
+    source_label: &str,
+) -> Result<()> {
+    let root_index = privacy_binding_index("GARAGA_ROOT_PUBLIC_INPUT_INDEX", 0)?;
+    let nullifier_index = privacy_binding_index("GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX_V3", 1)?;
+    let action_hash_index = intent_hash_public_input_index()?;
+    let required_len = std::cmp::max(
+        std::cmp::max(root_index, nullifier_index),
+        action_hash_index,
+    ) + 1;
+    if public_inputs.len() < required_len {
+        return Err(AppError::BadRequest(format!(
+            "{} V3 verifier output too short: public_inputs length is {}, required >= {} (root={}, nullifier={}, action_hash={}). Regenerate Garaga PK/VK and redeploy verifier.",
+            source_label,
+            public_inputs.len(),
+            required_len,
+            root_index,
+            nullifier_index,
+            action_hash_index
+        )));
+    }
+    let _ = parse_felt(public_inputs[action_hash_index].trim())?;
     Ok(())
 }
 

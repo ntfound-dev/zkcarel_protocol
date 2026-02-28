@@ -41,7 +41,8 @@ use super::{
     },
     privacy::{
         bind_intent_hash_into_payload, ensure_public_inputs_bind_nullifier_commitment,
-        ensure_public_inputs_bind_root_nullifier, generate_auto_garaga_payload,
+        ensure_public_inputs_bind_root_nullifier, ensure_public_inputs_bind_v3_shape,
+        generate_auto_garaga_payload,
         AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
     },
     require_starknet_user, require_user,
@@ -1701,7 +1702,14 @@ pub async fn deposit(
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
         };
-        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
+            tracing::info!(
+                "Ignoring client-provided Hide Balance V3 proof/public_inputs for stake deposit; regenerating payload server-side"
+            );
+            None
+        } else {
+            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
+        };
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
             request_payload
@@ -1780,6 +1788,10 @@ pub async fn deposit(
             ensure_public_inputs_bind_root_nullifier(
                 root,
                 &payload.nullifier,
+                &payload.public_inputs,
+                "stake hide payload (bound)",
+            )?;
+            ensure_public_inputs_bind_v3_shape(
                 &payload.public_inputs,
                 "stake hide payload (bound)",
             )?;
@@ -2052,7 +2064,14 @@ pub async fn withdraw(
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
         };
-        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
+            tracing::info!(
+                "Ignoring client-provided Hide Balance V3 proof/public_inputs for stake withdraw; regenerating payload server-side"
+            );
+            None
+        } else {
+            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
+        };
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
             request_payload
@@ -2131,6 +2150,10 @@ pub async fn withdraw(
             ensure_public_inputs_bind_root_nullifier(
                 root,
                 &payload.nullifier,
+                &payload.public_inputs,
+                "unstake hide payload (bound)",
+            )?;
+            ensure_public_inputs_bind_v3_shape(
                 &payload.public_inputs,
                 "unstake hide payload (bound)",
             )?;
@@ -2374,7 +2397,14 @@ pub async fn claim(
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
         };
-        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
+            tracing::info!(
+                "Ignoring client-provided Hide Balance V3 proof/public_inputs for stake claim; regenerating payload server-side"
+            );
+            None
+        } else {
+            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
+        };
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
             request_payload
@@ -2451,6 +2481,10 @@ pub async fn claim(
             ensure_public_inputs_bind_root_nullifier(
                 root,
                 &payload.nullifier,
+                &payload.public_inputs,
+                "stake claim hide payload (bound)",
+            )?;
+            ensure_public_inputs_bind_v3_shape(
                 &payload.public_inputs,
                 "stake claim hide payload (bound)",
             )?;

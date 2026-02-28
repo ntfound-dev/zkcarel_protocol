@@ -647,12 +647,16 @@ def build_payload(stdin_payload: Mapping[str, object]) -> GaragaPayload:
         if is_v3:
             root_idx = parse_index("GARAGA_ROOT_PUBLIC_INPUT_INDEX", 0)
             nullifier_idx = parse_index("GARAGA_NULLIFIER_PUBLIC_INPUT_INDEX_V3", 1)
-            required_len = max(root_idx, nullifier_idx) + 1
+            action_hash_idx = parse_index("GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX", 2)
+            required_len = max(root_idx, nullifier_idx, action_hash_idx) + 1
             if len(public_inputs) < required_len:
                 fail(
-                    "public_inputs too short to bind V3 root/nullifier: "
+                    "public_inputs too short for V3 verifier output: "
                     f"len={len(public_inputs)}, required>={required_len}, "
-                    f"root_idx={root_idx}, nullifier_idx={nullifier_idx}"
+                    "expected at least root/nullifier/action_hash indexes "
+                    f"(root_idx={root_idx}, nullifier_idx={nullifier_idx}, "
+                    f"action_hash_idx={action_hash_idx}). "
+                    "Regenerate Garaga PK/VK and redeploy verifier."
                 )
             root = to_hex_felt(public_inputs[root_idx])
             nullifier = to_hex_felt(public_inputs[nullifier_idx])

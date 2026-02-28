@@ -606,6 +606,46 @@ fn configured_v3_nullifier_public_input_index() -> usize {
         .unwrap_or(1)
 }
 
+fn configured_v3_action_hash_public_input_index() -> usize {
+    std::env::var("GARAGA_INTENT_HASH_PUBLIC_INPUT_INDEX")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(2)
+}
+
+fn ensure_v3_payload_public_inputs_shape(
+    payload: &AutoPrivacyPayloadResponse,
+    source_label: &str,
+) -> Result<()> {
+    let root_index = configured_root_public_input_index();
+    let nullifier_index = configured_v3_nullifier_public_input_index();
+    let action_hash_index = configured_v3_action_hash_public_input_index();
+    let required_len = std::cmp::max(
+        std::cmp::max(root_index, nullifier_index),
+        action_hash_index,
+    ) + 1;
+
+    if payload.public_inputs.len() < required_len {
+        return Err(AppError::BadRequest(format!(
+            "{} V3 verifier output too short: public_inputs length is {}, required >= {} (root={}, nullifier={}, action_hash={}). Regenerate Garaga proving key/verifier with at least [root, nullifier, action_hash] outputs.",
+            source_label,
+            payload.public_inputs.len(),
+            required_len,
+            root_index,
+            nullifier_index,
+            action_hash_index
+        )));
+    }
+
+    let _ = parse_felt(payload.public_inputs[action_hash_index].trim()).map_err(|_| {
+        AppError::BadRequest(format!(
+            "{} contains invalid action-hash felt at public_inputs[{}]",
+            source_label, action_hash_index
+        ))
+    })?;
+    Ok(())
+}
+
 fn normalize_v3_public_inputs_binding(payload: &mut AutoPrivacyPayloadResponse) -> Result<()> {
     let root = payload.root.as_deref().ok_or_else(|| {
         AppError::BadRequest("Hide Balance V3 requires privacy.root".to_string())
@@ -3006,9 +3046,21 @@ pub async fn execute_swap(
                 }
             }
 
-            let mut payload = if let Some(request_payload) =
-                payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
-            {
+            let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+            let mut payload = if hide_pool_version == Some(HidePoolVersion::V3) {
+                if request_payload.is_some() {
+                    tracing::info!(
+                        "Ignoring client-provided Hide Balance V3 proof/public_inputs; regenerating payload server-side"
+                    );
+                }
+                generate_auto_garaga_payload(
+                    &state.config,
+                    &user_address,
+                    verifier_kind.as_str(),
+                    Some(&tx_context),
+                )
+                .await?
+            } else if let Some(request_payload) = request_payload {
                 request_payload
             } else {
                 generate_auto_garaga_payload(
@@ -3047,6 +3099,7 @@ pub async fn execute_swap(
                         "swap hide payload (bound, normalized)",
                     )?;
                 }
+                ensure_v3_payload_public_inputs_shape(&payload, "swap hide payload (bound)")?;
             } else {
                 ensure_public_inputs_bind_nullifier_commitment(
                     &payload.nullifier,
