@@ -2636,7 +2636,8 @@ export function TradingInterface() {
 
   const ensureHideV3NoteDeposited = React.useCallback(
     async (payload: PrivacyVerificationPayload): Promise<number> => {
-      if (!HIDE_BALANCE_SHIELDED_POOL_V3) {
+      const payloadIsV3 = (payload.note_version || "").trim().toLowerCase() === "v3"
+      if (!HIDE_BALANCE_SHIELDED_POOL_V3 && !payloadIsV3) {
         throw new Error("Hide note auto-deposit only supports ShieldedPoolV3.")
       }
       const executorAddress = PRIVATE_ACTION_EXECUTOR_ADDRESS.trim()
@@ -3713,8 +3714,12 @@ export function TradingInterface() {
                 "Backend relayer hide-mode belum aktif (masih minta onchain_tx_hash). Set HIDE_BALANCE_RELAYER_POOL_ENABLED=true lalu restart backend."
               )
             }
+            const payloadLooksV3 =
+              (submittedPrivacyPayload?.note_version || "").trim().toLowerCase() === "v3"
             if (
-              HIDE_BALANCE_SHIELDED_POOL_V3 &&
+              (HIDE_BALANCE_SHIELDED_POOL_V3 ||
+                payloadLooksV3 ||
+                /hide balance v3/i.test(message)) &&
               /note belum terdaftar/i.test(message) &&
               submittedPrivacyPayload
             ) {
