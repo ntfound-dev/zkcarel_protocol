@@ -334,6 +334,12 @@ const normalizeFeltAddress = (value: string) => {
   }
 }
 
+const normalizeExecutorAddress = (value?: string) => {
+  const trimmed = (value || "").trim()
+  if (!trimmed) return ""
+  return normalizeFeltAddress(trimmed)
+}
+
 const normalizeHexArray = (value: unknown): string[] => {
   if (typeof value === "string") {
     return value
@@ -1510,6 +1516,15 @@ export function TradingInterface() {
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
     const cachedPayload = loadTradePrivacyPayload()
     const cachedPayloadIsV3 = isV3Payload(cachedPayload)
+    const lockedNoteNullifier = (cachedPayload?.nullifier || "").trim().toLowerCase()
+    const lockedNoteCommitment = (
+      cachedPayload?.note_commitment ||
+      cachedPayload?.commitment ||
+      ""
+    )
+      .trim()
+      .toLowerCase()
+    const hasLockedV3Note = cachedPayloadIsV3 && !!lockedNoteNullifier && !!lockedNoteCommitment
     if (hasCompleteV3SpendPayload(cachedPayload)) {
       setHasTradePrivacyPayload(true)
       return {
@@ -1641,6 +1656,26 @@ export function TradingInterface() {
           proof,
           public_inputs: publicInputs,
         }
+        if (hasLockedV3Note) {
+          const returnedNullifier = (normalizedPayload.nullifier || "").trim().toLowerCase()
+          const returnedCommitment = (
+            normalizedPayload.note_commitment ||
+            normalizedPayload.commitment ||
+            ""
+          )
+            .trim()
+            .toLowerCase()
+          if (returnedNullifier !== lockedNoteNullifier) {
+            throw new Error(
+              "Generated payload tidak cocok dengan note terpilih (nullifier mismatch). Pilih note lain atau withdraw note ini."
+            )
+          }
+          if (returnedCommitment && returnedCommitment !== lockedNoteCommitment) {
+            throw new Error(
+              "Generated payload tidak cocok dengan note terpilih (commitment mismatch). Pilih note lain atau withdraw note ini."
+            )
+          }
+        }
         persistTradePrivacyPayload(normalizedPayload)
         setHasTradePrivacyPayload(true)
         notifications.addNotification({
@@ -1667,7 +1702,7 @@ export function TradingInterface() {
               ? error.message
               : "Gagal menyiapkan payload Garaga otomatis.",
         })
-        if (cachedPayload) {
+        if (cachedPayload && !hasLockedV3Note) {
           // Fallback: keep active cached note payload so execute path can continue.
           // Backend will regenerate proof when payload is incomplete.
           return cachedPayload
@@ -2482,6 +2517,17 @@ export function TradingInterface() {
     hideBalanceOnchain &&
     ((activeTradePrivacyPayload?.note_version || "").trim().toLowerCase() === "v3" ||
       HIDE_BALANCE_SHIELDED_POOL_V3)
+  const configuredHideExecutorNormalized = normalizeExecutorAddress(
+    PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined
+  )
+  const activeHideExecutorNormalized = normalizeExecutorAddress(
+    activeTradePrivacyPayload?.executor_address
+  )
+  const activeHideExecutorMismatch =
+    activeHidePayloadIsV3 &&
+    !!configuredHideExecutorNormalized &&
+    !!activeHideExecutorNormalized &&
+    activeHideExecutorNormalized !== configuredHideExecutorNormalized
   const privacySpendableAtMs =
     typeof activeTradePrivacyPayload?.spendable_at_unix === "number" &&
     Number.isFinite(activeTradePrivacyPayload.spendable_at_unix)
@@ -2519,6 +2565,8 @@ export function TradingInterface() {
       ? "Connect your wallet first."
       : isCancellingHideNote
       ? "Cancelling hide note..."
+      : activeHideExecutorMismatch
+      ? "Active hide note memakai executor lama. Pilih note yang sesuai executor saat ini atau Cancel & Withdraw."
       : !hasPositiveAmount
       ? "Enter a valid amount."
       : isSameTokenSwapPair
@@ -4131,6 +4179,36 @@ export function TradingInterface() {
               /note belum terdaftar/i.test(message) &&
               noteDepositPayload
             ) {
+              const selectedCommitment = (
+                noteDepositPayload.note_commitment ||
+                noteDepositPayload.commitment ||
+                ""
+              )
+                .trim()
+                .toLowerCase()
+              const selectedNullifier = (noteDepositPayload.nullifier || "").trim().toLowerCase()
+              const selectedExecutorNormalized = normalizeExecutorAddress(
+                noteDepositPayload.executor_address
+              )
+              const pendingNotes = loadPendingHideNotes()
+              const selectedNoteTracked = pendingNotes.some((note) => {
+                const sameCommitment =
+                  !!selectedCommitment &&
+                  note.note_commitment.trim().toLowerCase() === selectedCommitment
+                const sameNullifier =
+                  !!selectedNullifier &&
+                  (note.nullifier || "").trim().toLowerCase() === selectedNullifier
+                return sameCommitment || sameNullifier
+              })
+              const selectedExecutorMismatch =
+                !!configuredHideExecutorNormalized &&
+                !!selectedExecutorNormalized &&
+                selectedExecutorNormalized !== configuredHideExecutorNormalized
+              if (selectedNoteTracked || selectedExecutorMismatch) {
+                throw new Error(
+                  "Hide note terpilih tidak cocok dengan executor aktif. Pilih note yang executor-nya sesuai atau Cancel & Withdraw. Auto-deposit dibatalkan."
+                )
+              }
               let spendableAtUnix = 0
               try {
                 spendableAtUnix = await ensureHideV3NoteDeposited(noteDepositPayload)
@@ -5089,6 +5167,14 @@ export function TradingInterface() {
             <div className="space-y-2 max-h-40 overflow-auto pr-1">
               {pendingHideNotesActive.map((note) => {
                 const noteCommitment = (note.note_commitment || "").trim()
+                const noteNullifier = (note.nullifier || "").trim()
+                const noteExecutorNormalized = normalizeExecutorAddress(note.executor_address)
+                const noteExecutorMismatch =
+                  !!configuredHideExecutorNormalized &&
+                  !!noteExecutorNormalized &&
+                  noteExecutorNormalized !== configuredHideExecutorNormalized
+                const noteMissingSwapMetadata = !noteNullifier || !noteExecutorNormalized
+                const noteUseBlocked = noteExecutorMismatch || noteMissingSwapMetadata
                 const noteRemainingMs =
                   typeof note.spendable_at_unix === "number" && Number.isFinite(note.spendable_at_unix)
                     ? Math.max(0, note.spendable_at_unix * 1000 - nowMs)
@@ -5107,13 +5193,33 @@ export function TradingInterface() {
                         ? `Ready in ${formatRemainingDuration(noteRemainingMs)}`
                         : "Ready now"}
                     </p>
+                    {noteExecutorMismatch && (
+                      <p className="text-[11px] text-warning">
+                        Note ini dari executor lama. Gunakan note executor aktif atau withdraw note ini.
+                      </p>
+                    )}
+                    {!noteExecutorMismatch && noteMissingSwapMetadata && (
+                      <p className="text-[11px] text-warning">
+                        Metadata note belum lengkap untuk swap (nullifier/executor).
+                      </p>
+                    )}
                     <div className="mt-2 grid grid-cols-2 gap-2">
                       <Button
                         type="button"
                         variant="secondary"
                         className="h-8 text-[11px]"
-                        disabled={swapState !== "idle"}
+                        disabled={swapState !== "idle" || noteUseBlocked}
                         onClick={() => {
+                          if (noteUseBlocked) {
+                            notifications.addNotification({
+                              type: "warning",
+                              title: "Use note blocked",
+                              message: noteExecutorMismatch
+                                ? "Note ini dari executor lama. Pilih note lain atau withdraw."
+                                : "Note belum punya metadata lengkap untuk swap.",
+                            })
+                            return
+                          }
                           const currentPayload = loadTradePrivacyPayload()
                           const currentCommitment = (
                             currentPayload?.note_commitment ||
@@ -5139,8 +5245,10 @@ export function TradingInterface() {
                             denom_id: note.denom_id,
                             spendable_at_unix: note.spendable_at_unix,
                             root:
-                              (currentPayload?.root || "").trim() ||
-                              inferV3RootFromPublicInputs(currentPublicInputs),
+                              isSameActiveNote
+                                ? (currentPayload?.root || "").trim() ||
+                                  inferV3RootFromPublicInputs(currentPublicInputs)
+                                : undefined,
                             proof: isSameActiveNote && currentProof.length > 0 ? currentProof : undefined,
                             public_inputs:
                               isSameActiveNote && currentPublicInputs.length > 0
