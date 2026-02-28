@@ -10,6 +10,19 @@ const RAW_WS_BASE_URL = (
 export const API_BASE_URL = RAW_API_BASE_URL.replace(/\/$/, "")
 export const WS_BASE_URL = RAW_WS_BASE_URL.replace(/\/$/, "")
 
+const SHOULD_SEND_NGROK_BYPASS_HEADER = (() => {
+  try {
+    const hostname = new URL(API_BASE_URL).hostname.toLowerCase()
+    return (
+      hostname.endsWith(".ngrok-free.app") ||
+      hostname.endsWith(".ngrok.app") ||
+      hostname.endsWith(".ngrok.io")
+    )
+  } catch {
+    return false
+  }
+})()
+
 export interface ApiResponse<T> {
   success: boolean
   data: T
@@ -908,13 +921,17 @@ function emitAuthExpired(message: string, path: string, token?: string | null) {
  */
 async function requestTokenRefresh(refreshToken: string): Promise<string | null> {
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    }
+    if (SHOULD_SEND_NGROK_BYPASS_HEADER) {
+      headers["ngrok-skip-browser-warning"] = "true"
+    }
     const response = await fetch(joinUrl("/api/v1/auth/refresh"), {
       method: "POST",
       cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-      },
+      headers,
       body: JSON.stringify({ refresh_token: refreshToken }),
     })
     const text = await response.text()
@@ -996,6 +1013,9 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
   const headers = new Headers(requestHeaders || {})
   headers.set("Content-Type", "application/json")
   headers.set("Accept", "application/json")
+  if (SHOULD_SEND_NGROK_BYPASS_HEADER && !headers.has("ngrok-skip-browser-warning")) {
+    headers.set("ngrok-skip-browser-warning", "true")
+  }
   if (typeof window !== "undefined" && !headers.has(STARKNET_ADDRESS_HEADER)) {
     const starknetAddress = getStoredActiveStarknetAddress()
     if (starknetAddress) {
