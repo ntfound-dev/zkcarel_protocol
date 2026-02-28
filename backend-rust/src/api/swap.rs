@@ -580,6 +580,52 @@ fn normalize_hex_items(items: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn configured_root_public_input_index() -> usize {
+    std::env::var("GARAGA_ROOT_PUBLIC_INPUT_INDEX")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+fn infer_v3_root_from_public_inputs(public_inputs: &[String]) -> Option<String> {
+    let index = configured_root_public_input_index();
+    let candidate = public_inputs.get(index)?.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    if parse_felt(candidate).is_err() {
+        return None;
+    }
+    Some(candidate.to_string())
+}
+
+fn ensure_v3_payload_root(
+    payload: &mut AutoPrivacyPayloadResponse,
+    tx_context: &AutoPrivacyTxContext,
+) {
+    let has_root = payload
+        .root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    if has_root {
+        return;
+    }
+
+    if let Some(root) = tx_context
+        .root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        payload.root = Some(root.to_string());
+        return;
+    }
+
+    payload.root = infer_v3_root_from_public_inputs(&payload.public_inputs);
+}
+
 // Internal helper that supports `payload_from_request` operations in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn payload_from_request(
@@ -609,6 +655,27 @@ fn payload_from_request(
     {
         return None;
     }
+    let note_version = payload
+        .note_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let mut root = payload
+        .root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if root.is_none()
+        && note_version
+            .as_deref()
+            .map(|value| value.eq_ignore_ascii_case("v3"))
+            .unwrap_or(false)
+    {
+        root = infer_v3_root_from_public_inputs(&public_inputs);
+    }
+
     Some(AutoPrivacyPayloadResponse {
         verifier: payload
             .verifier
@@ -619,18 +686,8 @@ fn payload_from_request(
             .to_string(),
         nullifier: nullifier.to_string(),
         commitment: commitment.to_string(),
-        root: payload
-            .root
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        note_version: payload
-            .note_version
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
+        root,
+        note_version,
         note_commitment: payload
             .note_commitment
             .as_deref()
@@ -2939,6 +2996,7 @@ pub async fn execute_swap(
             bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
             if hide_pool_version == Some(HidePoolVersion::V3) {
                 payload.note_version = Some("v3".to_string());
+                ensure_v3_payload_root(&mut payload, &tx_context);
                 let root = payload.root.as_deref().ok_or_else(|| {
                     AppError::BadRequest(
                         "Hide Balance V3 requires privacy.root in prover payload".to_string(),
@@ -3359,6 +3417,29 @@ mod tests {
         assert_eq!(mapped.note_commitment.as_deref(), Some("0xabc"));
         assert_eq!(mapped.denom_id.as_deref(), Some("10"));
         assert_eq!(mapped.spendable_at_unix, Some(1_777_777_777));
+    }
+
+    #[test]
+    fn payload_from_request_infers_v3_root_from_public_inputs() {
+        let payload = PrivacyVerificationPayload {
+            verifier: Some("garaga".to_string()),
+            note_version: Some("v3".to_string()),
+            root: None,
+            nullifier: Some("0x456".to_string()),
+            commitment: Some("0x789".to_string()),
+            note_commitment: Some("0xabc".to_string()),
+            denom_id: Some("10".to_string()),
+            spendable_at_unix: Some(1_777_777_777),
+            proof: Some(vec!["0x1".to_string(), "0x2".to_string()]),
+            public_inputs: Some(vec![
+                "0x123".to_string(),
+                "0x456".to_string(),
+                "0x999".to_string(),
+            ]),
+        };
+        let mapped = payload_from_request(Some(&payload), "garaga").expect("payload must map");
+        assert_eq!(mapped.note_version.as_deref(), Some("v3"));
+        assert_eq!(mapped.root.as_deref(), Some("0x123"));
     }
 
     #[test]
