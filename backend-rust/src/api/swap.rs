@@ -190,6 +190,13 @@ fn hide_balance_min_note_age_secs() -> u64 {
         .unwrap_or(3600)
 }
 
+fn hide_balance_max_uses_per_day() -> u64 {
+    std::env::var("HIDE_BALANCE_MAX_USES_PER_DAY")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(3)
+}
+
 // Internal helper that supports `resolve_swap_final_recipient` operations in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn resolve_swap_final_recipient(
@@ -669,9 +676,10 @@ fn ensure_v3_payload_public_inputs_shape(
 }
 
 fn normalize_v3_public_inputs_binding(payload: &mut AutoPrivacyPayloadResponse) -> Result<()> {
-    let root = payload.root.as_deref().ok_or_else(|| {
-        AppError::BadRequest("Hide Balance V3 requires privacy.root".to_string())
-    })?;
+    let root = payload
+        .root
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("Hide Balance V3 requires privacy.root".to_string()))?;
     let expected_root = parse_felt(root.trim())?;
     let expected_nullifier = parse_felt(payload.nullifier.trim())?;
     let root_index = configured_root_public_input_index();
@@ -1188,6 +1196,7 @@ fn total_fee(amount_in: f64, mode: &str, nft_discount_percent: f64) -> f64 {
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn estimate_swap_points_for_response(
     volume_usd: f64,
+    usdt_equivalent_volume: f64,
     is_testnet: bool,
     nft_discount_percent: f64,
     ai_level: u8,
@@ -1203,7 +1212,8 @@ fn estimate_swap_points_for_response(
     }
     let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
     let ai_factor = 1.0 + (ai_level_points_bonus_percent(ai_level) / 100.0);
-    (sanitized * POINTS_PER_USD_SWAP * nft_factor * ai_factor).max(0.0)
+    let usdt_tier_factor = 1.0 + (usdt_tier_bonus_percent(usdt_equivalent_volume) / 100.0);
+    (sanitized * POINTS_PER_USD_SWAP * nft_factor * ai_factor * usdt_tier_factor).max(0.0)
 }
 
 // Internal helper that supports `ai_level_points_bonus_percent` operations in the swap flow.
@@ -1213,6 +1223,40 @@ fn ai_level_points_bonus_percent(level: u8) -> f64 {
         3 => AI_LEVEL_3_POINTS_BONUS_PERCENT,
         _ => 0.0,
     }
+}
+
+fn usdt_tier_bonus_percent(usdt_equivalent_volume: f64) -> f64 {
+    let amount = usdt_equivalent_volume.max(0.0);
+    if amount >= 250.0 {
+        50.0
+    } else if amount >= 100.0 {
+        30.0
+    } else if amount >= 50.0 {
+        20.0
+    } else if amount >= 10.0 {
+        10.0
+    } else if amount >= 5.0 {
+        5.0
+    } else {
+        0.0
+    }
+}
+
+fn derive_usdt_equivalent_volume(
+    from_token: &str,
+    to_token: &str,
+    amount_in: f64,
+    amount_out: f64,
+    volume_usd: f64,
+) -> f64 {
+    if from_token.eq_ignore_ascii_case("USDT") {
+        return amount_in.max(0.0);
+    }
+    if to_token.eq_ignore_ascii_case("USDT") {
+        return amount_out.max(0.0);
+    }
+    // Fallback for non-USDT pairs: treat USD notional as USDT-equivalent.
+    sanitize_points_usd_base(volume_usd)
 }
 
 // Internal helper that supports `discount_contract_address` operations in the swap flow.
@@ -2912,6 +2956,18 @@ pub async fn execute_swap(
             _ => {}
         }
     }
+    if should_hide {
+        let max_uses = hide_balance_max_uses_per_day();
+        if max_uses > 0 {
+            let used_today = state.db.count_private_swaps_today(&user_address).await?;
+            if used_today >= max_uses as i64 {
+                return Err(AppError::BadRequest(format!(
+                    "Hide Balance daily limit reached: {}/{} transaksi private swap hari ini (UTC). Coba lagi besok atau set HIDE_BALANCE_MAX_USES_PER_DAY di backend.",
+                    used_today, max_uses
+                )));
+            }
+        }
+    }
 
     // 2. LOGIKA RECIPIENT
     let final_recipient = if should_hide && hide_pool_version == Some(HidePoolVersion::V3) {
@@ -3068,7 +3124,8 @@ pub async fn execute_swap(
                 }
             }
 
-            let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
+            let request_payload =
+                payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
             let mut payload = if hide_pool_version == Some(HidePoolVersion::V3) {
                 if request_payload.is_some() {
                     tracing::info!(
@@ -3355,6 +3412,13 @@ pub async fn execute_swap(
         amount_in * from_price,
         expected_out * to_price,
     ));
+    let usdt_equivalent_volume = derive_usdt_equivalent_volume(
+        &req.from_token,
+        &req.to_token,
+        amount_in,
+        expected_out,
+        volume_usd,
+    );
     let user_ai_level = match state.db.get_user_ai_level(&user_address).await {
         Ok(level) => level,
         Err(err) => {
@@ -3368,6 +3432,7 @@ pub async fn execute_swap(
     };
     let estimated_points_earned = estimate_swap_points_for_response(
         volume_usd,
+        usdt_equivalent_volume,
         state.config.is_testnet(),
         nft_discount_percent,
         user_ai_level,
@@ -3560,6 +3625,21 @@ mod tests {
     fn hide_balance_min_note_age_default_is_one_hour() {
         // Default hard gate (no env override) is 3600s.
         assert_eq!(hide_balance_min_note_age_secs(), 3600);
+    }
+
+    #[test]
+    fn hide_balance_max_uses_per_day_default_is_three() {
+        assert_eq!(hide_balance_max_uses_per_day(), 3);
+    }
+
+    #[test]
+    fn usdt_tier_bonus_percent_applies_expected_tiers() {
+        assert_eq!(usdt_tier_bonus_percent(4.99), 0.0);
+        assert_eq!(usdt_tier_bonus_percent(5.0), 5.0);
+        assert_eq!(usdt_tier_bonus_percent(10.0), 10.0);
+        assert_eq!(usdt_tier_bonus_percent(50.0), 20.0);
+        assert_eq!(usdt_tier_bonus_percent(100.0), 30.0);
+        assert_eq!(usdt_tier_bonus_percent(250.0), 50.0);
     }
 
     #[test]

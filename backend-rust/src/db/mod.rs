@@ -1144,6 +1144,41 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    /// Fetches data for `count_private_swaps_today`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub async fn count_private_swaps_today(&self, user_address: &str) -> Result<i64> {
+        ensure_varchar_max("transactions.user_address", user_address, 66)?;
+        if user_address.trim().is_empty() {
+            return Err(AppError::BadRequest(
+                "transactions.user_address cannot be empty".to_string(),
+            ));
+        }
+
+        let count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)
+            FROM transactions
+            WHERE LOWER(user_address) = LOWER($1)
+              AND tx_type = 'swap'
+              AND COALESCE(is_private, false) = true
+              AND (timestamp AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date
+            "#,
+        )
+        .bind(user_address)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
 }
 
 // Internal helper that runs side-effecting logic for `ensure_varchar_max`.
