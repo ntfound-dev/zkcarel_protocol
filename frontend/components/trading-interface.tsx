@@ -2564,17 +2564,6 @@ export function TradingInterface() {
     hideBalanceOnchain &&
     ((activeTradePrivacyPayload?.note_version || "").trim().toLowerCase() === "v3" ||
       HIDE_BALANCE_SHIELDED_POOL_V3)
-  const configuredHideExecutorNormalized = normalizeExecutorAddress(
-    PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined
-  )
-  const activeHideExecutorNormalized = normalizeExecutorAddress(
-    activeTradePrivacyPayload?.executor_address
-  )
-  const activeHideExecutorMismatch =
-    activeHidePayloadIsV3 &&
-    !!configuredHideExecutorNormalized &&
-    !!activeHideExecutorNormalized &&
-    activeHideExecutorNormalized !== configuredHideExecutorNormalized
   const privacySpendableAtMs =
     typeof activeTradePrivacyPayload?.spendable_at_unix === "number" &&
     Number.isFinite(activeTradePrivacyPayload.spendable_at_unix)
@@ -2612,8 +2601,6 @@ export function TradingInterface() {
       ? "Connect your wallet first."
       : isCancellingHideNote
       ? "Cancelling hide note..."
-      : activeHideExecutorMismatch
-      ? "Active hide note memakai executor lama. Pilih note yang sesuai executor saat ini atau Cancel & Withdraw."
       : !hasPositiveAmount
       ? "Enter a valid amount."
       : isSameTokenSwapPair
@@ -4240,9 +4227,6 @@ export function TradingInterface() {
                 .trim()
                 .toLowerCase()
               const selectedNullifier = (noteDepositPayload.nullifier || "").trim().toLowerCase()
-              const selectedExecutorNormalized = normalizeExecutorAddress(
-                noteDepositPayload.executor_address
-              )
               const pendingNotes = loadPendingHideNotes()
               const selectedNoteTracked = pendingNotes.some((note) => {
                 const sameCommitment =
@@ -4253,13 +4237,9 @@ export function TradingInterface() {
                   (note.nullifier || "").trim().toLowerCase() === selectedNullifier
                 return sameCommitment || sameNullifier
               })
-              const selectedExecutorMismatch =
-                !!configuredHideExecutorNormalized &&
-                !!selectedExecutorNormalized &&
-                selectedExecutorNormalized !== configuredHideExecutorNormalized
-              if (selectedNoteTracked || selectedExecutorMismatch) {
+              if (selectedNoteTracked) {
                 throw new Error(
-                  "Hide note terpilih tidak cocok dengan executor aktif. Pilih note yang executor-nya sesuai atau Cancel & Withdraw. Auto-deposit dibatalkan."
+                  "Hide note terpilih belum valid untuk executor aktif. Pilih note lain atau Cancel & Withdraw. Auto-deposit dibatalkan."
                 )
               }
               let spendableAtUnix = 0
@@ -5224,12 +5204,8 @@ export function TradingInterface() {
                 const noteExecutorNormalized = normalizeExecutorAddress(
                   note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined
                 )
-                const noteExecutorMismatch =
-                  !!configuredHideExecutorNormalized &&
-                  !!normalizeExecutorAddress(note.executor_address) &&
-                  noteExecutorNormalized !== configuredHideExecutorNormalized
                 const noteMissingSwapMetadata = !noteNullifier
-                const noteUseBlocked = noteExecutorMismatch || noteMissingSwapMetadata
+                const noteUseBlocked = noteMissingSwapMetadata
                 const noteRemainingMs =
                   typeof note.spendable_at_unix === "number" && Number.isFinite(note.spendable_at_unix)
                     ? Math.max(0, note.spendable_at_unix * 1000 - nowMs)
@@ -5248,14 +5224,9 @@ export function TradingInterface() {
                         ? `Ready in ${formatRemainingDuration(noteRemainingMs)}`
                         : "Ready now"}
                     </p>
-                    {noteExecutorMismatch && (
+                    {noteMissingSwapMetadata && (
                       <p className="text-[11px] text-warning">
-                        Note ini dari executor lama. Gunakan note executor aktif atau withdraw note ini.
-                      </p>
-                    )}
-                    {!noteExecutorMismatch && noteMissingSwapMetadata && (
-                      <p className="text-[11px] text-warning">
-                        Metadata note belum lengkap untuk swap (nullifier/executor).
+                        Metadata note belum lengkap untuk swap (nullifier).
                       </p>
                     )}
                     <div className="mt-2 grid grid-cols-2 gap-2">
@@ -5269,9 +5240,7 @@ export function TradingInterface() {
                             notifications.addNotification({
                               type: "warning",
                               title: "Use note blocked",
-                              message: noteExecutorMismatch
-                                ? "Note ini dari executor lama. Pilih note lain atau withdraw."
-                                : "Note belum punya metadata lengkap untuk swap.",
+                              message: "Note belum punya metadata lengkap untuk swap.",
                             })
                             return
                           }
