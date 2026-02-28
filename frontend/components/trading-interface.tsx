@@ -1667,7 +1667,9 @@ export function TradingInterface() {
               ? error.message
               : "Gagal menyiapkan payload Garaga otomatis.",
         })
-        if (cachedPayload && !cachedPayloadIsV3) {
+        if (cachedPayload) {
+          // Fallback: keep active cached note payload so execute path can continue.
+          // Backend will regenerate proof when payload is incomplete.
           return cachedPayload
         }
         return undefined
@@ -5111,7 +5113,7 @@ export function TradingInterface() {
                         variant="secondary"
                         className="h-8 text-[11px]"
                         disabled={swapState !== "idle"}
-                        onClick={async () => {
+                        onClick={() => {
                           const currentPayload = loadTradePrivacyPayload()
                           const currentCommitment = (
                             currentPayload?.note_commitment ||
@@ -5152,18 +5154,6 @@ export function TradingInterface() {
                             message:
                               "Active note diganti ke pending note terpilih. Lanjut Execute Private Swap.",
                           })
-                          try {
-                            await resolveHideBalancePrivacyPayload()
-                          } catch (error) {
-                            notifications.addNotification({
-                              type: "warning",
-                              title: "Hide note selected",
-                              message:
-                                error instanceof Error
-                                  ? `Payload refresh akan dilanjutkan saat Execute: ${error.message}`
-                                  : "Payload refresh akan dilanjutkan saat Execute.",
-                            })
-                          }
                         }}
                       >
                         Use For Swap
