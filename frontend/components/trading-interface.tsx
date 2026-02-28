@@ -343,6 +343,22 @@ const isV3Payload = (payload: PrivacyVerificationPayload | undefined): boolean =
   (HIDE_BALANCE_SHIELDED_POOL_V3 &&
     !!(payload?.executor_address || "").trim())
 
+const hasCompleteV3SpendPayload = (payload: PrivacyVerificationPayload | undefined): boolean => {
+  if (!isV3Payload(payload)) return false
+  const noteCommitment = (payload?.note_commitment || payload?.commitment || "").trim()
+  const nullifier = (payload?.nullifier || "").trim()
+  const proof = normalizeHexArray(payload?.proof)
+  const publicInputs = normalizeHexArray(payload?.public_inputs)
+  const root = (payload?.root || "").trim() || inferV3RootFromPublicInputs(publicInputs)
+  return (
+    noteCommitment.length > 0 &&
+    nullifier.length > 0 &&
+    root.length > 0 &&
+    proof.length > 0 &&
+    publicInputs.length > 0
+  )
+}
+
 const inferHideStrkDenomIdFromAmount = (amountText: string): string | undefined => {
   const parsed = Number.parseFloat((amountText || "").trim())
   if (!Number.isFinite(parsed) || parsed <= 0) return undefined
@@ -1391,6 +1407,16 @@ export function TradingInterface() {
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
     const cachedPayload = loadTradePrivacyPayload()
     const cachedPayloadIsV3 = isV3Payload(cachedPayload)
+    if (hasCompleteV3SpendPayload(cachedPayload)) {
+      setHasTradePrivacyPayload(true)
+      return {
+        ...cachedPayload,
+        root:
+          (cachedPayload?.root || "").trim() ||
+          inferV3RootFromPublicInputs(normalizeHexArray(cachedPayload?.public_inputs)) ||
+          undefined,
+      }
+    }
     if (cachedPayload && !cachedPayloadIsV3) {
       setHasTradePrivacyPayload(true)
       return cachedPayload
