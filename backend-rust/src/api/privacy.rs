@@ -82,6 +82,8 @@ pub struct AutoPrivacyPayloadResponse {
     pub nullifier: String,
     pub commitment: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub executor_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note_version: Option<String>,
@@ -261,13 +263,16 @@ pub async fn auto_submit_private_action(
 ) -> Result<Json<ApiResponse<AutoPrivacyActionResponse>>> {
     let user_address = require_user(&headers, &state).await?;
     let verifier_kind = parse_privacy_verifier_kind(req.verifier.as_deref())?;
-    let payload = generate_auto_garaga_payload(
+    let mut payload = generate_auto_garaga_payload(
         &state.config,
         &user_address,
         verifier_kind.as_str(),
         req.tx_context.as_ref(),
     )
     .await?;
+    if let Ok(executor_address) = resolve_private_action_executor_address(&state.config) {
+        payload.executor_address = Some(executor_address);
+    }
 
     let tx_hash = if req.submit_onchain.unwrap_or(false) {
         let submit_req = PrivacyActionRequest {
@@ -341,6 +346,7 @@ pub async fn prepare_private_execution(
         req.tx_context.as_ref(),
     )
     .await?;
+    payload.executor_address = Some(executor_address.clone());
     bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
     ensure_public_inputs_bind_nullifier_commitment(
         &payload.nullifier,
@@ -894,6 +900,7 @@ async fn load_auto_garaga_payload_from_prover_cmd(
         verifier: verifier.to_string(),
         nullifier,
         commitment,
+        executor_address: None,
         root,
         note_version,
         note_commitment,

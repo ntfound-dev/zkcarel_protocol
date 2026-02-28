@@ -372,6 +372,10 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
         typeof parsed.note_version === "string" && parsed.note_version.trim().length > 0
           ? parsed.note_version.trim()
           : undefined,
+      executor_address:
+        typeof parsed.executor_address === "string" && parsed.executor_address.trim().length > 0
+          ? parsed.executor_address.trim()
+          : undefined,
       root:
         typeof parsed.root === "string" && parsed.root.trim().length > 0
           ? parsed.root.trim()
@@ -1392,6 +1396,7 @@ export function TradingInterface() {
         const payload: PrivacyVerificationPayload = {
           verifier: (response.payload?.verifier || "garaga").trim() || "garaga",
           note_version: response.payload?.note_version?.trim() || undefined,
+          executor_address: response.payload?.executor_address?.trim() || undefined,
           root: response.payload?.root?.trim() || undefined,
           nullifier: response.payload?.nullifier?.trim(),
           commitment: response.payload?.commitment?.trim(),
@@ -1425,6 +1430,7 @@ export function TradingInterface() {
         const normalizedPayload: PrivacyVerificationPayload = {
           verifier: payload.verifier,
           note_version: payload.note_version,
+          executor_address: payload.executor_address,
           root: payload.root,
           nullifier: payload.nullifier,
           commitment: payload.commitment,
@@ -2502,6 +2508,7 @@ export function TradingInterface() {
             const preparedPayload: PrivacyVerificationPayload = {
               verifier: (preparedPrivate.payload?.verifier || "garaga").trim() || "garaga",
               note_version: preparedPrivate.payload?.note_version?.trim() || undefined,
+              executor_address: preparedPrivate.payload?.executor_address?.trim() || undefined,
               root: preparedPrivate.payload?.root?.trim() || undefined,
               nullifier: preparedPrivate.payload?.nullifier?.trim(),
               commitment: preparedPrivate.payload?.commitment?.trim(),
@@ -2649,7 +2656,8 @@ export function TradingInterface() {
 
   const ensureHideV3NoteDeposited = React.useCallback(
     async (payload: PrivacyVerificationPayload): Promise<number> => {
-      const executorAddress = PRIVATE_ACTION_EXECUTOR_ADDRESS.trim()
+      const executorAddress =
+        (payload.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
       if (!executorAddress) {
         throw new Error(
           "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS belum di-set untuk hide note deposit."

@@ -416,6 +416,7 @@ fn payload_from_request(
             .to_string(),
         nullifier: nullifier.to_string(),
         commitment: commitment.to_string(),
+        executor_address: None,
         root: payload
             .root
             .as_deref()

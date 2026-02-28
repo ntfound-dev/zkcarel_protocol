@@ -465,6 +465,7 @@ export interface PrivacyAutoSubmitResponse {
     verifier: string
     nullifier: string
     commitment: string
+    executor_address?: string
     recipient?: string
     root?: string
     note_version?: string
@@ -482,6 +483,7 @@ export interface PrivacyPreparePrivateExecutionResponse {
     verifier: string
     nullifier: string
     commitment: string
+    executor_address?: string
     recipient?: string
     root?: string
     note_version?: string
@@ -539,6 +541,7 @@ export type PrivacyRelayerExecutePayload = {
 export type PrivacyVerificationPayload = {
   verifier?: string
   note_version?: string
+  executor_address?: string
   root?: string
   nullifier?: string
   commitment?: string

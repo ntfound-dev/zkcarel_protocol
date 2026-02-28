@@ -116,6 +116,7 @@ export async function executeHideViaRelayer(
   const privacyPayload: PrivacyVerificationPayload = {
     verifier: (prepared.payload?.verifier || options.verifier || "garaga").trim() || "garaga",
     note_version: prepared.payload?.note_version?.trim() || undefined,
+    executor_address: prepared.payload?.executor_address?.trim() || undefined,
     root: prepared.payload?.root?.trim() || undefined,
     nullifier: prepared.payload?.nullifier?.trim(),
     commitment: prepared.payload?.commitment?.trim(),

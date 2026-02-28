@@ -717,6 +717,7 @@ fn parse_or_generate_payload_from_request(
             .filter(|value| !value.is_empty())
             .unwrap_or("0x0")
             .to_string(),
+        executor_address: None,
         root: None,
         note_version: None,
         note_commitment: None,
