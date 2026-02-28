@@ -1298,6 +1298,7 @@ export function TradingInterface() {
   const [balanceHidden, setBalanceHidden] = React.useState(false)
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
+  const [isCancellingHideNote, setIsCancellingHideNote] = React.useState(false)
   const [nowMs, setNowMs] = React.useState(() => Date.now())
   const [hideStrkDenomId, setHideStrkDenomId] = React.useState<string>("10")
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
@@ -2279,9 +2280,19 @@ export function TradingInterface() {
       : 0
   const hideMixingWindowBlocked =
     hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && hideMixingWindowRemainingMs > 0
+  const hasActiveHideV3Note =
+    hideBalanceOnchain &&
+    HIDE_BALANCE_SHIELDED_POOL_V3 &&
+    !!activeTradePrivacyPayload &&
+    !!(
+      (activeTradePrivacyPayload.note_commitment || "").trim() ||
+      (activeTradePrivacyPayload.commitment || "").trim()
+    )
   const executeDisabledReason =
     !wallet.isConnected
       ? "Connect your wallet first."
+      : isCancellingHideNote
+      ? "Cancelling hide note..."
       : !hasPositiveAmount
       ? "Enter a valid amount."
       : isSameTokenSwapPair
@@ -2678,6 +2689,10 @@ export function TradingInterface() {
       if (!noteCommitment) {
         throw new Error("Hide note commitment missing in privacy payload.")
       }
+      const nullifier = (payload.nullifier || "").trim()
+      if (!nullifier) {
+        throw new Error("Hide nullifier missing in privacy payload.")
+      }
 
       const denomId = (
         payload.denom_id ||
@@ -2704,7 +2719,12 @@ export function TradingInterface() {
       const depositCall = {
         contractAddress: executorAddress,
         entrypoint: "deposit_fixed_v3",
-        calldata: [tokenAddress, toHexFelt(denomId), toHexFelt(noteCommitment)],
+        calldata: [
+          tokenAddress,
+          toHexFelt(denomId),
+          toHexFelt(noteCommitment),
+          toHexFelt(nullifier),
+        ],
       }
 
       notifications.addNotification({
@@ -2748,6 +2768,78 @@ export function TradingInterface() {
       starknetProviderHint,
     ]
   )
+
+  const handleCancelHideNoteWithdraw = React.useCallback(async () => {
+    if (!hideBalanceOnchain || !HIDE_BALANCE_SHIELDED_POOL_V3) return
+    const payload = loadTradePrivacyPayload()
+    if (!payload) {
+      notifications.addNotification({
+        type: "warning",
+        title: "No active hide note",
+        message: "Tidak ada note hide aktif untuk di-withdraw.",
+      })
+      return
+    }
+    const executorAddress =
+      (payload.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+    if (!executorAddress) {
+      notifications.addNotification({
+        type: "error",
+        title: "Withdraw failed",
+        message:
+          "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS belum di-set untuk withdraw hide note.",
+      })
+      return
+    }
+    const noteCommitment = (payload.note_commitment || payload.commitment || "").trim()
+    if (!noteCommitment) {
+      notifications.addNotification({
+        type: "error",
+        title: "Withdraw failed",
+        message: "Note commitment tidak tersedia di payload hide aktif.",
+      })
+      return
+    }
+
+    setIsCancellingHideNote(true)
+    notifications.addNotification({
+      type: "info",
+      title: "Wallet signature required",
+      message: "Confirm Cancel & Withdraw untuk mengembalikan dana note ke wallet.",
+    })
+
+    try {
+      const txHash = await invokeStarknetCallsFromWallet(
+        [
+          {
+            contractAddress: executorAddress,
+            entrypoint: "withdraw_note_v3",
+            calldata: [toHexFelt(noteCommitment)],
+          },
+        ],
+        starknetProviderHint
+      )
+      clearTradePrivacyPayload()
+      setHasTradePrivacyPayload(false)
+      notifications.addNotification({
+        type: "success",
+        title: "Hide note withdrawn",
+        message: `Note dibatalkan dan dana dikembalikan (${txHash.slice(0, 10)}...).`,
+        txHash,
+        txNetwork: "starknet",
+      })
+      await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
+    } catch (error) {
+      notifications.addNotification({
+        type: "error",
+        title: "Withdraw failed",
+        message:
+          error instanceof Error ? error.message : "Failed to cancel and withdraw hide note.",
+      })
+    } finally {
+      setIsCancellingHideNote(false)
+    }
+  }, [hideBalanceOnchain, notifications, starknetProviderHint, wallet])
 
   const submitOnchainBridgeTx = React.useCallback(async () => {
     const fromChain = chainFromNetwork(fromToken.network)
@@ -3133,6 +3225,7 @@ export function TradingInterface() {
     setSwapState("confirming")
     setSwapState("processing")
     let tradeFinalized = true
+    let shouldClearTradePrivacyPayload = false
     let submittedSwapTxHash: string | null = null
     const requestedHideBalance = hideBalanceOnchain
     const tradePrivacyPayload = requestedHideBalance
@@ -3807,6 +3900,9 @@ export function TradingInterface() {
           })
         }
 
+        if (effectiveHideBalance) {
+          shouldClearTradePrivacyPayload = true
+        }
         notifications.addNotification({
           type: "success",
           title: "Swap completed",
@@ -3880,6 +3976,9 @@ export function TradingInterface() {
         timeoutCode === "TIMEOUT" ||
         (error instanceof Error && error.message.toLowerCase().includes("timeout"))
       if (!isCrossChain && submittedSwapTxHash && isTimeoutError) {
+        if (hideBalanceOnchain) {
+          shouldClearTradePrivacyPayload = true
+        }
         notifications.addNotification({
           type: "warning",
           title: "Swap still processing",
@@ -3897,7 +3996,7 @@ export function TradingInterface() {
       })
       setSwapState("error")
     } finally {
-      if (hideBalanceOnchain) {
+      if (hideBalanceOnchain && shouldClearTradePrivacyPayload) {
         clearTradePrivacyPayload()
         setHasTradePrivacyPayload(false)
       }
@@ -4611,23 +4710,75 @@ export function TradingInterface() {
           </div>
         )}
 
+        {hasActiveHideV3Note && (
+          <div className="mt-4 p-3 rounded-xl border border-primary/30 bg-primary/10 space-y-2">
+            <p className="text-sm font-medium text-foreground">🔒 Your note is mixing...</p>
+            <p className="text-xs text-muted-foreground">
+              ⏱️ Ready in:{" "}
+              {hideMixingWindowBlocked
+                ? formatRemainingDuration(hideMixingWindowRemainingMs)
+                : "now"}
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                onClick={handleExecuteTrade}
+                disabled={swapState !== "idle" || !!executeDisabledReason}
+                className={cn(
+                  "h-11 text-sm font-semibold text-primary-foreground",
+                  swapState === "idle" &&
+                    "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
+                  swapState === "confirming" && "bg-primary/80",
+                  swapState === "processing" && "bg-secondary/80",
+                  swapState === "success" && "bg-success",
+                  swapState === "error" && "bg-destructive"
+                )}
+              >
+                Execute Private Swap
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCancelHideNoteWithdraw}
+                disabled={isCancellingHideNote || swapState !== "idle"}
+                className="h-11 text-sm font-semibold"
+              >
+                {isCancellingHideNote ? (
+                  <span className="inline-flex items-center gap-1">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Cancelling...
+                  </span>
+                ) : (
+                  "Cancel & Withdraw"
+                )}
+              </Button>
+            </div>
+            {swapState === "idle" && executeDisabledReason && (
+              <p className="text-center text-xs text-warning">{executeDisabledReason}</p>
+            )}
+          </div>
+        )}
+
         {/* Execute Button */}
-        <Button 
-          onClick={handleExecuteTrade}
-          disabled={swapState !== "idle" || !!executeDisabledReason}
-          className={cn(
-            "hidden md:inline-flex w-full mt-6 py-6 text-lg font-bold transition-all text-primary-foreground",
-            swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
-            swapState === "confirming" && "bg-primary/80",
-            swapState === "processing" && "bg-secondary/80",
-            swapState === "success" && "bg-success",
-            swapState === "error" && "bg-destructive"
-          )}
-        >
-          {executeButtonLabel}
-        </Button>
-        {swapState === "idle" && executeDisabledReason && (
-          <p className="hidden md:block text-center text-xs text-warning mt-2">{executeDisabledReason}</p>
+        {!hasActiveHideV3Note && (
+          <>
+            <Button 
+              onClick={handleExecuteTrade}
+              disabled={swapState !== "idle" || !!executeDisabledReason}
+              className={cn(
+                "hidden md:inline-flex w-full mt-6 py-6 text-lg font-bold transition-all text-primary-foreground",
+                swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
+                swapState === "confirming" && "bg-primary/80",
+                swapState === "processing" && "bg-secondary/80",
+                swapState === "success" && "bg-success",
+                swapState === "error" && "bg-destructive"
+              )}
+            >
+              {executeButtonLabel}
+            </Button>
+            {swapState === "idle" && executeDisabledReason && (
+              <p className="hidden md:block text-center text-xs text-warning mt-2">{executeDisabledReason}</p>
+            )}
+          </>
         )}
 
         <p className="text-center text-xs text-muted-foreground mt-4">
@@ -4635,6 +4786,7 @@ export function TradingInterface() {
         </p>
       </div>
 
+      {!hasActiveHideV3Note && (
       <div className="fixed md:hidden inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto w-full max-w-xl px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
           <div className="mb-2 grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
@@ -4661,6 +4813,7 @@ export function TradingInterface() {
           )}
         </div>
       </div>
+      )}
 
       {previewOpen ? (
         <TradePreviewDialog

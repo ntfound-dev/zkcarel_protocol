@@ -17,8 +17,13 @@ pub trait IShieldedPoolV3<TContractState> {
     );
 
     fn deposit_fixed_v3(
-        ref self: TContractState, token: ContractAddress, denom_id: felt252, note_commitment: felt252,
+        ref self: TContractState,
+        token: ContractAddress,
+        denom_id: felt252,
+        note_commitment: felt252,
+        nullifier: felt252,
     );
+    fn withdraw_note_v3(ref self: TContractState, note_commitment: felt252);
 
     fn submit_private_swap(
         ref self: TContractState, root: felt252, nullifier: felt252, proof: Span<felt252>,
@@ -160,6 +165,12 @@ pub mod ShieldedPoolV3 {
 
         pub note_seen: Map<felt252, bool>,
         pub deposit_timestamp_by_commitment: Map<felt252, u64>,
+        pub note_owner_by_commitment: Map<felt252, ContractAddress>,
+        pub note_token_by_commitment: Map<felt252, ContractAddress>,
+        pub note_amount_by_commitment: Map<felt252, u256>,
+        pub note_nullifier_by_commitment: Map<felt252, felt252>,
+        pub note_commitment_by_nullifier: Map<felt252, felt252>,
+        pub note_spent_by_commitment: Map<felt252, bool>,
     }
 
     #[event]
@@ -170,6 +181,7 @@ pub mod ShieldedPoolV3 {
         RootUpdated: RootUpdated,
         AssetRuleUpdated: AssetRuleUpdated,
         DepositRegisteredV3: DepositRegisteredV3,
+        NoteWithdrawnV3: NoteWithdrawnV3,
         PrivateActionSubmittedV3: PrivateActionSubmittedV3,
         PrivateActionExecutedV3: PrivateActionExecutedV3,
     }
@@ -204,6 +216,17 @@ pub mod ShieldedPoolV3 {
         pub denom_id: felt252,
         pub amount: u256,
         pub note_commitment: felt252,
+        pub nullifier: felt252,
+        pub timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct NoteWithdrawnV3 {
+        pub sender: ContractAddress,
+        pub token: ContractAddress,
+        pub amount: u256,
+        pub note_commitment: felt252,
+        pub nullifier: felt252,
         pub timestamp: u64,
     }
 
@@ -282,14 +305,21 @@ pub mod ShieldedPoolV3 {
         }
 
         fn deposit_fixed_v3(
-            ref self: ContractState, token: ContractAddress, denom_id: felt252, note_commitment: felt252,
+            ref self: ContractState,
+            token: ContractAddress,
+            denom_id: felt252,
+            note_commitment: felt252,
+            nullifier: felt252,
         ) {
             let sender = get_caller_address();
             assert!(!sender.is_zero(), "Sender required");
             assert!(!token.is_zero(), "Token required");
             assert!(denom_id != 0, "denom_id required");
             assert!(note_commitment != 0, "note_commitment required");
+            assert!(nullifier != 0, "Nullifier required");
             assert!(!self.note_seen.read(note_commitment), "Note already exists");
+            assert!(!self.nullifier_used.read(nullifier), "Nullifier already spent");
+            assert!(self.note_commitment_by_nullifier.read(nullifier) == 0, "Nullifier already bound");
 
             let amount = self.fixed_amount(token, denom_id);
             assert!(!_is_zero_u256(amount), "Asset rule not set");
@@ -302,11 +332,58 @@ pub mod ShieldedPoolV3 {
             let ts = get_block_timestamp();
             self.note_seen.write(note_commitment, true);
             self.deposit_timestamp_by_commitment.write(note_commitment, ts);
+            self.note_owner_by_commitment.write(note_commitment, sender);
+            self.note_token_by_commitment.write(note_commitment, token);
+            self.note_amount_by_commitment.write(note_commitment, amount);
+            self.note_nullifier_by_commitment.write(note_commitment, nullifier);
+            self.note_commitment_by_nullifier.write(nullifier, note_commitment);
+            self.note_spent_by_commitment.write(note_commitment, false);
             self
                 .emit(
                     Event::DepositRegisteredV3(
                         DepositRegisteredV3 {
-                            sender, token, denom_id, amount, note_commitment, timestamp: ts,
+                            sender, token, denom_id, amount, note_commitment, nullifier, timestamp: ts,
+                        },
+                    ),
+                );
+        }
+
+        fn withdraw_note_v3(ref self: ContractState, note_commitment: felt252) {
+            let sender = get_caller_address();
+            assert!(!sender.is_zero(), "Sender required");
+            assert!(note_commitment != 0, "note_commitment required");
+            assert!(self.note_seen.read(note_commitment), "Note not found");
+            let owner = self.note_owner_by_commitment.read(note_commitment);
+            assert!(owner == sender, "Only note owner");
+            assert!(!self.note_spent_by_commitment.read(note_commitment), "Note already spent");
+
+            let token = self.note_token_by_commitment.read(note_commitment);
+            assert!(!token.is_zero(), "Note token missing");
+            let amount = self.note_amount_by_commitment.read(note_commitment);
+            assert!(!_is_zero_u256(amount), "Note amount missing");
+            let nullifier = self.note_nullifier_by_commitment.read(note_commitment);
+            assert!(nullifier != 0, "Note nullifier missing");
+            assert!(!self.pending_action_exists_by_nullifier.read(nullifier), "Pending action exists");
+            assert!(!self.nullifier_used.read(nullifier), "Nullifier already spent");
+
+            let token_dispatcher = IERC20Dispatcher { contract_address: token };
+            let transferred = token_dispatcher.transfer(sender, amount);
+            assert!(transferred, "Withdraw transfer failed");
+
+            self.note_spent_by_commitment.write(note_commitment, true);
+            self.nullifier_used.write(nullifier, true);
+
+            let ts = get_block_timestamp();
+            self
+                .emit(
+                    Event::NoteWithdrawnV3(
+                        NoteWithdrawnV3 {
+                            sender,
+                            token,
+                            amount,
+                            note_commitment,
+                            nullifier,
+                            timestamp: ts,
                         },
                     ),
                 );
@@ -545,6 +622,10 @@ pub mod ShieldedPoolV3 {
             assert!(nullifier != 0, "Nullifier required");
             assert!(!self.nullifier_used.read(nullifier), "Nullifier already spent");
             assert!(!self.pending_action_exists_by_nullifier.read(nullifier), "Pending action exists");
+            let note_commitment = self.note_commitment_by_nullifier.read(nullifier);
+            assert!(note_commitment != 0, "Nullifier note missing");
+            assert!(self.note_seen.read(note_commitment), "Note missing");
+            assert!(!self.note_spent_by_commitment.read(note_commitment), "Note already spent");
 
             let current_root = self.current_root.read();
             assert!(current_root != 0, "Root not initialized");
@@ -656,6 +737,10 @@ pub mod ShieldedPoolV3 {
 
             self._clear_pending_action(nullifier);
             self.nullifier_used.write(nullifier, true);
+            let note_commitment = self.note_commitment_by_nullifier.read(nullifier);
+            if note_commitment != 0 {
+                self.note_spent_by_commitment.write(note_commitment, true);
+            }
 
             self
                 .emit(

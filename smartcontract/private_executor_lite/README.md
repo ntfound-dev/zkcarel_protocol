@@ -34,7 +34,7 @@ Package ini adalah jalur default hide mode di MVP CAREL. Tujuannya iterasi cepat
 
 ## Hide Mode Flow (Ringkas)
 1. Admin set root dan aturan aset lewat `set_root` + `set_asset_rule(token, denom_id, amount)`.
-2. User deposit note lewat `deposit_fixed_v3(token, denom_id, note_commitment)`.
+2. User deposit note lewat `deposit_fixed_v3(token, denom_id, note_commitment, nullifier)`.
 3. User submit intent privat berbasis nullifier:
    - `submit_private_swap(root, nullifier, proof)`
    - `submit_private_limit(root, nullifier, proof)`
@@ -43,6 +43,8 @@ Package ini adalah jalur default hide mode di MVP CAREL. Tujuannya iterasi cepat
    - `execute_private_swap_with_payout(...)`
    - `execute_private_limit_with_payout(...)`
    - `execute_private_stake_with_payout(...)`
+5. User punya jalur cancel aman saat mixing:
+   - `withdraw_note_v3(note_commitment)`
 
 ## Build and Test
 Dari root repo:

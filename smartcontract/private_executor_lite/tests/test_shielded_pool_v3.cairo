@@ -240,7 +240,7 @@ fn test_v3_swap_payout_uses_recipient_from_proof() {
     token_in.approve(pool.contract_address, 100_u256);
     stop_cheat_caller_address(token_in.contract_address);
     start_cheat_caller_address(pool.contract_address, user);
-    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment, nullifier);
     stop_cheat_caller_address(pool.contract_address);
 
     let action_hash = pool
@@ -300,8 +300,8 @@ fn test_v3_two_notes_same_denom_both_spendable() {
     token_in.approve(pool.contract_address, 200_u256);
     stop_cheat_caller_address(token_in.contract_address);
     start_cheat_caller_address(pool.contract_address, user);
-    pool.deposit_fixed_v3(token_in.contract_address, 10, note_1);
-    pool.deposit_fixed_v3(token_in.contract_address, 10, note_2);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, note_1, nullifier_1);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, note_2, nullifier_2);
     stop_cheat_caller_address(pool.contract_address);
 
     let hash_1 = pool
@@ -372,7 +372,7 @@ fn test_v3_action_hash_mismatch_reverts() {
     token_in.approve(pool.contract_address, 100_u256);
     stop_cheat_caller_address(token_in.contract_address);
     start_cheat_caller_address(pool.contract_address, user);
-    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment, nullifier);
     stop_cheat_caller_address(pool.contract_address);
 
     let submit_calldata = array![payout_token_felt, 55, 0];
@@ -419,7 +419,7 @@ fn test_v3_rejects_double_spend_nullifier() {
     token_in.approve(pool.contract_address, 100_u256);
     stop_cheat_caller_address(token_in.contract_address);
     start_cheat_caller_address(pool.contract_address, user);
-    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment, nullifier);
     stop_cheat_caller_address(pool.contract_address);
 
     let action_hash = pool
@@ -466,8 +466,8 @@ fn test_v3_limit_and_stake_paths_work() {
     token_in.approve(pool.contract_address, 200_u256);
     stop_cheat_caller_address(token_in.contract_address);
     start_cheat_caller_address(pool.contract_address, user);
-    pool.deposit_fixed_v3(token_in.contract_address, 10, 0xe001);
-    pool.deposit_fixed_v3(token_in.contract_address, 10, 0xe002);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, 0xe001, 0xe101);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, 0xe002, 0xe102);
     stop_cheat_caller_address(pool.contract_address);
 
     let calldata_limit = array![payout_token_felt, 31, 0];
@@ -540,7 +540,7 @@ fn test_v3_pending_action_is_keyed_by_nullifier() {
     token_in.approve(pool.contract_address, 100_u256);
     stop_cheat_caller_address(token_in.contract_address);
     start_cheat_caller_address(pool.contract_address, user);
-    pool.deposit_fixed_v3(token_in.contract_address, 10, not_nullifier_but_note);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, not_nullifier_but_note, nullifier);
     stop_cheat_caller_address(pool.contract_address);
 
     let action_hash = pool
@@ -576,4 +576,48 @@ fn test_v3_denom_tiers_configurable() {
     assert(pool.fixed_amount(token_in.contract_address, 10) == 10_u256, 'D10');
     assert(pool.fixed_amount(token_in.contract_address, 50) == 50_u256, 'D50');
     assert(pool.fixed_amount(token_in.contract_address, 100) == 100_u256, 'D100');
+}
+
+#[test]
+fn test_v3_withdraw_note_returns_original_token_and_blocks_spend() {
+    let (pool, token_in, _token_out, _swap, _admin, _relayer, user, _root) = setup_pool_v3();
+    let note_commitment: felt252 = 0xa991;
+    let nullifier: felt252 = 0xa992;
+
+    start_cheat_caller_address(token_in.contract_address, user);
+    token_in.approve(pool.contract_address, 100_u256);
+    stop_cheat_caller_address(token_in.contract_address);
+
+    start_cheat_caller_address(pool.contract_address, user);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment, nullifier);
+    stop_cheat_caller_address(pool.contract_address);
+
+    assert(token_in.balance_of(user) == 1_900_u256, 'USER_AFTER_DEPOSIT');
+
+    start_cheat_caller_address(pool.contract_address, user);
+    pool.withdraw_note_v3(note_commitment);
+    stop_cheat_caller_address(pool.contract_address);
+
+    assert(token_in.balance_of(user) == 2_000_u256, 'USER_AFTER_WITHDRAW');
+    assert(pool.is_nullifier_used(nullifier), 'NULL_CONSUMED');
+}
+
+#[test]
+#[should_panic(expected: "Only note owner")]
+fn test_v3_withdraw_note_only_owner() {
+    let (pool, token_in, _token_out, _swap, _admin, _relayer, user, _root) = setup_pool_v3();
+    let note_commitment: felt252 = 0xaa11;
+    let nullifier: felt252 = 0xaa12;
+    let attacker: ContractAddress = 0xdead.try_into().unwrap();
+
+    start_cheat_caller_address(token_in.contract_address, user);
+    token_in.approve(pool.contract_address, 100_u256);
+    stop_cheat_caller_address(token_in.contract_address);
+
+    start_cheat_caller_address(pool.contract_address, user);
+    pool.deposit_fixed_v3(token_in.contract_address, 10, note_commitment, nullifier);
+    stop_cheat_caller_address(pool.contract_address);
+
+    start_cheat_caller_address(pool.contract_address, attacker);
+    pool.withdraw_note_v3(note_commitment);
 }
