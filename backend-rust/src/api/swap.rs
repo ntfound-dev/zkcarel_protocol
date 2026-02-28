@@ -481,7 +481,7 @@ async fn shielded_executor_supports_deposit_fixed_v3(
         .call(FunctionCall {
             contract_address: executor,
             entry_point_selector: selector,
-            calldata: vec![Felt::ONE, Felt::ONE, Felt::ONE],
+            calldata: vec![Felt::ONE, Felt::ONE, Felt::ONE, Felt::ONE],
         })
         .await;
     match probe {

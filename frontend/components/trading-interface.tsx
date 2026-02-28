@@ -104,6 +104,10 @@ type PendingHideNoteRecord = {
   note_commitment: string
   nullifier?: string
   executor_address?: string
+  verifier?: string
+  root?: string
+  proof?: string[]
+  public_inputs?: string[]
   denom_id?: string
   token_symbol?: string
   amount?: string
@@ -546,6 +550,8 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
           typeof item.spendable_at_unix === "number" && Number.isFinite(item.spendable_at_unix)
             ? Math.floor(item.spendable_at_unix)
             : undefined
+        const proof = normalizeHexArray((item as { proof?: unknown }).proof)
+        const publicInputs = normalizeHexArray((item as { public_inputs?: unknown }).public_inputs)
         return {
           note_version: "v3" as const,
           note_commitment: noteCommitment,
@@ -554,6 +560,16 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
             typeof item.executor_address === "string"
               ? item.executor_address.trim() || undefined
               : undefined,
+          verifier:
+            typeof (item as { verifier?: unknown }).verifier === "string"
+              ? String((item as { verifier?: string }).verifier || "").trim() || undefined
+              : undefined,
+          root:
+            typeof (item as { root?: unknown }).root === "string"
+              ? String((item as { root?: string }).root || "").trim() || undefined
+              : undefined,
+          proof: proof.length > 0 ? proof : undefined,
+          public_inputs: publicInputs.length > 0 ? publicInputs : undefined,
           denom_id: typeof item.denom_id === "string" ? item.denom_id.trim() || undefined : undefined,
           token_symbol:
             typeof item.token_symbol === "string" ? item.token_symbol.trim() || undefined : undefined,
@@ -579,8 +595,39 @@ const upsertPendingHideNote = (note: PendingHideNoteRecord) => {
   const items = loadPendingHideNotes()
   const normalizedCommitment = note.note_commitment.trim().toLowerCase()
   const normalizedNullifier = (note.nullifier || "").trim().toLowerCase()
+  const existing = items.find((item) => {
+    const sameCommitment = item.note_commitment.trim().toLowerCase() === normalizedCommitment
+    const sameNullifier =
+      normalizedNullifier.length > 0 &&
+      (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+    return sameCommitment || sameNullifier
+  })
+  const merged: PendingHideNoteRecord = {
+    ...(existing || {}),
+    ...note,
+    proof:
+      normalizeHexArray(note.proof).length > 0
+        ? normalizeHexArray(note.proof)
+        : normalizeHexArray(existing?.proof).length > 0
+        ? normalizeHexArray(existing?.proof)
+        : undefined,
+    public_inputs:
+      normalizeHexArray(note.public_inputs).length > 0
+        ? normalizeHexArray(note.public_inputs)
+        : normalizeHexArray(existing?.public_inputs).length > 0
+        ? normalizeHexArray(existing?.public_inputs)
+        : undefined,
+    root:
+      (note.root || "").trim() ||
+      (existing?.root || "").trim() ||
+      undefined,
+    verifier:
+      (note.verifier || "").trim() ||
+      (existing?.verifier || "").trim() ||
+      undefined,
+  }
   const next = [
-    note,
+    merged,
     ...items.filter((item) => {
       const sameCommitment = item.note_commitment.trim().toLowerCase() === normalizedCommitment
       const sameNullifier =
@@ -3045,6 +3092,12 @@ export function TradingInterface() {
         note_commitment: noteCommitment,
         nullifier,
         executor_address: executorAddress,
+        verifier: (payload.verifier || "garaga").trim() || "garaga",
+        root:
+          (payload.root || "").trim() ||
+          inferV3RootFromPublicInputs(normalizeHexArray(payload.public_inputs)),
+        proof: normalizeHexArray(payload.proof),
+        public_inputs: normalizeHexArray(payload.public_inputs),
         denom_id: denomId,
         token_symbol: tokenSymbol,
         amount: denomAmountText,
@@ -5168,12 +5221,14 @@ export function TradingInterface() {
               {pendingHideNotesActive.map((note) => {
                 const noteCommitment = (note.note_commitment || "").trim()
                 const noteNullifier = (note.nullifier || "").trim()
-                const noteExecutorNormalized = normalizeExecutorAddress(note.executor_address)
+                const noteExecutorNormalized = normalizeExecutorAddress(
+                  note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined
+                )
                 const noteExecutorMismatch =
                   !!configuredHideExecutorNormalized &&
-                  !!noteExecutorNormalized &&
+                  !!normalizeExecutorAddress(note.executor_address) &&
                   noteExecutorNormalized !== configuredHideExecutorNormalized
-                const noteMissingSwapMetadata = !noteNullifier || !noteExecutorNormalized
+                const noteMissingSwapMetadata = !noteNullifier
                 const noteUseBlocked = noteExecutorMismatch || noteMissingSwapMetadata
                 const noteRemainingMs =
                   typeof note.spendable_at_unix === "number" && Number.isFinite(note.spendable_at_unix)
@@ -5233,9 +5288,26 @@ export function TradingInterface() {
                             !!currentCommitment && currentCommitment === selectedCommitment
                           const currentProof = normalizeHexArray(currentPayload?.proof)
                           const currentPublicInputs = normalizeHexArray(currentPayload?.public_inputs)
+                          const noteProof = normalizeHexArray(note.proof)
+                          const notePublicInputs = normalizeHexArray(note.public_inputs)
+                          const noteRoot =
+                            (note.root || "").trim() || inferV3RootFromPublicInputs(notePublicInputs)
+                          const selectedProof =
+                            noteProof.length > 0
+                              ? noteProof
+                              : isSameActiveNote && currentProof.length > 0
+                              ? currentProof
+                              : undefined
+                          const selectedPublicInputs =
+                            notePublicInputs.length > 0
+                              ? notePublicInputs
+                              : isSameActiveNote && currentPublicInputs.length > 0
+                              ? currentPublicInputs
+                              : undefined
                           persistTradePrivacyPayload({
                             verifier:
-                              (currentPayload?.verifier || "garaga").trim() || "garaga",
+                              (note.verifier || currentPayload?.verifier || "garaga").trim() ||
+                              "garaga",
                             note_version: "v3",
                             executor_address:
                               note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
@@ -5245,15 +5317,13 @@ export function TradingInterface() {
                             denom_id: note.denom_id,
                             spendable_at_unix: note.spendable_at_unix,
                             root:
-                              isSameActiveNote
+                              noteRoot ||
+                              (isSameActiveNote
                                 ? (currentPayload?.root || "").trim() ||
                                   inferV3RootFromPublicInputs(currentPublicInputs)
-                                : undefined,
-                            proof: isSameActiveNote && currentProof.length > 0 ? currentProof : undefined,
-                            public_inputs:
-                              isSameActiveNote && currentPublicInputs.length > 0
-                                ? currentPublicInputs
-                                : undefined,
+                                : undefined),
+                            proof: selectedProof,
+                            public_inputs: selectedPublicInputs,
                           })
                           setHasTradePrivacyPayload(true)
                           notifications.addNotification({
