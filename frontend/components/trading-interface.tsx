@@ -160,8 +160,12 @@ const HIDE_BALANCE_SHIELDED_POOL_V3 =
   HIDE_BALANCE_EXECUTOR_KIND === "shielded-v3" ||
   HIDE_BALANCE_EXECUTOR_KIND === "v3"
 const HIDE_BALANCE_SHIELDED_POOL = HIDE_BALANCE_SHIELDED_POOL_V2 || HIDE_BALANCE_SHIELDED_POOL_V3
+const HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW =
+  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS || ""
+const HIDE_BALANCE_MIN_NOTE_AGE_CONFIGURED =
+  HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW.trim().length > 0
 const HIDE_BALANCE_MIN_NOTE_AGE_SECS = Number.parseInt(
-  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS || "3600",
+  HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW || "3600",
   10
 )
 const MIN_WAIT_MS =
@@ -2713,24 +2717,28 @@ export function TradingInterface() {
         starknetProviderHint
       )
 
-      const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+      const spendableAtUnix = HIDE_BALANCE_MIN_NOTE_AGE_CONFIGURED
+        ? Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+        : undefined
       persistTradePrivacyPayload({
         ...payload,
         note_version: "v3",
         note_commitment: noteCommitment,
         denom_id: denomId,
-        spendable_at_unix: spendableAtUnix,
+        spendable_at_unix: spendableAtUnix || undefined,
       })
       setHasTradePrivacyPayload(true)
 
       notifications.addNotification({
         type: "success",
         title: "Hide note deposited",
-        message: `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Tunggu mixing window sebelum swap hide.`,
+        message: HIDE_BALANCE_MIN_NOTE_AGE_CONFIGURED
+          ? `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Tunggu mixing window sebelum swap hide.`
+          : `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Retry private swap, backend akan enforce mixing window aktual.`,
         txHash: depositTxHash,
         txNetwork: "starknet",
       })
-      return spendableAtUnix
+      return spendableAtUnix || 0
     },
     [
       fromAmount,
@@ -3143,11 +3151,13 @@ export function TradingInterface() {
           tradePrivacyPayload.spendable_at_unix * 1000 - Date.now()
         )
         if (remainingMs > 0) {
-          throw new Error(
-            `Hide Balance note masih dalam mixing window. Tunggu ${formatRemainingDuration(
+          notifications.addNotification({
+            type: "warning",
+            title: "Mixing window aktif",
+            message: `Frontend estimate: tunggu ${formatRemainingDuration(
               remainingMs
-            )} sebelum execute.`
-          )
+            )}. Kamu tetap bisa retry; backend akan enforce window aktual.`,
+          })
         }
       }
       if (requestedHideBalance && !tradePrivacyPayload) {
@@ -3741,11 +3751,16 @@ export function TradingInterface() {
             ) {
               try {
                 const spendableAtUnix = await ensureHideV3NoteDeposited(noteDepositPayload)
-                const remainingMs = Math.max(0, spendableAtUnix * 1000 - Date.now())
+                if (spendableAtUnix > 0) {
+                  const remainingMs = Math.max(0, spendableAtUnix * 1000 - Date.now())
+                  throw new Error(
+                    `Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
+                      remainingMs
+                    )} sebelum retry private swap.`
+                  )
+                }
                 throw new Error(
-                  `Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
-                    remainingMs
-                  )} sebelum retry private swap.`
+                  "Hide note berhasil dideposit. Retry private swap; backend akan enforce mixing window aktual."
                 )
               } catch (depositError) {
                 const depositMessage =
