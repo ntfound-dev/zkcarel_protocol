@@ -2636,10 +2636,6 @@ export function TradingInterface() {
 
   const ensureHideV3NoteDeposited = React.useCallback(
     async (payload: PrivacyVerificationPayload): Promise<number> => {
-      const payloadIsV3 = (payload.note_version || "").trim().toLowerCase() === "v3"
-      if (!HIDE_BALANCE_SHIELDED_POOL_V3 && !payloadIsV3) {
-        throw new Error("Hide note auto-deposit only supports ShieldedPoolV3.")
-      }
       const executorAddress = PRIVATE_ACTION_EXECUTOR_ADDRESS.trim()
       if (!executorAddress) {
         throw new Error(
