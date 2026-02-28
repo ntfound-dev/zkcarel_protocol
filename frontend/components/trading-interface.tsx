@@ -2627,6 +2627,98 @@ export function TradingInterface() {
     ]
   )
 
+  const ensureHideV3NoteDeposited = React.useCallback(
+    async (payload: PrivacyVerificationPayload): Promise<number> => {
+      if (!HIDE_BALANCE_SHIELDED_POOL_V3) {
+        throw new Error("Hide note auto-deposit only supports ShieldedPoolV3.")
+      }
+      const executorAddress = PRIVATE_ACTION_EXECUTOR_ADDRESS.trim()
+      if (!executorAddress) {
+        throw new Error(
+          "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS belum di-set untuk hide note deposit."
+        )
+      }
+
+      const tokenSymbol = fromToken.symbol.toUpperCase()
+      const tokenAddress = resolveTokenAddress(tokenSymbol).trim()
+      if (!tokenAddress) {
+        throw new Error(`Token address for ${tokenSymbol} is not configured.`)
+      }
+
+      const noteCommitment = (payload.note_commitment || payload.commitment || "").trim()
+      if (!noteCommitment) {
+        throw new Error("Hide note commitment missing in privacy payload.")
+      }
+
+      const denomId = (
+        payload.denom_id ||
+        (hideStrkDenomEnabled ? selectedHideStrkDenom.id : "")
+      ).trim()
+      if (!denomId) {
+        throw new Error("Hide denom_id missing in privacy payload.")
+      }
+
+      const denomAmountText =
+        HIDE_STRK_DENOM_OPTIONS.find((item) => item.id === denomId)?.amount || fromAmount
+      const [amountLow, amountHigh] = decimalToU256Parts(
+        denomAmountText,
+        resolveTokenDecimals(tokenSymbol)
+      )
+
+      const approvalCall = {
+        contractAddress: tokenAddress,
+        entrypoint: "approve",
+        calldata: [executorAddress, amountLow, amountHigh],
+      }
+      const depositCall = {
+        contractAddress: executorAddress,
+        entrypoint: "deposit_fixed_v3",
+        calldata: [tokenAddress, toHexFelt(denomId), toHexFelt(noteCommitment)],
+      }
+
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: `Confirm hide note approval ${denomAmountText} ${tokenSymbol}.`,
+      })
+      await invokeStarknetCallsFromWallet([approvalCall], starknetProviderHint)
+
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: "Confirm hide note deposit transaction.",
+      })
+      const depositTxHash = await invokeStarknetCallsFromWallet([depositCall], starknetProviderHint)
+
+      const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+      persistTradePrivacyPayload({
+        ...payload,
+        note_version: "v3",
+        note_commitment: noteCommitment,
+        denom_id: denomId,
+        spendable_at_unix: spendableAtUnix,
+      })
+      setHasTradePrivacyPayload(true)
+
+      notifications.addNotification({
+        type: "success",
+        title: "Hide note deposited",
+        message: `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Tunggu mixing window sebelum swap hide.`,
+        txHash: depositTxHash,
+        txNetwork: "starknet",
+      })
+      return spendableAtUnix
+    },
+    [
+      fromAmount,
+      fromToken.symbol,
+      hideStrkDenomEnabled,
+      notifications,
+      selectedHideStrkDenom.id,
+      starknetProviderHint,
+    ]
+  )
+
   const submitOnchainBridgeTx = React.useCallback(async () => {
     const fromChain = chainFromNetwork(fromToken.network)
     const toChain = chainFromNetwork(toToken.network)
@@ -3613,6 +3705,27 @@ export function TradingInterface() {
               throw new Error(
                 "Backend relayer hide-mode belum aktif (masih minta onchain_tx_hash). Set HIDE_BALANCE_RELAYER_POOL_ENABLED=true lalu restart backend."
               )
+            }
+            if (
+              HIDE_BALANCE_SHIELDED_POOL_V3 &&
+              /note belum terdaftar/i.test(message) &&
+              submittedPrivacyPayload
+            ) {
+              try {
+                const spendableAtUnix = await ensureHideV3NoteDeposited(submittedPrivacyPayload)
+                const remainingMs = Math.max(0, spendableAtUnix * 1000 - Date.now())
+                throw new Error(
+                  `Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
+                    remainingMs
+                  )} sebelum retry private swap.`
+                )
+              } catch (depositError) {
+                const depositMessage =
+                  depositError instanceof Error ? depositError.message : String(depositError || "")
+                throw new Error(
+                  `Hide note belum terdaftar dan auto-deposit gagal. Detail: ${depositMessage}`
+                )
+              }
             }
             throw new Error(
               `Hide relayer unavailable. Wallet fallback diblok agar detail swap tidak bocor di explorer. Detail: ${message}`
