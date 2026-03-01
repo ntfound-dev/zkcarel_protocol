@@ -335,6 +335,9 @@ export async function invokeStarknetCallsFromWallet(
         if (isWalletUserRejectedError(error)) {
           throw new Error("Wallet signature was rejected.")
         }
+        if (isWalletRequestPendingError(error)) {
+          throw new Error("Wallet request already pending. Open wallet extension.")
+        }
         attemptErrors.push(`${payload.type} failed: ${walletErrorMessage(error)}`)
       }
     }
@@ -1723,14 +1726,27 @@ function isWalletUserRejectedError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code
   if (code === 4001 || code === "4001") return true
   const message = walletErrorMessage(error).toLowerCase()
-  return (
+  if (!message) return false
+  if (
     message.includes("user rejected") ||
     message.includes("rejected by user") ||
     message.includes("user denied") ||
     message.includes("request rejected") ||
-    message.includes("cancelled") ||
-    message.includes("canceled")
-  )
+    message.includes("wallet signature was rejected") ||
+    message.includes("transaction rejected")
+  ) {
+    return true
+  }
+  const cancelledPattern =
+    /(user|wallet|request|signature|approve|confirm).*(reject|den(y|ied)|declin|cancel|abort|dismiss)|(reject|den(y|ied)|declin|cancel|abort|dismiss).*(user|wallet|request|signature|approve|confirm)/
+  return cancelledPattern.test(message)
+}
+
+function isWalletRequestPendingError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code
+  if (code === -32002 || code === "-32002") return true
+  const message = walletErrorMessage(error).toLowerCase()
+  return message.includes("already pending") || /request of type .* already pending/i.test(message)
 }
 
 /**
@@ -1792,6 +1808,12 @@ async function requestStarknet(
     try {
       return await injected.request(variant)
     } catch (error) {
+      if (isWalletUserRejectedError(error)) {
+        throw new Error("Wallet signature was rejected.")
+      }
+      if (isWalletRequestPendingError(error)) {
+        throw new Error("Wallet request already pending. Open wallet extension.")
+      }
       lastError = error
       if (variant.type) {
         lastTypeError = error

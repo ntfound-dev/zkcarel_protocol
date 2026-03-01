@@ -2157,7 +2157,11 @@ function normalizeWalletError(error: unknown, fallbackMessage: string): Error {
     )
     if (message) {
       const normalized = message.trim()
-      if (/user rejected|user denied|rejected request/i.test(normalized)) {
+      if (
+        /user rejected|user denied|rejected request|transaction rejected|user canceled|user cancelled|request cancelled|request canceled|declined|dismissed|aborted/i.test(
+          normalized
+        )
+      ) {
         return new Error("Request rejected in wallet.")
       }
       if (/already pending|request of type .* already pending/i.test(normalized)) {

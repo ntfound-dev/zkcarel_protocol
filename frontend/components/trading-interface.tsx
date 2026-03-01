@@ -101,6 +101,14 @@ type PendingBtcDepositState = {
   lastUpdatedAt?: number
 }
 
+type BridgeRewardsSnapshot = {
+  estimatedPoints: number
+  discountPercent: number
+  aiBonusPercent: number
+  pointsPending: boolean
+  updatedAt: number
+}
+
 type PendingHideNoteRecord = {
   note_version: "v3"
   note_commitment: string
@@ -154,6 +162,8 @@ const MAX_QUOTE_CACHE_ENTRIES = 120
 const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v2"
 const TRADE_PRIVACY_PENDING_NOTES_KEY = "trade_privacy_pending_notes_v3"
 const TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT = "trade-privacy-pending-notes-updated"
+const TRADE_PENDING_BTC_DEPOSIT_KEY = "trade_pending_btc_deposit_v1"
+const TRADE_BRIDGE_REWARDS_KEY = "trade_bridge_rewards_v1"
 const DEV_AUTO_GARAGA_PAYLOAD_ENABLED =
   process.env.NODE_ENV !== "production" &&
   (process.env.NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL || "false").toLowerCase() === "true"
@@ -679,6 +689,91 @@ const removePendingHideNote = (noteCommitment?: string, nullifier?: string) => {
     return !(sameCommitment || sameNullifier)
   })
   persistPendingHideNotes(next)
+}
+
+const loadPendingBtcDeposit = (): PendingBtcDepositState | null => {
+  if (typeof window === "undefined") return null
+  const raw = window.localStorage.getItem(TRADE_PENDING_BTC_DEPOSIT_KEY)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<PendingBtcDepositState>
+    const bridgeId = typeof parsed.bridgeId === "string" ? parsed.bridgeId.trim() : ""
+    const depositAddress =
+      typeof parsed.depositAddress === "string" ? parsed.depositAddress.trim() : ""
+    const amountSats = Number.parseInt(String(parsed.amountSats || "0"), 10)
+    const destinationChain =
+      typeof parsed.destinationChain === "string" ? parsed.destinationChain.trim() : ""
+    if (!bridgeId || !depositAddress || !destinationChain || !Number.isFinite(amountSats) || amountSats < 0) {
+      return null
+    }
+    return {
+      bridgeId,
+      depositAddress,
+      amountSats,
+      destinationChain,
+      status: typeof parsed.status === "string" ? parsed.status : undefined,
+      txHash: typeof parsed.txHash === "string" ? parsed.txHash : null,
+      sourceInitiateTxHash:
+        typeof parsed.sourceInitiateTxHash === "string" ? parsed.sourceInitiateTxHash : null,
+      destinationInitiateTxHash:
+        typeof parsed.destinationInitiateTxHash === "string" ? parsed.destinationInitiateTxHash : null,
+      destinationRedeemTxHash:
+        typeof parsed.destinationRedeemTxHash === "string" ? parsed.destinationRedeemTxHash : null,
+      refundTxHash: typeof parsed.refundTxHash === "string" ? parsed.refundTxHash : null,
+      instantRefundTx: typeof parsed.instantRefundTx === "string" ? parsed.instantRefundTx : null,
+      instantRefundHash: typeof parsed.instantRefundHash === "string" ? parsed.instantRefundHash : null,
+      lastUpdatedAt:
+        typeof parsed.lastUpdatedAt === "number" && Number.isFinite(parsed.lastUpdatedAt)
+          ? parsed.lastUpdatedAt
+          : undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+const persistPendingBtcDeposit = (payload: PendingBtcDepositState | null) => {
+  if (typeof window === "undefined") return
+  if (!payload) {
+    window.localStorage.removeItem(TRADE_PENDING_BTC_DEPOSIT_KEY)
+    return
+  }
+  window.localStorage.setItem(TRADE_PENDING_BTC_DEPOSIT_KEY, JSON.stringify(payload))
+}
+
+const loadBridgeRewardsSnapshot = (): BridgeRewardsSnapshot | null => {
+  if (typeof window === "undefined") return null
+  const raw = window.localStorage.getItem(TRADE_BRIDGE_REWARDS_KEY)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<BridgeRewardsSnapshot>
+    const estimatedPoints = Number(parsed.estimatedPoints || 0)
+    const discountPercent = Number(parsed.discountPercent || 0)
+    const aiBonusPercent = Number(parsed.aiBonusPercent || 0)
+    const pointsPending = Boolean(parsed.pointsPending)
+    const updatedAt =
+      typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt)
+        ? parsed.updatedAt
+        : Date.now()
+    return {
+      estimatedPoints: Number.isFinite(estimatedPoints) ? estimatedPoints : 0,
+      discountPercent: Number.isFinite(discountPercent) ? discountPercent : 0,
+      aiBonusPercent: Number.isFinite(aiBonusPercent) ? aiBonusPercent : 0,
+      pointsPending,
+      updatedAt,
+    }
+  } catch {
+    return null
+  }
+}
+
+const persistBridgeRewardsSnapshot = (payload: BridgeRewardsSnapshot | null) => {
+  if (typeof window === "undefined") return
+  if (!payload) {
+    window.localStorage.removeItem(TRADE_BRIDGE_REWARDS_KEY)
+    return
+  }
+  window.localStorage.setItem(TRADE_BRIDGE_REWARDS_KEY, JSON.stringify(payload))
 }
 
 /**
@@ -1572,6 +1667,7 @@ export function TradingInterface() {
   const [xverseUserId, setXverseUserId] = React.useState("")
   const [btcVaultCopied, setBtcVaultCopied] = React.useState(false)
   const [pendingBtcDeposit, setPendingBtcDeposit] = React.useState<PendingBtcDepositState | null>(null)
+  const [lastBridgeRewards, setLastBridgeRewards] = React.useState<BridgeRewardsSnapshot | null>(null)
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
@@ -1993,6 +2089,20 @@ export function TradingInterface() {
       window.sessionStorage.setItem("xverse_user_id", xverseUserId)
     }
   }, [xverseUserId])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    setPendingBtcDeposit(loadPendingBtcDeposit())
+    setLastBridgeRewards(loadBridgeRewardsSnapshot())
+  }, [])
+
+  React.useEffect(() => {
+    persistPendingBtcDeposit(pendingBtcDeposit)
+  }, [pendingBtcDeposit])
+
+  React.useEffect(() => {
+    persistBridgeRewardsSnapshot(lastBridgeRewards)
+  }, [lastBridgeRewards])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -2455,6 +2565,15 @@ export function TradingInterface() {
   const rawFeeAmount = hasQuote ? quote?.fee ?? 0 : null
   const feeUnit = quote?.feeUnit || (quote?.type === "bridge" ? "token" : "usd")
   const discountRate = hasNftDiscount ? Math.min(Math.max(discountPercent, 0), 100) / 100 : 0
+  const bridgeRewardDiscountPercent =
+    isCrossChain && lastBridgeRewards
+      ? Math.max(0, Number(lastBridgeRewards.discountPercent || 0))
+      : 0
+  const bridgeRewardAiBonusPercent =
+    isCrossChain && lastBridgeRewards
+      ? Math.max(0, Number(lastBridgeRewards.aiBonusPercent || 0))
+      : 0
+  const displayDiscountPercent = hasNftDiscount ? discountPercent : bridgeRewardDiscountPercent
   const rawProtocolFee = quote?.protocolFee
   const rawMevFee = quote?.mevFee
   const rawNetworkFee = quote?.networkFee
@@ -2522,18 +2641,27 @@ export function TradingInterface() {
   const mevFeePercent = mevProtection ? (MEV_FEE_RATE * 100).toFixed(1) : "0.0"
   const basePointsEarned = hasQuote ? Math.max(0, Math.floor(fromValueUSD * 10)) : null
   const nftPointsMultiplier = hasNftDiscount ? 1 + discountRate : 1
+  const effectiveNftPointsMultiplier =
+    hasNftDiscount || bridgeRewardDiscountPercent <= 0
+      ? nftPointsMultiplier
+      : 1 + Math.min(Math.max(bridgeRewardDiscountPercent, 0), 100) / 100
   const normalizedStakeMultiplier =
     Number.isFinite(stakePointsMultiplier) && stakePointsMultiplier > 0 ? stakePointsMultiplier : 1
   const hideUsdtTierBonusPercent = hideBalanceOnchain ? usdtTierBonusPercent(fromValueUSD) : 0
   const hideUsdtTierMultiplier = 1 + hideUsdtTierBonusPercent / 100
+  const bridgeAiBonusMultiplier = 1 + bridgeRewardAiBonusPercent / 100
   const effectivePointsMultiplier =
-    normalizedStakeMultiplier * nftPointsMultiplier * hideUsdtTierMultiplier
+    normalizedStakeMultiplier * effectiveNftPointsMultiplier * hideUsdtTierMultiplier * bridgeAiBonusMultiplier
   const pointsEarned =
     basePointsEarned === null
       ? null
       : Math.max(0, Math.floor(basePointsEarned * effectivePointsMultiplier))
   const showPointsMultiplier =
-    normalizedStakeMultiplier > 1 || nftPointsMultiplier > 1 || hideUsdtTierBonusPercent > 0
+    normalizedStakeMultiplier > 1 ||
+    effectiveNftPointsMultiplier > 1 ||
+    hideUsdtTierBonusPercent > 0 ||
+    bridgeRewardAiBonusPercent > 0
+  const showDiscountBadge = displayDiscountPercent > 0
   const usdtEquivalentVolume =
     Number.isFinite(fromValueUSD) && fromValueUSD > 0 ? fromValueUSD : 0
   const activeUsdtPointsTier = hideBalanceOnchain
@@ -3324,8 +3452,7 @@ export function TradingInterface() {
       notifications.addNotification({
         type: "warning",
         title: "Withdraw unavailable",
-        message:
-          "Cancel & Withdraw hanya aktif untuk note Hide Balance V3 yang sedang aktif.",
+        message: "Withdraw hanya aktif untuk note Hide Balance V3 yang sedang aktif.",
       })
       return
     }
@@ -3363,7 +3490,7 @@ export function TradingInterface() {
     notifications.addNotification({
       type: "info",
       title: "Wallet signature required",
-      message: "Confirm Cancel & Withdraw untuk mengembalikan dana note ke wallet.",
+      message: "Confirm Withdraw untuk mengembalikan dana note ke wallet.",
     })
 
     try {
@@ -3585,7 +3712,20 @@ export function TradingInterface() {
                 txExplorerUrls: orderExplorerLinks,
               })
             }
-            setPendingBtcDeposit((prev) => (prev && prev.bridgeId === bridgeId ? null : prev))
+            setPendingBtcDeposit((prev) =>
+              prev && prev.bridgeId === bridgeId
+                ? {
+                    ...prev,
+                    status: "completed",
+                    sourceInitiateTxHash: progress.sourceInitiateTxHash || prev.sourceInitiateTxHash || null,
+                    destinationInitiateTxHash:
+                      progress.destinationInitiateTxHash || prev.destinationInitiateTxHash || null,
+                    destinationRedeemTxHash:
+                      progress.destinationRedeemTxHash || prev.destinationRedeemTxHash || null,
+                    lastUpdatedAt: Date.now(),
+                  }
+                : prev
+            )
             delete lastGardenOrderStatusRef.current[bridgeId]
             await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
             const [nftState, rewardsState] = await Promise.allSettled([
@@ -4253,6 +4393,13 @@ export function TradingInterface() {
         const bridgeDiscountSaved = Number(response.fee_discount_saved || 0)
         const bridgeAiBonusPercent = Number(response.ai_level_points_bonus_percent || 0)
         const bridgePointsPending = !!response.points_pending
+        setLastBridgeRewards({
+          estimatedPoints: Number.isFinite(bridgeEstimatedPoints) ? bridgeEstimatedPoints : 0,
+          discountPercent: Number.isFinite(bridgeDiscountPercent) ? bridgeDiscountPercent : 0,
+          aiBonusPercent: Number.isFinite(bridgeAiBonusPercent) ? bridgeAiBonusPercent : 0,
+          pointsPending: bridgePointsPending,
+          updatedAt: Date.now(),
+        })
         const bridgePointsLabel =
           Number.isFinite(bridgeEstimatedPoints) && bridgeEstimatedPoints > 0
             ? `Points +${bridgeEstimatedPoints.toFixed(2)} (estimated${bridgePointsPending ? ", pending settlement" : ""})`
@@ -4446,7 +4593,7 @@ export function TradingInterface() {
                 isManuallySelectedHideNote(selectedCommitment, selectedNullifier)
               ) {
                 throw new Error(
-                  "Hide note terpilih belum valid untuk executor aktif. Pilih note lain atau Cancel & Withdraw. Auto-deposit dibatalkan."
+                  "Hide note terpilih belum valid untuk executor aktif. Pilih note lain atau Withdraw. Auto-deposit dibatalkan."
                 )
               }
               let spendableAtUnix = 0
@@ -4601,6 +4748,41 @@ export function TradingInterface() {
           type: "info",
           title: "Hide note deposited",
           message: rawErrorMessage.replace("HIDE_NOTE_READY::", "").trim(),
+        })
+        setSwapState("idle")
+        return
+      }
+      const normalizedErrorMessage = rawErrorMessage.toLowerCase()
+      const walletRejected =
+        normalizedErrorMessage.includes("wallet signature was rejected") ||
+        normalizedErrorMessage.includes("request rejected in wallet") ||
+        normalizedErrorMessage.includes("user rejected") ||
+        normalizedErrorMessage.includes("rejected by user") ||
+        normalizedErrorMessage.includes("user denied") ||
+        normalizedErrorMessage.includes("request rejected") ||
+        normalizedErrorMessage.includes("transaction rejected") ||
+        normalizedErrorMessage.includes("wallet rejected") ||
+        normalizedErrorMessage.includes("user canceled") ||
+        normalizedErrorMessage.includes("user cancelled") ||
+        normalizedErrorMessage.includes("cancelled") ||
+        normalizedErrorMessage.includes("canceled")
+      const walletRequestPending =
+        normalizedErrorMessage.includes("wallet request already pending") ||
+        normalizedErrorMessage.includes("request already pending")
+      if (walletRejected) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Transaksi dibatalkan",
+          message: "Signature ditolak di wallet. Tidak ada transaksi yang dikirim.",
+        })
+        setSwapState("idle")
+        return
+      }
+      if (walletRequestPending) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Request masih pending di wallet",
+          message: "Buka extension wallet, selesaikan request yang masih terbuka, lalu coba lagi.",
         })
         setSwapState("idle")
         return
@@ -5156,13 +5338,23 @@ export function TradingInterface() {
                               type="button"
                               variant="secondary"
                               className="h-8 text-[11px]"
-                              disabled={swapState !== "idle" || noteUseBlocked}
+                              disabled={swapState !== "idle" || noteUseBlocked || noteRemainingMs > 0}
                               onClick={() => {
                                 if (noteUseBlocked) {
                                   notifications.addNotification({
                                     type: "warning",
                                     title: "Use note blocked",
                                     message: "Note belum punya metadata lengkap untuk swap.",
+                                  })
+                                  return
+                                }
+                                if (noteRemainingMs > 0) {
+                                  notifications.addNotification({
+                                    type: "warning",
+                                    title: "Note belum ready",
+                                    message: `Tunggu ${formatRemainingDuration(
+                                      noteRemainingMs
+                                    )} sebelum swap privat.`,
                                   })
                                   return
                                 }
@@ -5242,12 +5434,16 @@ export function TradingInterface() {
                                   type: "info",
                                   title: "Hide note selected",
                                   message:
-                                    "Active note diganti ke pending note terpilih. Lanjut Execute Private Swap.",
+                                    "Active note diganti ke pending note terpilih. Swap privat akan dijalankan sekarang.",
                                 })
                                 setHidePanelOpen(false)
+                                window.setTimeout(() => {
+                                  if (swapState !== "idle" || executeDisabledReason) return
+                                  void confirmTrade()
+                                }, 180)
                               }}
                             >
-                              Use For Swap
+                              Swap Privat now
                             </Button>
                             <Button
                               type="button"
@@ -5273,14 +5469,16 @@ export function TradingInterface() {
         </Dialog>
 
         {/* NFT Discount Counter */}
-        {hasNftDiscount && (
+        {showDiscountBadge && (
           <div className="mt-3 sm:mt-4 p-3 rounded-xl bg-gradient-to-r from-primary/10 to-accent/10 border border-primary/20">
             <div className="flex items-center justify-between">
               <span className="text-sm text-foreground flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-primary" />
                 NFT Discount Active
               </span>
-              <span className="text-xs text-muted-foreground">{discountPercent}% off fees</span>
+              <span className="text-xs text-muted-foreground">
+                {displayDiscountPercent.toFixed(2)}% off fees
+              </span>
             </div>
           </div>
         )}
@@ -5297,8 +5495,13 @@ export function TradingInterface() {
             </div>
             <p className="mt-1 text-[11px] text-muted-foreground">
               Stake: {formatMultiplier(normalizedStakeMultiplier)}
-              {nftPointsMultiplier > 1 ? ` • NFT: ${formatMultiplier(nftPointsMultiplier)}` : ""}
+              {effectiveNftPointsMultiplier > 1
+                ? ` • NFT: ${formatMultiplier(effectiveNftPointsMultiplier)}`
+                : ""}
               {hideUsdtTierBonusPercent > 0 ? ` • Hide Tier: +${hideUsdtTierBonusPercent.toFixed(0)}%` : ""}
+              {bridgeRewardAiBonusPercent > 0
+                ? ` • Bridge AI Bonus: +${bridgeRewardAiBonusPercent.toFixed(0)}%`
+                : ""}
             </p>
           </div>
         )}
@@ -5500,7 +5703,7 @@ export function TradingInterface() {
                 ? formatRemainingDuration(hideMixingWindowRemainingMs)
                 : "now"}
             </p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2">
               <Button
                 onClick={handleExecuteTrade}
                 disabled={swapState !== "idle" || !!executeDisabledReason}
@@ -5514,23 +5717,7 @@ export function TradingInterface() {
                   swapState === "error" && "bg-destructive"
                 )}
               >
-                Execute Private Swap
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleCancelHideNoteWithdraw}
-                disabled={isCancellingHideNote || swapState !== "idle"}
-                className="h-11 text-sm font-semibold"
-              >
-                {isCancellingHideNote ? (
-                  <span className="inline-flex items-center gap-1">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Cancelling...
-                  </span>
-                ) : (
-                  "Cancel & Withdraw"
-                )}
+                Execute Swap
               </Button>
             </div>
             {swapState === "idle" && executeDisabledReason && (
