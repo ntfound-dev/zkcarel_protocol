@@ -1350,7 +1350,7 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
                 "Invalid discount contract address while validating swap fee discount: {}",
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
     let user_felt = match parse_felt(user_address) {
@@ -1361,7 +1361,7 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
                 user_address,
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
 
@@ -1372,7 +1372,7 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
                 "Selector resolution failed for has_active_discount in swap submit validation: {}",
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
 
@@ -1395,18 +1395,18 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
                 user_address,
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
         Err(_) => {
             tracing::warn!(
                 "Timeout on-chain NFT discount submit validation in swap for user={}",
                 user_address
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
     if result.len() < 3 {
-        return 0.0;
+        return cached_nft_discount_from_local_state(state, user_address).await;
     }
 
     let chain_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
@@ -1425,14 +1425,14 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
                 user_address,
                 err
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
         Err(_) => {
             tracing::warn!(
                 "Timeout reading NFT usage snapshot in swap submit validation for user={}",
                 user_address
             );
-            return 0.0;
+            return cached_nft_discount_from_local_state(state, user_address).await;
         }
     };
 

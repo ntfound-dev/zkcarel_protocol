@@ -1537,6 +1537,10 @@ export function TradingInterface() {
   const [nowMs, setNowMs] = React.useState(() => Date.now())
   const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(5)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
+  const manuallySelectedHideNoteRef = React.useRef<{
+    commitment: string
+    nullifier: string
+  } | null>(null)
   // Hide Balance (Garaga) is only enabled for Starknet <-> Starknet swap flow.
   const hideBalanceSupportedForCurrentPair =
     chainFromNetwork(fromToken.network) === "starknet" &&
@@ -1598,6 +1602,42 @@ export function TradingInterface() {
   const refreshPendingHideNotes = React.useCallback(() => {
     setPendingHideNotes(loadPendingHideNotes())
   }, [])
+  const clearManuallySelectedHideNote = React.useCallback(() => {
+    manuallySelectedHideNoteRef.current = null
+  }, [])
+  const markManuallySelectedHideNote = React.useCallback(
+    (noteCommitment?: string, noteNullifier?: string) => {
+      const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+      const normalizedNullifier = (noteNullifier || "").trim().toLowerCase()
+      if (!normalizedCommitment && !normalizedNullifier) {
+        manuallySelectedHideNoteRef.current = null
+        return
+      }
+      manuallySelectedHideNoteRef.current = {
+        commitment: normalizedCommitment,
+        nullifier: normalizedNullifier,
+      }
+    },
+    []
+  )
+  const isManuallySelectedHideNote = React.useCallback(
+    (noteCommitment?: string, noteNullifier?: string) => {
+      const activeSelection = manuallySelectedHideNoteRef.current
+      if (!activeSelection) return false
+      const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+      const normalizedNullifier = (noteNullifier || "").trim().toLowerCase()
+      const sameCommitment =
+        !!activeSelection.commitment &&
+        !!normalizedCommitment &&
+        activeSelection.commitment === normalizedCommitment
+      const sameNullifier =
+        !!activeSelection.nullifier &&
+        !!normalizedNullifier &&
+        activeSelection.nullifier === normalizedNullifier
+      return sameCommitment || sameNullifier
+    },
+    []
+  )
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
     const cachedPayload = loadTradePrivacyPayload()
     const cachedPayloadIsV3 = isV3Payload(cachedPayload)
@@ -1934,7 +1974,8 @@ export function TradingInterface() {
     setBalanceHidden(false)
     clearTradePrivacyPayload()
     setHasTradePrivacyPayload(false)
-  }, [hideBalanceSupportedForCurrentPair, balanceHidden])
+    clearManuallySelectedHideNote()
+  }, [hideBalanceSupportedForCurrentPair, balanceHidden, clearManuallySelectedHideNote])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -3347,6 +3388,10 @@ export function TradingInterface() {
       if (activeCommitment === noteCommitment.trim().toLowerCase()) {
         clearTradePrivacyPayload()
         setHasTradePrivacyPayload(false)
+        clearManuallySelectedHideNote()
+      }
+      if (isManuallySelectedHideNote(noteCommitment, noteNullifier)) {
+        clearManuallySelectedHideNote()
       }
       notifications.addNotification({
         type: "success",
@@ -3366,7 +3411,14 @@ export function TradingInterface() {
     } finally {
       setIsCancellingHideNote(false)
     }
-  }, [hideBalanceOnchain, notifications, starknetProviderHint, wallet])
+  }, [
+    clearManuallySelectedHideNote,
+    hideBalanceOnchain,
+    isManuallySelectedHideNote,
+    notifications,
+    starknetProviderHint,
+    wallet,
+  ])
 
   const submitOnchainBridgeTx = React.useCallback(async () => {
     const fromChain = chainFromNetwork(fromToken.network)
@@ -4387,26 +4439,12 @@ export function TradingInterface() {
                   (note.nullifier || "").trim().toLowerCase() === selectedNullifier
                 return sameCommitment || sameNullifier
               })
-              const requestedTokenSymbol = fromToken.symbol.toUpperCase()
-              const requestedAmount = Number.parseFloat(fromAmount || "NaN")
-              const requestedDecimals = resolveTokenDecimals(fromToken.symbol)
-              const requestedTolerance = Math.max(1e-9, Math.pow(10, -Math.min(6, requestedDecimals)))
-              const hasCompatiblePendingNote = pendingNotes.some((note) => {
-                const noteToken = (note.token_symbol || "").trim().toUpperCase()
-                if (!noteToken || noteToken !== requestedTokenSymbol) return false
-                const noteAmount = Number.parseFloat((note.amount || "").trim() || "NaN")
-                if (!Number.isFinite(noteAmount) || noteAmount <= 0) return false
-                if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) return false
-                return Math.abs(noteAmount - requestedAmount) <= requestedTolerance
-              })
-              if (selectedNoteTracked) {
+              if (
+                selectedNoteTracked &&
+                isManuallySelectedHideNote(selectedCommitment, selectedNullifier)
+              ) {
                 throw new Error(
                   "Hide note terpilih belum valid untuk executor aktif. Pilih note lain atau Cancel & Withdraw. Auto-deposit dibatalkan."
-                )
-              }
-              if (hasCompatiblePendingNote) {
-                throw new Error(
-                  "Ada pending hide note yang cocok untuk amount/token ini. Klik Use For Swap pada note tersebut lalu retry. Auto-deposit dibatalkan."
                 )
               }
               let spendableAtUnix = 0
@@ -4604,6 +4642,7 @@ export function TradingInterface() {
       if (hideBalanceOnchain && shouldClearTradePrivacyPayload) {
         clearTradePrivacyPayload()
         setHasTradePrivacyPayload(false)
+        clearManuallySelectedHideNote()
       }
       setTimeout(() => {
         setSwapState("idle")
@@ -5522,6 +5561,7 @@ export function TradingInterface() {
                             proof: selectedProof,
                             public_inputs: selectedPublicInputs,
                           })
+                          markManuallySelectedHideNote(noteCommitment, note.nullifier)
                           const selectedTokenSymbol = (note.token_symbol || "").trim().toUpperCase()
                           const currentFromSymbol = fromToken.symbol.toUpperCase()
                           const selectedAmountText = (note.amount || "").trim()
@@ -5554,7 +5594,10 @@ export function TradingInterface() {
                         variant="outline"
                         className="h-8 text-[11px]"
                         disabled={isCancellingHideNote || swapState !== "idle"}
-                        onClick={() => void handleCancelHideNoteWithdraw(note)}
+                        onClick={() => {
+                          clearManuallySelectedHideNote()
+                          void handleCancelHideNoteWithdraw(note)
+                        }}
                       >
                         Withdraw
                       </Button>
