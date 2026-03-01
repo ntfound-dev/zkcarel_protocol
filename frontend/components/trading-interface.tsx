@@ -2706,7 +2706,8 @@ export function TradingInterface() {
   const isStarkgateBridgeRoute = quote?.type === "bridge" && bridgeProviderKey === "starkgate"
   const bridgeProtocolFeeLabel = isStarkgateBridgeRoute ? "StarkGate Fee" : "Bridge Fee"
   const bridgeNetworkFeeLabel = isStarkgateBridgeRoute ? "Network Gas (est.)" : "Network Fee (est.)"
-  const showPendingBtcDeposit = Boolean(pendingBtcDeposit) && isCrossChain
+  const showPendingBtcDeposit =
+    Boolean(pendingBtcDeposit) && isCrossChain && quote?.type === "bridge"
   const pendingOrderStatus = (
     pendingBtcDeposit?.status ||
     (pendingBtcDeposit?.txHash ? "processing" : "pending_deposit")
@@ -2987,6 +2988,8 @@ export function TradingInterface() {
         </span>
       )
     }
+    if (isCrossChain) return "Execute Bridge"
+    if (hideBalanceOnchain && !hasActiveHideV3Note) return "Execute Swap"
     return "Execute Trade"
   })()
 
