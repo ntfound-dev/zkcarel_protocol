@@ -293,6 +293,16 @@ fn requires_privacy_relayer(command: &str) -> bool {
     privacy_intent && executable_intent
 }
 
+// Internal helper that supports `ensure_privacy_level_scope` operations.
+fn ensure_privacy_level_scope(level: u8, command: &str) -> Result<()> {
+    if level < 3 && requires_privacy_relayer(command) {
+        return Err(AppError::BadRequest(
+            "Hide/private execution is only available on AI Level 3.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 // Internal helper that supports `resolve_effective_ai_level` operations.
 async fn resolve_effective_ai_level(
     state: &AppState,
@@ -835,6 +845,7 @@ pub async fn execute_command(
         req.action_id
     );
     ensure_ai_level_scope(level, &command)?;
+    ensure_privacy_level_scope(level, &command)?;
     if requires_privacy_relayer(&command) {
         let _ = RelayerService::from_config(&state.config)?;
     }
@@ -2281,6 +2292,21 @@ mod tests {
     fn level_2_allows_generic_chat_prompt() {
         // Memastikan level 2 tetap bisa dipakai ngobrol umum tanpa intent trading.
         assert!(ensure_ai_level_scope(2, "hello, can we chat about strategy?").is_ok());
+    }
+
+    #[test]
+    // Internal helper that supports `level_2_rejects_hide_private_execution_scope` operations.
+    fn level_2_rejects_hide_private_execution_scope() {
+        let err =
+            ensure_privacy_level_scope(2, "private swap 10 STRK to WBTC").expect_err("must reject");
+        assert!(err.to_string().to_ascii_lowercase().contains("level 3"));
+    }
+
+    #[test]
+    // Internal helper that supports `level_3_allows_hide_private_execution_scope` operations.
+    fn level_3_allows_hide_private_execution_scope() {
+        assert!(ensure_privacy_level_scope(3, "hide stake 10 USDT").is_ok());
+        assert!(ensure_privacy_level_scope(3, "private limit order STRK/USDC amount 10 at 1.2").is_ok());
     }
 
     #[test]

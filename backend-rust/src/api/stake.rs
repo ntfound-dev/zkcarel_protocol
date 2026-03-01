@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
 
-use crate::services::onchain::{
-    felt_to_u128, parse_felt, u256_from_felts, OnchainReader,
-};
+use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader};
 use crate::{
     constants::{
         token_address_for, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_BTC_TESTNET,
@@ -42,8 +40,7 @@ use super::{
     privacy::{
         bind_intent_hash_into_payload, ensure_public_inputs_bind_nullifier_commitment,
         ensure_public_inputs_bind_root_nullifier, ensure_public_inputs_bind_v3_shape,
-        generate_auto_garaga_payload,
-        AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
+        generate_auto_garaga_payload, AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
     },
     require_starknet_user, require_user,
     swap::{parse_decimal_to_u256_parts, token_decimals},
@@ -845,7 +842,8 @@ async fn compute_stake_intent_hash_on_executor(
     let approval_aware_selector =
         get_selector_from_name("preview_stake_target_intent_hash_with_approval")
             .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let mut approval_aware_calldata: Vec<Felt> = Vec::with_capacity(4 + input.action_calldata.len());
+    let mut approval_aware_calldata: Vec<Felt> =
+        Vec::with_capacity(4 + input.action_calldata.len());
     approval_aware_calldata.push(input.target);
     approval_aware_calldata.push(input.action_selector);
     approval_aware_calldata.push(Felt::from(input.action_calldata.len() as u64));
@@ -1007,9 +1005,16 @@ fn build_execute_private_stake_call(
             "execute_private_stake_with_target",
             4 + input.action_calldata.len(),
         ),
-        StakeExecuteMode::LegacyNoApproval => ("execute_private_stake", 3 + input.action_calldata.len()),
-        StakeExecuteMode::ShieldedPoolV2 => ("execute_private_stake", 5 + input.action_calldata.len()),
-        StakeExecuteMode::ShieldedPoolV3 => ("execute_private_stake_with_payout", 9 + input.action_calldata.len()),
+        StakeExecuteMode::LegacyNoApproval => {
+            ("execute_private_stake", 3 + input.action_calldata.len())
+        }
+        StakeExecuteMode::ShieldedPoolV2 => {
+            ("execute_private_stake", 5 + input.action_calldata.len())
+        }
+        StakeExecuteMode::ShieldedPoolV3 => (
+            "execute_private_stake_with_payout",
+            9 + input.action_calldata.len(),
+        ),
     };
     let selector = get_selector_from_name(entrypoint)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
@@ -1730,10 +1735,18 @@ pub async fn deposit(
                 ..Default::default()
             };
             if hide_pool_version == Some(HidePoolVersion::V3) {
-                tx_context.note_commitment =
-                    req.privacy.as_ref().and_then(|value| value.note_commitment.clone());
-                tx_context.denom_id = req.privacy.as_ref().and_then(|value| value.denom_id.clone());
-                tx_context.nullifier = req.privacy.as_ref().and_then(|value| value.nullifier.clone());
+                tx_context.note_commitment = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone());
+                tx_context.denom_id = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone());
+                tx_context.nullifier = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone());
             }
             generate_auto_garaga_payload(
                 &state.config,
@@ -1764,9 +1777,18 @@ pub async fn deposit(
                 approval_token: Some(format!("{approval_token:#x}")),
                 payout_token: Some("0x0".to_string()),
                 min_payout: Some("0x0:0x0".to_string()),
-                note_commitment: req.privacy.as_ref().and_then(|value| value.note_commitment.clone()),
-                denom_id: req.privacy.as_ref().and_then(|value| value.denom_id.clone()),
-                nullifier: req.privacy.as_ref().and_then(|value| value.nullifier.clone()),
+                note_commitment: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone()),
+                denom_id: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone()),
+                nullifier: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone()),
                 ..Default::default()
             };
             payload = generate_auto_garaga_payload(
@@ -1873,12 +1895,8 @@ pub async fn deposit(
                 .await?;
         }
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call = build_execute_private_stake_call(
-            executor,
-            &payload,
-            &stake_input,
-            execute_mode,
-        )?;
+        let execute_call =
+            build_execute_private_stake_call(executor, &payload, &stake_input, execute_mode)?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
         let submitted = relayer.submit_calls(relayer_calls).await?;
@@ -2092,10 +2110,18 @@ pub async fn withdraw(
                 ..Default::default()
             };
             if hide_pool_version == Some(HidePoolVersion::V3) {
-                tx_context.note_commitment =
-                    req.privacy.as_ref().and_then(|value| value.note_commitment.clone());
-                tx_context.denom_id = req.privacy.as_ref().and_then(|value| value.denom_id.clone());
-                tx_context.nullifier = req.privacy.as_ref().and_then(|value| value.nullifier.clone());
+                tx_context.note_commitment = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone());
+                tx_context.denom_id = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone());
+                tx_context.nullifier = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone());
             }
             generate_auto_garaga_payload(
                 &state.config,
@@ -2126,9 +2152,18 @@ pub async fn withdraw(
                 approval_token: Some(format!("{approval_token:#x}")),
                 payout_token: Some(format!("{payout_token:#x}")),
                 min_payout: Some("0x0:0x0".to_string()),
-                note_commitment: req.privacy.as_ref().and_then(|value| value.note_commitment.clone()),
-                denom_id: req.privacy.as_ref().and_then(|value| value.denom_id.clone()),
-                nullifier: req.privacy.as_ref().and_then(|value| value.nullifier.clone()),
+                note_commitment: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone()),
+                denom_id: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone()),
+                nullifier: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone()),
                 ..Default::default()
             };
             payload = generate_auto_garaga_payload(
@@ -2235,12 +2270,8 @@ pub async fn withdraw(
                 .await?;
         }
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call = build_execute_private_stake_call(
-            executor,
-            &payload,
-            &stake_input,
-            execute_mode,
-        )?;
+        let execute_call =
+            build_execute_private_stake_call(executor, &payload, &stake_input, execute_mode)?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
         let submitted = relayer.submit_calls(relayer_calls).await?;
@@ -2424,10 +2455,18 @@ pub async fn claim(
                 ..Default::default()
             };
             if hide_pool_version == Some(HidePoolVersion::V3) {
-                tx_context.note_commitment =
-                    req.privacy.as_ref().and_then(|value| value.note_commitment.clone());
-                tx_context.denom_id = req.privacy.as_ref().and_then(|value| value.denom_id.clone());
-                tx_context.nullifier = req.privacy.as_ref().and_then(|value| value.nullifier.clone());
+                tx_context.note_commitment = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone());
+                tx_context.denom_id = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone());
+                tx_context.nullifier = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone());
             }
             generate_auto_garaga_payload(
                 &state.config,
@@ -2457,9 +2496,18 @@ pub async fn claim(
                 approval_token: Some(format!("{approval_token:#x}")),
                 payout_token: Some(format!("{payout_token:#x}")),
                 min_payout: Some("0x0:0x0".to_string()),
-                note_commitment: req.privacy.as_ref().and_then(|value| value.note_commitment.clone()),
-                denom_id: req.privacy.as_ref().and_then(|value| value.denom_id.clone()),
-                nullifier: req.privacy.as_ref().and_then(|value| value.nullifier.clone()),
+                note_commitment: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone()),
+                denom_id: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone()),
+                nullifier: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone()),
                 ..Default::default()
             };
             payload = generate_auto_garaga_payload(
@@ -2570,12 +2618,8 @@ pub async fn claim(
                 .await?;
         }
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call = build_execute_private_stake_call(
-            executor,
-            &payload,
-            &stake_input,
-            execute_mode,
-        )?;
+        let execute_call =
+            build_execute_private_stake_call(executor, &payload, &stake_input, execute_mode)?;
         relayer_calls.push(submit_call);
         relayer_calls.push(execute_call);
         let submitted = relayer.submit_calls(relayer_calls).await?;
@@ -2874,6 +2918,13 @@ mod tests {
     #[test]
     fn hide_balance_min_note_age_default_is_one_hour() {
         assert_eq!(hide_balance_min_note_age_secs(), 3600);
+    }
+
+    #[test]
+    fn ai_level_points_bonus_percent_matches_expected() {
+        assert_eq!(ai_level_points_bonus_percent(1), 0.0);
+        assert_eq!(ai_level_points_bonus_percent(2), 20.0);
+        assert_eq!(ai_level_points_bonus_percent(3), 40.0);
     }
 
     #[test]

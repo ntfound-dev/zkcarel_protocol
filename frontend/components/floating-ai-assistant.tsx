@@ -2911,6 +2911,15 @@ export function FloatingAIAssistant() {
       let directExecutionMessage = ""
       const providerHint = resolveStarknetProviderHint(wallet.provider)
       const tierUsesGaraga = activeTier >= 3
+      const requestedPrivateMode = /private|hide/i.test(command)
+      if (requestedPrivateMode && !tierUsesGaraga) {
+        notifications.addNotification({
+          type: "info",
+          title: "L2 executes normal mode",
+          message:
+            "Level 2 tetap eksekusi mode biasa (transparent). Hide/private execution hanya aktif di Level 3.",
+        })
+      }
       const requestGaragaPayload = async (
         flow: string,
         fromToken?: string,
@@ -2952,7 +2961,7 @@ export function FloatingAIAssistant() {
           if (!SUPPORTED_SWAP_TOKENS.has(fromToken) || !SUPPORTED_SWAP_TOKENS.has(toToken)) {
             directExecutionMessage = `Swap pair ${fromToken}/${toToken} is not listed in CAREL swap. Supported: USDT, USDC, STRK, WBTC, CAREL.`
           } else {
-          const mode = tierUsesGaraga || /private|hide/i.test(command) ? "private" : "transparent"
+          const mode = tierUsesGaraga ? "private" : "transparent"
           const slippage = 1
           notifications.addNotification({
             type: "info",

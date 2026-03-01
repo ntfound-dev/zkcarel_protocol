@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::privacy::{
     bind_intent_hash_into_payload, ensure_public_inputs_bind_nullifier_commitment,
     ensure_public_inputs_bind_root_nullifier, ensure_public_inputs_bind_v3_shape,
-    generate_auto_garaga_payload,
-    AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
+    generate_auto_garaga_payload, AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
 };
 use super::swap::{parse_decimal_to_u256_parts, token_decimals};
 use crate::services::notification_service::{NotificationService, NotificationType};
@@ -908,8 +907,9 @@ pub async fn create_order(
         )
     });
     let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-    let use_relayer_pool_hide =
-        should_hide && hide_balance_limit_order_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
+    let use_relayer_pool_hide = should_hide
+        && hide_balance_limit_order_relayer_pool_enabled()
+        && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
         let action_target = resolve_limit_order_target_felt(&state)?;
@@ -977,10 +977,18 @@ pub async fn create_order(
                 ..Default::default()
             };
             if hide_pool_version == Some(HidePoolVersion::V3) {
-                tx_context.note_commitment =
-                    req.privacy.as_ref().and_then(|value| value.note_commitment.clone());
-                tx_context.denom_id = req.privacy.as_ref().and_then(|value| value.denom_id.clone());
-                tx_context.nullifier = req.privacy.as_ref().and_then(|value| value.nullifier.clone());
+                tx_context.note_commitment = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone());
+                tx_context.denom_id = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone());
+                tx_context.nullifier = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone());
             }
             generate_auto_garaga_payload(
                 &state.config,
@@ -1101,7 +1109,8 @@ pub async fn create_order(
             }
         }
 
-        let intent_hash = compute_limit_intent_hash_on_executor(&state, executor, &limit_input).await?;
+        let intent_hash =
+            compute_limit_intent_hash_on_executor(&state, executor, &limit_input).await?;
         if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
             let root = shielded_current_root(&state, executor).await?;
             let tx_context = AutoPrivacyTxContext {
@@ -1121,9 +1130,18 @@ pub async fn create_order(
                 approval_token: Some(format!("{from_token:#x}")),
                 payout_token: Some(format!("{to_token:#x}")),
                 min_payout: Some("0x0:0x0".to_string()),
-                note_commitment: req.privacy.as_ref().and_then(|value| value.note_commitment.clone()),
-                denom_id: req.privacy.as_ref().and_then(|value| value.denom_id.clone()),
-                nullifier: req.privacy.as_ref().and_then(|value| value.nullifier.clone()),
+                note_commitment: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone()),
+                denom_id: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone()),
+                nullifier: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone()),
                 ..Default::default()
             };
             payload = generate_auto_garaga_payload(
@@ -1381,8 +1399,9 @@ pub async fn cancel_order(
     }
 
     let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
-    let use_relayer_pool_hide =
-        should_hide && hide_balance_limit_order_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
+    let use_relayer_pool_hide = should_hide
+        && hide_balance_limit_order_relayer_pool_enabled()
+        && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt(&state.config)?;
         let action_target = resolve_limit_order_target_felt(&state)?;
@@ -1434,10 +1453,18 @@ pub async fn cancel_order(
                 ..Default::default()
             };
             if hide_pool_version == Some(HidePoolVersion::V3) {
-                tx_context.note_commitment =
-                    req.privacy.as_ref().and_then(|value| value.note_commitment.clone());
-                tx_context.denom_id = req.privacy.as_ref().and_then(|value| value.denom_id.clone());
-                tx_context.nullifier = req.privacy.as_ref().and_then(|value| value.nullifier.clone());
+                tx_context.note_commitment = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone());
+                tx_context.denom_id = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone());
+                tx_context.nullifier = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone());
             }
             generate_auto_garaga_payload(
                 &state.config,
@@ -1447,7 +1474,8 @@ pub async fn cancel_order(
             )
             .await?
         };
-        let intent_hash = compute_limit_intent_hash_on_executor(&state, executor, &limit_input).await?;
+        let intent_hash =
+            compute_limit_intent_hash_on_executor(&state, executor, &limit_input).await?;
         if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
             let root = shielded_current_root(&state, executor).await?;
             let tx_context = AutoPrivacyTxContext {
@@ -1463,9 +1491,18 @@ pub async fn cancel_order(
                 approval_token: Some(format!("{approval_token:#x}")),
                 payout_token: Some("0x0".to_string()),
                 min_payout: Some("0x0:0x0".to_string()),
-                note_commitment: req.privacy.as_ref().and_then(|value| value.note_commitment.clone()),
-                denom_id: req.privacy.as_ref().and_then(|value| value.denom_id.clone()),
-                nullifier: req.privacy.as_ref().and_then(|value| value.nullifier.clone()),
+                note_commitment: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_commitment.clone()),
+                denom_id: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.denom_id.clone()),
+                nullifier: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.nullifier.clone()),
                 ..Default::default()
             };
             payload = generate_auto_garaga_payload(
@@ -1701,6 +1738,13 @@ mod tests {
     #[test]
     fn hide_balance_min_note_age_default_is_one_hour() {
         assert_eq!(hide_balance_min_note_age_secs(), 3600);
+    }
+
+    #[test]
+    fn ai_level_points_bonus_percent_matches_expected() {
+        assert_eq!(ai_level_points_bonus_percent(1), 0.0);
+        assert_eq!(ai_level_points_bonus_percent(2), 20.0);
+        assert_eq!(ai_level_points_bonus_percent(3), 40.0);
     }
 
     #[test]
