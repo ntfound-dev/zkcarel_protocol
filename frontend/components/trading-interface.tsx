@@ -2691,7 +2691,7 @@ export function TradingInterface() {
   const isStarkgateBridgeRoute = quote?.type === "bridge" && bridgeProviderKey === "starkgate"
   const bridgeProtocolFeeLabel = isStarkgateBridgeRoute ? "StarkGate Fee" : "Bridge Fee"
   const bridgeNetworkFeeLabel = isStarkgateBridgeRoute ? "Network Gas (est.)" : "Network Fee (est.)"
-  const showPendingBtcDeposit = Boolean(pendingBtcDeposit)
+  const showPendingBtcDeposit = Boolean(pendingBtcDeposit) && isCrossChain
   const pendingOrderStatus = (
     pendingBtcDeposit?.status ||
     (pendingBtcDeposit?.txHash ? "processing" : "pending_deposit")
@@ -2700,6 +2700,7 @@ export function TradingInterface() {
     .toLowerCase()
   const pendingIsFinalized =
     pendingOrderStatus === "completed" || pendingOrderStatus === "refunded"
+  const pendingBtcOrderBlocking = showPendingBtcDeposit && !pendingIsFinalized
   const pendingCanClaimRefund =
     Boolean(
       pendingBtcDeposit &&
@@ -2903,6 +2904,8 @@ export function TradingInterface() {
       ? "Connect your wallet first."
       : isCancellingHideNote
       ? "Cancelling hide note..."
+      : pendingBtcOrderBlocking
+      ? "Masih ada BTC bridge order yang belum selesai. Selesaikan dulu order di panel Pending BTC Deposit."
       : !hasPositiveAmount
       ? "Enter a valid amount."
       : hideUsdtTierPriceUnavailable
