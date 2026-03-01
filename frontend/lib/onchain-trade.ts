@@ -338,6 +338,9 @@ export async function invokeStarknetCallsFromWallet(
         if (isWalletRequestPendingError(error)) {
           throw new Error("Wallet request already pending. Open wallet extension.")
         }
+        if (!isWalletRequestCompatibilityError(error)) {
+          throw new Error(walletErrorMessage(error))
+        }
         attemptErrors.push(`${payload.type} failed: ${walletErrorMessage(error)}`)
       }
     }
@@ -1749,6 +1752,14 @@ function isWalletRequestPendingError(error: unknown): boolean {
   return message.includes("already pending") || /request of type .* already pending/i.test(message)
 }
 
+function isWalletRequestCompatibilityError(error: unknown): boolean {
+  const message = walletErrorMessage(error).toLowerCase()
+  return (
+    /unknown request type|unsupported request type|method not found|unknown method/.test(message) ||
+    /invalid params|invalid parameter|invalid arguments|failed to deserialize param/.test(message)
+  )
+}
+
 /**
  * Handles `walletErrorMessage` logic.
  *
@@ -1813,6 +1824,9 @@ async function requestStarknet(
       }
       if (isWalletRequestPendingError(error)) {
         throw new Error("Wallet request already pending. Open wallet extension.")
+      }
+      if (!isWalletRequestCompatibilityError(error)) {
+        throw error instanceof Error ? error : new Error(walletErrorMessage(error))
       }
       lastError = error
       if (variant.type) {

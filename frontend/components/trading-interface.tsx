@@ -109,6 +109,13 @@ type BridgeRewardsSnapshot = {
   updatedAt: number
 }
 
+type TradeResultPopupState = {
+  status: "success" | "error"
+  title: string
+  message: string
+  txHash?: string
+}
+
 type PendingHideNoteRecord = {
   note_version: "v3"
   note_commitment: string
@@ -1670,6 +1677,7 @@ export function TradingInterface() {
   const [lastBridgeRewards, setLastBridgeRewards] = React.useState<BridgeRewardsSnapshot | null>(null)
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
+  const [tradeResultPopup, setTradeResultPopup] = React.useState<TradeResultPopupState | null>(null)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
   React.useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
@@ -1677,6 +1685,7 @@ export function TradingInterface() {
   }, [])
   React.useEffect(() => {
     if (!hideUsdtTierLockEnabled) return
+    if (manuallySelectedHideNoteRef.current) return
     const tokenPrice = Number(fromToken.price || 0)
     if (!Number.isFinite(tokenPrice) || tokenPrice <= 0) return
     const decimals = resolveTokenDecimals(fromToken.symbol)
@@ -1703,6 +1712,12 @@ export function TradingInterface() {
   const clearManuallySelectedHideNote = React.useCallback(() => {
     manuallySelectedHideNoteRef.current = null
   }, [])
+  const openTradeResultPopup = React.useCallback(
+    (payload: TradeResultPopupState) => {
+      setTradeResultPopup(payload)
+    },
+    []
+  )
   const markManuallySelectedHideNote = React.useCallback(
     (noteCommitment?: string, noteNullifier?: string) => {
       const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
@@ -3326,6 +3341,11 @@ export function TradingInterface() {
       if (!nullifier) {
         throw new Error("Hide nullifier missing in privacy payload.")
       }
+      if (isManuallySelectedHideNote(noteCommitment, nullifier)) {
+        throw new Error(
+          "Active hide note was manually selected. Auto-deposit is disabled for selected notes; swap must use the selected note directly."
+        )
+      }
 
       const denomId = (
         payload.denom_id ||
@@ -3429,6 +3449,7 @@ export function TradingInterface() {
       fromAmount,
       fromToken.symbol,
       inferredHideDenomId,
+      isManuallySelectedHideNote,
       notifications,
       starknetProviderHint,
       wallet.address,
@@ -3951,6 +3972,7 @@ export function TradingInterface() {
     let tradeFinalized = true
     let shouldClearTradePrivacyPayload = false
     let submittedSwapTxHash: string | null = null
+    let successPopupPayload: TradeResultPopupState | null = null
     const requestedHideBalance = hideBalanceOnchain
     const tradePrivacyPayload = requestedHideBalance
       ? await resolveHideBalancePrivacyPayload()
@@ -4420,6 +4442,28 @@ export function TradingInterface() {
           title: "Points & Discount",
           message: `${bridgePointsLabel}. ${bridgeDiscountLabel} ${bridgeAiBonusLabel}`,
         })
+        if (isBridgeFinalized) {
+          successPopupPayload = {
+            status: "success",
+            title: "Bridge Completed",
+            message: `${fromAmount} ${fromToken.symbol} was bridged to ${toToken.symbol} successfully.`,
+            txHash: onchainTxHash || undefined,
+          }
+        } else if (isSourceBitcoin) {
+          successPopupPayload = {
+            status: "success",
+            title: "Bridge Order Created",
+            message: "Bridge order was created. Send BTC to the deposit address to continue settlement.",
+            txHash: btcDepositTxHash || undefined,
+          }
+        } else {
+          successPopupPayload = {
+            status: "success",
+            title: "Bridge Submitted",
+            message: `${fromAmount} ${fromToken.symbol} bridge is now being processed.`,
+            txHash: onchainTxHash || undefined,
+          }
+        }
       } else {
         const slippageValue = Number(activeSlippage || "0.5")
         const toTokenDecimals = TOKEN_DECIMALS[toToken.symbol.toUpperCase()] ?? 6
@@ -4573,6 +4617,11 @@ export function TradingInterface() {
               /note belum terdaftar/i.test(message) &&
               noteDepositPayload
             ) {
+              if (manuallySelectedHideNoteRef.current) {
+                throw new Error(
+                  "Selected hide note is not recognized by the active executor/relayer. Auto-deposit is disabled for manually selected notes. Please choose another pending note or withdraw this note."
+                )
+              }
               const selectedCommitment = (
                 noteDepositPayload.note_commitment ||
                 noteDepositPayload.commitment ||
@@ -4711,6 +4760,12 @@ export function TradingInterface() {
             txNetwork: "starknet",
           })
         }
+        successPopupPayload = {
+          status: "success",
+          title: "Swap Completed",
+          message: `Swap ${fromAmount} ${fromToken.symbol} to ${response.to_amount} ${toToken.symbol} completed successfully.`,
+          txHash: finalTxHash || response.privacy_tx_hash || undefined,
+        }
       }
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       const [nftState, rewardsState] = await Promise.allSettled([
@@ -4734,6 +4789,9 @@ export function TradingInterface() {
       }
       if (tradeFinalized) {
         setSwapState("success")
+        if (successPopupPayload) {
+          openTradeResultPopup(successPopupPayload)
+        }
       }
     } catch (error) {
       const rawErrorMessage = error instanceof Error ? error.message : "Failed to execute trade"
@@ -4817,12 +4875,25 @@ export function TradingInterface() {
           txNetwork: "starknet",
         })
         setSwapState("success")
+        openTradeResultPopup({
+          status: "success",
+          title: "Transaction Submitted",
+          message:
+            "Transaction was submitted on-chain, but backend confirmation timed out. Check explorer/notifications for final status.",
+          txHash: submittedSwapTxHash,
+        })
         return
       }
       notifications.addNotification({
         type: "error",
         title: "Trade failed",
         message: rawErrorMessage,
+      })
+      openTradeResultPopup({
+        status: "error",
+        title: "Transaction Failed",
+        message: rawErrorMessage,
+        txHash: submittedSwapTxHash || undefined,
       })
       setSwapState("error")
     } finally {
@@ -5807,6 +5878,46 @@ export function TradingInterface() {
           onConfirm={confirmTrade}
         />
       ) : null}
+
+      <Dialog
+        open={Boolean(tradeResultPopup)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTradeResultPopup(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-md glass-strong border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {tradeResultPopup?.status === "success" ? (
+                <Check className="h-4 w-4 text-success" />
+              ) : (
+                <X className="h-4 w-4 text-destructive" />
+              )}
+              {tradeResultPopup?.title || "Transaction Status"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-foreground leading-relaxed">
+              {tradeResultPopup?.message}
+            </p>
+            {tradeResultPopup?.txHash ? (
+              <div className="rounded-lg border border-border bg-surface/40 p-2">
+                <p className="text-[11px] text-muted-foreground mb-1">Transaction Hash</p>
+                <p className="text-xs font-mono break-all text-foreground">{tradeResultPopup.txHash}</p>
+              </div>
+            ) : null}
+            <Button
+              type="button"
+              className="w-full"
+              onClick={() => setTradeResultPopup(null)}
+            >
+              OK
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
