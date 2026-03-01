@@ -1609,8 +1609,35 @@ export function TradingInterface() {
     )
       .trim()
       .toLowerCase()
-    const hasLockedV3Note = cachedPayloadIsV3 && !!lockedNoteNullifier && !!lockedNoteCommitment
-    if (hasCompleteV3SpendPayload(cachedPayload)) {
+    const lockedPendingNote = cachedPayloadIsV3
+      ? loadPendingHideNotes().find((note) => {
+          const noteCommitment = (note.note_commitment || "").trim().toLowerCase()
+          const noteNullifier = (note.nullifier || "").trim().toLowerCase()
+          return (
+            (!!lockedNoteCommitment && noteCommitment === lockedNoteCommitment) ||
+            (!!lockedNoteNullifier && noteNullifier === lockedNoteNullifier)
+          )
+        })
+      : undefined
+    const lockedNoteToken = (lockedPendingNote?.token_symbol || "").trim().toUpperCase()
+    const currentToken = fromToken.symbol.toUpperCase()
+    const lockedNoteAmount = Number.parseFloat((lockedPendingNote?.amount || "").trim() || "NaN")
+    const currentAmount = Number.parseFloat(fromAmount || "NaN")
+    const lockedTokenMismatch =
+      !!lockedNoteToken && !!currentToken && lockedNoteToken !== currentToken
+    const lockedAmountMismatch =
+      Number.isFinite(lockedNoteAmount) &&
+      lockedNoteAmount > 0 &&
+      Number.isFinite(currentAmount) &&
+      Math.abs(currentAmount - lockedNoteAmount) >
+        Math.max(1e-9, Math.pow(10, -Math.min(6, resolveTokenDecimals(fromToken.symbol))))
+    const cachedPayloadNoteMismatch = cachedPayloadIsV3 && (lockedTokenMismatch || lockedAmountMismatch)
+    const hasLockedV3Note =
+      cachedPayloadIsV3 &&
+      !cachedPayloadNoteMismatch &&
+      !!lockedNoteNullifier &&
+      !!lockedNoteCommitment
+    if (hasCompleteV3SpendPayload(cachedPayload) && !cachedPayloadNoteMismatch) {
       setHasTradePrivacyPayload(true)
       return {
         ...cachedPayload,
@@ -1673,10 +1700,14 @@ export function TradingInterface() {
             to_network: toToken.network,
             note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
             denom_id: inferredHideDenomId || cachedPayload?.denom_id,
-            note_commitment: cachedPayload?.note_commitment || cachedPayload?.commitment,
-            nullifier: cachedPayload?.nullifier,
-            root: cachedPayload?.root,
-            spendable_at_unix: cachedPayload?.spendable_at_unix,
+            note_commitment: cachedPayloadNoteMismatch
+              ? undefined
+              : cachedPayload?.note_commitment || cachedPayload?.commitment,
+            nullifier: cachedPayloadNoteMismatch ? undefined : cachedPayload?.nullifier,
+            root: cachedPayloadNoteMismatch ? undefined : cachedPayload?.root,
+            spendable_at_unix: cachedPayloadNoteMismatch
+              ? undefined
+              : cachedPayload?.spendable_at_unix,
           },
         })
         const responseProof = normalizeHexArray(response.payload?.proof)
@@ -1690,14 +1721,21 @@ export function TradingInterface() {
             cachedPayload?.note_version?.trim() ||
             (HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined),
           executor_address: response.payload?.executor_address?.trim() || undefined,
-          root: responseRoot || cachedPayload?.root?.trim() || undefined,
-          nullifier: response.payload?.nullifier?.trim() || cachedPayload?.nullifier?.trim(),
-          commitment: response.payload?.commitment?.trim() || cachedPayload?.commitment?.trim(),
+          root:
+            responseRoot ||
+            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.root?.trim()) ||
+            undefined,
+          nullifier:
+            response.payload?.nullifier?.trim() ||
+            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.nullifier?.trim()),
+          commitment:
+            response.payload?.commitment?.trim() ||
+            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.commitment?.trim()),
           recipient: response.payload?.recipient?.trim() || recipientForPayload,
           note_commitment:
             response.payload?.note_commitment?.trim() ||
-            cachedPayload?.note_commitment?.trim() ||
-            cachedPayload?.commitment?.trim() ||
+            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.note_commitment?.trim()) ||
+            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.commitment?.trim()) ||
             undefined,
           denom_id:
             response.payload?.denom_id?.trim() ||
@@ -1707,7 +1745,7 @@ export function TradingInterface() {
             typeof response.payload?.spendable_at_unix === "number" &&
             Number.isFinite(response.payload.spendable_at_unix)
               ? Math.floor(response.payload.spendable_at_unix)
-              : typeof cachedPayload?.spendable_at_unix === "number"
+              : !cachedPayloadNoteMismatch && typeof cachedPayload?.spendable_at_unix === "number"
               ? Math.floor(cachedPayload.spendable_at_unix)
               : undefined,
           proof: responseProof,
@@ -1787,7 +1825,7 @@ export function TradingInterface() {
               ? error.message
               : "Gagal menyiapkan payload Garaga otomatis.",
         })
-        if (cachedPayload && !hasLockedV3Note) {
+        if (cachedPayload && !hasLockedV3Note && !cachedPayloadNoteMismatch) {
           // Fallback: keep active cached note payload so execute path can continue.
           // Backend will regenerate proof when payload is incomplete.
           return cachedPayload
@@ -2708,10 +2746,6 @@ export function TradingInterface() {
         }.`
       : hasInsufficientLiquidityCap
       ? `Current route liquidity limits the amount. Max ${formatTokenAmount(maxExecutableFromAllLimits, 6)} ${fromToken.symbol}.`
-      : activeHideNoteTokenMismatch
-      ? `Active hide note memakai token ${activeHideNoteTokenSymbol}. Klik "Use For Swap" pada note yang sesuai.`
-      : activeHideNoteAmountMismatch
-      ? `Active hide note amount terkunci di ${activeHideNoteAmountText} ${activeHideNoteTokenSymbol || fromToken.symbol}. Samakan amount dulu.`
       : isStarknetPairSwap && isSwapContractEventOnly
       ? "Real-token swap is not active yet: current contract is event-only (events + gas only)."
       : !hasValidQuote
@@ -4192,7 +4226,7 @@ export function TradingInterface() {
         const deadline = Math.floor(Date.now() / 1000) + 60 * 20
         const recipient = (receiveAddress || preferredReceiveAddress).trim() || undefined
         const submittedPrivacyPayload =
-          effectiveHideBalance ? loadTradePrivacyPayload() || tradePrivacyPayload : undefined
+          effectiveHideBalance ? tradePrivacyPayload || loadTradePrivacyPayload() : undefined
         const swapRequestRecipient = effectiveHideBalance ? undefined : recipient
         let response: Awaited<ReturnType<typeof executeSwap>>
         let finalTxHash: string | undefined
@@ -4801,6 +4835,15 @@ export function TradingInterface() {
                 <p className="text-xs text-warning">
                   Receive address saat ini berbeda dari recipient note V3. Eksekusi tetap memakai
                   recipient yang terkunci di note.
+                </p>
+              )}
+            {hideBalanceOnchain &&
+              HIDE_BALANCE_SHIELDED_POOL_V3 &&
+              hasActiveHideV3Note &&
+              (activeHideNoteTokenMismatch || activeHideNoteAmountMismatch) && (
+                <p className="text-xs text-warning">
+                  Note aktif berbeda dari input saat ini. Saat Execute, sistem akan siapkan note baru
+                  sesuai nominal/token terbaru.
                 </p>
               )}
             {hideBalanceOnchain && (
