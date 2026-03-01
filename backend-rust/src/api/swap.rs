@@ -1197,6 +1197,7 @@ fn total_fee(amount_in: f64, mode: &str, nft_discount_percent: f64) -> f64 {
 fn estimate_swap_points_for_response(
     volume_usd: f64,
     usdt_equivalent_volume: f64,
+    hide_mode: bool,
     is_testnet: bool,
     nft_discount_percent: f64,
     ai_level: u8,
@@ -1212,7 +1213,11 @@ fn estimate_swap_points_for_response(
     }
     let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
     let ai_factor = 1.0 + (ai_level_points_bonus_percent(ai_level) / 100.0);
-    let usdt_tier_factor = 1.0 + (usdt_tier_bonus_percent(usdt_equivalent_volume) / 100.0);
+    let usdt_tier_factor = if hide_mode {
+        1.0 + (usdt_tier_bonus_percent(usdt_equivalent_volume) / 100.0)
+    } else {
+        1.0
+    };
     (sanitized * POINTS_PER_USD_SWAP * nft_factor * ai_factor * usdt_tier_factor).max(0.0)
 }
 
@@ -3433,6 +3438,7 @@ pub async fn execute_swap(
     let estimated_points_earned = estimate_swap_points_for_response(
         volume_usd,
         usdt_equivalent_volume,
+        should_hide,
         state.config.is_testnet(),
         nft_discount_percent,
         user_ai_level,
@@ -3640,6 +3646,14 @@ mod tests {
         assert_eq!(usdt_tier_bonus_percent(50.0), 20.0);
         assert_eq!(usdt_tier_bonus_percent(100.0), 30.0);
         assert_eq!(usdt_tier_bonus_percent(250.0), 50.0);
+    }
+
+    #[test]
+    fn usdt_tier_bonus_is_hide_mode_only() {
+        let normal = estimate_swap_points_for_response(100.0, 100.0, false, true, 0.0, 1);
+        let hide = estimate_swap_points_for_response(100.0, 100.0, true, true, 0.0, 1);
+        assert!(normal > 0.0);
+        assert!(hide > normal);
     }
 
     #[test]

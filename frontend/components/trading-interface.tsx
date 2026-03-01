@@ -399,6 +399,25 @@ const inferHideStrkDenomIdFromAmount = (amountText: string): string | undefined 
   return matched?.id
 }
 
+const usdtTierBonusPercent = (usdtEquivalentVolume: number): number => {
+  if (!Number.isFinite(usdtEquivalentVolume) || usdtEquivalentVolume <= 0) return 0
+  if (usdtEquivalentVolume >= 250) return 50
+  if (usdtEquivalentVolume >= 100) return 30
+  if (usdtEquivalentVolume >= 50) return 20
+  if (usdtEquivalentVolume >= 10) return 10
+  if (usdtEquivalentVolume >= 5) return 5
+  return 0
+}
+
+const inferHideDenomIdFromUsd = (usdtEquivalentVolume: number): string => {
+  if (!Number.isFinite(usdtEquivalentVolume) || usdtEquivalentVolume <= 0) return "1"
+  if (usdtEquivalentVolume >= 100) return "100"
+  if (usdtEquivalentVolume >= 50) return "50"
+  if (usdtEquivalentVolume >= 10) return "10"
+  if (usdtEquivalentVolume >= 5) return "5"
+  return "1"
+}
+
 const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
   if (typeof window === "undefined") return undefined
   const raw = window.localStorage.getItem(TRADE_PRIVACY_PAYLOAD_KEY)
@@ -1532,10 +1551,28 @@ export function TradingInterface() {
     HIDE_STRK_DENOM_OPTIONS.find((option) => option.id === hideStrkDenomId) ||
     HIDE_STRK_DENOM_OPTIONS[0]
   const inferredHideDenomId = React.useMemo(() => {
-    if (fromToken.symbol.toUpperCase() !== "STRK") return undefined
+    const currentFromSymbol = fromToken.symbol.toUpperCase()
+    if (currentFromSymbol !== "STRK") {
+      if (hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3) {
+        const amountValue = Number.parseFloat((fromAmount || "").trim())
+        const priceValue = Number(fromToken.price || 0)
+        const usdtEquivalent = Number.isFinite(amountValue) && Number.isFinite(priceValue)
+          ? Math.max(0, amountValue * priceValue)
+          : 0
+        return inferHideDenomIdFromUsd(usdtEquivalent)
+      }
+      return undefined
+    }
     if (hideStrkDenomEnabled) return selectedHideStrkDenom.id
     return inferHideStrkDenomIdFromAmount(fromAmount)
-  }, [fromAmount, fromToken.symbol, hideStrkDenomEnabled, selectedHideStrkDenom.id])
+  }, [
+    fromAmount,
+    fromToken.price,
+    fromToken.symbol,
+    hideBalanceOnchain,
+    hideStrkDenomEnabled,
+    selectedHideStrkDenom.id,
+  ])
   
   // Settings state
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -2412,18 +2449,24 @@ export function TradingInterface() {
   const nftPointsMultiplier = hasNftDiscount ? 1 + discountRate : 1
   const normalizedStakeMultiplier =
     Number.isFinite(stakePointsMultiplier) && stakePointsMultiplier > 0 ? stakePointsMultiplier : 1
-  const effectivePointsMultiplier = normalizedStakeMultiplier * nftPointsMultiplier
+  const hideUsdtTierBonusPercent = hideBalanceOnchain ? usdtTierBonusPercent(fromValueUSD) : 0
+  const hideUsdtTierMultiplier = 1 + hideUsdtTierBonusPercent / 100
+  const effectivePointsMultiplier =
+    normalizedStakeMultiplier * nftPointsMultiplier * hideUsdtTierMultiplier
   const pointsEarned =
     basePointsEarned === null
       ? null
       : Math.max(0, Math.floor(basePointsEarned * effectivePointsMultiplier))
-  const showPointsMultiplier = normalizedStakeMultiplier > 1 || nftPointsMultiplier > 1
+  const showPointsMultiplier =
+    normalizedStakeMultiplier > 1 || nftPointsMultiplier > 1 || hideUsdtTierBonusPercent > 0
   const usdtEquivalentVolume =
     Number.isFinite(fromValueUSD) && fromValueUSD > 0 ? fromValueUSD : 0
-  const activeUsdtPointsTier = USDT_POINTS_TIER_OPTIONS.reduce(
-    (best, option) => (usdtEquivalentVolume >= option.minUsdt ? option : best),
-    null as (typeof USDT_POINTS_TIER_OPTIONS)[number] | null
-  )
+  const activeUsdtPointsTier = hideBalanceOnchain
+    ? USDT_POINTS_TIER_OPTIONS.reduce(
+        (best, option) => (usdtEquivalentVolume >= option.minUsdt ? option : best),
+        null as (typeof USDT_POINTS_TIER_OPTIONS)[number] | null
+      )
+    : null
   const estimatedTime = hasQuote
     ? (quote?.estimatedTime || "").trim() ||
       (quote?.type === "bridge" ? estimatedBridgeTimeByProvider(quote?.provider) : "~1-2 min")
@@ -2614,10 +2657,6 @@ export function TradingInterface() {
       ? "Connect your wallet first."
       : isCancellingHideNote
       ? "Cancelling hide note..."
-      : hideBalanceOnchain &&
-        HIDE_BALANCE_SHIELDED_POOL_V3 &&
-        fromToken.symbol.toUpperCase() !== "STRK"
-      ? "Hide Balance V3 saat ini memakai note STRK. Ganti token From ke STRK dulu."
       : !hasPositiveAmount
       ? "Enter a valid amount."
       : isSameTokenSwapPair
@@ -3050,7 +3089,9 @@ export function TradingInterface() {
       }
 
       const denomAmountText =
-        HIDE_STRK_DENOM_OPTIONS.find((item) => item.id === denomId)?.amount || fromAmount
+        tokenSymbol === "STRK"
+          ? HIDE_STRK_DENOM_OPTIONS.find((item) => item.id === denomId)?.amount || fromAmount
+          : fromAmount
       const [amountLow, amountHigh] = decimalToU256Parts(
         denomAmountText,
         resolveTokenDecimals(tokenSymbol)
@@ -4345,6 +4386,10 @@ export function TradingInterface() {
         const swapEstimatedPoints = Number(response.estimated_points_earned || 0)
         const swapDiscountPercent = Number(response.nft_discount_percent || 0)
         const swapDiscountSaved = Number(response.fee_discount_saved || 0)
+        const hideTierLabel =
+          effectiveHideBalance && hideUsdtTierBonusPercent > 0
+            ? `Hide tier +${hideUsdtTierBonusPercent.toFixed(0)}% aktif.`
+            : null
         const pointsLabel =
           Number.isFinite(swapEstimatedPoints) && swapEstimatedPoints > 0
             ? `Points +${swapEstimatedPoints.toFixed(2)} (estimasi)`
@@ -4356,7 +4401,7 @@ export function TradingInterface() {
         notifications.addNotification({
           type: "info",
           title: "Points & Discount",
-          message: `${pointsLabel}. ${discountLabel}`,
+          message: `${pointsLabel}. ${discountLabel}${hideTierLabel ? ` ${hideTierLabel}` : ""}`,
         })
         if (response.privacy_tx_hash) {
           notifications.addNotification({
@@ -4715,14 +4760,8 @@ export function TradingInterface() {
                 </p>
               </div>
             )}
-            {hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && !hideStrkDenomEnabled && (
-              <p className="text-xs text-warning">
-                Hide note V3 aktif saat ini untuk source STRK. Points bonus tetap dihitung dari
-                USDT-equivalent.
-              </p>
-            )}
-
-            <div>
+            {hideBalanceOnchain && (
+              <div>
               <label className="text-sm text-foreground mb-2 block">
                 Points Tier (USDT-equivalent)
               </label>
@@ -4750,9 +4789,10 @@ export function TradingInterface() {
                 {(activeUsdtPointsTier?.bonusPercent || 0).toFixed(0)}% points.
               </p>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Tier ini hanya untuk bonus points, tidak mengubah denom note V3.
+                Tier ini khusus mode hide dan tetap dikombinasikan dengan NFT discount + multiplier stake.
               </p>
-            </div>
+              </div>
+            )}
 
             {/* Slippage Tolerance */}
             <div>
@@ -4973,6 +5013,9 @@ export function TradingInterface() {
                     Base +{basePointsEarned}
                     {normalizedStakeMultiplier > 1 ? ` × Stake ${formatMultiplier(normalizedStakeMultiplier)}` : ""}
                     {nftPointsMultiplier > 1 ? ` × NFT ${formatMultiplier(nftPointsMultiplier)}` : ""}
+                    {hideBalanceOnchain && hideUsdtTierBonusPercent > 0
+                      ? ` × HideTier +${hideUsdtTierBonusPercent.toFixed(0)}%`
+                      : ""}
                   </p>
                 )}
               </div>
@@ -5007,6 +5050,7 @@ export function TradingInterface() {
             <p className="mt-1 text-[11px] text-muted-foreground">
               Stake: {formatMultiplier(normalizedStakeMultiplier)}
               {nftPointsMultiplier > 1 ? ` • NFT: ${formatMultiplier(nftPointsMultiplier)}` : ""}
+              {hideUsdtTierBonusPercent > 0 ? ` • Hide Tier: +${hideUsdtTierBonusPercent.toFixed(0)}%` : ""}
             </p>
           </div>
         )}
