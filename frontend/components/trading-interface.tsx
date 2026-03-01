@@ -4387,9 +4387,26 @@ export function TradingInterface() {
                   (note.nullifier || "").trim().toLowerCase() === selectedNullifier
                 return sameCommitment || sameNullifier
               })
+              const requestedTokenSymbol = fromToken.symbol.toUpperCase()
+              const requestedAmount = Number.parseFloat(fromAmount || "NaN")
+              const requestedDecimals = resolveTokenDecimals(fromToken.symbol)
+              const requestedTolerance = Math.max(1e-9, Math.pow(10, -Math.min(6, requestedDecimals)))
+              const hasCompatiblePendingNote = pendingNotes.some((note) => {
+                const noteToken = (note.token_symbol || "").trim().toUpperCase()
+                if (!noteToken || noteToken !== requestedTokenSymbol) return false
+                const noteAmount = Number.parseFloat((note.amount || "").trim() || "NaN")
+                if (!Number.isFinite(noteAmount) || noteAmount <= 0) return false
+                if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) return false
+                return Math.abs(noteAmount - requestedAmount) <= requestedTolerance
+              })
               if (selectedNoteTracked) {
                 throw new Error(
                   "Hide note terpilih belum valid untuk executor aktif. Pilih note lain atau Cancel & Withdraw. Auto-deposit dibatalkan."
+                )
+              }
+              if (hasCompatiblePendingNote) {
+                throw new Error(
+                  "Ada pending hide note yang cocok untuk amount/token ini. Klik Use For Swap pada note tersebut lalu retry. Auto-deposit dibatalkan."
                 )
               }
               let spendableAtUnix = 0
