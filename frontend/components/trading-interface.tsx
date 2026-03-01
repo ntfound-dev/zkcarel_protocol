@@ -195,6 +195,13 @@ const HIDE_STRK_DENOM_OPTIONS = [
   { id: "50", amount: "50" },
   { id: "100", amount: "100" },
 ] as const
+const USDT_POINTS_TIER_OPTIONS = [
+  { minUsdt: 5, bonusPercent: 5 },
+  { minUsdt: 10, bonusPercent: 10 },
+  { minUsdt: 50, bonusPercent: 20 },
+  { minUsdt: 100, bonusPercent: 30 },
+  { minUsdt: 250, bonusPercent: 50 },
+] as const
 const BRIDGE_TO_STRK_DISABLED_MESSAGE =
   "Bridge to STRK is currently disabled. Use Starknet L2 Swap for STRK pairs."
 const UNSUPPORTED_BRIDGE_PAIR_MESSAGE =
@@ -2411,6 +2418,12 @@ export function TradingInterface() {
       ? null
       : Math.max(0, Math.floor(basePointsEarned * effectivePointsMultiplier))
   const showPointsMultiplier = normalizedStakeMultiplier > 1 || nftPointsMultiplier > 1
+  const usdtEquivalentVolume =
+    Number.isFinite(fromValueUSD) && fromValueUSD > 0 ? fromValueUSD : 0
+  const activeUsdtPointsTier = USDT_POINTS_TIER_OPTIONS.reduce(
+    (best, option) => (usdtEquivalentVolume >= option.minUsdt ? option : best),
+    null as (typeof USDT_POINTS_TIER_OPTIONS)[number] | null
+  )
   const estimatedTime = hasQuote
     ? (quote?.estimatedTime || "").trim() ||
       (quote?.type === "bridge" ? estimatedBridgeTimeByProvider(quote?.provider) : "~1-2 min")
@@ -2601,6 +2614,10 @@ export function TradingInterface() {
       ? "Connect your wallet first."
       : isCancellingHideNote
       ? "Cancelling hide note..."
+      : hideBalanceOnchain &&
+        HIDE_BALANCE_SHIELDED_POOL_V3 &&
+        fromToken.symbol.toUpperCase() !== "STRK"
+      ? "Hide Balance V3 saat ini memakai note STRK. Ganti token From ke STRK dulu."
       : !hasPositiveAmount
       ? "Enter a valid amount."
       : isSameTokenSwapPair
@@ -4698,6 +4715,44 @@ export function TradingInterface() {
                 </p>
               </div>
             )}
+            {hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && !hideStrkDenomEnabled && (
+              <p className="text-xs text-warning">
+                Hide note V3 aktif saat ini untuk source STRK. Points bonus tetap dihitung dari
+                USDT-equivalent.
+              </p>
+            )}
+
+            <div>
+              <label className="text-sm text-foreground mb-2 block">
+                Points Tier (USDT-equivalent)
+              </label>
+              <div className="grid grid-cols-5 gap-2">
+                {USDT_POINTS_TIER_OPTIONS.map((option) => {
+                  const unlocked = usdtEquivalentVolume >= option.minUsdt
+                  return (
+                    <div
+                      key={option.minUsdt}
+                      className={cn(
+                        "py-2 rounded-lg text-center text-[11px] font-medium border",
+                        unlocked
+                          ? "bg-success/10 border-success/40 text-success"
+                          : "bg-surface text-muted-foreground border-border"
+                      )}
+                    >
+                      <div>${option.minUsdt}</div>
+                      <div>+{option.bonusPercent}%</div>
+                    </div>
+                  )
+                })}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Volume saat ini: ${usdtEquivalentVolume.toFixed(2)} • Tier aktif: +
+                {(activeUsdtPointsTier?.bonusPercent || 0).toFixed(0)}% points.
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Tier ini hanya untuk bonus points, tidak mengubah denom note V3.
+              </p>
+            </div>
 
             {/* Slippage Tolerance */}
             <div>
@@ -5298,12 +5353,16 @@ export function TradingInterface() {
                           const currentFromSymbol = fromToken.symbol.toUpperCase()
                           const selectedAmountText = (note.amount || "").trim()
                           if (
-                            selectedAmountText &&
-                            (!selectedTokenSymbol || selectedTokenSymbol === currentFromSymbol)
+                            selectedTokenSymbol &&
+                            selectedTokenSymbol !== currentFromSymbol &&
+                            tokenCatalog.some((token) => token.symbol.toUpperCase() === selectedTokenSymbol)
                           ) {
+                            setFromTokenSymbol(selectedTokenSymbol)
+                          }
+                          if (selectedAmountText) {
                             setFromAmount(selectedAmountText)
                           }
-                          if (currentFromSymbol === "STRK" && (note.denom_id || "").trim()) {
+                          if (selectedTokenSymbol === "STRK" && (note.denom_id || "").trim()) {
                             setHideStrkDenomId((note.denom_id || "").trim())
                           }
                           setHasTradePrivacyPayload(true)

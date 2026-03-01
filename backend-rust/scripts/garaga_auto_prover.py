@@ -64,6 +64,17 @@ def getenv_required(name: str) -> str:
     return value
 
 
+def clean_optional_text(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.lower() in {"none", "null", "undefined", "nan"}:
+        return ""
+    return text
+
+
 def parse_stdin_payload() -> dict[str, object]:
     raw = sys.stdin.read().strip()
     if not raw:
@@ -219,10 +230,7 @@ def bool_env(name: str, default: bool = False) -> bool:
 
 def _tx_field(tx_context: Mapping[str, object], *keys: str) -> str:
     for key in keys:
-        value = tx_context.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
+        text = clean_optional_text(tx_context.get(key))
         if text:
             return text
     return ""
@@ -675,13 +683,15 @@ def build_payload(stdin_payload: Mapping[str, object]) -> GaragaPayload:
             commitment = to_hex_felt(
                 int.from_bytes(hashlib.sha256(commitment_seed).digest(), byteorder="big")
             )
-            note_commitment_raw = str(tx_context.get("note_commitment", "")).strip()
+            note_commitment_raw = clean_optional_text(tx_context.get("note_commitment"))
             note_commitment = note_commitment_raw if note_commitment_raw else commitment
-            denom_raw = str(tx_context.get("denom_id", "")).strip() or getenv_clean("GARAGA_DENOM_ID")
+            denom_raw = clean_optional_text(tx_context.get("denom_id")) or clean_optional_text(
+                getenv_clean("GARAGA_DENOM_ID")
+            )
             denom_id = denom_raw or None
             spendable_raw = (
-                str(tx_context.get("spendable_at_unix", "")).strip()
-                or getenv_clean("GARAGA_SPENDABLE_AT_UNIX")
+                clean_optional_text(tx_context.get("spendable_at_unix"))
+                or clean_optional_text(getenv_clean("GARAGA_SPENDABLE_AT_UNIX"))
             )
             if spendable_raw:
                 try:

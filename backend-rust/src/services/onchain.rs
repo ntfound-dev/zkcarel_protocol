@@ -806,6 +806,13 @@ pub fn parse_felt(value: &str) -> Result<Felt> {
             "Empty field element".to_string(),
         ));
     }
+    let lowered = trimmed.to_ascii_lowercase();
+    if matches!(lowered.as_str(), "none" | "null" | "undefined" | "nan") {
+        return Err(crate::error::AppError::BadRequest(format!(
+            "Invalid felt placeholder '{}'",
+            trimmed
+        )));
+    }
     if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
         let normalized = if trimmed.starts_with("0X") {
             format!("0x{}", &trimmed[2..])
@@ -813,10 +820,7 @@ pub fn parse_felt(value: &str) -> Result<Felt> {
             trimmed.to_string()
         };
         return Felt::from_hex(&normalized).map_err(|e| {
-            crate::error::AppError::Internal(format!(
-                "Invalid felt hex '{}': {}",
-                normalized, e
-            ))
+            crate::error::AppError::Internal(format!("Invalid felt hex '{}': {}", normalized, e))
         });
     }
     // Some payload producers return hex without `0x` prefix.
