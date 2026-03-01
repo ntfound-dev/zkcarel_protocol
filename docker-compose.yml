@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
@@ -53,6 +51,21 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:3
+    container_name: zkcare-ngrok
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    command: ["http", "backend:8080", "--log=stdout"]
+    ports:
+      - "4040:4040"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+    profiles:
+      - tunnel
 
   frontend:
     build:
