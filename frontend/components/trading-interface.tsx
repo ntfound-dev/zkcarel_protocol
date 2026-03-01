@@ -188,13 +188,6 @@ const MIN_WAIT_MS =
   (Number.isFinite(HIDE_BALANCE_MIN_NOTE_AGE_SECS) && HIDE_BALANCE_MIN_NOTE_AGE_SECS > 0
     ? HIDE_BALANCE_MIN_NOTE_AGE_SECS
     : 3600) * 1000
-const HIDE_STRK_DENOM_OPTIONS = [
-  { id: "1", amount: "1" },
-  { id: "5", amount: "5" },
-  { id: "10", amount: "10" },
-  { id: "50", amount: "50" },
-  { id: "100", amount: "100" },
-] as const
 const USDT_POINTS_TIER_OPTIONS = [
   { minUsdt: 5, bonusPercent: 5 },
   { minUsdt: 10, bonusPercent: 10 },
@@ -390,15 +383,6 @@ const hasCompleteV3SpendPayload = (payload: PrivacyVerificationPayload | undefin
   )
 }
 
-const inferHideStrkDenomIdFromAmount = (amountText: string): string | undefined => {
-  const parsed = Number.parseFloat((amountText || "").trim())
-  if (!Number.isFinite(parsed) || parsed <= 0) return undefined
-  const matched = HIDE_STRK_DENOM_OPTIONS.find(
-    (option) => Math.abs(Number.parseFloat(option.amount) - parsed) < 1e-9
-  )
-  return matched?.id
-}
-
 const usdtTierBonusPercent = (usdtEquivalentVolume: number): number => {
   if (!Number.isFinite(usdtEquivalentVolume) || usdtEquivalentVolume <= 0) return 0
   if (usdtEquivalentVolume >= 250) return 50
@@ -411,6 +395,7 @@ const usdtTierBonusPercent = (usdtEquivalentVolume: number): number => {
 
 const inferHideDenomIdFromUsd = (usdtEquivalentVolume: number): string => {
   if (!Number.isFinite(usdtEquivalentVolume) || usdtEquivalentVolume <= 0) return "1"
+  if (usdtEquivalentVolume >= 250) return "250"
   if (usdtEquivalentVolume >= 100) return "100"
   if (usdtEquivalentVolume >= 50) return "50"
   if (usdtEquivalentVolume >= 10) return "10"
@@ -421,6 +406,7 @@ const inferHideDenomIdFromUsd = (usdtEquivalentVolume: number): string => {
 const inferUsdtTierFromDenomId = (denomId: string): number => {
   const parsed = Number.parseFloat((denomId || "").trim())
   if (!Number.isFinite(parsed) || parsed <= 0) return 5
+  if (parsed >= 250) return 250
   if (parsed >= 100) return 100
   if (parsed >= 50) return 50
   if (parsed >= 10) return 10
@@ -1548,45 +1534,25 @@ export function TradingInterface() {
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const [isCancellingHideNote, setIsCancellingHideNote] = React.useState(false)
   const [nowMs, setNowMs] = React.useState(() => Date.now())
-  const [hideStrkDenomId, setHideStrkDenomId] = React.useState<string>("10")
-  const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(10)
+  const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(5)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
   // Hide Balance (Garaga) is only enabled for Starknet <-> Starknet swap flow.
   const hideBalanceSupportedForCurrentPair =
     chainFromNetwork(fromToken.network) === "starknet" &&
     chainFromNetwork(toToken.network) === "starknet"
   const hideBalanceOnchain = hideBalanceSupportedForCurrentPair && balanceHidden
-  const hideStrkDenomEnabled =
-    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && fromToken.symbol.toUpperCase() === "STRK"
   const hideUsdtTierLockEnabled =
-    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && fromToken.symbol.toUpperCase() !== "STRK"
-  const selectedHideStrkDenom =
-    HIDE_STRK_DENOM_OPTIONS.find((option) => option.id === hideStrkDenomId) ||
-    HIDE_STRK_DENOM_OPTIONS[0]
+    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3
   const selectedHideUsdtTier = React.useMemo(
     () =>
       USDT_POINTS_TIER_OPTIONS.find((option) => option.minUsdt === hideUsdtTierMin) ||
       USDT_POINTS_TIER_OPTIONS[1],
     [hideUsdtTierMin]
   )
-  const inferredHideDenomId = React.useMemo(() => {
-    const currentFromSymbol = fromToken.symbol.toUpperCase()
-    if (currentFromSymbol !== "STRK") {
-      if (hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3) {
-        return inferHideDenomIdFromUsd(selectedHideUsdtTier.minUsdt)
-      }
-      return undefined
-    }
-    if (hideStrkDenomEnabled) return selectedHideStrkDenom.id
-    return inferHideStrkDenomIdFromAmount(fromAmount)
-  }, [
-    fromAmount,
-    fromToken.symbol,
-    hideBalanceOnchain,
-    hideStrkDenomEnabled,
-    selectedHideUsdtTier.minUsdt,
-    selectedHideStrkDenom.id,
-  ])
+  const inferredHideDenomId = React.useMemo(
+    () => inferHideDenomIdFromUsd(selectedHideUsdtTier.minUsdt),
+    [selectedHideUsdtTier.minUsdt]
+  )
   
   // Settings state
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -1606,12 +1572,6 @@ export function TradingInterface() {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [])
-  React.useEffect(() => {
-    if (!hideStrkDenomEnabled) return
-    const targetAmount = selectedHideStrkDenom.amount
-    if (fromAmount === targetAmount) return
-    setFromAmount(targetAmount)
-  }, [hideStrkDenomEnabled, selectedHideStrkDenom.amount, fromAmount])
   React.useEffect(() => {
     if (!hideUsdtTierLockEnabled) return
     const tokenPrice = Number(fromToken.price || 0)
@@ -2620,7 +2580,7 @@ export function TradingInterface() {
   const hideUsdtTierPriceUnavailable =
     hideUsdtTierLockEnabled && !(Number.isFinite(fromToken.price) && fromToken.price > 0)
   React.useEffect(() => {
-    if (hideStrkDenomEnabled || hideUsdtTierLockEnabled) return
+    if (hideUsdtTierLockEnabled) return
     if (onchainBalanceUnavailable) return
     const parsed = Number.parseFloat(fromAmount || "0")
     if (!Number.isFinite(parsed) || parsed <= 0) return
@@ -2637,7 +2597,6 @@ export function TradingInterface() {
   }, [
     fromAmount,
     fromToken.symbol,
-    hideStrkDenomEnabled,
     hideUsdtTierLockEnabled,
     maxExecutableFromAllLimits,
     onchainBalanceUnavailable,
@@ -3124,17 +3083,13 @@ export function TradingInterface() {
       const denomId = (
         payload.denom_id ||
         inferredHideDenomId ||
-        inferHideStrkDenomIdFromAmount(fromAmount) ||
         ""
       ).trim()
       if (!denomId) {
         throw new Error("Hide denom_id missing in privacy payload.")
       }
 
-      const denomAmountText =
-        tokenSymbol === "STRK"
-          ? HIDE_STRK_DENOM_OPTIONS.find((item) => item.id === denomId)?.amount || fromAmount
-          : fromAmount
+      const denomAmountText = fromAmount
       const [amountLow, amountHigh] = decimalToU256Parts(
         denomAmountText,
         resolveTokenDecimals(tokenSymbol)
@@ -4627,7 +4582,7 @@ export function TradingInterface() {
             label="From"
             amount={fromAmount}
             onAmountChange={setFromAmount}
-            readOnly={hideStrkDenomEnabled || hideUsdtTierLockEnabled}
+            readOnly={hideUsdtTierLockEnabled}
             hideBalance={balanceHidden}
             maxTradeBalance={maxExecutableFromAllLimits}
           />
@@ -4779,36 +4734,10 @@ export function TradingInterface() {
                   recipient yang terkunci di note.
                 </p>
               )}
-            {hideStrkDenomEnabled && (
-              <div>
-                <label className="text-sm text-foreground mb-2 block">
-                  Hide Denomination (STRK)
-                </label>
-                <div className="grid grid-cols-5 gap-2">
-                  {HIDE_STRK_DENOM_OPTIONS.map((option) => (
-                    <button
-                      key={option.id}
-                      onClick={() => setHideStrkDenomId(option.id)}
-                      className={cn(
-                        "py-2 rounded-lg text-xs font-medium transition-all border",
-                        hideStrkDenomId === option.id
-                          ? "bg-primary/20 text-primary border-primary"
-                          : "bg-surface text-muted-foreground border-border hover:border-primary/50"
-                      )}
-                    >
-                      {option.amount}
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Denom note V3: {selectedHideStrkDenom.amount} STRK.
-                </p>
-              </div>
-            )}
             {hideBalanceOnchain && (
               <div>
                 <label className="text-sm text-foreground mb-2 block">
-                  Points Tier (USDT-equivalent)
+                  Hide Tier (USDT)
                 </label>
                 <div className="grid grid-cols-5 gap-2">
                   {USDT_POINTS_TIER_OPTIONS.map((option) => {
@@ -4844,7 +4773,7 @@ export function TradingInterface() {
                 </div>
                 {hideUsdtTierLockEnabled ? (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Amount hide dikunci ke tier ${selectedHideUsdtTier.minUsdt}: ~
+                    Nominal hide dikunci ke tier ${selectedHideUsdtTier.minUsdt}: ~
                     {fromAmount || "0"} {fromToken.symbol} • Bonus +{selectedHideUsdtTier.bonusPercent}
                     %.
                   </p>
@@ -4860,7 +4789,7 @@ export function TradingInterface() {
                   </p>
                 )}
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  Tier ini khusus mode hide dan tetap dikombinasikan dengan NFT discount + multiplier stake.
+                  Tier ini khusus mode hide (swap privat), tetap memakai NFT discount + multiplier stake.
                 </p>
               </div>
             )}
@@ -5477,9 +5406,7 @@ export function TradingInterface() {
                           if (selectedAmountText) {
                             setFromAmount(selectedAmountText)
                           }
-                          if (selectedTokenSymbol === "STRK" && (note.denom_id || "").trim()) {
-                            setHideStrkDenomId((note.denom_id || "").trim())
-                          } else if ((note.denom_id || "").trim()) {
+                          if ((note.denom_id || "").trim()) {
                             setHideUsdtTierMin(inferUsdtTierFromDenomId((note.denom_id || "").trim()))
                           }
                           setHasTradePrivacyPayload(true)

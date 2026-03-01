@@ -105,6 +105,17 @@ type ChartCandle = {
 }
 
 const stableSymbols = new Set(["USDT", "USDC"])
+
+const usdtTierBonusPercent = (usdtEquivalentVolume: number): number => {
+  if (!Number.isFinite(usdtEquivalentVolume) || usdtEquivalentVolume <= 0) return 0
+  if (usdtEquivalentVolume >= 250) return 50
+  if (usdtEquivalentVolume >= 100) return 30
+  if (usdtEquivalentVolume >= 50) return 20
+  if (usdtEquivalentVolume >= 10) return 10
+  if (usdtEquivalentVolume >= 5) return 5
+  return 0
+}
+
 const STARKNET_LIMIT_ORDER_BOOK_ADDRESS =
   process.env.NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS ||
   process.env.NEXT_PUBLIC_LIMIT_ORDER_BOOK_ADDRESS ||
@@ -811,7 +822,10 @@ export function LimitOrder() {
   const normalizedStakeMultiplier =
     Number.isFinite(stakePointsMultiplier) && stakePointsMultiplier > 0 ? stakePointsMultiplier : 1
   const nftPointsMultiplier = 1 + discountRate
-  const effectivePointsMultiplier = normalizedStakeMultiplier * nftPointsMultiplier
+  const hideUsdtTierBonus = balanceHidden ? usdtTierBonusPercent(estimatedUsdValue) : 0
+  const hideUsdtTierMultiplier = 1 + hideUsdtTierBonus / 100
+  const effectivePointsMultiplier =
+    normalizedStakeMultiplier * nftPointsMultiplier * hideUsdtTierMultiplier
   const rawLimitFeeUsd = Math.max(0, estimatedUsdValue) * 0.002
   const limitFeeUsd = rawLimitFeeUsd * (1 - discountRate)
   const feeSavedUsd = Math.max(0, rawLimitFeeUsd - limitFeeUsd)
@@ -1707,6 +1721,9 @@ export function LimitOrder() {
                       </div>
                       <p className="text-[11px] text-muted-foreground">
                         Points are awarded when the order is filled.
+                        {balanceHidden && hideUsdtTierBonus > 0
+                          ? ` Hide tier +${hideUsdtTierBonus.toFixed(0)}% aktif.`
+                          : ""}
                       </p>
                     </div>
                   )}
@@ -1927,6 +1944,9 @@ export function LimitOrder() {
                       </div>
                       <p className="text-[11px] text-muted-foreground">
                         Points are awarded when the order is filled.
+                        {balanceHidden && hideUsdtTierBonus > 0
+                          ? ` Hide tier +${hideUsdtTierBonus.toFixed(0)}% aktif.`
+                          : ""}
                       </p>
                     </div>
                   )}

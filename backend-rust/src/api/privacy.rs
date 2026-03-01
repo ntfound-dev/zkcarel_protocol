@@ -1,13 +1,10 @@
 use crate::{
     error::{AppError, Result},
     models::{ApiResponse, StarknetWalletCall},
-    services::{
-        onchain::parse_felt,
-        relayer::RelayerService,
-    },
     services::privacy_verifier::{
         parse_privacy_verifier_kind, resolve_privacy_router_for_verifier,
     },
+    services::{onchain::parse_felt, relayer::RelayerService},
 };
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
@@ -368,8 +365,8 @@ pub async fn prepare_private_execution(
         req.amount_low.as_deref(),
         req.amount_high.as_deref(),
     ) {
-        (Some(token), Some(amount_low), Some(amount_high)) => Some(
-            build_relayer_private_execution_draft(
+        (Some(token), Some(amount_low), Some(amount_high)) => {
+            Some(build_relayer_private_execution_draft(
                 &state,
                 &user_address,
                 token,
@@ -382,8 +379,8 @@ pub async fn prepare_private_execution(
                 action_selector,
                 &req.action_calldata,
                 &payload,
-            )?,
-        ),
+            )?)
+        }
         _ => None,
     };
 
@@ -468,16 +465,19 @@ pub async fn relay_private_execution(
     }
 
     let relayer = RelayerService::from_config(&state.config)?;
-    let submitted = relayer.submit_call(Call {
-        to,
-        selector,
-        calldata,
-    })
-    .await?;
+    let submitted = relayer
+        .submit_call(Call {
+            to,
+            selector,
+            calldata,
+        })
+        .await?;
 
-    Ok(Json(ApiResponse::success(RelayerPrivateExecutionResponse {
-        tx_hash: submitted.tx_hash,
-    })))
+    Ok(Json(ApiResponse::success(
+        RelayerPrivateExecutionResponse {
+            tx_hash: submitted.tx_hash,
+        },
+    )))
 }
 
 // Routes privacy submissions to V1 (`submit_private_action`) or V2 (`submit_action`) based on payload shape.
@@ -949,7 +949,8 @@ fn extract_optional_string(value: &Value, keys: &[&str]) -> Option<String> {
     for key in keys {
         let raw = object.get(*key)?;
         let text = raw.as_str()?.trim();
-        if !text.is_empty() {
+        let lowered = text.to_ascii_lowercase();
+        if !text.is_empty() && !matches!(lowered.as_str(), "none" | "null" | "undefined" | "nan") {
             return Some(text.to_string());
         }
     }
@@ -1316,8 +1317,10 @@ fn build_relayer_private_execution_draft(
     let proof_hash = parse_felt(&format!("{:#x}", poseidon_hash_many(&proof_felts)))?;
     let public_inputs_hash =
         parse_felt(&format!("{:#x}", poseidon_hash_many(&public_inputs_felts)))?;
-    let action_calldata_hash =
-        parse_felt(&format!("{:#x}", poseidon_hash_many(&action_calldata_felts)))?;
+    let action_calldata_hash = parse_felt(&format!(
+        "{:#x}",
+        poseidon_hash_many(&action_calldata_felts)
+    ))?;
 
     let message_hash = parse_felt(&format!(
         "{:#x}",

@@ -236,6 +236,8 @@ fn estimate_stake_points_for_response(
     nft_discount_percent: f64,
     is_testnet: bool,
     ai_level: u8,
+    hide_mode: bool,
+    usdt_equivalent_volume: f64,
 ) -> f64 {
     let sanitized = sanitize_points_usd_base(usd_value);
     if amount <= 0.0 || sanitized <= 0.0 {
@@ -247,7 +249,13 @@ fn estimate_stake_points_for_response(
     }
     let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
     let ai_factor = 1.0 + (ai_level_points_bonus_percent(ai_level) / 100.0);
-    (sanitized * POINTS_PER_USD_STAKE * multiplier * nft_factor * ai_factor).max(0.0)
+    let usdt_tier_factor = if hide_mode {
+        1.0 + (usdt_tier_bonus_percent(usdt_equivalent_volume) / 100.0)
+    } else {
+        1.0
+    };
+    (sanitized * POINTS_PER_USD_STAKE * multiplier * nft_factor * ai_factor * usdt_tier_factor)
+        .max(0.0)
 }
 
 // Internal helper that supports `ai_level_points_bonus_percent` operations.
@@ -256,6 +264,23 @@ fn ai_level_points_bonus_percent(level: u8) -> f64 {
         2 => AI_LEVEL_2_POINTS_BONUS_PERCENT,
         3 => AI_LEVEL_3_POINTS_BONUS_PERCENT,
         _ => 0.0,
+    }
+}
+
+fn usdt_tier_bonus_percent(usdt_equivalent_volume: f64) -> f64 {
+    let amount = usdt_equivalent_volume.max(0.0);
+    if amount >= 250.0 {
+        50.0
+    } else if amount >= 100.0 {
+        30.0
+    } else if amount >= 50.0 {
+        20.0
+    } else if amount >= 10.0 {
+        10.0
+    } else if amount >= 5.0 {
+        5.0
+    } else {
+        0.0
     }
 }
 
@@ -1959,6 +1984,8 @@ pub async fn deposit(
         nft_discount_percent,
         state.config.is_testnet(),
         user_ai_level,
+        should_hide,
+        usd_value,
     );
     let onchain_block_number = resolve_onchain_block_number_best_effort(&state, &tx_hash).await;
     let tx = crate::models::Transaction {
@@ -2925,6 +2952,25 @@ mod tests {
         assert_eq!(ai_level_points_bonus_percent(1), 0.0);
         assert_eq!(ai_level_points_bonus_percent(2), 20.0);
         assert_eq!(ai_level_points_bonus_percent(3), 40.0);
+    }
+
+    #[test]
+    fn usdt_tier_bonus_percent_applies_expected_tiers() {
+        assert_eq!(usdt_tier_bonus_percent(4.99), 0.0);
+        assert_eq!(usdt_tier_bonus_percent(5.0), 5.0);
+        assert_eq!(usdt_tier_bonus_percent(10.0), 10.0);
+        assert_eq!(usdt_tier_bonus_percent(50.0), 20.0);
+        assert_eq!(usdt_tier_bonus_percent(100.0), 30.0);
+        assert_eq!(usdt_tier_bonus_percent(250.0), 50.0);
+    }
+
+    #[test]
+    fn usdt_tier_bonus_is_hide_mode_only_for_stake() {
+        let normal =
+            estimate_stake_points_for_response(100.0, "USDT", 100.0, 0.0, true, 1, false, 100.0);
+        let hide =
+            estimate_stake_points_for_response(100.0, "USDT", 100.0, 0.0, true, 1, true, 100.0);
+        assert!(hide > normal);
     }
 
     #[test]

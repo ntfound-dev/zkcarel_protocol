@@ -94,6 +94,8 @@ fn estimate_limit_order_points_for_response(
     nft_discount_percent: f64,
     is_testnet: bool,
     ai_level: u8,
+    hide_mode: bool,
+    usdt_equivalent_volume: f64,
 ) -> f64 {
     let sanitized = sanitize_points_usd_base(usd_value);
     let min_threshold = if is_testnet {
@@ -106,7 +108,12 @@ fn estimate_limit_order_points_for_response(
     }
     let nft_factor = 1.0 + (nft_discount_percent.clamp(0.0, 100.0) / 100.0);
     let ai_factor = 1.0 + (ai_level_points_bonus_percent(ai_level) / 100.0);
-    (sanitized * POINTS_PER_USD_LIMIT_ORDER * nft_factor * ai_factor).max(0.0)
+    let usdt_tier_factor = if hide_mode {
+        1.0 + (usdt_tier_bonus_percent(usdt_equivalent_volume) / 100.0)
+    } else {
+        1.0
+    };
+    (sanitized * POINTS_PER_USD_LIMIT_ORDER * nft_factor * ai_factor * usdt_tier_factor).max(0.0)
 }
 
 // Internal helper that supports `ai_level_points_bonus_percent` operations in the limit-order flow.
@@ -115,6 +122,23 @@ fn ai_level_points_bonus_percent(level: u8) -> f64 {
         2 => AI_LEVEL_2_POINTS_BONUS_PERCENT,
         3 => AI_LEVEL_3_POINTS_BONUS_PERCENT,
         _ => 0.0,
+    }
+}
+
+fn usdt_tier_bonus_percent(usdt_equivalent_volume: f64) -> f64 {
+    let amount = usdt_equivalent_volume.max(0.0);
+    if amount >= 250.0 {
+        50.0
+    } else if amount >= 100.0 {
+        30.0
+    } else if amount >= 50.0 {
+        20.0
+    } else if amount >= 10.0 {
+        10.0
+    } else if amount >= 5.0 {
+        5.0
+    } else {
+        0.0
     }
 }
 
@@ -857,6 +881,7 @@ pub async fn create_order(
             1
         }
     };
+    let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
     let from_token_price = latest_limit_order_price(&state, &from_token_symbol).await?;
     let estimated_usd_value = sanitize_usd_notional(amount * from_token_price);
     let estimated_points_earned = estimate_limit_order_points_for_response(
@@ -864,10 +889,11 @@ pub async fn create_order(
         nft_discount_percent,
         state.config.is_testnet(),
         user_ai_level,
+        should_hide,
+        estimated_usd_value,
     );
 
     ensure_supported_limit_order_pair(&req.from_token, &req.to_token)?;
-    let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
     let strict_privacy_mode = should_hide && hide_balance_strict_privacy_mode_enabled();
     let hide_pool_version = if should_hide {
         Some(resolve_hide_pool_version(req.privacy.as_ref()))
@@ -1745,6 +1771,23 @@ mod tests {
         assert_eq!(ai_level_points_bonus_percent(1), 0.0);
         assert_eq!(ai_level_points_bonus_percent(2), 20.0);
         assert_eq!(ai_level_points_bonus_percent(3), 40.0);
+    }
+
+    #[test]
+    fn usdt_tier_bonus_percent_applies_expected_tiers() {
+        assert_eq!(usdt_tier_bonus_percent(4.99), 0.0);
+        assert_eq!(usdt_tier_bonus_percent(5.0), 5.0);
+        assert_eq!(usdt_tier_bonus_percent(10.0), 10.0);
+        assert_eq!(usdt_tier_bonus_percent(50.0), 20.0);
+        assert_eq!(usdt_tier_bonus_percent(100.0), 30.0);
+        assert_eq!(usdt_tier_bonus_percent(250.0), 50.0);
+    }
+
+    #[test]
+    fn usdt_tier_bonus_is_hide_mode_only_for_limit_order() {
+        let normal = estimate_limit_order_points_for_response(100.0, 0.0, true, 1, false, 100.0);
+        let hide = estimate_limit_order_points_for_response(100.0, 0.0, true, 1, true, 100.0);
+        assert!(hide > normal);
     }
 
     #[test]
