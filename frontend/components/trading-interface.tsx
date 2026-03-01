@@ -31,6 +31,7 @@ import {
   invokeStarknetCallsFromWallet,
   invokeStarknetCallFromWallet,
   parseEstimatedMinutes,
+  readStarknetErc20AllowanceFromWallet,
   providerIdToFeltHex,
   getConnectedEvmAddressFromWallet,
   sendEvmTransactionFromWallet,
@@ -3094,6 +3095,22 @@ export function TradingInterface() {
         denomAmountText,
         resolveTokenDecimals(tokenSymbol)
       )
+      const requiredAmount = BigInt(amountLow) + (BigInt(amountHigh) << BigInt(128))
+      const ownerAddress = (wallet.starknetAddress || wallet.address || "").trim()
+      let hasEnoughAllowance = false
+      if (ownerAddress) {
+        try {
+          const allowance = await readStarknetErc20AllowanceFromWallet(
+            tokenAddress,
+            ownerAddress,
+            executorAddress,
+            starknetProviderHint
+          )
+          hasEnoughAllowance = allowance !== null && allowance >= requiredAmount
+        } catch {
+          hasEnoughAllowance = false
+        }
+      }
 
       const approvalCall = {
         contractAddress: tokenAddress,
@@ -3110,14 +3127,17 @@ export function TradingInterface() {
           toHexFelt(nullifier),
         ],
       }
+      const callsToExecute = hasEnoughAllowance ? [depositCall] : [approvalCall, depositCall]
 
       notifications.addNotification({
         type: "info",
         title: "Wallet signature required",
-        message: `Confirm hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`,
+        message: hasEnoughAllowance
+          ? `Confirm hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`
+          : `Confirm approve + hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`,
       })
       const depositTxHash = await invokeStarknetCallsFromWallet(
-        [approvalCall, depositCall],
+        callsToExecute,
         starknetProviderHint
       )
 
@@ -3165,6 +3185,8 @@ export function TradingInterface() {
       inferredHideDenomId,
       notifications,
       starknetProviderHint,
+      wallet.address,
+      wallet.starknetAddress,
     ]
   )
 
