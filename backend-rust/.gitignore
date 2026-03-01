@@ -25,6 +25,9 @@ Thumbs.db
 # Temporary
 *.tmp
 *.temp
+__pycache__/
+**/__pycache__/
+garaga-real-prover/__pycache__/
 
 # Misc
 !README.md

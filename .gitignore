@@ -4,3 +4,9 @@ target/
 backend-rust/.env
 smartcontract/.env
 dump.rdb
+
+# runtime/cache artifacts
+.run/
+**/__pycache__/
+backend-rust/"/
+backend-rust/\"/
