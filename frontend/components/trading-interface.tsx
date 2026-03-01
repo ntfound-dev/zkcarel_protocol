@@ -1052,6 +1052,8 @@ const formatBtcFromSats = (value: number) => {
 
 const parseGardenOrderProgress = (orderPayload: unknown): GardenOrderProgress => {
   const statusRaw = pickNestedString(orderPayload, ["status"]).toLowerCase()
+  const sourceLegStatus = pickNestedString(orderPayload, ["source_swap", "status"]).toLowerCase()
+  const destinationLegStatus = pickNestedString(orderPayload, ["destination_swap", "status"]).toLowerCase()
   const sourceInitiateTxHash =
     pickNestedString(orderPayload, ["source_swap", "initiate_tx_hash"]) ||
     pickNestedString(orderPayload, ["source_swap", "initiateTxHash"])
@@ -1075,12 +1077,17 @@ const parseGardenOrderProgress = (orderPayload: unknown): GardenOrderProgress =>
     !!destinationRedeemTxHash ||
     statusRaw === "completed" ||
     statusRaw === "redeemed" ||
-    statusRaw === "success"
+    statusRaw === "success" ||
+    destinationLegStatus === "completed" ||
+    destinationLegStatus === "redeemed" ||
+    destinationLegStatus === "success"
   const isRefunded =
     !!sourceRefundTxHash ||
     !!destinationRefundTxHash ||
     statusRaw === "refunded" ||
-    statusRaw === "refund_completed"
+    statusRaw === "refund_completed" ||
+    sourceLegStatus === "refunded" ||
+    destinationLegStatus === "refunded"
   const isExpired = statusRaw === "expired"
   const isRefundable =
     !isCompleted &&
@@ -1135,6 +1142,12 @@ const broadcastBtcRawTransaction = async (rawTxHex: string): Promise<string> => 
     throw new Error(payload || `Failed to broadcast refund tx (${response.status})`)
   }
   return payload
+}
+
+const unwrapGardenOrderPayload = (payload: unknown): unknown => {
+  const first = (payload as { result?: unknown } | null)?.result ?? payload
+  const second = (first as { result?: unknown } | null)?.result ?? first
+  return second
 }
 
 /**
@@ -1679,6 +1692,7 @@ export function TradingInterface() {
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
   const [tradeResultPopup, setTradeResultPopup] = React.useState<TradeResultPopupState | null>(null)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
+  const gardenOrderPollingRef = React.useRef<Record<string, boolean>>({})
   React.useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
     return () => window.clearInterval(timer)
@@ -3683,6 +3697,11 @@ export function TradingInterface() {
 
   const pollGardenBridgeOrder = React.useCallback(
     async (bridgeId: string, destinationChain: string) => {
+      const normalizedBridgeId = (bridgeId || "").trim()
+      if (!normalizedBridgeId) return
+      if (gardenOrderPollingRef.current[normalizedBridgeId]) return
+      gardenOrderPollingRef.current[normalizedBridgeId] = true
+
       const maxAttempts = 18
       const intervalMs = 10_000
       const txNetwork: "btc" | "evm" | "starknet" =
@@ -3691,147 +3710,199 @@ export function TradingInterface() {
           : destinationChain === "ethereum"
           ? "evm"
           : "starknet"
-      const orderExplorerLinks = buildGardenOrderExplorerLinks(bridgeId)
+      const orderExplorerLinks = buildGardenOrderExplorerLinks(normalizedBridgeId)
 
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        if (attempt > 0) {
-          await new Promise((resolve) => window.setTimeout(resolve, intervalMs))
-        }
-        try {
-          const orderResponse = await getGardenOrderById(bridgeId)
-          const orderPayload = (orderResponse as any)?.result ?? orderResponse
-          const progress = parseGardenOrderProgress(orderPayload)
-          const previousStatus = lastGardenOrderStatusRef.current[bridgeId]
-          const didStatusChange = previousStatus !== progress.status
-          lastGardenOrderStatusRef.current[bridgeId] = progress.status
+      try {
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          if (attempt > 0) {
+            await new Promise((resolve) => window.setTimeout(resolve, intervalMs))
+          }
+          try {
+            const orderResponse = await getGardenOrderById(normalizedBridgeId)
+            const orderPayload = unwrapGardenOrderPayload(orderResponse)
+            const progress = parseGardenOrderProgress(orderPayload)
+            const previousStatus = lastGardenOrderStatusRef.current[normalizedBridgeId]
+            const didStatusChange = previousStatus !== progress.status
+            lastGardenOrderStatusRef.current[normalizedBridgeId] = progress.status
 
-          setPendingBtcDeposit((prev) =>
-            prev && prev.bridgeId === bridgeId
-              ? {
-                  ...prev,
-                  status: progress.status,
-                  sourceInitiateTxHash: progress.sourceInitiateTxHash || null,
-                  destinationInitiateTxHash: progress.destinationInitiateTxHash || null,
-                  destinationRedeemTxHash: progress.destinationRedeemTxHash || null,
-                  refundTxHash:
-                    progress.sourceRefundTxHash ||
-                    progress.destinationRefundTxHash ||
-                    prev.refundTxHash ||
-                    null,
-                  instantRefundTx: progress.instantRefundTx || prev.instantRefundTx || null,
-                  lastUpdatedAt: Date.now(),
-                }
-              : prev
-          )
-
-          if (progress.isCompleted) {
-            const txHash =
-              progress.destinationRedeemTxHash ||
-              progress.destinationInitiateTxHash ||
-              progress.sourceInitiateTxHash
-            if (didStatusChange) {
-              notifications.addNotification({
-                type: "success",
-                title: "Bridge completed",
-                message: `Order ${bridgeId.slice(0, 10)}... selesai di chain tujuan.`,
-                txHash: txHash || undefined,
-                txNetwork,
-                txExplorerUrls: orderExplorerLinks,
-              })
-            }
             setPendingBtcDeposit((prev) =>
-              prev && prev.bridgeId === bridgeId
+              prev && prev.bridgeId === normalizedBridgeId
                 ? {
                     ...prev,
-                    status: "completed",
-                    sourceInitiateTxHash: progress.sourceInitiateTxHash || prev.sourceInitiateTxHash || null,
-                    destinationInitiateTxHash:
-                      progress.destinationInitiateTxHash || prev.destinationInitiateTxHash || null,
-                    destinationRedeemTxHash:
-                      progress.destinationRedeemTxHash || prev.destinationRedeemTxHash || null,
+                    status: progress.status,
+                    sourceInitiateTxHash: progress.sourceInitiateTxHash || null,
+                    destinationInitiateTxHash: progress.destinationInitiateTxHash || null,
+                    destinationRedeemTxHash: progress.destinationRedeemTxHash || null,
+                    refundTxHash:
+                      progress.sourceRefundTxHash ||
+                      progress.destinationRefundTxHash ||
+                      prev.refundTxHash ||
+                      null,
+                    instantRefundTx: progress.instantRefundTx || prev.instantRefundTx || null,
                     lastUpdatedAt: Date.now(),
                   }
                 : prev
             )
-            delete lastGardenOrderStatusRef.current[bridgeId]
-            await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
-            const [nftState, rewardsState] = await Promise.allSettled([
-              getOwnedNfts({ force: true }),
-              getRewardsPoints({ force: true }),
-            ])
-            if (nftState.status === "fulfilled") {
-              const now = Math.floor(Date.now() / 1000)
-              const usable = nftState.value.find((nft) => !nft.used && (!nft.expiry || nft.expiry > now))
-              setActiveNft((prev) => {
-                if (usable) return usable
-                if (prev && !prev.used && (!prev.expiry || prev.expiry > now)) return prev
-                return null
-              })
-            }
-            if (rewardsState.status === "fulfilled") {
-              const parsedMultiplier = Number(rewardsState.value.multiplier)
-              setStakePointsMultiplier(
-                Number.isFinite(parsedMultiplier) && parsedMultiplier > 0 ? parsedMultiplier : 1
-              )
-            }
-            return
-          }
 
-          if (progress.isRefunded) {
-            const refundTxHash =
-              progress.sourceRefundTxHash || progress.destinationRefundTxHash || undefined
-            if (didStatusChange) {
-              notifications.addNotification({
-                type: "success",
-                title: "Refund completed",
-                message: `Order ${bridgeId.slice(0, 10)}... has been refunded.`,
+            if (progress.isCompleted) {
+              const txHash =
+                progress.destinationRedeemTxHash ||
+                progress.destinationInitiateTxHash ||
+                progress.sourceInitiateTxHash
+              if (didStatusChange) {
+                notifications.addNotification({
+                  type: "success",
+                  title: "Bridge completed",
+                  message: `Order ${normalizedBridgeId.slice(0, 10)}... settled on destination chain.`,
+                  txHash: txHash || undefined,
+                  txNetwork,
+                  txExplorerUrls: orderExplorerLinks,
+                })
+              }
+              openTradeResultPopup({
+                status: "success",
+                title: "Bridge Completed",
+                message: `Order ${normalizedBridgeId.slice(0, 10)}... finished successfully.`,
+                txHash: txHash || undefined,
+              })
+              setPendingBtcDeposit((prev) =>
+                prev && prev.bridgeId === normalizedBridgeId ? null : prev
+              )
+              delete lastGardenOrderStatusRef.current[normalizedBridgeId]
+              await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
+              const [nftState, rewardsState] = await Promise.allSettled([
+                getOwnedNfts({ force: true }),
+                getRewardsPoints({ force: true }),
+              ])
+              if (nftState.status === "fulfilled") {
+                const now = Math.floor(Date.now() / 1000)
+                const usable = nftState.value.find(
+                  (nft) => !nft.used && (!nft.expiry || nft.expiry > now)
+                )
+                setActiveNft((prev) => {
+                  if (usable) return usable
+                  if (prev && !prev.used && (!prev.expiry || prev.expiry > now)) return prev
+                  return null
+                })
+              }
+              if (rewardsState.status === "fulfilled") {
+                const parsedMultiplier = Number(rewardsState.value.multiplier)
+                setStakePointsMultiplier(
+                  Number.isFinite(parsedMultiplier) && parsedMultiplier > 0 ? parsedMultiplier : 1
+                )
+              }
+              return
+            }
+
+            if (progress.isRefunded) {
+              const refundTxHash =
+                progress.sourceRefundTxHash || progress.destinationRefundTxHash || undefined
+              if (didStatusChange) {
+                notifications.addNotification({
+                  type: "success",
+                  title: "Refund completed",
+                  message: `Order ${normalizedBridgeId.slice(0, 10)}... refunded successfully.`,
+                  txHash: refundTxHash,
+                  txNetwork: "btc",
+                  txExplorerUrls: orderExplorerLinks,
+                })
+              }
+              openTradeResultPopup({
+                status: "success",
+                title: "Bridge Refunded",
+                message: `Order ${normalizedBridgeId.slice(0, 10)}... was refunded.`,
                 txHash: refundTxHash,
-                txNetwork: "btc",
+              })
+              setPendingBtcDeposit((prev) =>
+                prev && prev.bridgeId === normalizedBridgeId ? null : prev
+              )
+              delete lastGardenOrderStatusRef.current[normalizedBridgeId]
+              await wallet.refreshOnchainBalances()
+              return
+            }
+
+            const isFailed =
+              progress.status === "failed" ||
+              progress.status === "cancelled" ||
+              progress.status === "expired" ||
+              progress.isExpired
+            if (isFailed) {
+              if (didStatusChange) {
+                notifications.addNotification({
+                  type: "error",
+                  title: "Bridge failed",
+                  message: `Order ${normalizedBridgeId.slice(0, 10)}... ended as ${progress.status || "failed"}.`,
+                  txExplorerUrls: orderExplorerLinks,
+                })
+              }
+              openTradeResultPopup({
+                status: "error",
+                title: "Bridge Failed",
+                message: `Order ${normalizedBridgeId.slice(0, 10)}... status: ${progress.status || "failed"}.`,
+              })
+              setPendingBtcDeposit((prev) =>
+                prev && prev.bridgeId === normalizedBridgeId ? null : prev
+              )
+              delete lastGardenOrderStatusRef.current[normalizedBridgeId]
+              return
+            }
+
+            if (
+              didStatusChange &&
+              (progress.status === "initiated" || progress.status === "processing")
+            ) {
+              notifications.addNotification({
+                type: "info",
+                title: "Bridge processing",
+                message: `Order ${normalizedBridgeId.slice(0, 10)}... is waiting for settlement.`,
                 txExplorerUrls: orderExplorerLinks,
               })
             }
-            lastGardenOrderStatusRef.current[bridgeId] = "refunded"
-            await wallet.refreshOnchainBalances()
-            return
+          } catch {
+            // ignore transient polling errors
           }
-
-          if (progress.isExpired && didStatusChange) {
-            notifications.addNotification({
-              type: "warning",
-              title: "Order expired",
-              message: `Order ${bridgeId.slice(0, 10)}... expired. Click Claim Refund to process BTC return.`,
-              txExplorerUrls: orderExplorerLinks,
-            })
-          }
-
-          if (
-            didStatusChange &&
-            (progress.status === "initiated" || progress.status === "processing")
-          ) {
-            notifications.addNotification({
-              type: "info",
-              title: "Bridge processing",
-              message: `Order ${bridgeId.slice(0, 10)}... is waiting for settlement.`,
-              txExplorerUrls: orderExplorerLinks,
-            })
-          }
-        } catch {
-          // ignore transient polling errors
         }
-      }
 
-      const status = lastGardenOrderStatusRef.current[bridgeId]
-      if (status !== "completed" && status !== "refunded") {
-        notifications.addNotification({
-          type: "info",
-          title: "Bridge still processing",
-          message: `Order ${bridgeId.slice(0, 10)}... masih diproses solver. Cek lagi beberapa menit.`,
-          txExplorerUrls: orderExplorerLinks,
-        })
+        const status = lastGardenOrderStatusRef.current[normalizedBridgeId]
+        if (status !== "completed" && status !== "refunded") {
+          notifications.addNotification({
+            type: "info",
+            title: "Bridge still processing",
+            message: `Order ${normalizedBridgeId.slice(0, 10)}... is still processing. Check again in a few minutes.`,
+            txExplorerUrls: orderExplorerLinks,
+          })
+        }
+      } finally {
+        delete gardenOrderPollingRef.current[normalizedBridgeId]
       }
     },
-    [notifications, wallet]
+    [notifications, openTradeResultPopup, wallet]
   )
+
+  React.useEffect(() => {
+    if (!pendingBtcDeposit?.bridgeId || !pendingBtcDeposit.destinationChain) return
+    const status = (pendingBtcDeposit.status || "").trim().toLowerCase()
+    if (
+      status === "completed" ||
+      status === "refunded" ||
+      status === "failed" ||
+      status === "cancelled" ||
+      status === "expired"
+    ) {
+      return
+    }
+
+    void pollGardenBridgeOrder(pendingBtcDeposit.bridgeId, pendingBtcDeposit.destinationChain)
+    const timer = window.setInterval(() => {
+      void pollGardenBridgeOrder(pendingBtcDeposit.bridgeId, pendingBtcDeposit.destinationChain)
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [
+    pendingBtcDeposit?.bridgeId,
+    pendingBtcDeposit?.destinationChain,
+    pendingBtcDeposit?.status,
+    pollGardenBridgeOrder,
+  ])
 
   const handleSendBtcDepositFromWallet = React.useCallback(async () => {
     if (!pendingBtcDeposit) return
