@@ -52,12 +52,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { 
   ArrowDownUp, ChevronDown, Clock, Zap, Shield, Settings2, Check, Loader2, X, 
   Eye, EyeOff, Info, Gift, Sparkles
@@ -4836,7 +4830,7 @@ export function TradingInterface() {
             className="h-11 text-sm font-semibold"
           >
             <EyeOff className="mr-2 h-4 w-4" />
-            Hide Drawer
+            Hide Balance
           </Button>
         </div>
 
@@ -5030,12 +5024,15 @@ export function TradingInterface() {
           </DialogContent>
         </Dialog>
 
-        <Sheet open={hidePanelOpen} onOpenChange={setHidePanelOpen}>
-          <SheetContent side="right" className="glass-strong border-border w-[92vw] sm:max-w-md">
-            <SheetHeader>
-              <SheetTitle>Hide Balance</SheetTitle>
-            </SheetHeader>
-            <div className="space-y-3 px-4 pb-4 overflow-y-auto">
+        <Dialog open={hidePanelOpen} onOpenChange={setHidePanelOpen}>
+          <DialogContent className="max-w-lg glass-strong border-border">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <EyeOff className="h-4 w-4" />
+                Hide Balance
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
               {hideBalanceOnchain && (
                 hasTradePrivacyPayload ? (
                   <p className="text-xs text-warning">
@@ -5272,8 +5269,8 @@ export function TradingInterface() {
                 </div>
               )}
             </div>
-          </SheetContent>
-        </Sheet>
+          </DialogContent>
+        </Dialog>
 
         {/* NFT Discount Counter */}
         {hasNftDiscount && (
