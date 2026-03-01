@@ -2641,6 +2641,40 @@ export function TradingInterface() {
       (activeTradePrivacyPayload.note_commitment || "").trim() ||
       (activeTradePrivacyPayload.commitment || "").trim()
     )
+  const activeHideNoteCommitment = (
+    activeTradePrivacyPayload?.note_commitment ||
+    activeTradePrivacyPayload?.commitment ||
+    ""
+  )
+    .trim()
+    .toLowerCase()
+  const activeHideNoteNullifier = (activeTradePrivacyPayload?.nullifier || "").trim().toLowerCase()
+  const activeHideNoteRecord = React.useMemo(() => {
+    if (!hasActiveHideV3Note) return null
+    return (
+      pendingHideNotes.find((note) => {
+        const noteCommitment = (note.note_commitment || "").trim().toLowerCase()
+        const noteNullifier = (note.nullifier || "").trim().toLowerCase()
+        return (
+          (!!activeHideNoteCommitment && noteCommitment === activeHideNoteCommitment) ||
+          (!!activeHideNoteNullifier && noteNullifier === activeHideNoteNullifier)
+        )
+      }) || null
+    )
+  }, [activeHideNoteCommitment, activeHideNoteNullifier, hasActiveHideV3Note, pendingHideNotes])
+  const activeHideNoteTokenSymbol = (activeHideNoteRecord?.token_symbol || "").trim().toUpperCase()
+  const activeHideNoteAmountText = (activeHideNoteRecord?.amount || "").trim()
+  const activeHideNoteAmountValue = Number.parseFloat(activeHideNoteAmountText || "NaN")
+  const activeHideNoteTokenMismatch =
+    hasActiveHideV3Note &&
+    !!activeHideNoteTokenSymbol &&
+    activeHideNoteTokenSymbol !== fromToken.symbol.toUpperCase()
+  const activeHideNoteAmountMismatch =
+    hasActiveHideV3Note &&
+    Number.isFinite(activeHideNoteAmountValue) &&
+    activeHideNoteAmountValue > 0 &&
+    Math.abs(fromAmountValue - activeHideNoteAmountValue) >
+      Math.max(1e-9, Math.pow(10, -Math.min(6, resolveTokenDecimals(fromToken.symbol))))
   const pendingHideNotesActive = React.useMemo(() => {
     return pendingHideNotes.filter((note) => {
       const commitment = (note.note_commitment || "").trim()
@@ -2674,6 +2708,10 @@ export function TradingInterface() {
         }.`
       : hasInsufficientLiquidityCap
       ? `Current route liquidity limits the amount. Max ${formatTokenAmount(maxExecutableFromAllLimits, 6)} ${fromToken.symbol}.`
+      : activeHideNoteTokenMismatch
+      ? `Active hide note memakai token ${activeHideNoteTokenSymbol}. Klik "Use For Swap" pada note yang sesuai.`
+      : activeHideNoteAmountMismatch
+      ? `Active hide note amount terkunci di ${activeHideNoteAmountText} ${activeHideNoteTokenSymbol || fromToken.symbol}. Samakan amount dulu.`
       : isStarknetPairSwap && isSwapContractEventOnly
       ? "Real-token swap is not active yet: current contract is event-only (events + gas only)."
       : !hasValidQuote
@@ -4747,6 +4785,15 @@ export function TradingInterface() {
                 Recipient note V3 terkunci: {shortenAddress(activeHideRecipient)}
               </p>
             )}
+            {hideBalanceOnchain &&
+              HIDE_BALANCE_SHIELDED_POOL_V3 &&
+              hasActiveHideV3Note &&
+              activeHideNoteAmountText && (
+                <p className="text-xs text-muted-foreground">
+                  Nominal note V3 terkunci: {activeHideNoteAmountText}{" "}
+                  {activeHideNoteTokenSymbol || fromToken.symbol.toUpperCase()}
+                </p>
+              )}
             {hideBalanceOnchain &&
               HIDE_BALANCE_SHIELDED_POOL_V3 &&
               hasTradePrivacyPayload &&
