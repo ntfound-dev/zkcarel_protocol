@@ -418,6 +418,16 @@ const inferHideDenomIdFromUsd = (usdtEquivalentVolume: number): string => {
   return "1"
 }
 
+const inferUsdtTierFromDenomId = (denomId: string): number => {
+  const parsed = Number.parseFloat((denomId || "").trim())
+  if (!Number.isFinite(parsed) || parsed <= 0) return 5
+  if (parsed >= 100) return 100
+  if (parsed >= 50) return 50
+  if (parsed >= 10) return 10
+  if (parsed >= 5) return 5
+  return 5
+}
+
 const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
   if (typeof window === "undefined") return undefined
   const raw = window.localStorage.getItem(TRADE_PRIVACY_PAYLOAD_KEY)
@@ -1539,6 +1549,7 @@ export function TradingInterface() {
   const [isCancellingHideNote, setIsCancellingHideNote] = React.useState(false)
   const [nowMs, setNowMs] = React.useState(() => Date.now())
   const [hideStrkDenomId, setHideStrkDenomId] = React.useState<string>("10")
+  const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(10)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
   // Hide Balance (Garaga) is only enabled for Starknet <-> Starknet swap flow.
   const hideBalanceSupportedForCurrentPair =
@@ -1547,19 +1558,22 @@ export function TradingInterface() {
   const hideBalanceOnchain = hideBalanceSupportedForCurrentPair && balanceHidden
   const hideStrkDenomEnabled =
     hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && fromToken.symbol.toUpperCase() === "STRK"
+  const hideUsdtTierLockEnabled =
+    hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && fromToken.symbol.toUpperCase() !== "STRK"
   const selectedHideStrkDenom =
     HIDE_STRK_DENOM_OPTIONS.find((option) => option.id === hideStrkDenomId) ||
     HIDE_STRK_DENOM_OPTIONS[0]
+  const selectedHideUsdtTier = React.useMemo(
+    () =>
+      USDT_POINTS_TIER_OPTIONS.find((option) => option.minUsdt === hideUsdtTierMin) ||
+      USDT_POINTS_TIER_OPTIONS[1],
+    [hideUsdtTierMin]
+  )
   const inferredHideDenomId = React.useMemo(() => {
     const currentFromSymbol = fromToken.symbol.toUpperCase()
     if (currentFromSymbol !== "STRK") {
       if (hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3) {
-        const amountValue = Number.parseFloat((fromAmount || "").trim())
-        const priceValue = Number(fromToken.price || 0)
-        const usdtEquivalent = Number.isFinite(amountValue) && Number.isFinite(priceValue)
-          ? Math.max(0, amountValue * priceValue)
-          : 0
-        return inferHideDenomIdFromUsd(usdtEquivalent)
+        return inferHideDenomIdFromUsd(selectedHideUsdtTier.minUsdt)
       }
       return undefined
     }
@@ -1567,10 +1581,10 @@ export function TradingInterface() {
     return inferHideStrkDenomIdFromAmount(fromAmount)
   }, [
     fromAmount,
-    fromToken.price,
     fromToken.symbol,
     hideBalanceOnchain,
     hideStrkDenomEnabled,
+    selectedHideUsdtTier.minUsdt,
     selectedHideStrkDenom.id,
   ])
   
@@ -1598,6 +1612,25 @@ export function TradingInterface() {
     if (fromAmount === targetAmount) return
     setFromAmount(targetAmount)
   }, [hideStrkDenomEnabled, selectedHideStrkDenom.amount, fromAmount])
+  React.useEffect(() => {
+    if (!hideUsdtTierLockEnabled) return
+    const tokenPrice = Number(fromToken.price || 0)
+    if (!Number.isFinite(tokenPrice) || tokenPrice <= 0) return
+    const decimals = resolveTokenDecimals(fromToken.symbol)
+    const targetAmount = sanitizeDecimalInput(
+      String(selectedHideUsdtTier.minUsdt / tokenPrice),
+      decimals
+    )
+    if (!targetAmount) return
+    if (fromAmount === targetAmount) return
+    setFromAmount(targetAmount)
+  }, [
+    fromAmount,
+    fromToken.price,
+    fromToken.symbol,
+    hideUsdtTierLockEnabled,
+    selectedHideUsdtTier.minUsdt,
+  ])
   const refreshTradePrivacyPayload = React.useCallback(() => {
     setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
   }, [])
@@ -2584,7 +2617,10 @@ export function TradingInterface() {
     hasPositiveAmount &&
     maxSpendableFromLiquidity !== null &&
     fromAmountValue > maxSpendableFromLiquidity + 1e-12
+  const hideUsdtTierPriceUnavailable =
+    hideUsdtTierLockEnabled && !(Number.isFinite(fromToken.price) && fromToken.price > 0)
   React.useEffect(() => {
+    if (hideStrkDenomEnabled || hideUsdtTierLockEnabled) return
     if (onchainBalanceUnavailable) return
     const parsed = Number.parseFloat(fromAmount || "0")
     if (!Number.isFinite(parsed) || parsed <= 0) return
@@ -2598,7 +2634,14 @@ export function TradingInterface() {
     if (clamped !== fromAmount) {
       setFromAmount(clamped)
     }
-  }, [fromAmount, fromToken.symbol, maxExecutableFromAllLimits, onchainBalanceUnavailable])
+  }, [
+    fromAmount,
+    fromToken.symbol,
+    hideStrkDenomEnabled,
+    hideUsdtTierLockEnabled,
+    maxExecutableFromAllLimits,
+    onchainBalanceUnavailable,
+  ])
   const resolvedReceiveAddress = (receiveAddress || preferredReceiveAddress).trim()
   const hasValidQuote = hasQuote && !quoteError
   const hasPreparedOnchainSwapCalls =
@@ -2659,6 +2702,8 @@ export function TradingInterface() {
       ? "Cancelling hide note..."
       : !hasPositiveAmount
       ? "Enter a valid amount."
+      : hideUsdtTierPriceUnavailable
+      ? `Live price ${fromToken.symbol} belum tersedia untuk lock tier hide. Tunggu price feed update.`
       : isSameTokenSwapPair
       ? "Select a different destination token."
       : onchainBalanceUnavailable && !hasFallbackPositiveBalance
@@ -3037,7 +3082,6 @@ export function TradingInterface() {
       fromToken.network,
       fromToken.symbol,
       hideBalanceOnchain,
-      hideStrkDenomEnabled,
       isSwapContractEventOnly,
       mevProtection,
       notifications,
@@ -3045,7 +3089,6 @@ export function TradingInterface() {
       quote,
       receiveAddress,
       inferredHideDenomId,
-      selectedHideStrkDenom.id,
       starknetProviderHint,
       toToken.network,
       toToken.symbol,
@@ -4543,6 +4586,7 @@ export function TradingInterface() {
                   const next = !balanceHidden
                   setBalanceHidden(next)
                   if (next) {
+                    setSettingsOpen(true)
                     clearTradePrivacyPayload()
                     void resolveHideBalancePrivacyPayload()
                   }
@@ -4583,6 +4627,7 @@ export function TradingInterface() {
             label="From"
             amount={fromAmount}
             onAmountChange={setFromAmount}
+            readOnly={hideStrkDenomEnabled || hideUsdtTierLockEnabled}
             hideBalance={balanceHidden}
             maxTradeBalance={maxExecutableFromAllLimits}
           />
@@ -4762,35 +4807,61 @@ export function TradingInterface() {
             )}
             {hideBalanceOnchain && (
               <div>
-              <label className="text-sm text-foreground mb-2 block">
-                Points Tier (USDT-equivalent)
-              </label>
-              <div className="grid grid-cols-5 gap-2">
-                {USDT_POINTS_TIER_OPTIONS.map((option) => {
-                  const unlocked = usdtEquivalentVolume >= option.minUsdt
-                  return (
-                    <div
-                      key={option.minUsdt}
-                      className={cn(
-                        "py-2 rounded-lg text-center text-[11px] font-medium border",
-                        unlocked
-                          ? "bg-success/10 border-success/40 text-success"
-                          : "bg-surface text-muted-foreground border-border"
-                      )}
-                    >
-                      <div>${option.minUsdt}</div>
-                      <div>+{option.bonusPercent}%</div>
-                    </div>
-                  )
-                })}
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Volume saat ini: ${usdtEquivalentVolume.toFixed(2)} • Tier aktif: +
-                {(activeUsdtPointsTier?.bonusPercent || 0).toFixed(0)}% points.
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Tier ini khusus mode hide dan tetap dikombinasikan dengan NFT discount + multiplier stake.
-              </p>
+                <label className="text-sm text-foreground mb-2 block">
+                  Points Tier (USDT-equivalent)
+                </label>
+                <div className="grid grid-cols-5 gap-2">
+                  {USDT_POINTS_TIER_OPTIONS.map((option) => {
+                    const unlocked = usdtEquivalentVolume >= option.minUsdt
+                    const selected =
+                      hideUsdtTierLockEnabled && selectedHideUsdtTier.minUsdt === option.minUsdt
+                    return (
+                      <button
+                        key={option.minUsdt}
+                        type="button"
+                        disabled={!hideUsdtTierLockEnabled}
+                        onClick={() => {
+                          if (!hideUsdtTierLockEnabled) return
+                          setHideUsdtTierMin(option.minUsdt)
+                        }}
+                        className={cn(
+                          "py-2 rounded-lg text-center text-[11px] font-medium border transition-all",
+                          selected
+                            ? "bg-primary/20 border-primary text-primary"
+                            : unlocked
+                            ? "bg-success/10 border-success/40 text-success"
+                            : "bg-surface text-muted-foreground border-border",
+                          hideUsdtTierLockEnabled
+                            ? "hover:border-primary/60"
+                            : "cursor-default"
+                        )}
+                      >
+                        <div>${option.minUsdt}</div>
+                        <div>+{option.bonusPercent}%</div>
+                      </button>
+                    )
+                  })}
+                </div>
+                {hideUsdtTierLockEnabled ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Amount hide dikunci ke tier ${selectedHideUsdtTier.minUsdt}: ~
+                    {fromAmount || "0"} {fromToken.symbol} • Bonus +{selectedHideUsdtTier.bonusPercent}
+                    %.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Volume saat ini: ${usdtEquivalentVolume.toFixed(2)} • Tier aktif: +
+                    {(activeUsdtPointsTier?.bonusPercent || 0).toFixed(0)}% points.
+                  </p>
+                )}
+                {hideUsdtTierPriceUnavailable && (
+                  <p className="mt-1 text-[11px] text-warning">
+                    Live price {fromToken.symbol} belum tersedia, jadi lock tier belum bisa dihitung.
+                  </p>
+                )}
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Tier ini khusus mode hide dan tetap dikombinasikan dengan NFT discount + multiplier stake.
+                </p>
               </div>
             )}
 
@@ -5408,6 +5479,8 @@ export function TradingInterface() {
                           }
                           if (selectedTokenSymbol === "STRK" && (note.denom_id || "").trim()) {
                             setHideStrkDenomId((note.denom_id || "").trim())
+                          } else if ((note.denom_id || "").trim()) {
+                            setHideUsdtTierMin(inferUsdtTierFromDenomId((note.denom_id || "").trim()))
                           }
                           setHasTradePrivacyPayload(true)
                           notifications.addNotification({
