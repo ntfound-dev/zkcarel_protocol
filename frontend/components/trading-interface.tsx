@@ -46,14 +46,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { 
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { 
   ArrowDownUp, ChevronDown, Clock, Zap, Shield, Settings2, Check, Loader2, X, 
-  Eye, EyeOff, ChevronUp, Info, Gift, Sparkles
+  Eye, EyeOff, Info, Gift, Sparkles
 } from "lucide-react"
 
 type QuoteState = {
@@ -1561,6 +1568,7 @@ export function TradingInterface() {
   
   // Settings state
   const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [hidePanelOpen, setHidePanelOpen] = React.useState(false)
   const [mevProtectionEnabled, setMevProtectionEnabled] = React.useState(false)
   const mevProtection = mode === "private" && mevProtectionEnabled
   const [slippage, setSlippage] = React.useState("0.5")
@@ -4691,9 +4699,11 @@ export function TradingInterface() {
                   const next = !balanceHidden
                   setBalanceHidden(next)
                   if (next) {
-                    setSettingsOpen(true)
+                    setHidePanelOpen(true)
                     clearTradePrivacyPayload()
                     void resolveHideBalancePrivacyPayload()
+                  } else {
+                    setHidePanelOpen(false)
                   }
                   refreshTradePrivacyPayload()
                 }}
@@ -4808,389 +4818,462 @@ export function TradingInterface() {
           )}
         </div>
 
-        {/* Settings Panel - Collapsible */}
-        <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen} className="mt-3 sm:mt-4">
-          <CollapsibleTrigger asChild>
-            <button className="w-full flex items-center justify-between p-3 rounded-xl bg-surface/30 border border-border/50 hover:border-primary/30 transition-colors">
-              <span className="text-sm font-medium text-foreground flex items-center gap-2">
+        <div className="mt-3 sm:mt-4 grid grid-cols-2 gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setSettingsOpen(true)}
+            className="h-11 text-sm font-semibold"
+          >
+            <Settings2 className="mr-2 h-4 w-4" />
+            Trade Settings
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setHidePanelOpen(true)}
+            disabled={!hideBalanceOnchain}
+            className="h-11 text-sm font-semibold"
+          >
+            <EyeOff className="mr-2 h-4 w-4" />
+            Hide Drawer
+          </Button>
+        </div>
+
+        <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DialogContent className="max-w-2xl glass-strong border-border">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
                 <Settings2 className="h-4 w-4" />
                 Trade Settings
-              </span>
-              {settingsOpen ? (
-                <ChevronUp className="h-4 w-4 text-muted-foreground" />
-              ) : (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              )}
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="mt-2 space-y-4 p-4 rounded-xl bg-surface/20 border border-border/30">
-            {/* MEV Protection */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Shield className="h-4 w-4 text-primary" />
-                <span className="text-sm text-foreground">MEV Protection</span>
-              </div>
-              <button 
-                onClick={() => setMevProtectionEnabled((prev) => !prev)}
-                disabled={mode !== "private"}
-                className={cn(
-                  "w-11 h-6 rounded-full transition-colors relative",
-                  mode !== "private" && "opacity-50 cursor-not-allowed",
-                  mevProtection ? "bg-primary" : "bg-muted"
-                )}
-              >
-                <span className={cn(
-                  "absolute top-1 w-4 h-4 rounded-full bg-background transition-transform",
-                  mevProtection ? "left-6" : "left-1"
-                )} />
-              </button>
-            </div>
-            {mode !== "private" && (
-              <p className="text-xs text-muted-foreground">
-                Aktif hanya di Private Mode. Saat mode biasa, selalu Disabled.
-              </p>
-            )}
-
-            {hideBalanceOnchain && (
-              hasTradePrivacyPayload ? (
-                <p className="text-xs text-warning">
-                  {hideMixingWindowBlocked
-                    ? `On-chain Hide Balance aktif. Mixing window berjalan: ${formatRemainingDuration(
-                        hideMixingWindowRemainingMs
-                      )}.`
-                    : "On-chain Hide Balance aktif (ikon mata kanan atas)."}
-                </p>
-              ) : (
-                <p className="text-xs text-warning">
-                  {isAutoPrivacyProvisioning
-                    ? "Menyiapkan payload Garaga otomatis..."
-                    : DEV_AUTO_GARAGA_PAYLOAD_ENABLED
-                    ? "Hide Balance aktif. Sistem akan auto-generate payload mock (dev mode) saat execute."
-                    : "Hide Balance aktif. Sistem akan menyiapkan payload Garaga otomatis saat Execute Trade."}
-                </p>
-              )
-            )}
-            {hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && activeHideRecipient && (
-              <p className="text-xs text-muted-foreground">
-                Recipient note V3 terkunci: {shortenAddress(activeHideRecipient)}
-              </p>
-            )}
-            {hideBalanceOnchain &&
-              HIDE_BALANCE_SHIELDED_POOL_V3 &&
-              hasActiveHideV3Note &&
-              activeHideNoteAmountText && (
-                <p className="text-xs text-muted-foreground">
-                  Nominal note V3 terkunci: {activeHideNoteAmountText}{" "}
-                  {activeHideNoteTokenSymbol || fromToken.symbol.toUpperCase()}
-                </p>
-              )}
-            {hideBalanceOnchain &&
-              HIDE_BALANCE_SHIELDED_POOL_V3 &&
-              hasTradePrivacyPayload &&
-              activeHideRecipientMismatched && (
-                <p className="text-xs text-warning">
-                  Receive address saat ini berbeda dari recipient note V3. Eksekusi tetap memakai
-                  recipient yang terkunci di note.
-                </p>
-              )}
-            {hideBalanceOnchain &&
-              HIDE_BALANCE_SHIELDED_POOL_V3 &&
-              hasActiveHideV3Note &&
-              (activeHideNoteTokenMismatch || activeHideNoteAmountMismatch) && (
-                <p className="text-xs text-warning">
-                  Note aktif berbeda dari input saat ini. Saat Execute, sistem akan siapkan note baru
-                  sesuai nominal/token terbaru.
-                </p>
-              )}
-            {hideBalanceOnchain && (
-              <div>
-                <label className="text-sm text-foreground mb-2 block">
-                  Hide Tier (USDT)
-                </label>
-                <div className="grid grid-cols-5 gap-2">
-                  {USDT_POINTS_TIER_OPTIONS.map((option) => {
-                    const unlocked = usdtEquivalentVolume >= option.minUsdt
-                    const selected =
-                      hideUsdtTierLockEnabled && selectedHideUsdtTier.minUsdt === option.minUsdt
-                    return (
-                      <button
-                        key={option.minUsdt}
-                        type="button"
-                        disabled={!hideUsdtTierLockEnabled}
-                        onClick={() => {
-                          if (!hideUsdtTierLockEnabled) return
-                          setHideUsdtTierMin(option.minUsdt)
-                        }}
-                        className={cn(
-                          "py-2 rounded-lg text-center text-[11px] font-medium border transition-all",
-                          selected
-                            ? "bg-primary/20 border-primary text-primary"
-                            : unlocked
-                            ? "bg-success/10 border-success/40 text-success"
-                            : "bg-surface text-muted-foreground border-border",
-                          hideUsdtTierLockEnabled
-                            ? "hover:border-primary/60"
-                            : "cursor-default"
-                        )}
-                      >
-                        <div>${option.minUsdt}</div>
-                        <div>+{option.bonusPercent}%</div>
-                      </button>
-                    )
-                  })}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+              {/* MEV Protection */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-primary" />
+                  <span className="text-sm text-foreground">MEV Protection</span>
                 </div>
-                {hideUsdtTierLockEnabled ? (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Nominal hide dikunci ke tier ${selectedHideUsdtTier.minUsdt}: ~
-                    {fromAmount || "0"} {fromToken.symbol} • Bonus +{selectedHideUsdtTier.bonusPercent}
-                    %.
-                  </p>
-                ) : (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Volume saat ini: ${usdtEquivalentVolume.toFixed(2)} • Tier aktif: +
-                    {(activeUsdtPointsTier?.bonusPercent || 0).toFixed(0)}% points.
-                  </p>
-                )}
-                {hideUsdtTierPriceUnavailable && (
-                  <p className="mt-1 text-[11px] text-warning">
-                    Live price {fromToken.symbol} belum tersedia, jadi lock tier belum bisa dihitung.
-                  </p>
-                )}
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Tier ini khusus mode hide (swap privat), tetap memakai NFT discount + multiplier stake.
-                </p>
-              </div>
-            )}
-
-            {/* Slippage Tolerance */}
-            <div>
-              <label className="text-sm text-foreground mb-2 block">Slippage Tolerance</label>
-              <div className="flex gap-2">
-                {slippagePresets.map((val) => (
-                  <button
-                    key={val}
-                    onClick={() => { setSlippage(val); setCustomSlippage(""); }}
+                <button
+                  onClick={() => setMevProtectionEnabled((prev) => !prev)}
+                  disabled={mode !== "private"}
+                  className={cn(
+                    "w-11 h-6 rounded-full transition-colors relative",
+                    mode !== "private" && "opacity-50 cursor-not-allowed",
+                    mevProtection ? "bg-primary" : "bg-muted"
+                  )}
+                >
+                  <span
                     className={cn(
-                      "flex-1 py-2 rounded-lg text-xs font-medium transition-all",
-                      slippage === val && !customSlippage
-                        ? "bg-primary/20 text-primary border border-primary"
-                        : "bg-surface text-muted-foreground border border-border hover:border-primary/50"
+                      "absolute top-1 w-4 h-4 rounded-full bg-background transition-transform",
+                      mevProtection ? "left-6" : "left-1"
                     )}
-                  >
-                    {val}%
-                  </button>
-                ))}
-                <div className="relative flex-1">
-                  <input
-                    type="text"
-                    value={customSlippage}
-                    inputMode="decimal"
-                    onChange={(e) => {
-                      const sanitized = sanitizeDecimalInput(e.target.value, 2)
-                      if (!sanitized) {
-                        setCustomSlippage("")
-                        return
-                      }
-                      const parsed = Number(sanitized)
-                      if (!Number.isFinite(parsed)) return
-                      setCustomSlippage(String(Math.min(parsed, 50)))
-                    }}
-                    placeholder="Auto"
-                    className="w-full py-2 px-2 rounded-lg text-xs font-medium bg-surface text-foreground border border-border focus:border-primary outline-none text-center"
                   />
-                  {customSlippage && <span className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">%</span>}
-                </div>
+                </button>
               </div>
-            </div>
-
-            {/* Estimated Amount Received */}
-            <div className="flex items-center justify-between p-3 rounded-lg bg-surface/50">
-              <span className="text-sm text-muted-foreground">Estimated Received</span>
-              <span className="text-sm font-medium text-foreground">
-                {toAmount ? `${Number.parseFloat(toAmount).toFixed(4)} ${toToken.symbol}` : "—"}
-              </span>
-            </div>
-            {quote?.type === "bridge" && bridgeTokenMismatch && (
-              <div className="p-3 rounded-lg bg-warning/10 border border-warning/30">
-                <p className="text-xs text-foreground">
-                  Original bridge quote:{" "}
-                  <span className="font-medium">
-                    {formatTokenAmount(quote.bridgeSourceAmount ?? 0, 8)} {fromToken.symbol}
-                  </span>
-                  . The {toToken.symbol} above value is the live conversion estimate (already includes assumed swap fee + slippage).
-                </p>
-              </div>
-            )}
-
-            {/* Receive Address */}
-            <div>
-              <label className="text-sm text-foreground mb-2 block">Receive Address</label>
-              <input
-                type="text"
-                value={receiveAddress}
-                onChange={(e) => {
-                  setIsReceiveAddressManual(true)
-                  setReceiveAddress(e.target.value)
-                }}
-                className="w-full py-2 px-3 rounded-lg text-sm bg-surface text-foreground border border-border focus:border-primary outline-none"
-              />
-              {isCrossChain && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  If you use UniSat, enter BTC receive address manually. Xverse User ID is optional only for Xverse-managed BTC.
+              {mode !== "private" && (
+                <p className="text-xs text-muted-foreground">
+                  Aktif hanya di Private Mode. Saat mode biasa, selalu Disabled.
                 </p>
               )}
-            </div>
 
-            {isCrossChain && targetChain === "bitcoin" && (
+              {/* Slippage Tolerance */}
               <div>
-                <label className="text-sm text-foreground mb-2 block">Xverse User ID (optional)</label>
+                <label className="text-sm text-foreground mb-2 block">Slippage Tolerance</label>
+                <div className="flex gap-2">
+                  {slippagePresets.map((val) => (
+                    <button
+                      key={val}
+                      onClick={() => {
+                        setSlippage(val)
+                        setCustomSlippage("")
+                      }}
+                      className={cn(
+                        "flex-1 py-2 rounded-lg text-xs font-medium transition-all",
+                        slippage === val && !customSlippage
+                          ? "bg-primary/20 text-primary border border-primary"
+                          : "bg-surface text-muted-foreground border border-border hover:border-primary/50"
+                      )}
+                    >
+                      {val}%
+                    </button>
+                  ))}
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={customSlippage}
+                      inputMode="decimal"
+                      onChange={(e) => {
+                        const sanitized = sanitizeDecimalInput(e.target.value, 2)
+                        if (!sanitized) {
+                          setCustomSlippage("")
+                          return
+                        }
+                        const parsed = Number(sanitized)
+                        if (!Number.isFinite(parsed)) return
+                        setCustomSlippage(String(Math.min(parsed, 50)))
+                      }}
+                      placeholder="Auto"
+                      className="w-full py-2 px-2 rounded-lg text-xs font-medium bg-surface text-foreground border border-border focus:border-primary outline-none text-center"
+                    />
+                    {customSlippage && (
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">
+                        %
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Estimated Amount Received */}
+              <div className="flex items-center justify-between p-3 rounded-lg bg-surface/50">
+                <span className="text-sm text-muted-foreground">Estimated Received</span>
+                <span className="text-sm font-medium text-foreground">
+                  {toAmount ? `${Number.parseFloat(toAmount).toFixed(4)} ${toToken.symbol}` : "—"}
+                </span>
+              </div>
+
+              {/* Receive Address */}
+              <div>
+                <label className="text-sm text-foreground mb-2 block">Receive Address</label>
                 <input
                   type="text"
-                  value={xverseUserId}
-                  onChange={(e) => setXverseUserId(e.target.value)}
-                  placeholder="Use if BTC address is managed by Xverse"
+                  value={receiveAddress}
+                  onChange={(e) => {
+                    setIsReceiveAddressManual(true)
+                    setReceiveAddress(e.target.value)
+                  }}
                   className="w-full py-2 px-3 rounded-lg text-sm bg-surface text-foreground border border-border focus:border-primary outline-none"
                 />
               </div>
-            )}
 
-            {isCrossChain && sourceChain === "bitcoin" && (
-              <div className="space-y-3">
-                <div className="p-3 rounded-lg bg-primary/10 border border-primary/30 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs text-muted-foreground">BTC Vault Address (Testnet)</p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-xs"
-                      onClick={handleCopyBtcVaultAddress}
-                      disabled={!BTC_VAULT_ADDRESS}
-                    >
-                      {btcVaultCopied ? "Copied" : "Copy"}
-                    </Button>
-                  </div>
-                  <p className="font-mono text-xs text-foreground break-all">
-                    {BTC_VAULT_ADDRESS ||
-                      "Set NEXT_PUBLIC_BTC_VAULT_ADDRESS di frontend/.env.local"}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-xs"
-                      onClick={() => openExternalUrl(BTC_TESTNET_FAUCET_URL)}
-                    >
-                      Open BTC Testnet Faucet
-                    </Button>
-                    {btcVaultExplorerUrl && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={() => openExternalUrl(btcVaultExplorerUrl)}
-                      >
-                        View Vault on Explorer
-                      </Button>
+              {/* Transaction Fee Breakdown */}
+              <div className="space-y-2 p-3 rounded-lg bg-surface/50">
+                {quote?.type === "bridge" ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">{bridgeProtocolFeeLabel}</span>
+                      <span className="text-sm text-foreground">{protocolFeeDisplay}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">{bridgeNetworkFeeLabel}</span>
+                      <span className="text-sm text-foreground">{networkFeeDisplay}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">MEV Fee ({mevFeePercent}%)</span>
+                      <span className="text-sm text-foreground">{mevFeeDisplay}</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-border pt-2">
+                      <span className="text-sm font-medium text-foreground">Total Fee</span>
+                      <span className="text-sm font-medium text-foreground">{feeDisplayLabel}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Protocol Fee</span>
+                      <span className="text-sm text-foreground">{protocolFeeDisplay}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">MEV Fee ({mevFeePercent}%)</span>
+                      <span className="text-sm text-foreground">{mevFeeDisplay}</span>
+                    </div>
+                    {hasNftDiscount && (
+                      <div className="flex items-center justify-between text-success">
+                        <span className="text-sm flex items-center gap-1">
+                          <Sparkles className="h-3 w-3" />
+                          NFT Discount
+                        </span>
+                        <span className="text-sm">-{discountPercent}%</span>
+                      </div>
                     )}
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    For Garden quickstart flow, click Execute Trade first to create an order and
-                    get a dynamic BTC deposit address (`result.to`). The vault address in this panel
-                    is for tester reference only.
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    If faucet is unavailable, fallback top-up can use ETH Sepolia to BTC Testnet bridge,
-                    then continue deposit to the Garden order BTC address.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Transaction Fee Breakdown */}
-            <div className="space-y-2 p-3 rounded-lg bg-surface/50">
-              {quote?.type === "bridge" ? (
-                <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">{bridgeProtocolFeeLabel}</span>
-                    <span className="text-sm text-foreground">{protocolFeeDisplay}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">{bridgeNetworkFeeLabel}</span>
-                    <span className="text-sm text-foreground">{networkFeeDisplay}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">MEV Fee ({mevFeePercent}%)</span>
-                    <span className="text-sm text-foreground">{mevFeeDisplay}</span>
-                  </div>
-                  <div className="flex items-center justify-between border-t border-border pt-2">
-                    <span className="text-sm font-medium text-foreground">Total Fee</span>
-                    <span className="text-sm font-medium text-foreground">{feeDisplayLabel}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Provider</span>
-                    <span className="text-sm text-foreground">{routeLabel}</span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Protocol Fee</span>
-                    <span className="text-sm text-foreground">{protocolFeeDisplay}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">MEV Fee ({mevFeePercent}%)</span>
-                    <span className="text-sm text-foreground">{mevFeeDisplay}</span>
-                  </div>
-                  {hasNftDiscount && (
-                    <div className="flex items-center justify-between text-success">
-                      <span className="text-sm flex items-center gap-1">
-                        <Sparkles className="h-3 w-3" />
-                        NFT Discount
-                      </span>
-                      <span className="text-sm">-{discountPercent}%</span>
+                    <div className="flex items-center justify-between border-t border-border pt-2">
+                      <span className="text-sm font-medium text-foreground">Total Fee</span>
+                      <span className="text-sm font-medium text-foreground">{feeDisplayLabel}</span>
                     </div>
-                  )}
-                  <div className="flex items-center justify-between border-t border-border pt-2">
-                    <span className="text-sm font-medium text-foreground">Total Fee</span>
-                    <span className="text-sm font-medium text-foreground">
-                      {feeDisplayLabel}
-                    </span>
-                  </div>
-                  {hasNftDiscount && feeSavingsUsd > 0 && (
-                    <div className="flex items-center justify-between text-success">
-                      <span className="text-xs">Fee saved (NFT)</span>
-                      <span className="text-xs">-${feeSavingsUsd.toFixed(2)}</span>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            {/* Points Estimate */}
-            <div className="flex items-center justify-between p-3 rounded-lg bg-accent/10 border border-accent/20">
-              <div>
-                <span className="text-sm text-foreground flex items-center gap-2">
-                  <Gift className="h-4 w-4 text-accent" />
-                  Estimated Points
-                </span>
-                {basePointsEarned !== null && (
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    Base +{basePointsEarned}
-                    {normalizedStakeMultiplier > 1 ? ` × Stake ${formatMultiplier(normalizedStakeMultiplier)}` : ""}
-                    {nftPointsMultiplier > 1 ? ` × NFT ${formatMultiplier(nftPointsMultiplier)}` : ""}
-                    {hideBalanceOnchain && hideUsdtTierBonusPercent > 0
-                      ? ` × HideTier +${hideUsdtTierBonusPercent.toFixed(0)}%`
-                      : ""}
-                  </p>
+                    {hasNftDiscount && feeSavingsUsd > 0 && (
+                      <div className="flex items-center justify-between text-success">
+                        <span className="text-xs">Fee saved (NFT)</span>
+                        <span className="text-xs">-${feeSavingsUsd.toFixed(2)}</span>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
-              <span className="text-sm font-bold text-accent">{pointsEarned === null ? "—" : `+${pointsEarned}`}</span>
+
+              {/* Points Estimate */}
+              <div className="flex items-center justify-between p-3 rounded-lg bg-accent/10 border border-accent/20">
+                <div>
+                  <span className="text-sm text-foreground flex items-center gap-2">
+                    <Gift className="h-4 w-4 text-accent" />
+                    Estimated Points
+                  </span>
+                  {basePointsEarned !== null && (
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Base +{basePointsEarned}
+                      {normalizedStakeMultiplier > 1
+                        ? ` × Stake ${formatMultiplier(normalizedStakeMultiplier)}`
+                        : ""}
+                      {nftPointsMultiplier > 1 ? ` × NFT ${formatMultiplier(nftPointsMultiplier)}` : ""}
+                      {hideBalanceOnchain && hideUsdtTierBonusPercent > 0
+                        ? ` × HideTier +${hideUsdtTierBonusPercent.toFixed(0)}%`
+                        : ""}
+                    </p>
+                  )}
+                </div>
+                <span className="text-sm font-bold text-accent">
+                  {pointsEarned === null ? "—" : `+${pointsEarned}`}
+                </span>
+              </div>
             </div>
-          </CollapsibleContent>
-        </Collapsible>
+          </DialogContent>
+        </Dialog>
+
+        <Sheet open={hidePanelOpen} onOpenChange={setHidePanelOpen}>
+          <SheetContent side="right" className="glass-strong border-border w-[92vw] sm:max-w-md">
+            <SheetHeader>
+              <SheetTitle>Hide Balance</SheetTitle>
+            </SheetHeader>
+            <div className="space-y-3 px-4 pb-4 overflow-y-auto">
+              {hideBalanceOnchain && (
+                hasTradePrivacyPayload ? (
+                  <p className="text-xs text-warning">
+                    {hideMixingWindowBlocked
+                      ? `On-chain Hide Balance aktif. Mixing window berjalan: ${formatRemainingDuration(
+                          hideMixingWindowRemainingMs
+                        )}.`
+                      : "On-chain Hide Balance aktif (ikon mata kanan atas)."}
+                  </p>
+                ) : (
+                  <p className="text-xs text-warning">
+                    {isAutoPrivacyProvisioning
+                      ? "Menyiapkan payload Garaga otomatis..."
+                      : DEV_AUTO_GARAGA_PAYLOAD_ENABLED
+                      ? "Hide Balance aktif. Sistem akan auto-generate payload mock (dev mode) saat execute."
+                      : "Hide Balance aktif. Sistem akan menyiapkan payload Garaga otomatis saat Execute Trade."}
+                  </p>
+                )
+              )}
+              {hideBalanceOnchain && HIDE_BALANCE_SHIELDED_POOL_V3 && activeHideRecipient && (
+                <p className="text-xs text-muted-foreground">
+                  Recipient note V3 terkunci: {shortenAddress(activeHideRecipient)}
+                </p>
+              )}
+              {hideBalanceOnchain &&
+                HIDE_BALANCE_SHIELDED_POOL_V3 &&
+                hasActiveHideV3Note &&
+                activeHideNoteAmountText && (
+                  <p className="text-xs text-muted-foreground">
+                    Nominal note V3 terkunci: {activeHideNoteAmountText}{" "}
+                    {activeHideNoteTokenSymbol || fromToken.symbol.toUpperCase()}
+                  </p>
+                )}
+              {hideBalanceOnchain && (
+                <div>
+                  <label className="text-sm text-foreground mb-2 block">Hide Tier (USDT)</label>
+                  <div className="grid grid-cols-5 gap-2">
+                    {USDT_POINTS_TIER_OPTIONS.map((option) => {
+                      const unlocked = usdtEquivalentVolume >= option.minUsdt
+                      const selected =
+                        hideUsdtTierLockEnabled && selectedHideUsdtTier.minUsdt === option.minUsdt
+                      return (
+                        <button
+                          key={option.minUsdt}
+                          type="button"
+                          disabled={!hideUsdtTierLockEnabled}
+                          onClick={() => {
+                            if (!hideUsdtTierLockEnabled) return
+                            setHideUsdtTierMin(option.minUsdt)
+                          }}
+                          className={cn(
+                            "py-2 rounded-lg text-center text-[11px] font-medium border transition-all",
+                            selected
+                              ? "bg-primary/20 border-primary text-primary"
+                              : unlocked
+                              ? "bg-success/10 border-success/40 text-success"
+                              : "bg-surface text-muted-foreground border-border",
+                            hideUsdtTierLockEnabled ? "hover:border-primary/60" : "cursor-default"
+                          )}
+                        >
+                          <div>${option.minUsdt}</div>
+                          <div>+{option.bonusPercent}%</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {hideUsdtTierLockEnabled ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Nominal hide dikunci ke tier ${selectedHideUsdtTier.minUsdt}: ~
+                      {fromAmount || "0"} {fromToken.symbol} • Bonus +{selectedHideUsdtTier.bonusPercent}%.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Volume saat ini: ${usdtEquivalentVolume.toFixed(2)} • Tier aktif: +
+                      {(activeUsdtPointsTier?.bonusPercent || 0).toFixed(0)}% points.
+                    </p>
+                  )}
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Tier ini khusus mode hide (swap privat), tetap memakai NFT discount + multiplier stake.
+                  </p>
+                </div>
+              )}
+
+              {hideBalanceOnchain && pendingHideNotesActive.length > 0 && (
+                <div className="mt-2 p-3 rounded-xl border border-border/70 bg-surface/40 space-y-2">
+                  <p className="text-xs font-semibold text-foreground">
+                    Pending Hide Notes ({pendingHideNotesActive.length})
+                  </p>
+                  <div className="space-y-2 max-h-64 overflow-auto pr-1">
+                    {pendingHideNotesActive.map((note) => {
+                      const noteCommitment = (note.note_commitment || "").trim()
+                      const noteNullifier = (note.nullifier || "").trim()
+                      const noteMissingSwapMetadata = !noteNullifier
+                      const noteUseBlocked = noteMissingSwapMetadata
+                      const noteRemainingMs =
+                        typeof note.spendable_at_unix === "number" &&
+                        Number.isFinite(note.spendable_at_unix)
+                          ? Math.max(0, note.spendable_at_unix * 1000 - nowMs)
+                          : 0
+                      return (
+                        <div
+                          key={`${noteCommitment}:${note.nullifier || ""}`}
+                          className="rounded-lg border border-border/60 bg-background/40 p-2"
+                        >
+                          <p className="text-[11px] text-muted-foreground break-all">
+                            {noteCommitment.slice(0, 12)}...{noteCommitment.slice(-6)}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {note.amount || "?"} {note.token_symbol || "STRK"} •{" "}
+                            {noteRemainingMs > 0
+                              ? `Ready in ${formatRemainingDuration(noteRemainingMs)}`
+                              : "Ready now"}
+                          </p>
+                          {noteMissingSwapMetadata && (
+                            <p className="text-[11px] text-warning">
+                              Metadata note belum lengkap untuk swap (nullifier).
+                            </p>
+                          )}
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="h-8 text-[11px]"
+                              disabled={swapState !== "idle" || noteUseBlocked}
+                              onClick={() => {
+                                if (noteUseBlocked) {
+                                  notifications.addNotification({
+                                    type: "warning",
+                                    title: "Use note blocked",
+                                    message: "Note belum punya metadata lengkap untuk swap.",
+                                  })
+                                  return
+                                }
+                                const currentPayload = loadTradePrivacyPayload()
+                                const currentCommitment = (
+                                  currentPayload?.note_commitment ||
+                                  currentPayload?.commitment ||
+                                  ""
+                                )
+                                  .trim()
+                                  .toLowerCase()
+                                const selectedCommitment = noteCommitment.trim().toLowerCase()
+                                const isSameActiveNote =
+                                  !!currentCommitment && currentCommitment === selectedCommitment
+                                const currentProof = normalizeHexArray(currentPayload?.proof)
+                                const currentPublicInputs = normalizeHexArray(currentPayload?.public_inputs)
+                                const noteProof = normalizeHexArray(note.proof)
+                                const notePublicInputs = normalizeHexArray(note.public_inputs)
+                                const noteRoot =
+                                  (note.root || "").trim() || inferV3RootFromPublicInputs(notePublicInputs)
+                                const selectedProof =
+                                  noteProof.length > 0
+                                    ? noteProof
+                                    : isSameActiveNote && currentProof.length > 0
+                                    ? currentProof
+                                    : undefined
+                                const selectedPublicInputs =
+                                  notePublicInputs.length > 0
+                                    ? notePublicInputs
+                                    : isSameActiveNote && currentPublicInputs.length > 0
+                                    ? currentPublicInputs
+                                    : undefined
+                                persistTradePrivacyPayload({
+                                  verifier:
+                                    (note.verifier || currentPayload?.verifier || "garaga").trim() ||
+                                    "garaga",
+                                  note_version: "v3",
+                                  executor_address:
+                                    note.executor_address ||
+                                    PRIVATE_ACTION_EXECUTOR_ADDRESS ||
+                                    undefined,
+                                  note_commitment: noteCommitment,
+                                  commitment: noteCommitment,
+                                  nullifier: note.nullifier || currentPayload?.nullifier,
+                                  denom_id: note.denom_id,
+                                  spendable_at_unix: note.spendable_at_unix,
+                                  root:
+                                    noteRoot ||
+                                    (isSameActiveNote
+                                      ? (currentPayload?.root || "").trim() ||
+                                        inferV3RootFromPublicInputs(currentPublicInputs)
+                                      : undefined),
+                                  proof: selectedProof,
+                                  public_inputs: selectedPublicInputs,
+                                })
+                                markManuallySelectedHideNote(noteCommitment, note.nullifier)
+                                const selectedTokenSymbol = (note.token_symbol || "").trim().toUpperCase()
+                                const currentFromSymbol = fromToken.symbol.toUpperCase()
+                                const selectedAmountText = (note.amount || "").trim()
+                                if (
+                                  selectedTokenSymbol &&
+                                  selectedTokenSymbol !== currentFromSymbol &&
+                                  tokenCatalog.some(
+                                    (token) => token.symbol.toUpperCase() === selectedTokenSymbol
+                                  )
+                                ) {
+                                  setFromTokenSymbol(selectedTokenSymbol)
+                                }
+                                if (selectedAmountText) {
+                                  setFromAmount(selectedAmountText)
+                                }
+                                if ((note.denom_id || "").trim()) {
+                                  setHideUsdtTierMin(inferUsdtTierFromDenomId((note.denom_id || "").trim()))
+                                }
+                                setHasTradePrivacyPayload(true)
+                                notifications.addNotification({
+                                  type: "info",
+                                  title: "Hide note selected",
+                                  message:
+                                    "Active note diganti ke pending note terpilih. Lanjut Execute Private Swap.",
+                                })
+                                setHidePanelOpen(false)
+                              }}
+                            >
+                              Use For Swap
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-8 text-[11px]"
+                              disabled={isCancellingHideNote || swapState !== "idle"}
+                              onClick={() => {
+                                clearManuallySelectedHideNote()
+                                void handleCancelHideNoteWithdraw(note)
+                              }}
+                            >
+                              Withdraw
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </SheetContent>
+        </Sheet>
 
         {/* NFT Discount Counter */}
         {hasNftDiscount && (
@@ -5456,156 +5539,6 @@ export function TradingInterface() {
             {swapState === "idle" && executeDisabledReason && (
               <p className="text-center text-xs text-warning">{executeDisabledReason}</p>
             )}
-          </div>
-        )}
-
-        {hideBalanceOnchain && pendingHideNotesActive.length > 0 && (
-          <div className="mt-3 p-3 rounded-xl border border-border/70 bg-surface/40 space-y-2">
-            <p className="text-xs font-semibold text-foreground">
-              Pending Hide Notes ({pendingHideNotesActive.length})
-            </p>
-            <div className="space-y-2 max-h-40 overflow-auto pr-1">
-              {pendingHideNotesActive.map((note) => {
-                const noteCommitment = (note.note_commitment || "").trim()
-                const noteNullifier = (note.nullifier || "").trim()
-                const noteExecutorNormalized = normalizeExecutorAddress(
-                  note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined
-                )
-                const noteMissingSwapMetadata = !noteNullifier
-                const noteUseBlocked = noteMissingSwapMetadata
-                const noteRemainingMs =
-                  typeof note.spendable_at_unix === "number" && Number.isFinite(note.spendable_at_unix)
-                    ? Math.max(0, note.spendable_at_unix * 1000 - nowMs)
-                    : 0
-                return (
-                  <div
-                    key={`${noteCommitment}:${note.nullifier || ""}`}
-                    className="rounded-lg border border-border/60 bg-background/40 p-2"
-                  >
-                    <p className="text-[11px] text-muted-foreground break-all">
-                      {noteCommitment.slice(0, 12)}...{noteCommitment.slice(-6)}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {note.amount || "?"} {note.token_symbol || "STRK"} •{" "}
-                      {noteRemainingMs > 0
-                        ? `Ready in ${formatRemainingDuration(noteRemainingMs)}`
-                        : "Ready now"}
-                    </p>
-                    {noteMissingSwapMetadata && (
-                      <p className="text-[11px] text-warning">
-                        Metadata note belum lengkap untuk swap (nullifier).
-                      </p>
-                    )}
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="h-8 text-[11px]"
-                        disabled={swapState !== "idle" || noteUseBlocked}
-                        onClick={() => {
-                          if (noteUseBlocked) {
-                            notifications.addNotification({
-                              type: "warning",
-                              title: "Use note blocked",
-                              message: "Note belum punya metadata lengkap untuk swap.",
-                            })
-                            return
-                          }
-                          const currentPayload = loadTradePrivacyPayload()
-                          const currentCommitment = (
-                            currentPayload?.note_commitment ||
-                            currentPayload?.commitment ||
-                            ""
-                          )
-                            .trim()
-                            .toLowerCase()
-                          const selectedCommitment = noteCommitment.trim().toLowerCase()
-                          const isSameActiveNote =
-                            !!currentCommitment && currentCommitment === selectedCommitment
-                          const currentProof = normalizeHexArray(currentPayload?.proof)
-                          const currentPublicInputs = normalizeHexArray(currentPayload?.public_inputs)
-                          const noteProof = normalizeHexArray(note.proof)
-                          const notePublicInputs = normalizeHexArray(note.public_inputs)
-                          const noteRoot =
-                            (note.root || "").trim() || inferV3RootFromPublicInputs(notePublicInputs)
-                          const selectedProof =
-                            noteProof.length > 0
-                              ? noteProof
-                              : isSameActiveNote && currentProof.length > 0
-                              ? currentProof
-                              : undefined
-                          const selectedPublicInputs =
-                            notePublicInputs.length > 0
-                              ? notePublicInputs
-                              : isSameActiveNote && currentPublicInputs.length > 0
-                              ? currentPublicInputs
-                              : undefined
-                          persistTradePrivacyPayload({
-                            verifier:
-                              (note.verifier || currentPayload?.verifier || "garaga").trim() ||
-                              "garaga",
-                            note_version: "v3",
-                            executor_address:
-                              note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
-                            note_commitment: noteCommitment,
-                            commitment: noteCommitment,
-                            nullifier: note.nullifier || currentPayload?.nullifier,
-                            denom_id: note.denom_id,
-                            spendable_at_unix: note.spendable_at_unix,
-                            root:
-                              noteRoot ||
-                              (isSameActiveNote
-                                ? (currentPayload?.root || "").trim() ||
-                                  inferV3RootFromPublicInputs(currentPublicInputs)
-                                : undefined),
-                            proof: selectedProof,
-                            public_inputs: selectedPublicInputs,
-                          })
-                          markManuallySelectedHideNote(noteCommitment, note.nullifier)
-                          const selectedTokenSymbol = (note.token_symbol || "").trim().toUpperCase()
-                          const currentFromSymbol = fromToken.symbol.toUpperCase()
-                          const selectedAmountText = (note.amount || "").trim()
-                          if (
-                            selectedTokenSymbol &&
-                            selectedTokenSymbol !== currentFromSymbol &&
-                            tokenCatalog.some((token) => token.symbol.toUpperCase() === selectedTokenSymbol)
-                          ) {
-                            setFromTokenSymbol(selectedTokenSymbol)
-                          }
-                          if (selectedAmountText) {
-                            setFromAmount(selectedAmountText)
-                          }
-                          if ((note.denom_id || "").trim()) {
-                            setHideUsdtTierMin(inferUsdtTierFromDenomId((note.denom_id || "").trim()))
-                          }
-                          setHasTradePrivacyPayload(true)
-                          notifications.addNotification({
-                            type: "info",
-                            title: "Hide note selected",
-                            message:
-                              "Active note diganti ke pending note terpilih. Lanjut Execute Private Swap.",
-                          })
-                        }}
-                      >
-                        Use For Swap
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-8 text-[11px]"
-                        disabled={isCancellingHideNote || swapState !== "idle"}
-                        onClick={() => {
-                          clearManuallySelectedHideNote()
-                          void handleCancelHideNoteWithdraw(note)
-                        }}
-                      >
-                        Withdraw
-                      </Button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
           </div>
         )}
 
