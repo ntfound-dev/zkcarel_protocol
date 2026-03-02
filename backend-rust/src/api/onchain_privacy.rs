@@ -552,8 +552,8 @@ fn verify_hide_balance_privacy_call_via_intermediary(
     expected_proof: &[Felt],
     expected_public_inputs: &[Felt],
 ) -> Result<bool> {
-    let execute_selector =
-        get_selector_from_name("execute").map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let execute_selector = get_selector_from_name("execute")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
     let (_, calldata) = extract_invoke_sender_and_calldata(tx)?;
     let calls = parse_execute_calls(calldata).map_err(|err| {
         AppError::BadRequest(format!(
@@ -596,9 +596,14 @@ fn verify_hide_balance_privacy_call_via_intermediary(
     }
 
     let mut cursor = 4usize;
-    let signature_len = felt_to_usize(data.get(cursor).ok_or_else(|| {
-        AppError::BadRequest("onchain_tx_hash intermediary calldata missing signature_len".to_string())
-    })?, "signature_len")?;
+    let signature_len = felt_to_usize(
+        data.get(cursor).ok_or_else(|| {
+            AppError::BadRequest(
+                "onchain_tx_hash intermediary calldata missing signature_len".to_string(),
+            )
+        })?,
+        "signature_len",
+    )?;
     cursor += 1;
     let signature_end = cursor.checked_add(signature_len).ok_or_else(|| {
         AppError::BadRequest("onchain_tx_hash intermediary signature length overflow".to_string())

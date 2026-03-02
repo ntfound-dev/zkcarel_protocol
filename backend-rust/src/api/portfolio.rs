@@ -1029,13 +1029,7 @@ async fn merge_onchain_holdings(
             None
         };
 
-        let (
-            strk_fallback,
-            carel_fallback,
-            usdc_fallback,
-            usdt_fallback,
-            wbtc_fallback,
-        ) = tokio::join!(
+        let (strk_fallback, carel_fallback, usdc_fallback, usdt_fallback, wbtc_fallback) = tokio::join!(
             strk_fallback_fut,
             carel_fallback_fut,
             usdc_fallback_fut,

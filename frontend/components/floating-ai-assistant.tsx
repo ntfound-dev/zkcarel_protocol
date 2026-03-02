@@ -38,6 +38,8 @@ import {
   decimalToU256Parts,
   invokeStarknetCallFromWallet,
   invokeStarknetCallsFromWallet,
+  readStarknetErc20AllowanceFromWallet,
+  readStarknetShieldedPoolV3FixedAmountFromWallet,
   sendEvmTransactionFromWallet,
   signStarknetTypedDataFromWallet,
   toHexFelt,
@@ -104,11 +106,16 @@ const quickPromptsByTier: Record<number, string[]> = {
     "please limit order USDT/USDC amount 10 at 1.25 expiry 3d",
   ],
   3: [
+    "set hide tier $5",
+    "set hide tier $10",
+    "set hide tier $50",
+    "set hide tier $100",
+    "set hide tier $250",
     "please set price alert for WBTC",
-    "please private swap 25 STRK to WBTC",
-    "please private swap 20 CAREL to USDT",
-    "please private swap 15 USDC to WBTC",
-    "please private swap 25 USDC to CAREL",
+    "please private swap 10 STRK to WBTC with tier $50",
+    "please private swap 10 CAREL to USDT with tier $10",
+    "please private swap 10 USDC to WBTC with tier $100",
+    "please private swap 10 USDC to CAREL with tier $5",
     "please private stake 15 USDT",
     "please private stake 10 USDT",
     "please private stake 100 CAREL",
@@ -126,7 +133,7 @@ const l2BridgeShortcutPrompts = quickPromptsByTier[2].filter((prompt) => /\bbrid
 const featureListByTier: Record<number, string> = {
   1: "Available now: chat, balance check, points check, token price, and market summary.",
   2: "Available now: swap, bridge, stake, claim rewards, create limit order, and cancel order. Tap one example below to start.",
-  3: "Available now: private swap/stake/claim/limit order, plus portfolio rebalance, price alerts, and deeper analysis. Bridge stays on Level 2 for now.",
+  3: "Available now: private swap/stake/claim/limit order, plus portfolio rebalance, price alerts, and deeper analysis. Hide tier ($5/$10/$50/$100/$250) controls private swap amount. Bridge stays on Level 2 for now.",
 }
 
 const levelBadgeClasses: Record<number, string> = {
@@ -165,6 +172,22 @@ const HIDE_BALANCE_SHIELDED_POOL_V2 =
   HIDE_BALANCE_EXECUTOR_KIND === "shielded_pool_v2" ||
   HIDE_BALANCE_EXECUTOR_KIND === "shielded-v2" ||
   HIDE_BALANCE_EXECUTOR_KIND === "v2"
+const HIDE_BALANCE_SHIELDED_POOL_V3 =
+  HIDE_BALANCE_EXECUTOR_KIND === "shielded_pool_v3" ||
+  HIDE_BALANCE_EXECUTOR_KIND === "shielded-v3" ||
+  HIDE_BALANCE_EXECUTOR_KIND === "v3"
+const AI_HIDE_MIN_NOTE_AGE_SECS_RAW =
+  process.env.NEXT_PUBLIC_AI_HIDE_MIN_NOTE_AGE_SECS ||
+  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS ||
+  "60"
+const AI_HIDE_MIN_NOTE_AGE_SECS = Number.parseInt(AI_HIDE_MIN_NOTE_AGE_SECS_RAW, 10)
+const AI_HIDE_MIN_NOTE_AGE_MS =
+  (Number.isFinite(AI_HIDE_MIN_NOTE_AGE_SECS) && AI_HIDE_MIN_NOTE_AGE_SECS > 0
+    ? AI_HIDE_MIN_NOTE_AGE_SECS
+    : 60) * 1000
+const AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN =
+  (process.env.NEXT_PUBLIC_AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN || "true").toLowerCase() !==
+  "false"
 const GARDEN_STARKNET_APPROVE_SELECTOR = "0x219209e083275171774dab1df80982e9df2096516f06319c5c6d71ae0a8480c"
 const GARDEN_STARKNET_INITIATE_SELECTOR = "0x2aed25fcd0101fcece997d93f9d0643dfa3fbd4118cae16bf7d6cd533577c28"
 
@@ -237,6 +260,13 @@ const AI_TOKEN_DECIMALS: Record<string, number> = {
   WBTC: 8,
   BTC: 8,
 }
+const AI_HIDE_USDT_TIER_OPTIONS = [
+  { minUsdt: 5, bonusPercent: 5 },
+  { minUsdt: 10, bonusPercent: 10 },
+  { minUsdt: 50, bonusPercent: 20 },
+  { minUsdt: 100, bonusPercent: 30 },
+  { minUsdt: 250, bonusPercent: 50 },
+] as const
 const U256_MAX_WORD_HEX = "0xffffffffffffffffffffffffffffffff"
 const SUPPORTED_SWAP_TOKENS = new Set(["USDT", "USDC", "STRK", "WBTC", "CAREL"])
 const SUPPORTED_LIMIT_ORDER_TOKENS = new Set(["USDT", "USDC", "STRK", "CAREL"])
@@ -887,6 +917,26 @@ function parseSwapTokensFromCommand(
   return null
 }
 
+function parseHideTierFromCommand(command: string): number | null {
+  const normalized = normalizeMessageText(command)
+  const hasTierKeyword = /\b(hide\s*tier|tier\s*hide|tier|denom|denomination)\b/i.test(normalized)
+  if (!hasTierKeyword) return null
+  const amountMatch = normalized.match(/\$?\s*(5|10|50|100|250)\b/i)
+  if (!amountMatch) return null
+  const tier = Number.parseInt(amountMatch[1] || "", 10)
+  if (!Number.isFinite(tier)) return null
+  return AI_HIDE_USDT_TIER_OPTIONS.some((option) => option.minUsdt === tier) ? tier : null
+}
+
+function isHideTierOnlyCommand(command: string): boolean {
+  const normalized = normalizeMessageText(command)
+  if (!/\b(hide\s*tier|tier|denom|denomination)\b/i.test(normalized)) return false
+  if (/\bswap|stake|claim|limit|order|bridge|rebalance|alert|portfolio|chart|price\b/i.test(normalized)) {
+    return false
+  }
+  return true
+}
+
 // Internal helper that parses token pair/amount from limit-order commands.
 function parseLimitOrderIntentFromCommand(
   command: string
@@ -1229,6 +1279,52 @@ function parseNumberish(value: unknown): number {
   return 0
 }
 
+function sanitizeDecimalInput(raw: string, maxDecimals = 18): string {
+  const cleaned = raw.replace(/,/g, "").replace(/[^\d.]/g, "")
+  if (!cleaned) return ""
+  const firstDot = cleaned.indexOf(".")
+  if (firstDot === -1) {
+    const noLeading = cleaned.replace(/^0+(?=\d)/, "")
+    return noLeading || "0"
+  }
+  const intPartRaw = cleaned.slice(0, firstDot).replace(/\./g, "")
+  const fracRaw = cleaned.slice(firstDot + 1).replace(/\./g, "")
+  const intPart = intPartRaw.replace(/^0+(?=\d)/, "") || "0"
+  const fracPart = fracRaw.slice(0, Math.max(0, maxDecimals))
+  return `${intPart}.${fracPart}`
+}
+
+function trimDecimalZeros(raw: string): string {
+  return raw
+    .replace(/(\.\d*?[1-9])0+$/, "$1")
+    .replace(/\.0+$/, "")
+    .replace(/\.$/, "")
+}
+
+function scaledBigIntToDecimalString(value: bigint, decimals: number): string {
+  if (decimals <= 0) return value.toString()
+  const base = BigInt(10) ** BigInt(decimals)
+  const whole = value / base
+  const fraction = value % base
+  if (fraction === BigInt(0)) return whole.toString()
+  const fractionRaw = fraction
+    .toString()
+    .padStart(decimals, "0")
+    .replace(/0+$/, "")
+  return `${whole.toString()}.${fractionRaw}`
+}
+
+function formatDurationHhMmSs(ms: number): string {
+  const safeMs = Number.isFinite(ms) ? Math.max(0, ms) : 0
+  const totalSec = Math.floor(safeMs / 1000)
+  const hours = Math.floor(totalSec / 3600)
+  const minutes = Math.floor((totalSec % 3600) / 60)
+  const seconds = totalSec % 60
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(
+    seconds
+  ).padStart(2, "0")}`
+}
+
 // Internal helper that parses limit-order id from `cancel order <id>` commands.
 function parseLimitOrderIdFromCancelCommand(command: string): string {
   const match = command.match(/\bcancel\s+order\s+([^\s]+)/i)
@@ -1504,6 +1600,7 @@ export function FloatingAIAssistant() {
   const [input, setInput] = React.useState("")
   const [showPromptExamples, setShowPromptExamples] = React.useState(false)
   const [selectedTier, setSelectedTier] = React.useState(1)
+  const [aiHideUsdtTierMin, setAiHideUsdtTierMin] = React.useState<number>(5)
   const [unlockedTier, setUnlockedTier] = React.useState(1)
   const [paymentAddress, setPaymentAddress] = React.useState("")
   const [isLoadingTier, setIsLoadingTier] = React.useState(false)
@@ -1567,6 +1664,12 @@ export function FloatingAIAssistant() {
   const messages = messagesByTier[selectedTier] || []
   const quickPrompts = quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
   const featureList = featureListByTier[selectedTier] ?? featureListByTier[1]
+  const selectedAiHideTier = React.useMemo(
+    () =>
+      AI_HIDE_USDT_TIER_OPTIONS.find((option) => option.minUsdt === aiHideUsdtTierMin) ||
+      AI_HIDE_USDT_TIER_OPTIONS[0],
+    [aiHideUsdtTierMin]
+  )
   const staticCarelTokenAddress = React.useMemo(
     () => STATIC_CAREL_TOKEN_ADDRESS.trim(),
     []
@@ -2364,6 +2467,179 @@ export function FloatingAIAssistant() {
     return followUps
   }
 
+  const resolveAiHideTierAmountText = React.useCallback(
+    async ({
+      fromToken,
+      fallbackAmountText,
+      providerHint,
+    }: {
+      fromToken: string
+      fallbackAmountText: string
+      providerHint: "starknet" | "argentx" | "braavos"
+    }): Promise<string> => {
+      const tokenSymbol = fromToken.trim().toUpperCase()
+      const decimals = AI_TOKEN_DECIMALS[tokenSymbol] ?? 18
+      const fallback = sanitizeDecimalInput(fallbackAmountText || "", decimals)
+      const tierUsdt = selectedAiHideTier.minUsdt
+      const denomId = String(tierUsdt)
+      const tokenAddress = (AI_TOKEN_ADDRESS_MAP[tokenSymbol] || "").trim()
+      const executorAddress = PRIVATE_ACTION_EXECUTOR_ADDRESS
+
+      if (tokenAddress && executorAddress && HIDE_BALANCE_SHIELDED_POOL_V3) {
+        try {
+          const fixedAmount = await readStarknetShieldedPoolV3FixedAmountFromWallet(
+            executorAddress,
+            tokenAddress,
+            denomId,
+            providerHint
+          )
+          if (fixedAmount !== null && fixedAmount > BigInt(0)) {
+            const text = trimDecimalZeros(
+              sanitizeDecimalInput(scaledBigIntToDecimalString(fixedAmount, decimals), decimals)
+            )
+            if (text) return text
+          }
+        } catch {
+          // Fall through to local conversion fallback.
+        }
+      }
+
+      if (tokenSymbol === "USDT" || tokenSymbol === "USDC" || tokenSymbol === "CAREL") {
+        return trimDecimalZeros(sanitizeDecimalInput(String(tierUsdt), decimals))
+      }
+
+      try {
+        const perOneQuote = await getSwapQuote({
+          from_token: tokenSymbol,
+          to_token: "USDT",
+          amount: "1",
+          slippage: 1,
+          mode: "transparent",
+        })
+        const usdtPerToken = Number.parseFloat(String(perOneQuote.to_amount || "0"))
+        if (Number.isFinite(usdtPerToken) && usdtPerToken > 0) {
+          const converted = tierUsdt / usdtPerToken
+          const text = trimDecimalZeros(sanitizeDecimalInput(String(converted), decimals))
+          if (text) return text
+        }
+      } catch {
+        // Keep fallback when conversion quote is unavailable.
+      }
+
+      return fallback || trimDecimalZeros(sanitizeDecimalInput(String(tierUsdt), decimals))
+    },
+    [selectedAiHideTier.minUsdt]
+  )
+
+  const ensureAiHideV3NoteDeposited = React.useCallback(
+    async ({
+      payload,
+      fromToken,
+      amountText,
+      providerHint,
+    }: {
+      payload: PrivacyVerificationPayload
+      fromToken: string
+      amountText: string
+      providerHint: "starknet" | "argentx" | "braavos"
+    }): Promise<{ spendableAtMs: number; txHash: string; amountText: string }> => {
+      const executorAddress = (PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+      if (!executorAddress) {
+        throw new Error(
+          "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS is not configured for Hide Balance v3 deposit."
+        )
+      }
+      const tokenSymbol = fromToken.trim().toUpperCase()
+      const tokenAddress = (AI_TOKEN_ADDRESS_MAP[tokenSymbol] || "").trim()
+      if (!tokenAddress) {
+        throw new Error(`Token address for ${tokenSymbol} is not configured.`)
+      }
+      const noteCommitment = (payload.note_commitment || payload.commitment || "").trim()
+      if (!noteCommitment) {
+        throw new Error("Hide note commitment is missing in prover payload.")
+      }
+      const nullifier = (payload.nullifier || "").trim()
+      if (!nullifier) {
+        throw new Error("Hide nullifier is missing in prover payload.")
+      }
+      const denomId = (payload.denom_id || String(selectedAiHideTier.minUsdt)).trim()
+      if (!denomId) {
+        throw new Error("Hide tier denom is missing in prover payload.")
+      }
+      const decimals = AI_TOKEN_DECIMALS[tokenSymbol] ?? 18
+      const resolvedAmount = await resolveAiHideTierAmountText({
+        fromToken: tokenSymbol,
+        fallbackAmountText: amountText,
+        providerHint,
+      })
+      if (!resolvedAmount) {
+        throw new Error("Failed to resolve hide deposit amount for selected tier.")
+      }
+      const [amountLow, amountHigh] = decimalToU256Parts(resolvedAmount, decimals)
+      const requiredAmount = BigInt(amountLow) + (BigInt(amountHigh) << BigInt(128))
+      const ownerAddress = (wallet.starknetAddress || wallet.address || "").trim()
+      let hasEnoughAllowance = false
+      if (ownerAddress) {
+        try {
+          const allowance = await readStarknetErc20AllowanceFromWallet(
+            tokenAddress,
+            ownerAddress,
+            executorAddress,
+            providerHint
+          )
+          hasEnoughAllowance = allowance !== null && allowance >= requiredAmount
+        } catch {
+          hasEnoughAllowance = false
+        }
+      }
+
+      const approvalCall: StarknetInvokeCall = {
+        contractAddress: tokenAddress,
+        entrypoint: "approve",
+        calldata: [executorAddress, amountLow, amountHigh],
+      }
+      const depositCall: StarknetInvokeCall = {
+        contractAddress: executorAddress,
+        entrypoint: "deposit_fixed_v3",
+        calldata: [
+          tokenAddress,
+          toHexFelt(denomId),
+          toHexFelt(noteCommitment),
+          toHexFelt(nullifier),
+        ],
+      }
+      const calls = hasEnoughAllowance ? [depositCall] : [approvalCall, depositCall]
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: hasEnoughAllowance
+          ? `Confirm hide note deposit (${resolvedAmount} ${tokenSymbol}) in one transaction.`
+          : `Confirm approve + hide note deposit (${resolvedAmount} ${tokenSymbol}) in one transaction.`,
+      })
+      const depositTxHash = await invokeStarknetCallsFromWallet(calls, providerHint)
+      const spendableAtMs = Date.now() + AI_HIDE_MIN_NOTE_AGE_MS
+      notifications.addNotification({
+        type: "success",
+        title: "Hide note deposited",
+        message: `Hide note submitted (${depositTxHash.slice(0, 10)}...).`,
+        txHash: depositTxHash,
+        txNetwork: "starknet",
+      })
+      return {
+        spendableAtMs,
+        txHash: depositTxHash,
+        amountText: resolvedAmount,
+      }
+    },
+    [
+      notifications,
+      resolveAiHideTierAmountText,
+      selectedAiHideTier.minUsdt,
+      wallet.address,
+      wallet.starknetAddress,
+    ]
+  )
+
   /**
    * Handles `handleSend` logic.
    *
@@ -2467,6 +2743,38 @@ export function FloatingAIAssistant() {
       command = pendingForTier.command
       setPendingExecutionConfirmation(null)
       confirmedPendingExecution = true
+    }
+
+    const requestedHideTier = activeTier >= 3 ? parseHideTierFromCommand(command) : null
+    if (requestedHideTier && requestedHideTier !== selectedAiHideTier.minUsdt) {
+      setAiHideUsdtTierMin(requestedHideTier)
+      notifications.addNotification({
+        type: "info",
+        title: "Hide tier updated",
+        message: `AI L3 hide tier set to $${requestedHideTier}.`,
+      })
+    }
+    if (activeTier >= 3 && requestedHideTier && isHideTierOnlyCommand(command)) {
+      if (!hasPendingConfirmation) {
+        appendMessagesForTier(activeTier, [
+          {
+            role: "user",
+            content: command,
+            timestamp: userMessageTimestamp,
+          },
+        ])
+        setInput("")
+      }
+      appendMessagesForTier(activeTier, [
+        {
+          role: "assistant",
+          content: normalizeMessageText(
+            `Hide tier set to $${requestedHideTier}. Next private swap will use this tier amount automatically.`
+          ),
+          timestamp: nowTimestampLabel(),
+        },
+      ])
+      return
     }
 
     const isBridgeCommand = BRIDGE_COMMAND_REGEX.test(command)
@@ -2924,7 +3232,8 @@ export function FloatingAIAssistant() {
         flow: string,
         fromToken?: string,
         toToken?: string,
-        amountText?: string
+        amountText?: string,
+        options?: { denomId?: string; noteVersion?: "v3" }
       ): Promise<PrivacyVerificationPayload> => {
         const prepared = await autoSubmitPrivacyAction({
           verifier: "garaga",
@@ -2934,17 +3243,38 @@ export function FloatingAIAssistant() {
             from_token: fromToken,
             to_token: toToken,
             amount: amountText,
+            denom_id: options?.denomId,
             recipient: wallet.starknetAddress || wallet.address || undefined,
             from_network: "starknet",
             to_network: "starknet",
           },
         })
+        const preparedPayload = prepared.payload || {}
+        const normalizedProof = normalizeHexArray(preparedPayload.proof)
+        const normalizedPublicInputs = normalizeHexArray(preparedPayload.public_inputs)
+        const inferredRoot = normalizedPublicInputs[0]?.trim()
         return {
-          verifier: (prepared.payload?.verifier || "garaga").trim() || "garaga",
-          nullifier: prepared.payload?.nullifier?.trim(),
-          commitment: prepared.payload?.commitment?.trim(),
-          proof: normalizeHexArray(prepared.payload?.proof),
-          public_inputs: normalizeHexArray(prepared.payload?.public_inputs),
+          verifier: (preparedPayload.verifier || "garaga").trim() || "garaga",
+          note_version: options?.noteVersion || preparedPayload.note_version,
+          denom_id:
+            (preparedPayload.denom_id || "").trim() || (options?.denomId || "").trim() || undefined,
+          nullifier: preparedPayload.nullifier?.trim(),
+          commitment: preparedPayload.commitment?.trim(),
+          note_commitment:
+            (preparedPayload.note_commitment || preparedPayload.commitment || "").trim() || undefined,
+          root: (preparedPayload.root || "").trim() || inferredRoot || undefined,
+          recipient:
+            (preparedPayload.recipient || wallet.starknetAddress || wallet.address || "").trim() ||
+            undefined,
+          executor_address:
+            (preparedPayload.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim() || undefined,
+          spendable_at_unix:
+            typeof preparedPayload.spendable_at_unix === "number" &&
+            Number.isFinite(preparedPayload.spendable_at_unix)
+              ? Math.floor(preparedPayload.spendable_at_unix)
+              : undefined,
+          proof: normalizedProof,
+          public_inputs: normalizedPublicInputs,
         }
       }
 
@@ -2956,82 +3286,82 @@ export function FloatingAIAssistant() {
         const fromToken = readString(response.data, "from_token").toUpperCase()
         const toToken = readString(response.data, "to_token").toUpperCase()
         const amount = readNumber(response.data, "amount")
-        const amountText = Number.isFinite(amount) && amount > 0 ? String(amount) : ""
-        if (fromToken && toToken && fromToken !== toToken && amountText) {
+        const baseAmountText = Number.isFinite(amount) && amount > 0 ? String(amount) : ""
+        if (fromToken && toToken && fromToken !== toToken && baseAmountText) {
           if (!SUPPORTED_SWAP_TOKENS.has(fromToken) || !SUPPORTED_SWAP_TOKENS.has(toToken)) {
             directExecutionMessage = `Swap pair ${fromToken}/${toToken} is not listed in CAREL swap. Supported: USDT, USDC, STRK, WBTC, CAREL.`
           } else {
-          const mode = tierUsesGaraga ? "private" : "transparent"
-          const slippage = 1
-          notifications.addNotification({
-            type: "info",
-            title: "Preparing swap",
-            message: `Preparing ${amountText} ${fromToken} -> ${toToken} on-chain call.`,
-          })
-          const quote = await getSwapQuote({
-            from_token: fromToken,
-            to_token: toToken,
-            amount: amountText,
-            slippage,
-            mode,
-          })
-          const minAmountOut = formatSwapMinAmountOut(String(quote.to_amount || "0"), slippage)
-          const onchainCalls = Array.isArray(quote.onchain_calls)
-            ? quote.onchain_calls
-                .filter(
-                  (call) =>
-                    call &&
-                    typeof call.contract_address === "string" &&
-                    typeof call.entrypoint === "string" &&
-                    Array.isArray(call.calldata)
-                )
-                .map((call) => ({
-                  contractAddress: call.contract_address.trim(),
-                  entrypoint: call.entrypoint.trim(),
-                  calldata: call.calldata.map((item) => String(item)),
-                }))
-                .filter(
-                  (call) =>
-                    !!call.contractAddress &&
-                    !!call.entrypoint &&
-                    call.calldata.every(
-                      (item) => typeof item === "string" && item.trim().length > 0
-                    )
-                )
-            : []
-          let privacyPayload: PrivacyVerificationPayload | undefined
-          let swapResult: Awaited<ReturnType<typeof executeSwap>>
-          let finalTxHash = ""
-
-          if (tierUsesGaraga) {
-            if (HIDE_BALANCE_SHIELDED_POOL_V2 && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
-              throw new Error(
-                "Hide relayer pool is not enabled. Set NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true and restart frontend/backend."
-              )
-            }
-
-            privacyPayload = await requestGaragaPayload("swap", fromToken, toToken, amountText)
-            try {
-              notifications.addNotification({
-                type: "info",
-                title: "Submitting private swap",
-                message: "Submitting hide-mode swap through Starknet relayer pool.",
+            const mode = tierUsesGaraga ? "private" : "transparent"
+            const slippage = 1
+            let swapAmountText = baseAmountText
+            if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+              swapAmountText = await resolveAiHideTierAmountText({
+                fromToken,
+                fallbackAmountText: baseAmountText,
+                providerHint,
               })
+            }
+            notifications.addNotification({
+              type: "info",
+              title: "Preparing swap",
+              message: `Preparing ${swapAmountText} ${fromToken} -> ${toToken} on-chain call.`,
+            })
+            const quote = await getSwapQuote({
+              from_token: fromToken,
+              to_token: toToken,
+              amount: swapAmountText,
+              slippage,
+              mode,
+            })
+            const minAmountOut = formatSwapMinAmountOut(String(quote.to_amount || "0"), slippage)
+            const onchainCalls = Array.isArray(quote.onchain_calls)
+              ? quote.onchain_calls
+                  .filter(
+                    (call) =>
+                      call &&
+                      typeof call.contract_address === "string" &&
+                      typeof call.entrypoint === "string" &&
+                      Array.isArray(call.calldata)
+                  )
+                  .map((call) => ({
+                    contractAddress: call.contract_address.trim(),
+                    entrypoint: call.entrypoint.trim(),
+                    calldata: call.calldata.map((item) => String(item)),
+                  }))
+                  .filter(
+                    (call) =>
+                      !!call.contractAddress &&
+                      !!call.entrypoint &&
+                      call.calldata.every(
+                        (item) => typeof item === "string" && item.trim().length > 0
+                      )
+                  )
+              : []
+            let privacyPayload: PrivacyVerificationPayload | undefined
+            let swapResult: Awaited<ReturnType<typeof executeSwap>>
+            let finalTxHash = ""
+
+            if (tierUsesGaraga) {
+              if (HIDE_BALANCE_SHIELDED_POOL_V2 && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
+                throw new Error(
+                  "Hide relayer pool is not enabled. Set NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true and restart frontend/backend."
+                )
+              }
+
+              privacyPayload = await requestGaragaPayload(
+                "swap",
+                fromToken,
+                toToken,
+                swapAmountText,
+                HIDE_BALANCE_SHIELDED_POOL_V3
+                  ? { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                  : undefined
+              )
+              if (HIDE_BALANCE_SHIELDED_POOL_V3 && !(privacyPayload.denom_id || "").trim()) {
+                privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+              }
               const deadline = Math.floor(Date.now() / 1000) + 60 * 20
-              if (HIDE_BALANCE_SHIELDED_POOL_V2) {
-                swapResult = await executeSwap({
-                  from_token: fromToken,
-                  to_token: toToken,
-                  amount: amountText,
-                  min_amount_out: minAmountOut,
-                  slippage,
-                  deadline,
-                  mode,
-                  hide_balance: true,
-                  privacy: privacyPayload,
-                })
-                finalTxHash = swapResult.tx_hash || ""
-              } else {
+              const submitV3HideSwap = async (payloadToSubmit: PrivacyVerificationPayload) => {
                 const fundingToken = (AI_TOKEN_ADDRESS_MAP[fromToken] || "").trim()
                 if (!fundingToken) {
                   throw new Error(
@@ -3046,112 +3376,208 @@ export function FloatingAIAssistant() {
                   flow: "swap",
                   actionCall: swapActionCall,
                   tokenAddress: fundingToken,
-                  amount: amountText,
+                  amount: swapAmountText,
                   tokenDecimals: AI_TOKEN_DECIMALS[fromToken] ?? 18,
                   providerHint,
-                  verifier: (privacyPayload.verifier || "garaga").trim() || "garaga",
+                  verifier: (payloadToSubmit.verifier || "garaga").trim() || "garaga",
                   deadline,
                   txContext: {
                     flow: "swap",
                     from_token: fromToken,
                     to_token: toToken,
-                    amount: amountText,
+                    amount: swapAmountText,
+                    denom_id: payloadToSubmit.denom_id,
                     from_network: "starknet",
                     to_network: "starknet",
                   },
                 })
-                privacyPayload = relayed.privacyPayload
-                swapResult = await executeSwap({
-                  from_token: fromToken,
-                  to_token: toToken,
-                  amount: amountText,
-                  min_amount_out: minAmountOut,
-                  slippage,
-                  deadline,
-                  onchain_tx_hash: relayed.txHash,
-                  mode,
-                  hide_balance: true,
-                  privacy: privacyPayload,
-                })
-                finalTxHash = swapResult.tx_hash || relayed.txHash || ""
+                return {
+                  relayedTxHash: relayed.txHash,
+                  privacyPayload: relayed.privacyPayload,
+                }
               }
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error ?? "")
-              throw new Error(
-                `Hide relayer unavailable. Wallet fallback is disabled so swap details never leak in explorer. Detail: ${message}`
-              )
+
+              try {
+                notifications.addNotification({
+                  type: "info",
+                  title: "Submitting private swap",
+                  message: "Submitting hide-mode swap through Starknet relayer pool.",
+                })
+                if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+                  swapResult = await executeSwap({
+                    from_token: fromToken,
+                    to_token: toToken,
+                    amount: swapAmountText,
+                    min_amount_out: minAmountOut,
+                    slippage,
+                    deadline,
+                    mode,
+                    hide_balance: true,
+                    privacy: privacyPayload,
+                  })
+                  finalTxHash = swapResult.tx_hash || ""
+                } else {
+                  const relayed = await submitV3HideSwap(privacyPayload)
+                  privacyPayload = relayed.privacyPayload
+                  swapResult = await executeSwap({
+                    from_token: fromToken,
+                    to_token: toToken,
+                    amount: swapAmountText,
+                    min_amount_out: minAmountOut,
+                    slippage,
+                    deadline,
+                    onchain_tx_hash: relayed.relayedTxHash,
+                    mode,
+                    hide_balance: true,
+                    privacy: privacyPayload,
+                  })
+                  finalTxHash = swapResult.tx_hash || relayed.relayedTxHash || ""
+                }
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error ?? "")
+                const lower = message.toLowerCase()
+                const noteNotRegistered =
+                  HIDE_BALANCE_SHIELDED_POOL_V3 &&
+                  /note belum terdaftar|note not registered|nullifier note missing|unknown root|note missing/.test(
+                    lower
+                  )
+                if (noteNotRegistered && privacyPayload) {
+                  const depositResult = await ensureAiHideV3NoteDeposited({
+                    payload: privacyPayload,
+                    fromToken,
+                    amountText: swapAmountText,
+                    providerHint,
+                  })
+                  swapAmountText = depositResult.amountText
+                  const remainingWaitMs = Math.max(0, depositResult.spendableAtMs - Date.now())
+                  if (remainingWaitMs > 0) {
+                    notifications.addNotification({
+                      type: "info",
+                      title: "Mixing window active",
+                      message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Swap Privat now.`,
+                    })
+                  }
+                  if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
+                    throw new Error(
+                      `Hide note deposited. Wait ${formatDurationHhMmSs(
+                        remainingWaitMs
+                      )} then retry private swap.`
+                    )
+                  }
+                  if (remainingWaitMs > 0) {
+                    await waitMs(remainingWaitMs)
+                  }
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Swap Privat now",
+                    message: "Cooldown selesai. Menjalankan private swap otomatis.",
+                  })
+                  privacyPayload = await requestGaragaPayload(
+                    "swap",
+                    fromToken,
+                    toToken,
+                    swapAmountText,
+                    { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                  )
+                  if (!(privacyPayload.denom_id || "").trim()) {
+                    privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                  }
+                  const relayedRetry = await submitV3HideSwap(privacyPayload)
+                  privacyPayload = relayedRetry.privacyPayload
+                  swapResult = await executeSwap({
+                    from_token: fromToken,
+                    to_token: toToken,
+                    amount: swapAmountText,
+                    min_amount_out: minAmountOut,
+                    slippage,
+                    deadline,
+                    onchain_tx_hash: relayedRetry.relayedTxHash,
+                    mode,
+                    hide_balance: true,
+                    privacy: privacyPayload,
+                  })
+                  finalTxHash = swapResult.tx_hash || relayedRetry.relayedTxHash || ""
+                } else {
+                  throw new Error(
+                    `Hide relayer unavailable. Wallet fallback is disabled so swap details never leak in explorer. Detail: ${message}`
+                  )
+                }
+              }
+            } else {
+              if (!onchainCalls.length) {
+                throw new Error(
+                  "Swap quote does not include on-chain calldata. Ensure swap aggregator is active."
+                )
+              }
+              notifications.addNotification({
+                type: "info",
+                title: "Wallet signature required",
+                message: `Confirm swap ${swapAmountText} ${fromToken} -> ${toToken} in your wallet.`,
+              })
+              const onchainTxHash = await invokeStarknetCallsFromWallet(onchainCalls, providerHint)
+              swapResult = await executeSwap({
+                from_token: fromToken,
+                to_token: toToken,
+                amount: swapAmountText,
+                min_amount_out: minAmountOut,
+                slippage,
+                deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+                onchain_tx_hash: onchainTxHash,
+                mode,
+                hide_balance: false,
+              })
+              finalTxHash = swapResult.tx_hash || onchainTxHash
             }
-          } else {
-            if (!onchainCalls.length) {
-              throw new Error(
-                "Swap quote does not include on-chain calldata. Ensure swap aggregator is active."
-              )
-            }
+
             notifications.addNotification({
-              type: "info",
-              title: "Wallet signature required",
-              message: `Confirm swap ${amountText} ${fromToken} -> ${toToken} in your wallet.`,
+              type: "success",
+              title: "Swap completed",
+              message: `${swapAmountText} ${fromToken} -> ${swapResult.to_amount} ${toToken}`,
+              txHash: finalTxHash || undefined,
+              txNetwork: "starknet",
             })
-            const onchainTxHash = await invokeStarknetCallsFromWallet(onchainCalls, providerHint)
-            swapResult = await executeSwap({
-              from_token: fromToken,
-              to_token: toToken,
-              amount: amountText,
-              min_amount_out: minAmountOut,
-              slippage,
-              deadline: Math.floor(Date.now() / 1000) + 60 * 20,
-              onchain_tx_hash: onchainTxHash,
-              mode,
-              hide_balance: false,
-            })
-            finalTxHash = swapResult.tx_hash || onchainTxHash
-          }
+            const estimatedPoints = parseNumberish(swapResult.estimated_points_earned)
+            const appliedDiscountPercent = parseNumberish(swapResult.nft_discount_percent)
+            const feeDiscountSaved = parseNumberish(swapResult.fee_discount_saved)
+            const [pointsSnapshot, ownedNftsSnapshot] = await Promise.allSettled([
+              getRewardsPoints({ force: true }),
+              getOwnedNfts({ force: true }),
+            ])
 
-          notifications.addNotification({
-            type: "success",
-            title: "Swap completed",
-            message: `${amountText} ${fromToken} -> ${swapResult.to_amount} ${toToken}`,
-            txHash: finalTxHash || undefined,
-            txNetwork: "starknet",
-          })
-          const estimatedPoints = parseNumberish(swapResult.estimated_points_earned)
-          const appliedDiscountPercent = parseNumberish(swapResult.nft_discount_percent)
-          const feeDiscountSaved = parseNumberish(swapResult.fee_discount_saved)
-          const [pointsSnapshot, ownedNftsSnapshot] = await Promise.allSettled([
-            getRewardsPoints({ force: true }),
-            getOwnedNfts({ force: true }),
-          ])
-
-          let pointsLine = estimatedPoints > 0
-            ? `Points +${estimatedPoints.toFixed(2)} (estimated).`
-            : "Points reward: 0 (minimum notional for points was not reached)."
-          if (pointsSnapshot.status === "fulfilled") {
-            pointsLine =
-              estimatedPoints > 0
-                ? `Points +${estimatedPoints.toFixed(2)} (estimated), total now ${pointsSnapshot.value.total_points.toFixed(2)}.`
-                : `Total points now ${pointsSnapshot.value.total_points.toFixed(2)}.`
-          }
-
-          let discountLine = "Discount: not active on this swap."
-          if (appliedDiscountPercent > 0) {
-            discountLine = `Discount NFT applied ${appliedDiscountPercent.toFixed(2)}% (fee saved ${feeDiscountSaved.toFixed(8)} ${fromToken}).`
-          } else if (ownedNftsSnapshot.status === "fulfilled") {
-            const activeNft = ownedNftsSnapshot.value
-              .filter((item) => !item.used && (item.remaining_usage ?? 1) > 0)
-              .sort((a, b) => (b.discount || 0) - (a.discount || 0))[0]
-            if (activeNft && Number.isFinite(activeNft.discount) && activeNft.discount > 0) {
-              discountLine = `Discount NFT available: ${activeNft.discount.toFixed(2)}% for the next transaction.`
+            let pointsLine = estimatedPoints > 0
+              ? `Points +${estimatedPoints.toFixed(2)} (estimated).`
+              : "Points reward: 0 (minimum notional for points was not reached)."
+            if (pointsSnapshot.status === "fulfilled") {
+              pointsLine =
+                estimatedPoints > 0
+                  ? `Points +${estimatedPoints.toFixed(2)} (estimated), total now ${pointsSnapshot.value.total_points.toFixed(2)}.`
+                  : `Total points now ${pointsSnapshot.value.total_points.toFixed(2)}.`
             }
-          }
 
-          const pendingLine = swapResult.points_pending
-            ? "Points on-chain/off-chain are syncing; full update usually appears within a few seconds."
-            : ""
-          const swapTxPreview = finalTxHash ? `${finalTxHash.slice(0, 14)}...` : "-"
-          const swapTxUrl = finalTxHash ? buildTxExplorerUrl(finalTxHash, "starknet") : ""
-          directExecutionMessage = normalizeMessageText(
-            `✅ Swap executed: ${amountText} ${fromToken} -> ${swapResult.to_amount} ${toToken}. Tx: ${swapTxPreview}${swapTxUrl ? `\nTrack tx: ${swapTxUrl}` : ""}\n${pointsLine}\n${discountLine}${pendingLine ? `\n${pendingLine}` : ""}`
-          )
+            let discountLine = "Discount: not active on this swap."
+            if (appliedDiscountPercent > 0) {
+              discountLine = `Discount NFT applied ${appliedDiscountPercent.toFixed(2)}% (fee saved ${feeDiscountSaved.toFixed(8)} ${fromToken}).`
+            } else if (ownedNftsSnapshot.status === "fulfilled") {
+              const activeNft = ownedNftsSnapshot.value
+                .filter((item) => !item.used && (item.remaining_usage ?? 1) > 0)
+                .sort((a, b) => (b.discount || 0) - (a.discount || 0))[0]
+              if (activeNft && Number.isFinite(activeNft.discount) && activeNft.discount > 0) {
+                discountLine = `Discount NFT available: ${activeNft.discount.toFixed(2)}% for the next transaction.`
+              }
+            }
+
+            const aiBonusLine =
+              tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3
+                ? "AI L3 private bonus +40% points is applied on top of base + NFT + stake + hide tier."
+                : ""
+            const pendingLine = swapResult.points_pending
+              ? "Points on-chain/off-chain are syncing; full update usually appears within a few seconds."
+              : ""
+            const swapTxPreview = finalTxHash ? `${finalTxHash.slice(0, 14)}...` : "-"
+            const swapTxUrl = finalTxHash ? buildTxExplorerUrl(finalTxHash, "starknet") : ""
+            directExecutionMessage = normalizeMessageText(
+              `✅ Swap executed: ${swapAmountText} ${fromToken} -> ${swapResult.to_amount} ${toToken}. Tx: ${swapTxPreview}${swapTxUrl ? `\nTrack tx: ${swapTxUrl}` : ""}\n${pointsLine}\n${discountLine}${aiBonusLine ? `\n${aiBonusLine}` : ""}${pendingLine ? `\n${pendingLine}` : ""}`
+            )
           }
         }
       }
@@ -4966,6 +5392,44 @@ export function FloatingAIAssistant() {
                       </button>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {selectedTier >= 3 && (
+                <div className="mb-2 rounded-xl border border-[#1f3a5a] bg-[#0b1828] px-3 py-2">
+                  <p className={cn(spaceMono.className, "text-[10px] font-semibold text-[#67e8f9]")}>
+                    L3 Hide Tier (USDT)
+                  </p>
+                  <div className="mt-1 grid grid-cols-5 gap-1.5">
+                    {AI_HIDE_USDT_TIER_OPTIONS.map((option) => {
+                      const isActive = option.minUsdt === selectedAiHideTier.minUsdt
+                      return (
+                        <button
+                          key={option.minUsdt}
+                          type="button"
+                          onClick={() => setAiHideUsdtTierMin(option.minUsdt)}
+                          className={cn(
+                            spaceMono.className,
+                            "rounded-md border px-1 py-1 text-[10px] transition",
+                            isActive
+                              ? "border-[#06b6d4] bg-[#083344] text-[#cffafe]"
+                              : "border-[#334155] bg-[#0b1729] text-[#94a3b8] hover:border-[#06b6d4]"
+                          )}
+                        >
+                          ${option.minUsdt}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className={cn(spaceMono.className, "mt-1 text-[10px] text-[#94a3b8]")}>
+                    Bonus tier: +{selectedAiHideTier.bonusPercent}% points
+                  </p>
+                  <p className={cn(spaceMono.className, "text-[10px] text-[#64748b]")}>
+                    Cooldown: {Math.floor(AI_HIDE_MIN_NOTE_AGE_MS / 1000)}s
+                    {AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN
+                      ? " (auto Swap Privat now after cooldown)"
+                      : " (manual retry after cooldown)"}
+                  </p>
                 </div>
               )}
 

@@ -2306,7 +2306,9 @@ mod tests {
     // Internal helper that supports `level_3_allows_hide_private_execution_scope` operations.
     fn level_3_allows_hide_private_execution_scope() {
         assert!(ensure_privacy_level_scope(3, "hide stake 10 USDT").is_ok());
-        assert!(ensure_privacy_level_scope(3, "private limit order STRK/USDC amount 10 at 1.2").is_ok());
+        assert!(
+            ensure_privacy_level_scope(3, "private limit order STRK/USDC amount 10 at 1.2").is_ok()
+        );
     }
 
     #[test]

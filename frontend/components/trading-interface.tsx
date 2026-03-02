@@ -3697,11 +3697,35 @@ export function TradingInterface() {
       })
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
     } catch (error) {
+      const rawErrorMessage =
+        error instanceof Error ? error.message : "Failed to cancel and withdraw hide note."
+      const normalizedErrorMessage = rawErrorMessage.toLowerCase()
+      const walletRejected =
+        normalizedErrorMessage.includes("user_refused_op") ||
+        normalizedErrorMessage.includes("wallet signature was rejected") ||
+        normalizedErrorMessage.includes("request rejected in wallet") ||
+        normalizedErrorMessage.includes("user rejected") ||
+        normalizedErrorMessage.includes("rejected by user") ||
+        normalizedErrorMessage.includes("user denied") ||
+        normalizedErrorMessage.includes("request rejected") ||
+        normalizedErrorMessage.includes("transaction rejected") ||
+        normalizedErrorMessage.includes("wallet rejected") ||
+        normalizedErrorMessage.includes("user canceled") ||
+        normalizedErrorMessage.includes("user cancelled") ||
+        normalizedErrorMessage.includes("cancelled") ||
+        normalizedErrorMessage.includes("canceled")
+      if (walletRejected) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Withdraw cancelled",
+          message: "Wallet signature was rejected. No funds were moved.",
+        })
+        return
+      }
       notifications.addNotification({
         type: "error",
         title: "Withdraw failed",
-        message:
-          error instanceof Error ? error.message : "Failed to cancel and withdraw hide note.",
+        message: rawErrorMessage,
       })
     } finally {
       setIsCancellingHideNote(false)
@@ -5604,7 +5628,15 @@ export function TradingInterface() {
                           disabled={!hideUsdtTierLockEnabled}
                           onClick={() => {
                             if (!hideUsdtTierLockEnabled) return
+                            const previousTier = hideUsdtTierMin
                             setHideUsdtTierMin(option.minUsdt)
+                            if (previousTier !== option.minUsdt) {
+                              // Changing tier should unlock any previously selected note/payload
+                              // so the next hide flow provisions a note for the new tier.
+                              clearManuallySelectedHideNote()
+                              clearTradePrivacyPayload()
+                              setHasTradePrivacyPayload(false)
+                            }
                           }}
                           className={cn(
                             "py-2 rounded-lg text-center text-[11px] font-medium border transition-all",

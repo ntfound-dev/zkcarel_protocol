@@ -59,8 +59,7 @@ impl RelayerService {
         for attempt in 0..poll_attempts {
             match self.reader.get_transaction_receipt(&tx_hash).await {
                 Ok(receipt) => {
-                    if let ExecutionResult::Reverted { reason } =
-                        receipt.receipt.execution_result()
+                    if let ExecutionResult::Reverted { reason } = receipt.receipt.execution_result()
                     {
                         return Err(AppError::BadRequest(format!(
                             "Relayer transaction reverted: {}",
