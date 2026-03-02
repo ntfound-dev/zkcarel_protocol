@@ -1738,7 +1738,7 @@ export function TradingInterface() {
       const resolvedExecutor = (executorAddress || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
       const tokenAddress = resolveTokenAddress(resolvedTokenSymbol).trim()
       if (!resolvedExecutor || !tokenAddress) {
-        return fallback || fallbackFromDenom || ""
+        return fallbackFromDenom || fallback || ""
       }
 
       try {
@@ -1759,7 +1759,7 @@ export function TradingInterface() {
         // fallback to cached/local values below
       }
 
-      return fallback || fallbackFromDenom || ""
+      return fallbackFromDenom || fallback || ""
     },
     [fromToken.symbol]
   )
