@@ -2474,10 +2474,12 @@ export function FloatingAIAssistant() {
       fromToken,
       fallbackAmountText,
       providerHint,
+      requireOnchainRule = false,
     }: {
       fromToken: string
       fallbackAmountText: string
       providerHint: "starknet" | "argentx" | "braavos"
+      requireOnchainRule?: boolean
     }): Promise<string> => {
       const tokenSymbol = fromToken.trim().toUpperCase()
       const decimals = AI_TOKEN_DECIMALS[tokenSymbol] ?? 18
@@ -2501,7 +2503,17 @@ export function FloatingAIAssistant() {
             )
             if (text) return text
           }
+          if (requireOnchainRule) {
+            throw new Error(
+              `Hide Balance V3 asset rule is not set for ${tokenSymbol} tier $${tierUsdt}. Ask admin to set_asset_rule for this token+tier before retrying.`
+            )
+          }
         } catch {
+          if (requireOnchainRule) {
+            throw new Error(
+              `Hide Balance V3 asset rule is not set for ${tokenSymbol} tier $${tierUsdt}. Ask admin to set_asset_rule for this token+tier before retrying.`
+            )
+          }
           // Fall through to local conversion fallback.
         }
       }
@@ -2573,6 +2585,7 @@ export function FloatingAIAssistant() {
         fromToken: tokenSymbol,
         fallbackAmountText: amountText,
         providerHint,
+        requireOnchainRule: true,
       })
       if (!resolvedAmount) {
         throw new Error("Failed to resolve hide deposit amount for selected tier.")
@@ -2618,7 +2631,18 @@ export function FloatingAIAssistant() {
           ? `Confirm hide note deposit (${resolvedAmount} ${tokenSymbol}) in one transaction.`
           : `Confirm approve + hide note deposit (${resolvedAmount} ${tokenSymbol}) in one transaction.`,
       })
-      const depositTxHash = await invokeStarknetCallsFromWallet(calls, providerHint)
+      let depositTxHash = ""
+      try {
+        depositTxHash = await invokeStarknetCallsFromWallet(calls, providerHint)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "")
+        if (/asset rule not set/i.test(message)) {
+          throw new Error(
+            `Hide Balance V3 asset rule is not set for ${tokenSymbol} tier $${denomId}. Ask admin to set_asset_rule for this token+tier before retrying.`
+          )
+        }
+        throw error
+      }
       const spendableAtMs = Date.now() + AI_HIDE_MIN_NOTE_AGE_MS
       notifications.addNotification({
         type: "success",
@@ -3295,14 +3319,15 @@ export function FloatingAIAssistant() {
           } else {
             const mode = tierUsesGaraga ? "private" : "transparent"
             const slippage = 1
-            let swapAmountText = baseAmountText
-            if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
-              swapAmountText = await resolveAiHideTierAmountText({
-                fromToken,
-                fallbackAmountText: baseAmountText,
-                providerHint,
-              })
-            }
+              let swapAmountText = baseAmountText
+              if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+                swapAmountText = await resolveAiHideTierAmountText({
+                  fromToken,
+                  fallbackAmountText: baseAmountText,
+                  providerHint,
+                  requireOnchainRule: true,
+                })
+              }
             notifications.addNotification({
               type: "info",
               title: "Preparing swap",
