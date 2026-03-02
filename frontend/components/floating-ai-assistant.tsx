@@ -4592,18 +4592,59 @@ export function FloatingAIAssistant() {
         return null
       }
 
+      const isRetriableSetupError = (input: unknown): boolean => {
+        const message = input instanceof Error ? input.message : String(input ?? "")
+        const lower = message.toLowerCase()
+        return (
+          /request timeout|network error|timed out|timeout|failed to fetch|bad gateway|gateway timeout|service unavailable/.test(
+            lower
+          ) || /http 502|http 503|http 504/.test(lower)
+        )
+      }
+      type SetupPreflight = Awaited<ReturnType<typeof ensureAiExecutorReady>>
       const cachedPreflight = executorPreflightCacheRef.current
       const nowMs = Date.now()
       const useCachedPreflight = cachedPreflight.expiresAt > nowMs
-      const preflight = useCachedPreflight
-        ? {
-            ready: cachedPreflight.ready,
-            burner_role_granted: cachedPreflight.burnerRoleGranted,
-            updated_onchain: false,
-            tx_hash: null,
-            message: cachedPreflight.message,
+      let preflight: SetupPreflight
+      if (useCachedPreflight) {
+        preflight = {
+          ready: cachedPreflight.ready,
+          burner_role_granted: cachedPreflight.burnerRoleGranted,
+          updated_onchain: false,
+          tx_hash: null,
+          message: cachedPreflight.message,
+        }
+      } else {
+        const preflightBackoffMs = [1200, 2500]
+        let lastPreflightError: unknown = null
+        let resolvedPreflight: SetupPreflight | null = null
+        for (let attempt = 0; attempt <= preflightBackoffMs.length; attempt += 1) {
+          try {
+            resolvedPreflight = await ensureAiExecutorReady()
+            lastPreflightError = null
+            break
+          } catch (error) {
+            lastPreflightError = error
+            if (!isRetriableSetupError(error) || attempt >= preflightBackoffMs.length) {
+              break
+            }
+            notifications.addNotification({
+              type: "info",
+              title: "Preparing on-chain setup",
+              message: `Executor preflight is still syncing (${attempt + 1}/${preflightBackoffMs.length + 1}). Retrying...`,
+            })
+            await waitMs(preflightBackoffMs[attempt] ?? preflightBackoffMs[preflightBackoffMs.length - 1])
           }
-        : await ensureAiExecutorReady()
+        }
+        if (!resolvedPreflight) {
+          throw (
+            lastPreflightError instanceof Error
+              ? lastPreflightError
+              : new Error("AI executor preflight timed out before wallet popup appeared.")
+          )
+        }
+        preflight = resolvedPreflight
+      }
       if (!useCachedPreflight) {
         const preflightTtlMs =
           preflight.ready && preflight.burner_role_granted
@@ -4662,22 +4703,29 @@ export function FloatingAIAssistant() {
           return prepared
         }
 
-        try {
-          return await fetchPrepared()
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error ?? "")
-          if (!/request timeout|network error|timed out|timeout/i.test(message.toLowerCase())) {
-            throw error
+        const prepareBackoffMs = [1200, 2500]
+        let lastPrepareError: unknown = null
+        for (let attempt = 0; attempt <= prepareBackoffMs.length; attempt += 1) {
+          try {
+            return await fetchPrepared()
+          } catch (error) {
+            lastPrepareError = error
+            if (!isRetriableSetupError(error) || attempt >= prepareBackoffMs.length) {
+              break
+            }
+            notifications.addNotification({
+              type: "info",
+              title: "Preparing setup challenge",
+              message: `Backend/RPC is still preparing AI typed-data challenge (${attempt + 1}/${prepareBackoffMs.length + 1}). Retrying...`,
+            })
+            await waitMs(prepareBackoffMs[attempt] ?? prepareBackoffMs[prepareBackoffMs.length - 1])
           }
-          notifications.addNotification({
-            type: "info",
-            title: "Preparing setup challenge",
-            message:
-              "Backend is still preparing AI typed-data challenge. Retrying once before opening wallet popup.",
-          })
-          await waitMs(1200)
-          return fetchPrepared()
         }
+        throw (
+          lastPrepareError instanceof Error
+            ? lastPrepareError
+            : new Error("AI setup preparation timed out before wallet popup appeared.")
+        )
       }
 
       const buildSetupCalls = async (options?: { forceFreshPrepare?: boolean }): Promise<StarknetInvokeCall[]> => {
@@ -4971,7 +5019,7 @@ export function FloatingAIAssistant() {
         : /rate limit exceeded/i.test(rawMessage)
           ? "AI executor daily on-chain rate limit reached. Ask admin to increase `set_rate_limit` (for example 1000), or wait until UTC day reset."
         : /request timeout|network error|timed out|timeout/i.test(lowerRaw)
-          ? "AI setup preparation timed out before wallet popup appeared. Usually backend/RPC is still busy preparing typed-data challenge. Retry once."
+          ? "AI setup preparation timed out before wallet popup appeared. Backend/RPC is still busy preparing typed-data challenge even after automatic retries. Retry once."
         : /insufficient allowance/i.test(rawMessage)
           ? "Demo setup is skipping approve, but contract still requires allowance. Disable AI setup fee (fee_enabled=false) or disable NEXT_PUBLIC_AI_SETUP_SKIP_APPROVE."
         : rawMessage
