@@ -312,6 +312,8 @@ const AI_PANEL_EDGE_PADDING_PX = 16
 const AI_PANEL_WIDTH_PX = 460
 const AI_PANEL_MINIMIZED_HEIGHT_PX = 64
 const AI_PANEL_EXPANDED_HEIGHT_PX = 700
+const TRADE_PRIVACY_PENDING_NOTES_KEY = "trade_privacy_pending_notes_v3"
+const TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT = "trade-privacy-pending-notes-updated"
 
 type BubblePosition = { x: number; y: number }
 
@@ -818,6 +820,127 @@ function normalizeHexArray(values?: string[] | null): string[] {
     .filter((item) => item.length > 0)
 }
 
+function loadAiPendingHideNotes(): AiPendingHideNoteRecord[] {
+  if (typeof window === "undefined") return []
+  const raw = window.localStorage.getItem(TRADE_PRIVACY_PENDING_NOTES_KEY)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const mapped: Array<AiPendingHideNoteRecord | null> = parsed.map((entry) => {
+      if (!entry || typeof entry !== "object") return null
+      const item = entry as Record<string, unknown>
+      const noteCommitment =
+        typeof item.note_commitment === "string" ? item.note_commitment.trim() : ""
+      if (!noteCommitment) return null
+      const depositedAt =
+        typeof item.deposited_at_unix === "number" && Number.isFinite(item.deposited_at_unix)
+          ? Math.floor(item.deposited_at_unix)
+          : Math.floor(Date.now() / 1000)
+      const spendableAt =
+        typeof item.spendable_at_unix === "number" && Number.isFinite(item.spendable_at_unix)
+          ? Math.floor(item.spendable_at_unix)
+          : undefined
+      const proof = normalizeHexArray((item.proof as string[] | undefined) || [])
+      const publicInputs = normalizeHexArray((item.public_inputs as string[] | undefined) || [])
+      return {
+        note_version: "v3",
+        note_commitment: noteCommitment,
+        nullifier: typeof item.nullifier === "string" ? item.nullifier.trim() || undefined : undefined,
+        executor_address:
+          typeof item.executor_address === "string" ? item.executor_address.trim() || undefined : undefined,
+        verifier: typeof item.verifier === "string" ? item.verifier.trim() || undefined : undefined,
+        root: typeof item.root === "string" ? item.root.trim() || undefined : undefined,
+        proof: proof.length > 0 ? proof : undefined,
+        public_inputs: publicInputs.length > 0 ? publicInputs : undefined,
+        denom_id: typeof item.denom_id === "string" ? item.denom_id.trim() || undefined : undefined,
+        token_symbol:
+          typeof item.token_symbol === "string" ? item.token_symbol.trim() || undefined : undefined,
+        target_token_symbol:
+          typeof item.target_token_symbol === "string"
+            ? item.target_token_symbol.trim() || undefined
+            : typeof item.to_token_symbol === "string"
+              ? item.to_token_symbol.trim() || undefined
+              : undefined,
+        amount: typeof item.amount === "string" ? item.amount.trim() || undefined : undefined,
+        deposited_at_unix: depositedAt,
+        spendable_at_unix: spendableAt,
+      }
+    })
+    return mapped
+      .filter((item): item is AiPendingHideNoteRecord => item !== null)
+      .sort((a, b) => b.deposited_at_unix - a.deposited_at_unix)
+  } catch {
+    return []
+  }
+}
+
+function persistAiPendingHideNotes(items: AiPendingHideNoteRecord[]) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(TRADE_PRIVACY_PENDING_NOTES_KEY, JSON.stringify(items))
+  window.dispatchEvent(new Event(TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT))
+}
+
+function upsertAiPendingHideNote(note: AiPendingHideNoteRecord) {
+  const items = loadAiPendingHideNotes()
+  const normalizedCommitment = note.note_commitment.trim().toLowerCase()
+  const normalizedNullifier = (note.nullifier || "").trim().toLowerCase()
+  const existing = items.find((item) => {
+    const sameCommitment = item.note_commitment.trim().toLowerCase() === normalizedCommitment
+    const sameNullifier =
+      normalizedNullifier.length > 0 &&
+      (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+    return sameCommitment || sameNullifier
+  })
+  const merged: AiPendingHideNoteRecord = {
+    ...(existing || {}),
+    ...note,
+    proof:
+      normalizeHexArray(note.proof).length > 0
+        ? normalizeHexArray(note.proof)
+        : normalizeHexArray(existing?.proof).length > 0
+          ? normalizeHexArray(existing?.proof)
+          : undefined,
+    public_inputs:
+      normalizeHexArray(note.public_inputs).length > 0
+        ? normalizeHexArray(note.public_inputs)
+        : normalizeHexArray(existing?.public_inputs).length > 0
+          ? normalizeHexArray(existing?.public_inputs)
+          : undefined,
+    root: (note.root || "").trim() || (existing?.root || "").trim() || undefined,
+    verifier: (note.verifier || "").trim() || (existing?.verifier || "").trim() || undefined,
+  }
+  const next = [
+    merged,
+    ...items.filter((item) => {
+      const sameCommitment = item.note_commitment.trim().toLowerCase() === normalizedCommitment
+      const sameNullifier =
+        normalizedNullifier.length > 0 &&
+        (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+      return !(sameCommitment || sameNullifier)
+    }),
+  ]
+  persistAiPendingHideNotes(next)
+}
+
+function removeAiPendingHideNote(noteCommitment?: string, nullifier?: string) {
+  if (typeof window === "undefined") return
+  const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+  const normalizedNullifier = (nullifier || "").trim().toLowerCase()
+  if (!normalizedCommitment && !normalizedNullifier) return
+  const items = loadAiPendingHideNotes()
+  const next = items.filter((item) => {
+    const sameCommitment =
+      normalizedCommitment.length > 0 &&
+      item.note_commitment.trim().toLowerCase() === normalizedCommitment
+    const sameNullifier =
+      normalizedNullifier.length > 0 &&
+      (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+    return !(sameCommitment || sameNullifier)
+  })
+  persistAiPendingHideNotes(next)
+}
+
 // Internal helper that supports `resolveStakeTokenSymbol` operations.
 function resolveStakeTokenSymbol(value: string): string {
   const normalized = value.trim().toUpperCase()
@@ -1248,6 +1371,23 @@ interface OptimisticExecutionPreview {
   toToken: string
   amountText: string
   estimatedPoints: string
+}
+
+interface AiPendingHideNoteRecord {
+  note_version: "v3"
+  note_commitment: string
+  nullifier?: string
+  executor_address?: string
+  verifier?: string
+  root?: string
+  proof?: string[]
+  public_inputs?: string[]
+  denom_id?: string
+  token_symbol?: string
+  target_token_symbol?: string
+  amount?: string
+  deposited_at_unix: number
+  spendable_at_unix?: number
 }
 
 type AIData = Record<string, unknown> | null | undefined
@@ -2557,11 +2697,13 @@ export function FloatingAIAssistant() {
     async ({
       payload,
       fromToken,
+      toToken,
       amountText,
       providerHint,
     }: {
       payload: PrivacyVerificationPayload
       fromToken: string
+      toToken?: string
       amountText: string
       providerHint: "starknet" | "argentx" | "braavos"
     }): Promise<{ spendableAtMs: number; txHash: string; amountText: string }> => {
@@ -2652,6 +2794,22 @@ export function FloatingAIAssistant() {
         throw error
       }
       const spendableAtMs = Date.now() + AI_HIDE_MIN_NOTE_AGE_MS
+      upsertAiPendingHideNote({
+        note_version: "v3",
+        note_commitment: noteCommitment,
+        nullifier,
+        executor_address: (payload.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim() || undefined,
+        verifier: (payload.verifier || "garaga").trim() || undefined,
+        root: (payload.root || "").trim() || undefined,
+        proof: normalizeHexArray(payload.proof),
+        public_inputs: normalizeHexArray(payload.public_inputs),
+        denom_id: denomId,
+        token_symbol: tokenSymbol,
+        target_token_symbol: (toToken || "").trim().toUpperCase() || undefined,
+        amount: resolvedAmount,
+        deposited_at_unix: Math.floor(Date.now() / 1000),
+        spendable_at_unix: Math.floor(spendableAtMs / 1000),
+      })
       notifications.addNotification({
         type: "success",
         title: "Hide note deposited",
@@ -3506,6 +3664,7 @@ export function FloatingAIAssistant() {
                   const depositResult = await ensureAiHideV3NoteDeposited({
                     payload: privacyPayload,
                     fromToken,
+                    toToken,
                     amountText: swapAmountText,
                     providerHint,
                   })
@@ -3598,6 +3757,11 @@ export function FloatingAIAssistant() {
                           retryLower
                         )
                       if (!stillNotRegistered || retryIndex >= noteRetryBackoffMs.length) {
+                        if (stillNotRegistered && retryIndex >= noteRetryBackoffMs.length) {
+                          throw new Error(
+                            "Hide note is already deposited, but indexer is still syncing. Note is saved in Pending Hide Notes; use Swap Privat now again once status is Ready."
+                          )
+                        }
                         throw retryError
                       }
                       const waitRetryMs =
@@ -3667,6 +3831,17 @@ export function FloatingAIAssistant() {
               txHash: finalTxHash || undefined,
               txNetwork: "starknet",
             })
+            if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+              const consumedNoteCommitment = (
+                privacyPayload?.note_commitment ||
+                privacyPayload?.commitment ||
+                ""
+              ).trim()
+              const consumedNullifier = (privacyPayload?.nullifier || "").trim()
+              if (consumedNoteCommitment || consumedNullifier) {
+                removeAiPendingHideNote(consumedNoteCommitment, consumedNullifier)
+              }
+            }
             const estimatedPoints = parseNumberish(swapResult.estimated_points_earned)
             const appliedDiscountPercent = parseNumberish(swapResult.nft_discount_percent)
             const feeDiscountSaved = parseNumberish(swapResult.fee_discount_saved)
