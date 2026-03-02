@@ -1637,6 +1637,7 @@ export function TradingInterface() {
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [quote, setQuote] = React.useState<QuoteState | null>(null)
   const [isQuoteLoading, setIsQuoteLoading] = React.useState(false)
+  const [resolvedQuoteKey, setResolvedQuoteKey] = React.useState("")
   const [quoteError, setQuoteError] = React.useState<string | null>(null)
   const [liquidityMaxFromQuote, setLiquidityMaxFromQuote] = React.useState<number | null>(null)
   const quoteCacheRef = React.useRef<Map<string, QuoteCacheEntry>>(new Map())
@@ -2298,6 +2299,7 @@ export function TradingInterface() {
       stableKeyNumber(slippageValue, 4),
       tradeMode,
     ].join("|")
+    setResolvedQuoteKey("")
 
     let cancelled = false
     const requestSeq = ++quoteRequestSeqRef.current
@@ -2318,6 +2320,7 @@ export function TradingInterface() {
           setToAmount(cached.toAmount)
           setQuote(cached.quote)
           setQuoteError(cached.quoteError)
+          setResolvedQuoteKey(quoteCacheKey)
           setLiquidityMaxFromQuote(
             parseLiquidityMaxFromQuoteError(cached.quoteError || "", fromSymbol)
           )
@@ -2437,6 +2440,7 @@ export function TradingInterface() {
           setToAmount(displayToAmount)
           setQuote(bridgeQuote)
           setQuoteError(bridgeQuoteError)
+          setResolvedQuoteKey(quoteCacheKey)
           setLiquidityMaxFromQuote(
             parseLiquidityMaxFromQuoteError(bridgeQuoteError || "", fromSymbol)
           )
@@ -2520,6 +2524,7 @@ export function TradingInterface() {
           setToAmount(swapQuote.toAmount)
           setQuote(swapQuote)
           setQuoteError(null)
+          setResolvedQuoteKey(quoteCacheKey)
           setLiquidityMaxFromQuote(null)
           saveQuoteToCache(swapQuote, swapQuote.toAmount, null)
         }
@@ -2527,6 +2532,7 @@ export function TradingInterface() {
         if (isStale()) return
         const message = error instanceof Error ? error.message : "Failed to fetch quote"
         setQuoteError(message)
+        setResolvedQuoteKey("")
         setLiquidityMaxFromQuote(parseLiquidityMaxFromQuoteError(message, fromSymbol))
         setToAmount("")
         setQuote(null)
@@ -2712,6 +2718,22 @@ export function TradingInterface() {
     : null
 
   const activeSlippage = customSlippage || slippage
+  const autoRunQuoteKey = React.useMemo(() => {
+    const amountValue = Number.parseFloat(fromAmount || "0")
+    if (!Number.isFinite(amountValue) || amountValue <= 0) return ""
+    const slippageValue = Number(customSlippage || slippage || "0.5")
+    const tradeMode = mevProtection ? "private" : "transparent"
+    return [
+      isCrossChain ? "bridge" : "swap",
+      fromChain,
+      toChain,
+      fromSymbol,
+      toSymbol,
+      stableKeyNumber(amountValue, 8),
+      stableKeyNumber(slippageValue, 4),
+      tradeMode,
+    ].join("|")
+  }, [customSlippage, fromAmount, fromChain, fromSymbol, isCrossChain, mevProtection, slippage, toChain, toSymbol])
   const routeLabel = isCrossChain ? (quote?.provider || "Bridge") : "Auto"
   const isSameTokenSwapPair = !isCrossChain && fromSymbol.toUpperCase() === toSymbol.toUpperCase()
   const isBtcGardenRoute =
@@ -5005,6 +5027,7 @@ export function TradingInterface() {
     if (hideMixingWindowBlocked) return
     if (isQuoteLoading) return
     if (!hasValidQuote) return
+    if (!autoRunQuoteKey || resolvedQuoteKey !== autoRunQuoteKey) return
     if (isStarknetPairSwap && !hasPreparedOnchainSwapCalls) return
 
     setAutoRunSelectedHideNoteSwap(false)
@@ -5020,6 +5043,8 @@ export function TradingInterface() {
     hideMixingWindowBlocked,
     isQuoteLoading,
     hasValidQuote,
+    autoRunQuoteKey,
+    resolvedQuoteKey,
     isStarknetPairSwap,
     hasPreparedOnchainSwapCalls,
   ])
