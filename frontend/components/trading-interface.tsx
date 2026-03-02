@@ -4996,10 +4996,33 @@ export function TradingInterface() {
       setAutoRunSelectedHideNoteSwap(false)
       return
     }
+    if (isCrossChain) {
+      setAutoRunSelectedHideNoteSwap(false)
+      return
+    }
+    if (!hasActiveHideV3Note) return
+    if (activeHideNoteTokenMismatch || activeHideNoteAmountMismatch) return
+    if (hideMixingWindowBlocked) return
+    if (isQuoteLoading) return
+    if (!hasValidQuote) return
+    if (isStarknetPairSwap && !hasPreparedOnchainSwapCalls) return
 
     setAutoRunSelectedHideNoteSwap(false)
     confirmTradeRef.current()
-  }, [autoRunSelectedHideNoteSwap, swapState, wallet.isConnected])
+  }, [
+    autoRunSelectedHideNoteSwap,
+    swapState,
+    wallet.isConnected,
+    isCrossChain,
+    hasActiveHideV3Note,
+    activeHideNoteTokenMismatch,
+    activeHideNoteAmountMismatch,
+    hideMixingWindowBlocked,
+    isQuoteLoading,
+    hasValidQuote,
+    isStarknetPairSwap,
+    hasPreparedOnchainSwapCalls,
+  ])
 
   return (
     <div className="w-full max-w-xl mx-auto px-2 sm:px-0 pb-28 md:pb-0">
