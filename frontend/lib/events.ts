@@ -20,6 +20,7 @@ export type AuthExpiredEvent = {
   reason: "invalid_or_expired_token"
   message?: string
   path?: string
+  token?: string | null
 }
 
 export type AppEvents = {

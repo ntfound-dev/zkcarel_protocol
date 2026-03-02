@@ -397,6 +397,7 @@ const hasCompleteV3SpendPayload = (payload: PrivacyVerificationPayload | undefin
   return (
     noteCommitment.length > 0 &&
     nullifier.length > 0 &&
+    !!root &&
     root.length > 0 &&
     proof.length > 0 &&
     publicInputs.length > 0
@@ -576,11 +577,11 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
   const raw = window.localStorage.getItem(TRADE_PRIVACY_PENDING_NOTES_KEY)
   if (!raw) return []
   try {
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .map((item) => {
-        if (!item || typeof item !== "object") return null
+    const parsedRaw: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsedRaw)) return []
+    const mapped: Array<PendingHideNoteRecord | null> = parsedRaw.map((entry) => {
+      if (!entry || typeof entry !== "object") return null
+      const item = entry as Record<string, unknown>
         const noteCommitment =
           typeof item.note_commitment === "string" ? item.note_commitment.trim() : ""
         if (!noteCommitment) return null
@@ -620,6 +621,7 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
           spendable_at_unix: spendableAt,
         }
       })
+    return mapped
       .filter((item): item is PendingHideNoteRecord => item !== null)
       .sort((a, b) => b.deposited_at_unix - a.deposited_at_unix)
   } catch {
