@@ -128,6 +128,7 @@ type PendingHideNoteRecord = {
   public_inputs?: string[]
   denom_id?: string
   token_symbol?: string
+  target_token_symbol?: string
   amount?: string
   deposited_at_unix: number
   spendable_at_unix?: number
@@ -616,6 +617,12 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
           denom_id: typeof item.denom_id === "string" ? item.denom_id.trim() || undefined : undefined,
           token_symbol:
             typeof item.token_symbol === "string" ? item.token_symbol.trim() || undefined : undefined,
+          target_token_symbol:
+            typeof item.target_token_symbol === "string"
+              ? item.target_token_symbol.trim() || undefined
+              : typeof item.to_token_symbol === "string"
+              ? item.to_token_symbol.trim() || undefined
+              : undefined,
           amount: typeof item.amount === "string" ? item.amount.trim() || undefined : undefined,
           deposited_at_unix: depositedAt,
           spendable_at_unix: spendableAt,
@@ -1881,7 +1888,13 @@ export function TradingInterface() {
       !cachedPayloadNoteMismatch &&
       !!lockedNoteNullifier &&
       !!lockedNoteCommitment
-    if (hasCompleteV3SpendPayload(cachedPayload) && !cachedPayloadNoteMismatch) {
+    // For manually selected notes, always regenerate proof against current pair/quote context.
+    const forceRefreshForManualSelectedNote = Boolean(manuallySelectedHideNoteRef.current)
+    if (
+      hasCompleteV3SpendPayload(cachedPayload) &&
+      !cachedPayloadNoteMismatch &&
+      !forceRefreshForManualSelectedNote
+    ) {
       setHasTradePrivacyPayload(true)
       return {
         ...cachedPayload,
@@ -3555,6 +3568,7 @@ export function TradingInterface() {
         public_inputs: normalizeHexArray(payload.public_inputs),
         denom_id: denomId,
         token_symbol: tokenSymbol,
+        target_token_symbol: toToken.symbol.toUpperCase(),
         amount: denomAmountText,
         deposited_at_unix: depositedAtUnix,
         spendable_at_unix: spendableAtUnix,
@@ -3579,6 +3593,7 @@ export function TradingInterface() {
       notifications,
       resolveHideV3FixedAmountText,
       starknetProviderHint,
+      toToken.symbol,
       wallet.address,
       wallet.starknetAddress,
     ]
@@ -5608,6 +5623,15 @@ export function TradingInterface() {
                     {pendingHideNotesActive.map((note) => {
                       const noteCommitment = (note.note_commitment || "").trim()
                       const noteNullifier = (note.nullifier || "").trim()
+                      const noteSourceTokenSymbol = (note.token_symbol || "STRK").trim().toUpperCase()
+                      const noteTargetTokenSymbol = (
+                        note.target_token_symbol ||
+                        ""
+                      )
+                        .trim()
+                        .toUpperCase()
+                      const displayTargetToken =
+                        noteTargetTokenSymbol || toToken.symbol.toUpperCase()
                       const noteMissingSwapMetadata = !noteNullifier
                       const noteUseBlocked = noteMissingSwapMetadata
                       const noteRemainingMs =
@@ -5624,7 +5648,7 @@ export function TradingInterface() {
                             {noteCommitment.slice(0, 12)}...{noteCommitment.slice(-6)}
                           </p>
                           <p className="text-[11px] text-muted-foreground">
-                            {note.amount || "?"} {note.token_symbol || "STRK"} •{" "}
+                            {note.amount || "?"} {noteSourceTokenSymbol} → {displayTargetToken} •{" "}
                             {noteRemainingMs > 0
                               ? `Ready in ${formatRemainingDuration(noteRemainingMs)}`
                               : "Ready now"}
@@ -5716,9 +5740,26 @@ export function TradingInterface() {
                                     public_inputs: selectedPublicInputs,
                                   })
                                   markManuallySelectedHideNote(noteCommitment, note.nullifier)
-                                  const selectedTokenSymbol = (note.token_symbol || "").trim().toUpperCase()
+                                  const selectedTokenSymbol = noteSourceTokenSymbol
+                                  const selectedTargetTokenSymbol = noteTargetTokenSymbol
                                   const currentFromSymbol = fromToken.symbol.toUpperCase()
+                                  const currentToSymbol = toToken.symbol.toUpperCase()
+                                  const resolvedTargetForNote =
+                                    selectedTargetTokenSymbol || currentToSymbol
                                   const selectedAmountText = (note.amount || "").trim()
+                                  if (
+                                    selectedTokenSymbol &&
+                                    (selectedTokenSymbol !== (note.token_symbol || "").trim().toUpperCase() ||
+                                      resolvedTargetForNote !==
+                                        (note.target_token_symbol || "").trim().toUpperCase())
+                                  ) {
+                                    upsertPendingHideNote({
+                                      ...note,
+                                      token_symbol: selectedTokenSymbol,
+                                      target_token_symbol: resolvedTargetForNote,
+                                    })
+                                    setPendingHideNotes(loadPendingHideNotes())
+                                  }
                                   if (
                                     selectedTokenSymbol &&
                                     selectedTokenSymbol !== currentFromSymbol &&
@@ -5727,6 +5768,16 @@ export function TradingInterface() {
                                     )
                                   ) {
                                     setFromTokenSymbol(selectedTokenSymbol)
+                                  }
+                                  if (
+                                    selectedTargetTokenSymbol &&
+                                    selectedTargetTokenSymbol !== currentToSymbol &&
+                                    selectedTargetTokenSymbol !== selectedTokenSymbol &&
+                                    tokenCatalog.some(
+                                      (token) => token.symbol.toUpperCase() === selectedTargetTokenSymbol
+                                    )
+                                  ) {
+                                    setToTokenSymbol(selectedTargetTokenSymbol)
                                   }
                                   let resolvedNoteAmountText = selectedAmountText
                                   // Keep existing persisted note amount as source of truth.
@@ -5748,6 +5799,9 @@ export function TradingInterface() {
                                       upsertPendingHideNote({
                                         ...note,
                                         amount: resolvedNoteAmountText,
+                                        token_symbol: selectedTokenSymbol || note.token_symbol,
+                                        target_token_symbol:
+                                          selectedTargetTokenSymbol || note.target_token_symbol,
                                       })
                                       setPendingHideNotes(loadPendingHideNotes())
                                     }
