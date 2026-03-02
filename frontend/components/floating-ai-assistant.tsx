@@ -3274,6 +3274,8 @@ export function FloatingAIAssistant() {
           nullifier?: string
         }
       ): Promise<PrivacyVerificationPayload> => {
+        const forcedNoteCommitment = (options?.noteCommitment || "").trim()
+        const forcedNullifier = (options?.nullifier || "").trim()
         const prepared = await autoSubmitPrivacyAction({
           verifier: "garaga",
           submit_onchain: false,
@@ -3293,16 +3295,28 @@ export function FloatingAIAssistant() {
         const preparedPayload = prepared.payload || {}
         const normalizedProof = normalizeHexArray(preparedPayload.proof)
         const normalizedPublicInputs = normalizeHexArray(preparedPayload.public_inputs)
+        if (forcedNullifier) {
+          if (normalizedPublicInputs.length >= 2) {
+            normalizedPublicInputs[1] = forcedNullifier
+          } else {
+            while (normalizedPublicInputs.length < 1) normalizedPublicInputs.push("0x0")
+            normalizedPublicInputs.push(forcedNullifier)
+          }
+        }
         const inferredRoot = normalizedPublicInputs[0]?.trim()
+        const resolvedNullifier = (preparedPayload.nullifier || "").trim() || forcedNullifier || undefined
+        const resolvedNoteCommitment =
+          (preparedPayload.note_commitment || preparedPayload.commitment || "").trim() ||
+          forcedNoteCommitment ||
+          undefined
         return {
           verifier: (preparedPayload.verifier || "garaga").trim() || "garaga",
           note_version: options?.noteVersion || preparedPayload.note_version,
           denom_id:
             (preparedPayload.denom_id || "").trim() || (options?.denomId || "").trim() || undefined,
-          nullifier: preparedPayload.nullifier?.trim(),
+          nullifier: resolvedNullifier,
           commitment: preparedPayload.commitment?.trim(),
-          note_commitment:
-            (preparedPayload.note_commitment || preparedPayload.commitment || "").trim() || undefined,
+          note_commitment: resolvedNoteCommitment,
           root: (preparedPayload.root || "").trim() || inferredRoot || undefined,
           recipient:
             (preparedPayload.recipient || wallet.starknetAddress || wallet.address || "").trim() ||
@@ -3428,7 +3442,12 @@ export function FloatingAIAssistant() {
                     from_token: fromToken,
                     to_token: toToken,
                     amount: swapAmountText,
+                    note_version: (payloadToSubmit.note_version || "v3").trim() || "v3",
+                    root: payloadToSubmit.root,
                     denom_id: payloadToSubmit.denom_id,
+                    note_commitment: payloadToSubmit.note_commitment || payloadToSubmit.commitment,
+                    nullifier: payloadToSubmit.nullifier,
+                    spendable_at_unix: payloadToSubmit.spendable_at_unix,
                     from_network: "starknet",
                     to_network: "starknet",
                   },
@@ -3536,7 +3555,7 @@ export function FloatingAIAssistant() {
                   if (!(privacyPayload.denom_id || "").trim()) {
                     privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
                   }
-                  const noteRetryBackoffMs = [8000, 12000, 15000]
+                  const noteRetryBackoffMs = [8000, 12000, 15000, 20000, 25000, 30000]
                   for (let retryIndex = 0; ; retryIndex += 1) {
                     try {
                       if (HIDE_BALANCE_SHIELDED_POOL) {
@@ -3592,13 +3611,6 @@ export function FloatingAIAssistant() {
                         }/${noteRetryBackoffMs.length + 1} in ${formatDurationHhMmSs(waitRetryMs)}.`,
                       })
                       await waitMs(waitRetryMs)
-                      const retryPinnedNoteCommitment = (
-                        privacyPayload.note_commitment ||
-                        privacyPayload.commitment ||
-                        ""
-                      )
-                        .trim()
-                      const retryPinnedNullifier = (privacyPayload.nullifier || "").trim()
                       privacyPayload = await requestGaragaPayload(
                         "swap",
                         fromToken,
@@ -3607,8 +3619,8 @@ export function FloatingAIAssistant() {
                         {
                           denomId: String(selectedAiHideTier.minUsdt),
                           noteVersion: "v3",
-                          noteCommitment: retryPinnedNoteCommitment || undefined,
-                          nullifier: retryPinnedNullifier || undefined,
+                          noteCommitment: pinnedNoteCommitment || undefined,
+                          nullifier: pinnedNullifier || undefined,
                         }
                       )
                       if (!(privacyPayload.denom_id || "").trim()) {
