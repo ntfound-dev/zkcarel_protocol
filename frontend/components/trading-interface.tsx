@@ -4165,6 +4165,14 @@ export function TradingInterface() {
    * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
    */
   const confirmTrade = async () => {
+    if (executeDisabledReason) {
+      notifications.addNotification({
+        type: "warning",
+        title: "Swap unavailable",
+        message: executeDisabledReason,
+      })
+      return
+    }
     setPreviewOpen(false)
     setSwapState("confirming")
     setSwapState("processing")
@@ -5126,6 +5134,18 @@ export function TradingInterface() {
     if (!hasActiveHideV3Note) return
     if (activeHideNoteTokenMismatch || activeHideNoteAmountMismatch) return
     if (hideMixingWindowBlocked) return
+    if (hasInsufficientBalance || hasInsufficientLiquidityCap) {
+      setAutoRunSelectedHideNoteSwap(false)
+      notifications.addNotification({
+        type: "warning",
+        title: "Swap note blocked",
+        message:
+          hasInsufficientLiquidityCap && maxExecutableFromAllLimits > 0
+            ? `Current route liquidity is low. Max ${formatTokenAmount(maxExecutableFromAllLimits, 6)} ${fromToken.symbol}.`
+            : `Insufficient ${fromToken.symbol} balance for selected note amount.`,
+      })
+      return
+    }
     if (isQuoteLoading) return
     if (!hasValidQuote) return
     if (!autoRunQuoteKey || resolvedQuoteKey !== autoRunQuoteKey) return
@@ -5142,6 +5162,11 @@ export function TradingInterface() {
     activeHideNoteTokenMismatch,
     activeHideNoteAmountMismatch,
     hideMixingWindowBlocked,
+    hasInsufficientBalance,
+    hasInsufficientLiquidityCap,
+    maxExecutableFromAllLimits,
+    fromToken.symbol,
+    notifications,
     isQuoteLoading,
     hasValidQuote,
     autoRunQuoteKey,
