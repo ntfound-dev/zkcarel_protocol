@@ -5728,23 +5728,29 @@ export function TradingInterface() {
                                   ) {
                                     setFromTokenSymbol(selectedTokenSymbol)
                                   }
-                                  const resolvedNoteAmountText = await resolveHideV3FixedAmountText({
-                                    executorAddress:
-                                      note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS,
-                                    tokenSymbol:
-                                      selectedTokenSymbol || fromToken.symbol.toUpperCase(),
-                                    denomId: note.denom_id,
-                                    fallbackAmount: selectedAmountText,
-                                  })
+                                  let resolvedNoteAmountText = selectedAmountText
+                                  // Keep existing persisted note amount as source of truth.
+                                  // Only fallback to on-chain rule when legacy note amount is missing.
+                                  if (!resolvedNoteAmountText) {
+                                    resolvedNoteAmountText =
+                                      (await resolveHideV3FixedAmountText({
+                                        executorAddress:
+                                          note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS,
+                                        tokenSymbol:
+                                          selectedTokenSymbol || fromToken.symbol.toUpperCase(),
+                                        denomId: note.denom_id,
+                                        fallbackAmount: "",
+                                      })) || ""
+                                  }
                                   if (resolvedNoteAmountText) {
                                     setFromAmount(resolvedNoteAmountText)
-                                    upsertPendingHideNote({
-                                      ...note,
-                                      amount: resolvedNoteAmountText,
-                                    })
-                                    setPendingHideNotes(loadPendingHideNotes())
-                                  } else if (selectedAmountText) {
-                                    setFromAmount(selectedAmountText)
+                                    if (resolvedNoteAmountText !== selectedAmountText) {
+                                      upsertPendingHideNote({
+                                        ...note,
+                                        amount: resolvedNoteAmountText,
+                                      })
+                                      setPendingHideNotes(loadPendingHideNotes())
+                                    }
                                   }
                                   if ((note.denom_id || "").trim()) {
                                     setHideUsdtTierMin(

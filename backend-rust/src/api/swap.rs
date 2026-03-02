@@ -2161,6 +2161,42 @@ async fn read_erc20_balance_parts(
     ))
 }
 
+// Internal helper that validates hide executor liquidity before private swap execution.
+// Prevents opaque ERC20 revert ("insufficient balance") by surfacing user-readable detail first.
+async fn ensure_hide_executor_has_input_balance(
+    state: &AppState,
+    executor: Felt,
+    context: &OnchainSwapContext,
+    from_token_symbol: &str,
+    requested_amount_text: &str,
+) -> Result<()> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let (available_low, available_high) =
+        read_erc20_balance_parts(&reader, context.from_token, executor).await?;
+    if u256_is_greater(
+        context.amount_low,
+        context.amount_high,
+        available_low,
+        available_high,
+        "requested private swap amount",
+        "executor token balance",
+    )? {
+        let available = onchain_u256_to_f64(
+            available_low,
+            available_high,
+            token_decimals(from_token_symbol),
+        )
+        .unwrap_or(0.0);
+        return Err(AppError::BadRequest(format!(
+            "Hide note/pool balance tidak cukup untuk swap ini. Requested {}, available {:.8} {} di executor. Pilih note lebih kecil atau deposit note baru.",
+            requested_amount_text,
+            available,
+            from_token_symbol.to_ascii_uppercase()
+        )));
+    }
+    Ok(())
+}
+
 // Internal helper that fetches data for `read_erc20_allowance_parts` in the swap flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 async fn read_erc20_allowance_parts(
@@ -3235,6 +3271,14 @@ pub async fn execute_swap(
                         min_age_secs, remaining
                     )));
                 }
+                ensure_hide_executor_has_input_balance(
+                    &state,
+                    executor,
+                    &onchain_context,
+                    &req.from_token,
+                    &req.amount,
+                )
+                .await?;
             } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
                 let commitment_felt = parse_felt(payload.commitment.trim())?;
                 let user_felt = parse_felt(&user_address)?;
