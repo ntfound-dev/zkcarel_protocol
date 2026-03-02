@@ -2497,24 +2497,32 @@ export function FloatingAIAssistant() {
             denomId,
             providerHint
           )
-          if (fixedAmount !== null && fixedAmount > BigInt(0)) {
-            const text = trimDecimalZeros(
-              sanitizeDecimalInput(scaledBigIntToDecimalString(fixedAmount, decimals), decimals)
-            )
-            if (text) return text
+          // If rule can be read from wallet provider:
+          // - `>0` means rule exists and we can use exact fixed amount.
+          // - `==0` means rule truly missing.
+          // If provider cannot read (`null`), continue with deterministic tier fallback and
+          // let on-chain deposit be the source of truth instead of failing early.
+          if (fixedAmount !== null) {
+            if (fixedAmount > BigInt(0)) {
+              const text = trimDecimalZeros(
+                sanitizeDecimalInput(scaledBigIntToDecimalString(fixedAmount, decimals), decimals)
+              )
+              if (text) return text
+            }
+            if (requireOnchainRule) {
+              throw new Error(
+                `Hide Balance V3 asset rule is not set for ${tokenSymbol} tier $${tierUsdt}. Ask admin to set_asset_rule for this token+tier before retrying.`
+              )
+            }
           }
-          if (requireOnchainRule) {
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error ?? "")
+          if (requireOnchainRule && /asset rule not set/i.test(reason)) {
             throw new Error(
               `Hide Balance V3 asset rule is not set for ${tokenSymbol} tier $${tierUsdt}. Ask admin to set_asset_rule for this token+tier before retrying.`
             )
           }
-        } catch {
-          if (requireOnchainRule) {
-            throw new Error(
-              `Hide Balance V3 asset rule is not set for ${tokenSymbol} tier $${tierUsdt}. Ask admin to set_asset_rule for this token+tier before retrying.`
-            )
-          }
-          // Fall through to local conversion fallback.
+          // Provider-side read failed (RPC/wallet variant), fall through to deterministic fallback.
         }
       }
 
