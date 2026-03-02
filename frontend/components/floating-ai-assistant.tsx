@@ -3462,10 +3462,11 @@ export function FloatingAIAssistant() {
           }
         }
         const inferredRoot = normalizedPublicInputs[0]?.trim()
-        const resolvedNullifier = (preparedPayload.nullifier || "").trim() || forcedNullifier || undefined
+        const resolvedNullifier =
+          forcedNullifier || (preparedPayload.nullifier || "").trim() || undefined
         const resolvedNoteCommitment =
-          (preparedPayload.note_commitment || preparedPayload.commitment || "").trim() ||
           forcedNoteCommitment ||
+          (preparedPayload.note_commitment || preparedPayload.commitment || "").trim() ||
           undefined
         return {
           verifier: (preparedPayload.verifier || "garaga").trim() || "garaga",

@@ -72,6 +72,17 @@ fn is_transient_indexer_error(message: &str) -> bool {
         || lower.contains("gateway")
         || lower.contains("temporarily unavailable")
         || lower.contains("connection reset")
+        || lower.contains("connection refused")
+        || lower.contains("connection aborted")
+        || lower.contains("connection closed")
+        || lower.contains("error sending request")
+        || lower.contains("error sending request for url")
+        || lower.contains("network is unreachable")
+        || lower.contains("host is unreachable")
+        || lower.contains("failed to lookup address information")
+        || lower.contains("temporary failure in name resolution")
+        || lower.contains("dns")
+        || lower.contains("connect error")
         || lower.contains("eof while parsing")
 }
 

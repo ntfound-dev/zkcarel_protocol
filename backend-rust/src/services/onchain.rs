@@ -142,6 +142,13 @@ fn tx_submit_mutex() -> &'static Arc<Mutex<()>> {
 // Internal helper that supports `looks_like_transient_rpc_error` operations.
 fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
+    if lower.contains("contracterror")
+        || lower.contains("contract error")
+        || lower.contains("entrypoint_not_found")
+        || lower.contains("sender required")
+    {
+        return false;
+    }
     lower.contains("too many requests")
         || lower.contains("429")
         || lower.contains("cu limit exceeded")
@@ -151,6 +158,17 @@ fn looks_like_transient_rpc_error(message: &str) -> bool {
         || lower.contains("gateway")
         || lower.contains("temporarily unavailable")
         || lower.contains("connection reset")
+        || lower.contains("connection refused")
+        || lower.contains("connection aborted")
+        || lower.contains("connection closed")
+        || lower.contains("error sending request")
+        || lower.contains("error sending request for url")
+        || lower.contains("network is unreachable")
+        || lower.contains("host is unreachable")
+        || lower.contains("failed to lookup address information")
+        || lower.contains("temporary failure in name resolution")
+        || lower.contains("dns")
+        || lower.contains("connect error")
         || lower.contains("eof while parsing")
         || lower.contains("jsonrpcresponse")
         || lower.contains("error decoding response body")
