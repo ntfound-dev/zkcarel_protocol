@@ -3517,35 +3517,73 @@ export function FloatingAIAssistant() {
                   if (!(privacyPayload.denom_id || "").trim()) {
                     privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
                   }
-                  if (HIDE_BALANCE_SHIELDED_POOL) {
-                    swapResult = await executeSwap({
-                      from_token: fromToken,
-                      to_token: toToken,
-                      amount: swapAmountText,
-                      min_amount_out: minAmountOut,
-                      slippage,
-                      deadline,
-                      mode,
-                      hide_balance: true,
-                      privacy: privacyPayload,
-                    })
-                    finalTxHash = swapResult.tx_hash || ""
-                  } else {
-                    const relayedRetry = await submitV3HideSwap(privacyPayload)
-                    privacyPayload = relayedRetry.privacyPayload
-                    swapResult = await executeSwap({
-                      from_token: fromToken,
-                      to_token: toToken,
-                      amount: swapAmountText,
-                      min_amount_out: minAmountOut,
-                      slippage,
-                      deadline,
-                      onchain_tx_hash: relayedRetry.relayedTxHash,
-                      mode,
-                      hide_balance: true,
-                      privacy: privacyPayload,
-                    })
-                    finalTxHash = swapResult.tx_hash || relayedRetry.relayedTxHash || ""
+                  const noteRetryBackoffMs = [8000, 12000, 15000]
+                  for (let retryIndex = 0; ; retryIndex += 1) {
+                    try {
+                      if (HIDE_BALANCE_SHIELDED_POOL) {
+                        swapResult = await executeSwap({
+                          from_token: fromToken,
+                          to_token: toToken,
+                          amount: swapAmountText,
+                          min_amount_out: minAmountOut,
+                          slippage,
+                          deadline,
+                          mode,
+                          hide_balance: true,
+                          privacy: privacyPayload,
+                        })
+                        finalTxHash = swapResult.tx_hash || ""
+                      } else {
+                        const relayedRetry = await submitV3HideSwap(privacyPayload)
+                        privacyPayload = relayedRetry.privacyPayload
+                        swapResult = await executeSwap({
+                          from_token: fromToken,
+                          to_token: toToken,
+                          amount: swapAmountText,
+                          min_amount_out: minAmountOut,
+                          slippage,
+                          deadline,
+                          onchain_tx_hash: relayedRetry.relayedTxHash,
+                          mode,
+                          hide_balance: true,
+                          privacy: privacyPayload,
+                        })
+                        finalTxHash = swapResult.tx_hash || relayedRetry.relayedTxHash || ""
+                      }
+                      break
+                    } catch (retryError) {
+                      const retryMessage =
+                        retryError instanceof Error ? retryError.message : String(retryError ?? "")
+                      const retryLower = retryMessage.toLowerCase()
+                      const stillNotRegistered =
+                        /note belum terdaftar|note not registered|nullifier note missing|unknown root|note missing/.test(
+                          retryLower
+                        )
+                      if (!stillNotRegistered || retryIndex >= noteRetryBackoffMs.length) {
+                        throw retryError
+                      }
+                      const waitRetryMs =
+                        noteRetryBackoffMs[retryIndex] ??
+                        noteRetryBackoffMs[noteRetryBackoffMs.length - 1]
+                      notifications.addNotification({
+                        type: "info",
+                        title: "Indexer syncing",
+                        message: `Hide note belum terbaca penuh di indexer. Retry ${
+                          retryIndex + 2
+                        }/${noteRetryBackoffMs.length + 1} in ${formatDurationHhMmSs(waitRetryMs)}.`,
+                      })
+                      await waitMs(waitRetryMs)
+                      privacyPayload = await requestGaragaPayload(
+                        "swap",
+                        fromToken,
+                        toToken,
+                        swapAmountText,
+                        { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                      )
+                      if (!(privacyPayload.denom_id || "").trim()) {
+                        privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                      }
+                    }
                   }
                 } else {
                   throw new Error(
