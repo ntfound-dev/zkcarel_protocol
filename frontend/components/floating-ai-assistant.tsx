@@ -112,10 +112,10 @@ const quickPromptsByTier: Record<number, string[]> = {
     "set hide tier $100",
     "set hide tier $250",
     "please set price alert for WBTC",
-    "please private swap 10 STRK to WBTC with tier $50",
-    "please private swap 10 CAREL to USDT with tier $10",
-    "please private swap 10 USDC to WBTC with tier $100",
-    "please private swap 10 USDC to CAREL with tier $5",
+    "please private swap CAREL to USDT with tier $10",
+    "please private swap USDC to STRK with tier $50",
+    "please private swap STRK to WBTC with tier $100",
+    "please private swap WBTC to CAREL with tier $250",
     "please private stake 15 USDT",
     "please private stake 10 USDT",
     "please private stake 100 CAREL",
@@ -176,6 +176,8 @@ const HIDE_BALANCE_SHIELDED_POOL_V3 =
   HIDE_BALANCE_EXECUTOR_KIND === "shielded_pool_v3" ||
   HIDE_BALANCE_EXECUTOR_KIND === "shielded-v3" ||
   HIDE_BALANCE_EXECUTOR_KIND === "v3"
+const HIDE_BALANCE_SHIELDED_POOL =
+  HIDE_BALANCE_SHIELDED_POOL_V2 || HIDE_BALANCE_SHIELDED_POOL_V3
 const AI_HIDE_MIN_NOTE_AGE_SECS_RAW =
   process.env.NEXT_PUBLIC_AI_HIDE_MIN_NOTE_AGE_SECS ||
   process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS ||
@@ -3342,7 +3344,7 @@ export function FloatingAIAssistant() {
             let finalTxHash = ""
 
             if (tierUsesGaraga) {
-              if (HIDE_BALANCE_SHIELDED_POOL_V2 && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
+              if (HIDE_BALANCE_SHIELDED_POOL && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
                 throw new Error(
                   "Hide relayer pool is not enabled. Set NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true and restart frontend/backend."
                 )
@@ -3403,7 +3405,7 @@ export function FloatingAIAssistant() {
                   title: "Submitting private swap",
                   message: "Submitting hide-mode swap through Starknet relayer pool.",
                 })
-                if (HIDE_BALANCE_SHIELDED_POOL_V2) {
+                if (HIDE_BALANCE_SHIELDED_POOL) {
                   swapResult = await executeSwap({
                     from_token: fromToken,
                     to_token: toToken,
@@ -3482,21 +3484,36 @@ export function FloatingAIAssistant() {
                   if (!(privacyPayload.denom_id || "").trim()) {
                     privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
                   }
-                  const relayedRetry = await submitV3HideSwap(privacyPayload)
-                  privacyPayload = relayedRetry.privacyPayload
-                  swapResult = await executeSwap({
-                    from_token: fromToken,
-                    to_token: toToken,
-                    amount: swapAmountText,
-                    min_amount_out: minAmountOut,
-                    slippage,
-                    deadline,
-                    onchain_tx_hash: relayedRetry.relayedTxHash,
-                    mode,
-                    hide_balance: true,
-                    privacy: privacyPayload,
-                  })
-                  finalTxHash = swapResult.tx_hash || relayedRetry.relayedTxHash || ""
+                  if (HIDE_BALANCE_SHIELDED_POOL) {
+                    swapResult = await executeSwap({
+                      from_token: fromToken,
+                      to_token: toToken,
+                      amount: swapAmountText,
+                      min_amount_out: minAmountOut,
+                      slippage,
+                      deadline,
+                      mode,
+                      hide_balance: true,
+                      privacy: privacyPayload,
+                    })
+                    finalTxHash = swapResult.tx_hash || ""
+                  } else {
+                    const relayedRetry = await submitV3HideSwap(privacyPayload)
+                    privacyPayload = relayedRetry.privacyPayload
+                    swapResult = await executeSwap({
+                      from_token: fromToken,
+                      to_token: toToken,
+                      amount: swapAmountText,
+                      min_amount_out: minAmountOut,
+                      slippage,
+                      deadline,
+                      onchain_tx_hash: relayedRetry.relayedTxHash,
+                      mode,
+                      hide_balance: true,
+                      privacy: privacyPayload,
+                    })
+                    finalTxHash = swapResult.tx_hash || relayedRetry.relayedTxHash || ""
+                  }
                 } else {
                   throw new Error(
                     `Hide relayer unavailable. Wallet fallback is disabled so swap details never leak in explorer. Detail: ${message}`

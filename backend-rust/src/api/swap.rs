@@ -3003,7 +3003,7 @@ pub async fn execute_swap(
             let used_today = state.db.count_private_swaps_today(&user_address).await?;
             if used_today >= max_uses as i64 {
                 return Err(AppError::BadRequest(format!(
-                    "Hide Balance daily limit reached: {}/{} transaksi private swap hari ini (UTC). Coba lagi besok atau set HIDE_BALANCE_MAX_USES_PER_DAY di backend.",
+                    "Hide Balance daily limit reached: {}/{} private swaps used today (UTC). Try again tomorrow or increase HIDE_BALANCE_MAX_USES_PER_DAY in backend config.",
                     used_today, max_uses
                 )));
             }
