@@ -2778,8 +2778,8 @@ export function FloatingAIAssistant() {
         type: "info",
         title: "Wallet signature required",
         message: hasEnoughAllowance
-          ? `Confirm hide note deposit (${resolvedAmount} ${tokenSymbol}) in one transaction.`
-          : `Confirm approve + hide note deposit (${resolvedAmount} ${tokenSymbol}) in one transaction.`,
+          ? `Confirm hide note deposit (${resolvedAmount} ${tokenSymbol}) in one transaction.\nDeposit executor: ${executorAddress}`
+          : `Confirm approve + hide note deposit (${resolvedAmount} ${tokenSymbol}) in one transaction.\nDeposit executor: ${executorAddress}`,
       })
       let depositTxHash = ""
       try {
@@ -3061,6 +3061,12 @@ export function FloatingAIAssistant() {
         command,
         createdAt: Date.now(),
       })
+      const burnAddressHint = effectivePaymentAddress
+        ? `\nBurn address (CAREL): ${effectivePaymentAddress}`
+        : "\nBurn address (CAREL): not configured"
+      const hideDepositExecutorHint = (PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+        ? `\nHide deposit executor: ${(PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()}`
+        : "\nHide deposit executor: not configured"
       const bridgeConfirmHint = isBridgeCommand
         ? "\nBridge execution usually has 2 steps:\n1. Sign Starknet setup in Argent/Braavos (burn CAREL).\n2. If source is BTC, sign BTC deposit in UniSat/Xverse.\nOrder is only completed after BTC deposit is sent."
         : ""
@@ -3068,7 +3074,7 @@ export function FloatingAIAssistant() {
         {
           role: "assistant",
           content:
-            `You're about to execute this REAL on-chain command:\n${command}\n\nReply \`yes\` to continue or \`no\` to cancel.\nThis will request wallet signature and burn ${executionBurnAmountCarel(activeTier)} CAREL on-chain for this execution.${bridgeConfirmHint}\nIf you have an active discount NFT, fee discount will be applied automatically.`,
+            `You're about to execute this REAL on-chain command:\n${command}\n\nReply \`yes\` to continue or \`no\` to cancel.\nThis will request wallet signature and burn ${executionBurnAmountCarel(activeTier)} CAREL on-chain for this execution.${burnAddressHint}${hideDepositExecutorHint}${bridgeConfirmHint}\nIf you have an active discount NFT, fee discount will be applied automatically.`,
           timestamp: nowTimestampLabel(),
         },
       ])
@@ -5094,8 +5100,8 @@ export function FloatingAIAssistant() {
         type: "info",
         title: "Wallet signature required",
         message: AI_SETUP_SKIP_APPROVE
-          ? `Confirm submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).`
-          : `Confirm CAREL approval (${approveAmountCarel}) + submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).`,
+          ? `Confirm submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn address: ${effectivePaymentAddress || "not configured"}`
+          : `Confirm CAREL approval (${approveAmountCarel}) + submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn address: ${effectivePaymentAddress || "not configured"}`,
       })
       let onchainTxHash: string
       try {
