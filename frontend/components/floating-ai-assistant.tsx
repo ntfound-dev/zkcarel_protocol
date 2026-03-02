@@ -3267,7 +3267,12 @@ export function FloatingAIAssistant() {
         fromToken?: string,
         toToken?: string,
         amountText?: string,
-        options?: { denomId?: string; noteVersion?: "v3" }
+        options?: {
+          denomId?: string
+          noteVersion?: "v3"
+          noteCommitment?: string
+          nullifier?: string
+        }
       ): Promise<PrivacyVerificationPayload> => {
         const prepared = await autoSubmitPrivacyAction({
           verifier: "garaga",
@@ -3278,6 +3283,8 @@ export function FloatingAIAssistant() {
             to_token: toToken,
             amount: amountText,
             denom_id: options?.denomId,
+            note_commitment: options?.noteCommitment,
+            nullifier: options?.nullifier,
             recipient: wallet.starknetAddress || wallet.address || undefined,
             from_network: "starknet",
             to_network: "starknet",
@@ -3507,12 +3514,24 @@ export function FloatingAIAssistant() {
                     title: "Swap Privat now",
                     message: "Cooldown selesai. Menjalankan private swap otomatis.",
                   })
+                  const pinnedNoteCommitment = (
+                    privacyPayload.note_commitment ||
+                    privacyPayload.commitment ||
+                    ""
+                  )
+                    .trim()
+                  const pinnedNullifier = (privacyPayload.nullifier || "").trim()
                   privacyPayload = await requestGaragaPayload(
                     "swap",
                     fromToken,
                     toToken,
                     swapAmountText,
-                    { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                    {
+                      denomId: String(selectedAiHideTier.minUsdt),
+                      noteVersion: "v3",
+                      noteCommitment: pinnedNoteCommitment || undefined,
+                      nullifier: pinnedNullifier || undefined,
+                    }
                   )
                   if (!(privacyPayload.denom_id || "").trim()) {
                     privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
@@ -3573,12 +3592,24 @@ export function FloatingAIAssistant() {
                         }/${noteRetryBackoffMs.length + 1} in ${formatDurationHhMmSs(waitRetryMs)}.`,
                       })
                       await waitMs(waitRetryMs)
+                      const retryPinnedNoteCommitment = (
+                        privacyPayload.note_commitment ||
+                        privacyPayload.commitment ||
+                        ""
+                      )
+                        .trim()
+                      const retryPinnedNullifier = (privacyPayload.nullifier || "").trim()
                       privacyPayload = await requestGaragaPayload(
                         "swap",
                         fromToken,
                         toToken,
                         swapAmountText,
-                        { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                        {
+                          denomId: String(selectedAiHideTier.minUsdt),
+                          noteVersion: "v3",
+                          noteCommitment: retryPinnedNoteCommitment || undefined,
+                          nullifier: retryPinnedNullifier || undefined,
+                        }
                       )
                       if (!(privacyPayload.denom_id || "").trim()) {
                         privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
