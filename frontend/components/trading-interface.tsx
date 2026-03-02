@@ -1690,9 +1690,11 @@ export function TradingInterface() {
   const [lastBridgeRewards, setLastBridgeRewards] = React.useState<BridgeRewardsSnapshot | null>(null)
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
+  const [autoRunSelectedHideNoteSwap, setAutoRunSelectedHideNoteSwap] = React.useState(false)
   const [tradeResultPopup, setTradeResultPopup] = React.useState<TradeResultPopupState | null>(null)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
   const gardenOrderPollingRef = React.useRef<Record<string, boolean>>({})
+  const confirmTradeRef = React.useRef<() => void>(() => {})
   React.useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
     return () => window.clearInterval(timer)
@@ -4982,6 +4984,23 @@ export function TradingInterface() {
     }
   }
 
+  confirmTradeRef.current = () => {
+    void confirmTrade()
+  }
+
+  React.useEffect(() => {
+    if (!autoRunSelectedHideNoteSwap) return
+    if (swapState !== "idle") return
+
+    if (!wallet.isConnected) {
+      setAutoRunSelectedHideNoteSwap(false)
+      return
+    }
+
+    setAutoRunSelectedHideNoteSwap(false)
+    confirmTradeRef.current()
+  }, [autoRunSelectedHideNoteSwap, swapState, wallet.isConnected])
+
   return (
     <div className="w-full max-w-xl mx-auto px-2 sm:px-0 pb-28 md:pb-0">
       <div className="p-4 sm:p-6 rounded-xl sm:rounded-2xl glass-strong border border-border neon-border">
@@ -5585,10 +5604,7 @@ export function TradingInterface() {
                                     "Active note diganti ke pending note terpilih. Swap privat akan dijalankan sekarang.",
                                 })
                                 setHidePanelOpen(false)
-                                window.setTimeout(() => {
-                                  if (swapState !== "idle" || executeDisabledReason) return
-                                  void confirmTrade()
-                                }, 180)
+                                setAutoRunSelectedHideNoteSwap(true)
                               }}
                             >
                               Swap Privat now
