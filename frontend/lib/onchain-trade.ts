@@ -680,6 +680,175 @@ export async function readStarknetErc20AllowanceFromWallet(
   return null
 }
 
+export async function readStarknetShieldedPoolV3FixedAmountFromWallet(
+  executorAddress: string,
+  tokenAddress: string,
+  denomId: string,
+  providerHint: StarknetWalletHint = "starknet"
+): Promise<bigint | null> {
+  const executor = executorAddress.trim()
+  const token = tokenAddress.trim()
+  const denom = denomId.trim()
+  if (!executor || !token || !denom) return null
+
+  let denomFelt = ""
+  try {
+    denomFelt = toHexFelt(denom)
+  } catch {
+    return null
+  }
+
+  const injected = getInjectedStarknet(providerHint)
+  if (!injected) return null
+
+  await ensureStarknetAccounts(injected)
+  const chainId = await ensureStarknetSepolia(injected)
+  if (!isStarknetSepolia(chainId)) return null
+
+  const parseFelt = (value: unknown): string | null => {
+    if (typeof value === "string") {
+      const trimmed = value.trim()
+      if (!trimmed) return null
+      if (/^0x[0-9a-fA-F]+$/.test(trimmed) || /^\d+$/.test(trimmed)) {
+        try {
+          return toHexFelt(trimmed)
+        } catch {
+          return null
+        }
+      }
+      return null
+    }
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || value < 0) return null
+      try {
+        return toHexFelt(Math.trunc(value))
+      } catch {
+        return null
+      }
+    }
+    if (typeof value === "bigint") {
+      if (value < BIGINT_ZERO) return null
+      try {
+        return toHexFelt(value)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+
+  const extractFelts = (value: unknown): string[] => {
+    const direct = parseFelt(value)
+    if (direct) return [direct]
+
+    if (Array.isArray(value)) {
+      const parsed = value.flatMap((item) => extractFelts(item))
+      return parsed
+    }
+
+    if (typeof value !== "object" || !value) return []
+    const anyValue = value as Record<string, unknown>
+    const low = parseFelt(anyValue.low)
+    const high = parseFelt(anyValue.high)
+    if (low && high) return [low, high]
+    if (low) return [low]
+
+    const commonFields = [
+      "result",
+      "data",
+      "response",
+      "values",
+      "calldata",
+      "return_data",
+      "returnData",
+      "output",
+      "outputs",
+      "payload",
+    ] as const
+    for (const field of commonFields) {
+      if (field in anyValue) {
+        const parsed = extractFelts(anyValue[field])
+        if (parsed.length > 0) return parsed
+      }
+    }
+
+    const numericKeys = Object.keys(anyValue).filter((key) => /^\d+$/.test(key))
+    if (numericKeys.length > 0) {
+      const parsed = numericKeys
+        .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10))
+        .flatMap((key) => extractFelts(anyValue[key]))
+      if (parsed.length > 0) return parsed
+    }
+
+    return []
+  }
+
+  const parseU256 = (value: unknown): bigint | null => {
+    const felts = extractFelts(value)
+    if (felts.length === 0) return null
+    try {
+      const low = BigInt(felts[0])
+      const high = felts.length > 1 ? BigInt(felts[1]) : BIGINT_ZERO
+      return low + (high << BigInt(128))
+    } catch {
+      return null
+    }
+  }
+
+  const callShapes: Array<Record<string, unknown>> = [
+    {
+      contract_address: executor,
+      entry_point_selector: "fixed_amount",
+      calldata: [token, denomFelt],
+    },
+    {
+      contract_address: executor,
+      selector: "fixed_amount",
+      calldata: [token, denomFelt],
+    },
+    {
+      contract_address: executor,
+      entrypoint: "fixed_amount",
+      calldata: [token, denomFelt],
+    },
+    {
+      contractAddress: executor,
+      entrypoint: "fixed_amount",
+      calldata: [token, denomFelt],
+    },
+    {
+      to: executor,
+      entrypoint: "fixed_amount",
+      calldata: [token, denomFelt],
+    },
+  ]
+  const blockTags: unknown[] = ["latest", { block_tag: "latest" }, { block_number: "latest" }]
+  const requestMethods = ["starknet_call", "wallet_call"] as const
+
+  for (const method of requestMethods) {
+    for (const callShape of callShapes) {
+      for (const blockTag of blockTags) {
+        const paramsVariants: unknown[] = [
+          { request: callShape, block_id: blockTag },
+          { call: callShape, block_id: blockTag },
+          [callShape, blockTag],
+        ]
+        for (const params of paramsVariants) {
+          try {
+            const result = await requestStarknet(injected, { type: method, params })
+            const parsed = parseU256(result)
+            if (parsed !== null) return parsed
+          } catch {
+            // continue with next payload variant
+          }
+        }
+      }
+    }
+  }
+
+  return null
+}
+
 export async function signPrivacyParamsForRelayer(
   typedData: Record<string, unknown>,
   providerHint: StarknetWalletHint = "starknet"
@@ -1756,7 +1925,8 @@ function isWalletRequestCompatibilityError(error: unknown): boolean {
   const message = walletErrorMessage(error).toLowerCase()
   return (
     /unknown request type|unsupported request type|method not found|unknown method/.test(message) ||
-    /invalid params|invalid parameter|invalid arguments|failed to deserialize param/.test(message)
+    /invalid params|invalid parameter|invalid arguments|failed to deserialize param/.test(message) ||
+    /invalid transaction|invalid input|invalid_type|expected.*array/.test(message)
   )
 }
 

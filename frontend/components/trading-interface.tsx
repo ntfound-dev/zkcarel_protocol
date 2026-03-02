@@ -32,6 +32,7 @@ import {
   invokeStarknetCallFromWallet,
   parseEstimatedMinutes,
   readStarknetErc20AllowanceFromWallet,
+  readStarknetShieldedPoolV3FixedAmountFromWallet,
   providerIdToFeltHex,
   getConnectedEvmAddressFromWallet,
   sendEvmTransactionFromWallet,
@@ -1215,6 +1216,19 @@ const trimDecimalZeros = (raw: string) =>
     .replace(/\.0+$/, "")
     .replace(/\.$/, "")
 
+const scaledBigIntToDecimalString = (value: bigint, decimals: number): string => {
+  if (decimals <= 0) return value.toString()
+  const base = BigInt(10) ** BigInt(decimals)
+  const whole = value / base
+  const fraction = value % base
+  if (fraction === BigInt(0)) return whole.toString()
+  const fractionRaw = fraction
+    .toString()
+    .padStart(decimals, "0")
+    .replace(/0+$/, "")
+  return `${whole.toString()}.${fractionRaw}`
+}
+
 /**
  * Parses or transforms values for `normalizeTokenAmountDisplay`.
  *
@@ -1696,6 +1710,58 @@ export function TradingInterface() {
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
   const gardenOrderPollingRef = React.useRef<Record<string, boolean>>({})
   const confirmTradeRef = React.useRef<() => void>(() => {})
+
+  const resolveHideV3FixedAmountText = React.useCallback(
+    async ({
+      executorAddress,
+      tokenSymbol,
+      denomId,
+      fallbackAmount,
+    }: {
+      executorAddress?: string
+      tokenSymbol?: string
+      denomId?: string
+      fallbackAmount?: string
+    }): Promise<string> => {
+      const resolvedTokenSymbol = (tokenSymbol || fromToken.symbol).trim().toUpperCase()
+      const resolvedDenomId = (denomId || "").trim()
+      const decimals = resolveTokenDecimals(resolvedTokenSymbol || fromToken.symbol)
+      const fallback = sanitizeDecimalInput(fallbackAmount || "", decimals)
+      const fallbackFromDenom = sanitizeDecimalInput(resolvedDenomId, decimals)
+
+      if (!resolvedDenomId) {
+        return fallback || ""
+      }
+
+      const resolvedExecutor = (executorAddress || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+      const tokenAddress = resolveTokenAddress(resolvedTokenSymbol).trim()
+      if (!resolvedExecutor || !tokenAddress) {
+        return fallback || fallbackFromDenom || ""
+      }
+
+      try {
+        const fixedAmount = await readStarknetShieldedPoolV3FixedAmountFromWallet(
+          resolvedExecutor,
+          tokenAddress,
+          resolvedDenomId,
+          "starknet"
+        )
+        if (fixedAmount !== null && fixedAmount > BigInt(0)) {
+          const text = sanitizeDecimalInput(
+            scaledBigIntToDecimalString(fixedAmount, decimals),
+            decimals
+          )
+          if (text) return text
+        }
+      } catch {
+        // fallback to cached/local values below
+      }
+
+      return fallback || fallbackFromDenom || ""
+    },
+    [fromToken.symbol]
+  )
+
   React.useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
     return () => window.clearInterval(timer)
@@ -1703,21 +1769,27 @@ export function TradingInterface() {
   React.useEffect(() => {
     if (!hideUsdtTierLockEnabled) return
     if (manuallySelectedHideNoteRef.current) return
-    const tokenPrice = Number(fromToken.price || 0)
-    if (!Number.isFinite(tokenPrice) || tokenPrice <= 0) return
-    const decimals = resolveTokenDecimals(fromToken.symbol)
-    const targetAmount = sanitizeDecimalInput(
-      String(selectedHideUsdtTier.minUsdt / tokenPrice),
-      decimals
-    )
-    if (!targetAmount) return
-    if (fromAmount === targetAmount) return
-    setFromAmount(targetAmount)
+    let cancelled = false
+    void (async () => {
+      const targetAmount = await resolveHideV3FixedAmountText({
+        executorAddress: PRIVATE_ACTION_EXECUTOR_ADDRESS,
+        tokenSymbol: fromToken.symbol,
+        denomId: inferredHideDenomId,
+        fallbackAmount: String(selectedHideUsdtTier.minUsdt),
+      })
+      if (cancelled || !targetAmount) return
+      if (fromAmount === targetAmount) return
+      setFromAmount(targetAmount)
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [
     fromAmount,
-    fromToken.price,
     fromToken.symbol,
     hideUsdtTierLockEnabled,
+    inferredHideDenomId,
+    resolveHideV3FixedAmountText,
     selectedHideUsdtTier.minUsdt,
   ])
   const refreshTradePrivacyPayload = React.useCallback(() => {
@@ -3397,7 +3469,18 @@ export function TradingInterface() {
         throw new Error("Hide denom_id missing in privacy payload.")
       }
 
-      const denomAmountText = fromAmount
+      const denomAmountText = await resolveHideV3FixedAmountText({
+        executorAddress,
+        tokenSymbol,
+        denomId,
+        fallbackAmount: fromAmount,
+      })
+      if (!denomAmountText) {
+        throw new Error("Failed to resolve fixed note amount for selected hide denom.")
+      }
+      if (fromAmount !== denomAmountText) {
+        setFromAmount(denomAmountText)
+      }
       const [amountLow, amountHigh] = decimalToU256Parts(
         denomAmountText,
         resolveTokenDecimals(tokenSymbol)
@@ -3492,6 +3575,7 @@ export function TradingInterface() {
       inferredHideDenomId,
       isManuallySelectedHideNote,
       notifications,
+      resolveHideV3FixedAmountText,
       starknetProviderHint,
       wallet.address,
       wallet.starknetAddress,
@@ -5555,104 +5639,126 @@ export function TradingInterface() {
                               className="h-8 text-[11px]"
                               disabled={swapState !== "idle" || noteUseBlocked || noteRemainingMs > 0}
                               onClick={() => {
-                                if (noteUseBlocked) {
-                                  notifications.addNotification({
-                                    type: "warning",
-                                    title: "Use note blocked",
-                                    message: "Note belum punya metadata lengkap untuk swap.",
-                                  })
-                                  return
-                                }
-                                if (noteRemainingMs > 0) {
-                                  notifications.addNotification({
-                                    type: "warning",
-                                    title: "Note belum ready",
-                                    message: `Tunggu ${formatRemainingDuration(
-                                      noteRemainingMs
-                                    )} sebelum swap privat.`,
-                                  })
-                                  return
-                                }
-                                const currentPayload = loadTradePrivacyPayload()
-                                const currentCommitment = (
-                                  currentPayload?.note_commitment ||
-                                  currentPayload?.commitment ||
-                                  ""
-                                )
-                                  .trim()
-                                  .toLowerCase()
-                                const selectedCommitment = noteCommitment.trim().toLowerCase()
-                                const isSameActiveNote =
-                                  !!currentCommitment && currentCommitment === selectedCommitment
-                                const currentProof = normalizeHexArray(currentPayload?.proof)
-                                const currentPublicInputs = normalizeHexArray(currentPayload?.public_inputs)
-                                const noteProof = normalizeHexArray(note.proof)
-                                const notePublicInputs = normalizeHexArray(note.public_inputs)
-                                const noteRoot =
-                                  (note.root || "").trim() || inferV3RootFromPublicInputs(notePublicInputs)
-                                const selectedProof =
-                                  noteProof.length > 0
-                                    ? noteProof
-                                    : isSameActiveNote && currentProof.length > 0
-                                    ? currentProof
-                                    : undefined
-                                const selectedPublicInputs =
-                                  notePublicInputs.length > 0
-                                    ? notePublicInputs
-                                    : isSameActiveNote && currentPublicInputs.length > 0
-                                    ? currentPublicInputs
-                                    : undefined
-                                persistTradePrivacyPayload({
-                                  verifier:
-                                    (note.verifier || currentPayload?.verifier || "garaga").trim() ||
-                                    "garaga",
-                                  note_version: "v3",
-                                  executor_address:
-                                    note.executor_address ||
-                                    PRIVATE_ACTION_EXECUTOR_ADDRESS ||
-                                    undefined,
-                                  note_commitment: noteCommitment,
-                                  commitment: noteCommitment,
-                                  nullifier: note.nullifier || currentPayload?.nullifier,
-                                  denom_id: note.denom_id,
-                                  spendable_at_unix: note.spendable_at_unix,
-                                  root:
-                                    noteRoot ||
-                                    (isSameActiveNote
-                                      ? (currentPayload?.root || "").trim() ||
-                                        inferV3RootFromPublicInputs(currentPublicInputs)
-                                      : undefined),
-                                  proof: selectedProof,
-                                  public_inputs: selectedPublicInputs,
-                                })
-                                markManuallySelectedHideNote(noteCommitment, note.nullifier)
-                                const selectedTokenSymbol = (note.token_symbol || "").trim().toUpperCase()
-                                const currentFromSymbol = fromToken.symbol.toUpperCase()
-                                const selectedAmountText = (note.amount || "").trim()
-                                if (
-                                  selectedTokenSymbol &&
-                                  selectedTokenSymbol !== currentFromSymbol &&
-                                  tokenCatalog.some(
-                                    (token) => token.symbol.toUpperCase() === selectedTokenSymbol
+                                void (async () => {
+                                  if (noteUseBlocked) {
+                                    notifications.addNotification({
+                                      type: "warning",
+                                      title: "Use note blocked",
+                                      message: "Note belum punya metadata lengkap untuk swap.",
+                                    })
+                                    return
+                                  }
+                                  if (noteRemainingMs > 0) {
+                                    notifications.addNotification({
+                                      type: "warning",
+                                      title: "Note belum ready",
+                                      message: `Tunggu ${formatRemainingDuration(
+                                        noteRemainingMs
+                                      )} sebelum swap privat.`,
+                                    })
+                                    return
+                                  }
+                                  const currentPayload = loadTradePrivacyPayload()
+                                  const currentCommitment = (
+                                    currentPayload?.note_commitment ||
+                                    currentPayload?.commitment ||
+                                    ""
                                   )
-                                ) {
-                                  setFromTokenSymbol(selectedTokenSymbol)
-                                }
-                                if (selectedAmountText) {
-                                  setFromAmount(selectedAmountText)
-                                }
-                                if ((note.denom_id || "").trim()) {
-                                  setHideUsdtTierMin(inferUsdtTierFromDenomId((note.denom_id || "").trim()))
-                                }
-                                setHasTradePrivacyPayload(true)
-                                notifications.addNotification({
-                                  type: "info",
-                                  title: "Hide note selected",
-                                  message:
-                                    "Active note diganti ke pending note terpilih. Swap privat akan dijalankan sekarang.",
-                                })
-                                setHidePanelOpen(false)
-                                setAutoRunSelectedHideNoteSwap(true)
+                                    .trim()
+                                    .toLowerCase()
+                                  const selectedCommitment = noteCommitment.trim().toLowerCase()
+                                  const isSameActiveNote =
+                                    !!currentCommitment && currentCommitment === selectedCommitment
+                                  const currentProof = normalizeHexArray(currentPayload?.proof)
+                                  const currentPublicInputs = normalizeHexArray(
+                                    currentPayload?.public_inputs
+                                  )
+                                  const noteProof = normalizeHexArray(note.proof)
+                                  const notePublicInputs = normalizeHexArray(note.public_inputs)
+                                  const noteRoot =
+                                    (note.root || "").trim() ||
+                                    inferV3RootFromPublicInputs(notePublicInputs)
+                                  const selectedProof =
+                                    noteProof.length > 0
+                                      ? noteProof
+                                      : isSameActiveNote && currentProof.length > 0
+                                      ? currentProof
+                                      : undefined
+                                  const selectedPublicInputs =
+                                    notePublicInputs.length > 0
+                                      ? notePublicInputs
+                                      : isSameActiveNote && currentPublicInputs.length > 0
+                                      ? currentPublicInputs
+                                      : undefined
+                                  persistTradePrivacyPayload({
+                                    verifier:
+                                      (note.verifier || currentPayload?.verifier || "garaga").trim() ||
+                                      "garaga",
+                                    note_version: "v3",
+                                    executor_address:
+                                      note.executor_address ||
+                                      PRIVATE_ACTION_EXECUTOR_ADDRESS ||
+                                      undefined,
+                                    note_commitment: noteCommitment,
+                                    commitment: noteCommitment,
+                                    nullifier: note.nullifier || currentPayload?.nullifier,
+                                    denom_id: note.denom_id,
+                                    spendable_at_unix: note.spendable_at_unix,
+                                    root:
+                                      noteRoot ||
+                                      (isSameActiveNote
+                                        ? (currentPayload?.root || "").trim() ||
+                                          inferV3RootFromPublicInputs(currentPublicInputs)
+                                        : undefined),
+                                    proof: selectedProof,
+                                    public_inputs: selectedPublicInputs,
+                                  })
+                                  markManuallySelectedHideNote(noteCommitment, note.nullifier)
+                                  const selectedTokenSymbol = (note.token_symbol || "").trim().toUpperCase()
+                                  const currentFromSymbol = fromToken.symbol.toUpperCase()
+                                  const selectedAmountText = (note.amount || "").trim()
+                                  if (
+                                    selectedTokenSymbol &&
+                                    selectedTokenSymbol !== currentFromSymbol &&
+                                    tokenCatalog.some(
+                                      (token) => token.symbol.toUpperCase() === selectedTokenSymbol
+                                    )
+                                  ) {
+                                    setFromTokenSymbol(selectedTokenSymbol)
+                                  }
+                                  const resolvedNoteAmountText = await resolveHideV3FixedAmountText({
+                                    executorAddress:
+                                      note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS,
+                                    tokenSymbol:
+                                      selectedTokenSymbol || fromToken.symbol.toUpperCase(),
+                                    denomId: note.denom_id,
+                                    fallbackAmount: selectedAmountText,
+                                  })
+                                  if (resolvedNoteAmountText) {
+                                    setFromAmount(resolvedNoteAmountText)
+                                    upsertPendingHideNote({
+                                      ...note,
+                                      amount: resolvedNoteAmountText,
+                                    })
+                                    setPendingHideNotes(loadPendingHideNotes())
+                                  } else if (selectedAmountText) {
+                                    setFromAmount(selectedAmountText)
+                                  }
+                                  if ((note.denom_id || "").trim()) {
+                                    setHideUsdtTierMin(
+                                      inferUsdtTierFromDenomId((note.denom_id || "").trim())
+                                    )
+                                  }
+                                  setHasTradePrivacyPayload(true)
+                                  notifications.addNotification({
+                                    type: "info",
+                                    title: "Hide note selected",
+                                    message:
+                                      "Active note diganti ke pending note terpilih. Swap privat akan dijalankan sekarang.",
+                                  })
+                                  setHidePanelOpen(false)
+                                  setAutoRunSelectedHideNoteSwap(true)
+                                })()
                               }}
                             >
                               Swap Privat now
