@@ -4966,7 +4966,13 @@ export function TradingInterface() {
               }
               let spendableAtUnix = 0
               try {
-                spendableAtUnix = await ensureHideV3NoteDeposited(noteDepositPayload)
+                // Force auto-deposit to follow currently selected hide tier in UI.
+                // This prevents stale payload denom_id (e.g. old $5) from overriding current tier (e.g. $250).
+                const depositPayloadWithCurrentTier: PrivacyVerificationPayload = {
+                  ...noteDepositPayload,
+                  denom_id: inferredHideDenomId,
+                }
+                spendableAtUnix = await ensureHideV3NoteDeposited(depositPayloadWithCurrentTier)
               } catch (depositError) {
                 const depositMessage =
                   depositError instanceof Error ? depositError.message : String(depositError || "")
