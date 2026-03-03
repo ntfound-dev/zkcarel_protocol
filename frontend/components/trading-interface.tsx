@@ -1737,6 +1737,7 @@ export function TradingInterface() {
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
   const [autoRunSelectedHideNoteSwap, setAutoRunSelectedHideNoteSwap] = React.useState(false)
+  const [activePendingHideNoteSwapKey, setActivePendingHideNoteSwapKey] = React.useState<string | null>(null)
   const [tradeResultPopup, setTradeResultPopup] = React.useState<TradeResultPopupState | null>(null)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
   const gardenOrderPollingRef = React.useRef<Record<string, boolean>>({})
@@ -4278,6 +4279,7 @@ export function TradingInterface() {
         title: "Swap unavailable",
         message: executeDisabledReason,
       })
+      setActivePendingHideNoteSwapKey(null)
       return
     }
     setPreviewOpen(false)
@@ -5211,6 +5213,7 @@ export function TradingInterface() {
       })
       setSwapState("error")
     } finally {
+      setActivePendingHideNoteSwapKey(null)
       if (hideBalanceOnchain && shouldClearTradePrivacyPayload) {
         clearTradePrivacyPayload()
         setHasTradePrivacyPayload(false)
@@ -5232,10 +5235,12 @@ export function TradingInterface() {
 
     if (!wallet.isConnected) {
       setAutoRunSelectedHideNoteSwap(false)
+      setActivePendingHideNoteSwapKey(null)
       return
     }
     if (isCrossChain) {
       setAutoRunSelectedHideNoteSwap(false)
+      setActivePendingHideNoteSwapKey(null)
       return
     }
     if (!hasActiveHideV3Note) return
@@ -5243,6 +5248,7 @@ export function TradingInterface() {
     if (hideMixingWindowBlocked) return
     if (hasInsufficientBalance || hasInsufficientLiquidityCap) {
       setAutoRunSelectedHideNoteSwap(false)
+      setActivePendingHideNoteSwapKey(null)
       notifications.addNotification({
         type: "warning",
         title: "Swap note blocked",
@@ -5280,6 +5286,7 @@ export function TradingInterface() {
     resolvedQuoteKey,
     isStarknetPairSwap,
     hasPreparedOnchainSwapCalls,
+    setActivePendingHideNoteSwapKey,
   ])
 
   return (
@@ -5763,6 +5770,7 @@ export function TradingInterface() {
                     {pendingHideNotesActive.map((note) => {
                       const noteCommitment = (note.note_commitment || "").trim()
                       const noteNullifier = (note.nullifier || "").trim()
+                      const noteActionKey = `${noteCommitment}:${noteNullifier}`
                       const noteSourceTokenSymbol = (note.token_symbol || "STRK").trim().toUpperCase()
                       const noteTargetTokenSymbol = (
                         note.target_token_symbol ||
@@ -5779,9 +5787,14 @@ export function TradingInterface() {
                         Number.isFinite(note.spendable_at_unix)
                           ? Math.max(0, note.spendable_at_unix * 1000 - nowMs)
                           : 0
+                      const isActiveNoteSwap =
+                        activePendingHideNoteSwapKey === noteActionKey &&
+                        (autoRunSelectedHideNoteSwap ||
+                          swapState === "confirming" ||
+                          swapState === "processing")
                       return (
                         <div
-                          key={`${noteCommitment}:${note.nullifier || ""}`}
+                          key={noteActionKey}
                           className="rounded-lg border border-border/60 bg-background/40 p-2"
                         >
                           <p className="text-[11px] text-muted-foreground break-all">
@@ -5803,28 +5816,37 @@ export function TradingInterface() {
                               type="button"
                               variant="secondary"
                               className="h-8 text-[11px]"
-                              disabled={swapState !== "idle" || noteUseBlocked || noteRemainingMs > 0}
+                              disabled={
+                                swapState !== "idle" ||
+                                !!activePendingHideNoteSwapKey ||
+                                noteUseBlocked ||
+                                noteRemainingMs > 0
+                              }
                               onClick={() => {
                                 void (async () => {
-                                  if (noteUseBlocked) {
-                                    notifications.addNotification({
-                                      type: "warning",
-                                      title: "Use note blocked",
-                                      message: "Note belum punya metadata lengkap untuk swap.",
-                                    })
-                                    return
-                                  }
-                                  if (noteRemainingMs > 0) {
-                                    notifications.addNotification({
-                                      type: "warning",
-                                      title: "Note belum ready",
-                                      message: `Tunggu ${formatRemainingDuration(
-                                        noteRemainingMs
-                                      )} sebelum swap privat.`,
-                                    })
-                                    return
-                                  }
-                                  const currentPayload = loadTradePrivacyPayload()
+                                  setActivePendingHideNoteSwapKey(noteActionKey)
+                                  try {
+                                    if (noteUseBlocked) {
+                                      notifications.addNotification({
+                                        type: "warning",
+                                        title: "Use note blocked",
+                                        message: "Note belum punya metadata lengkap untuk swap.",
+                                      })
+                                      setActivePendingHideNoteSwapKey(null)
+                                      return
+                                    }
+                                    if (noteRemainingMs > 0) {
+                                      notifications.addNotification({
+                                        type: "warning",
+                                        title: "Note belum ready",
+                                        message: `Tunggu ${formatRemainingDuration(
+                                          noteRemainingMs
+                                        )} sebelum swap privat.`,
+                                      })
+                                      setActivePendingHideNoteSwapKey(null)
+                                      return
+                                    }
+                                    const currentPayload = loadTradePrivacyPayload()
                                   const currentCommitment = (
                                     currentPayload?.note_commitment ||
                                     currentPayload?.commitment ||
@@ -5920,18 +5942,23 @@ export function TradingInterface() {
                                     setToTokenSymbol(selectedTargetTokenSymbol)
                                   }
                                   let resolvedNoteAmountText = selectedAmountText
-                                  // Keep existing persisted note amount as source of truth.
-                                  // Only fallback to on-chain rule when legacy note amount is missing.
-                                  if (!resolvedNoteAmountText) {
+                                  // Always refresh fixed amount from on-chain rule when denom_id exists.
+                                  // This avoids stale local note amount causing requested > available mismatch.
+                                  const noteDenomId = (note.denom_id || "").trim()
+                                  if (noteDenomId) {
                                     resolvedNoteAmountText =
                                       (await resolveHideV3FixedAmountText({
                                         executorAddress:
                                           note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS,
                                         tokenSymbol:
                                           selectedTokenSymbol || fromToken.symbol.toUpperCase(),
-                                        denomId: note.denom_id,
-                                        fallbackAmount: "",
+                                        denomId: noteDenomId,
+                                        fallbackAmount: selectedAmountText,
+                                        fallbackKind: "token",
                                       })) || ""
+                                  }
+                                  if (!resolvedNoteAmountText) {
+                                    resolvedNoteAmountText = selectedAmountText
                                   }
                                   if (resolvedNoteAmountText) {
                                     setFromAmount(resolvedNoteAmountText)
@@ -5960,10 +5987,28 @@ export function TradingInterface() {
                                   })
                                   setHidePanelOpen(false)
                                   setAutoRunSelectedHideNoteSwap(true)
+                                  } catch (error) {
+                                    setActivePendingHideNoteSwapKey(null)
+                                    notifications.addNotification({
+                                      type: "error",
+                                      title: "Use note failed",
+                                      message:
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Failed to prepare selected hide note.",
+                                    })
+                                  }
                                 })()
                               }}
                             >
-                              Swap Privat now
+                              {isActiveNoteSwap ? (
+                                <span className="inline-flex items-center gap-1">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  Processing...
+                                </span>
+                              ) : (
+                                "Swap Privat now"
+                              )}
                             </Button>
                             <Button
                               type="button"
