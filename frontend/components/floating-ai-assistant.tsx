@@ -5199,6 +5199,15 @@ export function FloatingAIAssistant() {
         txHash: onchainTxHash,
         txNetwork: "starknet",
       })
+      appendMessagesForTier(selectedTier, [
+        {
+          role: "assistant",
+          content: normalizeMessageText(
+            `On-chain setup submitted.\nBurn Tx: ${onchainTxHash.slice(0, 12)}...\nTrack tx: ${buildTxExplorerUrl(onchainTxHash, "starknet")}`
+          ),
+          timestamp: nowTimestampLabel(),
+        },
+      ])
       setupSubmitCooldownUntilRef.current = Date.now() + AI_SETUP_SUBMIT_COOLDOWN_MS
       lastSetupSubmitAtRef.current = Date.now()
 
