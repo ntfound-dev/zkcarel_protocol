@@ -892,6 +892,34 @@ export function LimitOrder() {
    * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
    */
   const handleSubmitOrder = () => {
+    const parsedPrice = Number.parseFloat(price)
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      notifications.addNotification({
+        type: "error",
+        title: "Price is required",
+        message: "Set a valid target price before creating the order.",
+      })
+      return
+    }
+    const parsedAmount = Number.parseFloat(amount)
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      notifications.addNotification({
+        type: "error",
+        title: "Amount is required",
+        message: "Set a valid amount before creating the order.",
+      })
+      return
+    }
+    const sourceToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
+    const available = resolveAvailableBalance(sourceToken)
+    if (parsedAmount > available) {
+      notifications.addNotification({
+        type: "error",
+        title: "Insufficient balance",
+        message: `Amount exceeds your ${sourceToken} balance.`,
+      })
+      return
+    }
     setShowConfirmDialog(true)
   }
 
@@ -911,6 +939,7 @@ export function LimitOrder() {
       return
     }
     setIsSubmitting(true)
+    let orderCreated = false
     try {
       const effectiveHideBalance = balanceHidden
       const fromToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
@@ -1096,6 +1125,7 @@ export function LimitOrder() {
       }
 
       setOrders((prev) => [newOrder, ...prev])
+      orderCreated = true
       setSubmitSuccess(true)
       notifications.addNotification({
         type: "success",
@@ -1112,12 +1142,14 @@ export function LimitOrder() {
       })
     } finally {
       setIsSubmitting(false)
-      setTimeout(() => {
-        setShowConfirmDialog(false)
-        setSubmitSuccess(false)
-        setAmount("")
-        setPrice("")
-      }, 1500)
+      if (orderCreated) {
+        setTimeout(() => {
+          setShowConfirmDialog(false)
+          setSubmitSuccess(false)
+          setAmount("")
+          setPrice("")
+        }, 1500)
+      }
     }
   }
 
@@ -1845,7 +1877,7 @@ export function LimitOrder() {
                   {/* Submit Button */}
                   <Button 
                     onClick={handleSubmitOrder}
-                    disabled={!price || !amount || isBtcBuyComingSoon || isAutoPrivacyProvisioning}
+                    disabled={isBtcBuyComingSoon || isAutoPrivacyProvisioning}
                     className="w-full py-6 bg-success hover:bg-success/90 text-success-foreground font-bold"
                   >
                     {isBtcBuyComingSoon ? "Coming Soon (BTC Buy)" : "Create Buy Order"}
@@ -2101,7 +2133,7 @@ export function LimitOrder() {
                   {/* Submit Button */}
                   <Button 
                     onClick={handleSubmitOrder}
-                    disabled={!price || !amount || isAutoPrivacyProvisioning}
+                    disabled={isAutoPrivacyProvisioning}
                     className="w-full py-6 bg-destructive hover:bg-destructive/90 text-destructive-foreground font-bold"
                   >
                     Create Sell Order
