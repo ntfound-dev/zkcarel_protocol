@@ -57,6 +57,7 @@ import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 
 const tokenCatalog = [
   { symbol: "STRK", name: "StarkNet", icon: "◈", price: 0, change: 0 },
+  { symbol: "WBTC", name: "Wrapped Bitcoin", icon: "₿", price: 0, change: 0 },
   { symbol: "CAREL", name: "Carel Protocol", icon: "◐", price: 0, change: 0 },
   { symbol: "USDT", name: "Tether", icon: "₮", price: 0, change: 0 },
   { symbol: "USDC", name: "USD Coin", icon: "⭕", price: 0, change: 0 },
@@ -344,7 +345,7 @@ export function LimitOrder() {
   const wallet = useWallet()
   const { prices: livePrices, changes: liveChanges } = useLivePrices(
     React.useMemo(() => tokenCatalog.map((token) => token.symbol), []),
-    { fallbackPrices: { CAREL: 1, USDC: 1, USDT: 1 } }
+    { fallbackPrices: { CAREL: 1, USDC: 1, USDT: 1, WBTC: 68000 } }
   )
   const [tokens, setTokens] = React.useState<TokenItem[]>(tokenCatalog)
   const [selectedToken, setSelectedToken] = React.useState(tokens[0])
@@ -617,19 +618,20 @@ export function LimitOrder() {
   React.useEffect(() => {
     let active = true
     const { interval, limit } = intervalForPeriod(chartPeriod)
+    const chartSymbol = selectedToken.symbol.toUpperCase() === "WBTC" ? "BTC" : selectedToken.symbol
     ;(async () => {
       try {
         let response
         try {
           response = await getTokenOHLCV({
-            token: selectedToken.symbol,
+            token: chartSymbol,
             interval,
             limit,
             source: "coingecko",
           })
         } catch {
           response = await getTokenOHLCV({
-            token: selectedToken.symbol,
+            token: chartSymbol,
             interval,
             limit,
           })
