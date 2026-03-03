@@ -1892,16 +1892,55 @@ export function TradingInterface() {
   )
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
     const cachedPayload = loadTradePrivacyPayload()
+    const manualSelection = manuallySelectedHideNoteRef.current
+    const manualSelectedPendingNote = manualSelection
+      ? loadPendingHideNotes().find((note) => {
+          const noteCommitment = (note.note_commitment || "").trim().toLowerCase()
+          const noteNullifier = (note.nullifier || "").trim().toLowerCase()
+          const sameCommitment =
+            !!manualSelection.commitment && !!noteCommitment && noteCommitment === manualSelection.commitment
+          const sameNullifier =
+            !!manualSelection.nullifier && !!noteNullifier && noteNullifier === manualSelection.nullifier
+          return sameCommitment || sameNullifier
+        })
+      : undefined
+    const manualSelectedCommitment = (
+      manualSelectedPendingNote?.note_commitment ||
+      manualSelection?.commitment ||
+      ""
+    )
+      .trim()
+      .toLowerCase()
+    const manualSelectedNullifier = (
+      manualSelectedPendingNote?.nullifier ||
+      manualSelection?.nullifier ||
+      ""
+    )
+      .trim()
+      .toLowerCase()
+    const manualSelectedExecutor = (manualSelectedPendingNote?.executor_address || "").trim()
+    const manualSelectedRoot = (manualSelectedPendingNote?.root || "").trim()
+    const manualSelectedDenomId = (manualSelectedPendingNote?.denom_id || "").trim()
+    const manualSelectedSpendableAtUnix =
+      typeof manualSelectedPendingNote?.spendable_at_unix === "number" &&
+      Number.isFinite(manualSelectedPendingNote.spendable_at_unix)
+        ? Math.floor(manualSelectedPendingNote.spendable_at_unix)
+        : undefined
+    const manualSelectionLocked = !!manualSelectedCommitment || !!manualSelectedNullifier
     const cachedPayloadIsV3 = isV3Payload(cachedPayload)
-    const lockedNoteNullifier = (cachedPayload?.nullifier || "").trim().toLowerCase()
+    const lockedNoteNullifier =
+      manualSelectedNullifier || (cachedPayload?.nullifier || "").trim().toLowerCase()
     const lockedNoteCommitment = (
+      manualSelectedCommitment ||
       cachedPayload?.note_commitment ||
       cachedPayload?.commitment ||
       ""
     )
       .trim()
       .toLowerCase()
-    const lockedPendingNote = cachedPayloadIsV3
+    const lockedPendingNote = manualSelectedPendingNote
+      ? manualSelectedPendingNote
+      : cachedPayloadIsV3
       ? loadPendingHideNotes().find((note) => {
           const noteCommitment = (note.note_commitment || "").trim().toLowerCase()
           const noteNullifier = (note.nullifier || "").trim().toLowerCase()
@@ -1923,9 +1962,10 @@ export function TradingInterface() {
       Number.isFinite(currentAmount) &&
       Math.abs(currentAmount - lockedNoteAmount) >
         Math.max(1e-9, Math.pow(10, -Math.min(6, resolveTokenDecimals(fromToken.symbol))))
-    const cachedPayloadNoteMismatch = cachedPayloadIsV3 && (lockedTokenMismatch || lockedAmountMismatch)
+    const cachedPayloadNoteMismatch =
+      cachedPayloadIsV3 && !manualSelectionLocked && (lockedTokenMismatch || lockedAmountMismatch)
     const hasLockedV3Note =
-      cachedPayloadIsV3 &&
+      (cachedPayloadIsV3 || manualSelectionLocked) &&
       !cachedPayloadNoteMismatch &&
       !!lockedNoteNullifier &&
       !!lockedNoteCommitment
@@ -1998,14 +2038,19 @@ export function TradingInterface() {
             to_network: toToken.network,
             note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
             denom_id: inferredHideDenomId || cachedPayload?.denom_id,
-            note_commitment: cachedPayloadNoteMismatch
-              ? undefined
-              : cachedPayload?.note_commitment || cachedPayload?.commitment,
-            nullifier: cachedPayloadNoteMismatch ? undefined : cachedPayload?.nullifier,
-            root: cachedPayloadNoteMismatch ? undefined : cachedPayload?.root,
-            spendable_at_unix: cachedPayloadNoteMismatch
-              ? undefined
-              : cachedPayload?.spendable_at_unix,
+            note_commitment:
+              manualSelectedCommitment ||
+              (cachedPayloadNoteMismatch
+                ? undefined
+                : cachedPayload?.note_commitment || cachedPayload?.commitment),
+            nullifier:
+              manualSelectedNullifier ||
+              (cachedPayloadNoteMismatch ? undefined : cachedPayload?.nullifier),
+            root:
+              manualSelectedRoot || (cachedPayloadNoteMismatch ? undefined : cachedPayload?.root),
+            spendable_at_unix:
+              manualSelectedSpendableAtUnix ||
+              (cachedPayloadNoteMismatch ? undefined : cachedPayload?.spendable_at_unix),
           },
         })
         const responseProof = normalizeHexArray(response.payload?.proof)
@@ -2066,14 +2111,14 @@ export function TradingInterface() {
         const normalizedPayload: PrivacyVerificationPayload = {
           verifier: payload.verifier,
           note_version: payload.note_version,
-          executor_address: payload.executor_address,
-          root: payload.root,
-          nullifier: payload.nullifier,
-          commitment: payload.commitment,
+          executor_address: manualSelectedExecutor || payload.executor_address,
+          root: manualSelectedRoot || payload.root,
+          nullifier: manualSelectedNullifier || payload.nullifier,
+          commitment: manualSelectedCommitment || payload.commitment,
           recipient: payload.recipient,
-          note_commitment: payload.note_commitment,
-          denom_id: payload.denom_id,
-          spendable_at_unix: payload.spendable_at_unix,
+          note_commitment: manualSelectedCommitment || payload.note_commitment,
+          denom_id: manualSelectedDenomId || payload.denom_id,
+          spendable_at_unix: manualSelectedSpendableAtUnix || payload.spendable_at_unix,
           proof,
           public_inputs: publicInputs,
         }
