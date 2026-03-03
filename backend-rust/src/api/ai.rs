@@ -75,6 +75,7 @@ pub struct AIRuntimeConfigResponse {
 pub struct AIExecutorReadyResponse {
     pub ready: bool,
     pub burner_role_granted: bool,
+    pub signature_verification_enabled: Option<bool>,
     pub updated_onchain: bool,
     pub tx_hash: Option<String>,
     pub message: String,
@@ -1524,6 +1525,8 @@ pub async fn ensure_executor_ready(
     let _ = require_user(&headers, &state).await?;
     let (executor_address, carel_token_address) =
         resolve_ai_executor_and_carel_addresses(&state.config)?;
+    let signature_verification_enabled =
+        fetch_ai_executor_signature_verification_enabled(&state, &executor_address).await;
     let mut status_notes: Vec<String> = Vec::new();
 
     let burner_role_granted =
@@ -1535,6 +1538,7 @@ pub async fn ensure_executor_ready(
             return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
                 ready: false,
                 burner_role_granted: true,
+                signature_verification_enabled,
                 updated_onchain: false,
                 tx_hash: None,
                 message: format!("AI executor preflight blocked. {}", status_notes.join(" ")),
@@ -1548,6 +1552,7 @@ pub async fn ensure_executor_ready(
         return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
             ready: true,
             burner_role_granted: true,
+            signature_verification_enabled,
             updated_onchain: false,
             tx_hash: None,
             message,
@@ -1570,6 +1575,7 @@ pub async fn ensure_executor_ready(
                 return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
                     ready: false,
                     burner_role_granted: true,
+                    signature_verification_enabled,
                     updated_onchain: true,
                     tx_hash: Some(tx_hash_hex.clone()),
                     message: format!("AI executor preflight blocked. {}", status_notes.join(" ")),
@@ -1586,6 +1592,7 @@ pub async fn ensure_executor_ready(
             return Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
                 ready: true,
                 burner_role_granted: true,
+                signature_verification_enabled,
                 updated_onchain: true,
                 tx_hash: Some(tx_hash_hex),
                 message,
@@ -1596,6 +1603,7 @@ pub async fn ensure_executor_ready(
     Ok(Json(ApiResponse::success(AIExecutorReadyResponse {
         ready: false,
         burner_role_granted: false,
+        signature_verification_enabled,
         updated_onchain: true,
         tx_hash: Some(tx_hash_hex),
         message:
@@ -2208,6 +2216,21 @@ async fn fetch_ai_executor_action_count(state: &AppState, contract: &str) -> Opt
         .await
         .ok()?;
     parse_felt_u64(&raw_value)
+}
+
+// Internal helper that fetches data for `fetch_ai_executor_signature_verification_enabled`.
+async fn fetch_ai_executor_signature_verification_enabled(
+    state: &AppState,
+    contract: &str,
+) -> Option<bool> {
+    let client = StarknetClient::new(state.config.starknet_rpc_url.clone());
+    let storage_key = get_storage_var_address("signature_verification_enabled", &[]).ok()?;
+    let storage_key_hex = format!("{:#x}", storage_key);
+    let raw_value = client
+        .get_storage_at(contract, &storage_key_hex)
+        .await
+        .ok()?;
+    parse_felt_u64(&raw_value).map(|value| value != 0)
 }
 
 #[cfg(test)]

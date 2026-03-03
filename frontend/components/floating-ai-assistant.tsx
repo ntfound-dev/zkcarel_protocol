@@ -1354,6 +1354,7 @@ interface PendingExecutionConfirmation {
 interface ExecutorPreflightCache {
   ready: boolean
   burnerRoleGranted: boolean
+  signatureVerificationEnabled: boolean | null
   message: string
   expiresAt: number
 }
@@ -1784,6 +1785,7 @@ export function FloatingAIAssistant() {
   const executorPreflightCacheRef = React.useRef<ExecutorPreflightCache>({
     ready: false,
     burnerRoleGranted: false,
+    signatureVerificationEnabled: null,
     message: "",
     expiresAt: 0,
   })
@@ -4881,6 +4883,7 @@ export function FloatingAIAssistant() {
         preflight = {
           ready: cachedPreflight.ready,
           burner_role_granted: cachedPreflight.burnerRoleGranted,
+          signature_verification_enabled: cachedPreflight.signatureVerificationEnabled,
           updated_onchain: false,
           tx_hash: null,
           message: cachedPreflight.message,
@@ -4924,6 +4927,7 @@ export function FloatingAIAssistant() {
         executorPreflightCacheRef.current = {
           ready: preflight.ready,
           burnerRoleGranted: preflight.burner_role_granted,
+          signatureVerificationEnabled: preflight.signature_verification_enabled ?? null,
           message: preflight.message || "",
           expiresAt: Date.now() + preflightTtlMs,
         }
@@ -4940,6 +4944,7 @@ export function FloatingAIAssistant() {
       if (!preflight.ready || !preflight.burner_role_granted) {
         throw new Error(preflight.message || "AI executor preflight is not ready yet.")
       }
+      const requiresTypedSetupSignature = preflight.signature_verification_enabled !== false
 
       const payload = `tier:${selectedTier}`
       const actionType = actionTypeForTier(selectedTier)
@@ -4999,36 +5004,49 @@ export function FloatingAIAssistant() {
         )
       }
 
-      const buildSetupCalls = async (options?: { forceFreshPrepare?: boolean }): Promise<StarknetInvokeCall[]> => {
-        const prepareResponse = await prepareChallengeWithRetry({
-          forceFresh: options?.forceFreshPrepare === true,
-        })
-        const preparedActionType = Number.isFinite(prepareResponse.action_type)
-          ? prepareResponse.action_type
-          : actionType
-        const preparedParams =
-          typeof prepareResponse.params === "string" && prepareResponse.params.trim()
-            ? prepareResponse.params
-            : payload
-        const messageHash = toHexFelt(prepareResponse.message_hash || "0x0")
-        const typedData =
-          prepareResponse.typed_data && typeof prepareResponse.typed_data === "object"
-            ? (prepareResponse.typed_data as Record<string, unknown>)
-            : null
-        if (!typedData) {
-          throw new Error("Backend did not return AI setup typed-data payload.")
-        }
+      const buildSetupCalls = async (options?: {
+        forceFreshPrepare?: boolean
+        forceTypedSignature?: boolean
+      }): Promise<{ calls: StarknetInvokeCall[]; usesTypedSignature: boolean }> => {
+        const useTypedSignature =
+          options?.forceTypedSignature === true || requiresTypedSetupSignature
 
-        notifications.addNotification({
-          type: "info",
-          title: "AI setup challenge ready",
-          message: `Nonce ${prepareResponse.nonce} prepared. Confirm wallet message signature.`,
-        })
+        let preparedActionType = actionType
+        let preparedParams = payload
+        let messageHash = "0x0"
+        let userSignature: string[] = []
 
-        await waitMs(AI_SETUP_PRE_WALLET_DELAY_MS)
-        const userSignature = await signStarknetTypedDataFromWallet(typedData, providerHint)
-        if (!Array.isArray(userSignature) || userSignature.length === 0) {
-          throw new Error("Wallet returned empty AI setup signature.")
+        if (useTypedSignature) {
+          const prepareResponse = await prepareChallengeWithRetry({
+            forceFresh: options?.forceFreshPrepare === true,
+          })
+          preparedActionType = Number.isFinite(prepareResponse.action_type)
+            ? prepareResponse.action_type
+            : actionType
+          preparedParams =
+            typeof prepareResponse.params === "string" && prepareResponse.params.trim()
+              ? prepareResponse.params
+              : payload
+          messageHash = toHexFelt(prepareResponse.message_hash || "0x0")
+          const typedData =
+            prepareResponse.typed_data && typeof prepareResponse.typed_data === "object"
+              ? (prepareResponse.typed_data as Record<string, unknown>)
+              : null
+          if (!typedData) {
+            throw new Error("Backend did not return AI setup typed-data payload.")
+          }
+
+          notifications.addNotification({
+            type: "info",
+            title: "AI setup challenge ready",
+            message: `Nonce ${prepareResponse.nonce} prepared. Confirm wallet message signature.`,
+          })
+
+          await waitMs(AI_SETUP_PRE_WALLET_DELAY_MS)
+          userSignature = await signStarknetTypedDataFromWallet(typedData, providerHint)
+          if (!Array.isArray(userSignature) || userSignature.length === 0) {
+            throw new Error("Wallet returned empty AI setup signature.")
+          }
         }
 
         const submitCalldata = [
@@ -5038,7 +5056,7 @@ export function FloatingAIAssistant() {
           userSignature.length,
           ...userSignature,
         ]
-        return AI_SETUP_SKIP_APPROVE
+        const calls: StarknetInvokeCall[] = AI_SETUP_SKIP_APPROVE
           ? [
               {
                 contractAddress: executorAddress,
@@ -5058,6 +5076,7 @@ export function FloatingAIAssistant() {
                 calldata: submitCalldata,
               },
             ]
+        return { calls, usesTypedSignature: useTypedSignature }
       }
 
       /**
@@ -5095,21 +5114,52 @@ export function FloatingAIAssistant() {
         return /invalid transaction nonce|invalid nonce|nonce too low/i.test(message.toLowerCase())
       }
 
-      let setupCalls = await buildSetupCalls()
+      const isTypedSignatureRequiredError = (message: string) => {
+        const lower = message.toLowerCase()
+        return (
+          lower.includes("message hash required") ||
+          lower.includes("invalid user signature") ||
+          lower.includes("signature required")
+        )
+      }
+
+      let setupBundle = await buildSetupCalls()
       notifications.addNotification({
         type: "info",
         title: "Wallet signature required",
-        message: AI_SETUP_SKIP_APPROVE
-          ? `Confirm submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn address: ${effectivePaymentAddress || "not configured"}`
-          : `Confirm CAREL approval (${approveAmountCarel}) + submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn address: ${effectivePaymentAddress || "not configured"}`,
+        message:
+          (AI_SETUP_SKIP_APPROVE
+            ? `Confirm submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn address: ${effectivePaymentAddress || "not configured"}`
+            : `Confirm CAREL approval (${approveAmountCarel}) + submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn address: ${effectivePaymentAddress || "not configured"}`) +
+          (setupBundle.usesTypedSignature
+            ? ""
+            : "\nSignature challenge is disabled, so setup+burn uses one wallet transaction."),
       })
       let onchainTxHash: string
       try {
-        onchainTxHash = await submitOnchainAction(setupCalls)
+        onchainTxHash = await submitOnchainAction(setupBundle.calls)
       } catch (firstError) {
         const firstMessage =
           firstError instanceof Error ? firstError.message : String(firstError ?? "")
-        if (
+        if (!setupBundle.usesTypedSignature && isTypedSignatureRequiredError(firstMessage)) {
+          notifications.addNotification({
+            type: "info",
+            title: "Signature challenge required",
+            message:
+              "Executor still requires typed-data signature. Refreshing challenge and retrying setup.",
+          })
+          await waitMs(AI_SETUP_NONCE_RETRY_DELAY_MS)
+          setupBundle = await buildSetupCalls({
+            forceFreshPrepare: true,
+            forceTypedSignature: true,
+          })
+          notifications.addNotification({
+            type: "info",
+            title: "Wallet signature required",
+            message: "Confirm typed-data signature, then confirm submit_action transaction.",
+          })
+          onchainTxHash = await submitOnchainAction(setupBundle.calls)
+        } else if (
           isInvalidUserSignatureError(firstError) ||
           isWalletMulticallExecutionError(firstMessage)
         ) {
@@ -5121,13 +5171,13 @@ export function FloatingAIAssistant() {
           })
           await waitMs(AI_SETUP_NONCE_RETRY_DELAY_MS)
           // Retry once by refreshing typed-data challenge and wallet signature.
-          setupCalls = await buildSetupCalls({ forceFreshPrepare: true })
+          setupBundle = await buildSetupCalls({ forceFreshPrepare: true, forceTypedSignature: true })
           notifications.addNotification({
             type: "info",
             title: "Retrying with refreshed signature",
             message: "Typed-data signature refreshed. Confirm the transaction one more time.",
           })
-          onchainTxHash = await submitOnchainAction(setupCalls, true)
+          onchainTxHash = await submitOnchainAction(setupBundle.calls, true)
         } else if (isWalletNonceError(firstError)) {
           notifications.addNotification({
             type: "info",
@@ -5136,7 +5186,7 @@ export function FloatingAIAssistant() {
               "Previous wallet nonce is still pending. Waiting briefly, then retrying setup once.",
           })
           await waitMs(AI_SETUP_NONCE_RETRY_DELAY_MS)
-          onchainTxHash = await submitOnchainAction(setupCalls)
+          onchainTxHash = await submitOnchainAction(setupBundle.calls)
         } else {
           throw firstError
         }
@@ -5291,6 +5341,8 @@ export function FloatingAIAssistant() {
           ? "AI executor daily on-chain rate limit reached. Ask admin to increase `set_rate_limit` (for example 1000), or wait until UTC day reset."
         : /request timeout|network error|timed out|timeout/i.test(lowerRaw)
           ? "AI setup preparation timed out before wallet popup appeared. Backend/RPC is still busy preparing typed-data challenge even after automatic retries. Retry once."
+        : /message hash required|invalid user signature/.test(lowerRaw)
+          ? "AI executor currently requires typed-data signature. Confirm the typed-data popup first, then confirm submit_action transaction."
         : /insufficient allowance/i.test(rawMessage)
           ? "Demo setup is skipping approve, but contract still requires allowance. Disable AI setup fee (fee_enabled=false) or disable NEXT_PUBLIC_AI_SETUP_SKIP_APPROVE."
         : rawMessage

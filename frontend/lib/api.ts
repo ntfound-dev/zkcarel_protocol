@@ -442,6 +442,7 @@ export interface AiRuntimeConfigResponse {
 export interface AiExecutorReadyResponse {
   ready: boolean
   burner_role_granted: boolean
+  signature_verification_enabled?: boolean | null
   updated_onchain: boolean
   tx_hash?: string | null
   message: string
