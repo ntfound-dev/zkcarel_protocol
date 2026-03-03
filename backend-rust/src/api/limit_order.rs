@@ -35,6 +35,7 @@ use crate::{
 };
 use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
+use std::collections::HashSet;
 
 use super::{
     onchain_privacy::{
@@ -357,9 +358,13 @@ fn resolve_hide_pool_version(payload: Option<&ModelPrivacyVerificationPayload>) 
     hide_balance_pool_version_default()
 }
 
-// Internal helper that fetches data for `resolve_private_action_executor_felt` in the limit-order flow.
+// Internal helper that fetches data for `resolve_private_action_executor_candidates` in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Result<Felt> {
+fn resolve_private_action_executor_candidates(
+    config: &crate::config::Config,
+) -> Result<Vec<Felt>> {
+    let mut out: Vec<Felt> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     for raw in [
         std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
         std::env::var("NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
@@ -372,7 +377,24 @@ fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Resul
         if trimmed.is_empty() || trimmed.starts_with("0x0000") {
             continue;
         }
-        return parse_felt(trimmed);
+        match parse_felt(trimmed) {
+            Ok(parsed) => {
+                let key = parsed.to_string().to_ascii_lowercase();
+                if seen.insert(key) {
+                    out.push(parsed);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Ignoring invalid PrivateActionExecutor candidate '{}' for limit hide mode: {}",
+                    trimmed,
+                    err
+                );
+            }
+        }
+    }
+    if !out.is_empty() {
+        return Ok(out);
     }
     Err(crate::error::AppError::BadRequest(
         "PrivateActionExecutor is not configured. Set PRIVATE_ACTION_EXECUTOR_ADDRESS.".to_string(),
@@ -452,11 +474,71 @@ async fn contract_supports_selector(
                     contract, message
                 )))
             } else {
-                Ok(true)
+                Err(crate::error::AppError::BlockchainRPC(format!(
+                    "Unexpected selector probe error on {}: {}",
+                    contract, message
+                )))
             }
         }
         Err(err) => Err(err),
     }
+}
+
+async fn executor_supports_selectors(
+    state: &AppState,
+    executor: Felt,
+    selectors: &[&str],
+) -> Result<bool> {
+    for name in selectors {
+        let selector = get_selector_from_name(name)
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+        if !contract_supports_selector(state, executor, selector).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn resolve_private_action_executor_felt_for_limit_hide(state: &AppState) -> Result<Felt> {
+    let candidates = resolve_private_action_executor_candidates(&state.config)?;
+    let required_selectors: &[&str] = match hide_executor_kind() {
+        HideExecutorKind::PrivateActionExecutorV1 => &[
+            "preview_limit_intent_hash",
+            "submit_private_intent",
+            "execute_private_limit_order",
+        ],
+        HideExecutorKind::ShieldedPoolV2 => &[
+            "deposit_fixed_for",
+            "preview_limit_action_hash",
+            "submit_private_action",
+            "execute_private_limit_order",
+        ],
+        HideExecutorKind::ShieldedPoolV3 => &[
+            "deposit_fixed_v3",
+            "preview_limit_action_hash",
+            "submit_private_limit",
+            "execute_private_limit_with_payout",
+        ],
+    };
+
+    let mut unsupported: Vec<String> = Vec::new();
+    for candidate in candidates {
+        if executor_supports_selectors(state, candidate, required_selectors).await? {
+            tracing::info!(
+                "Using compatible limit-order hide executor {} (kind={:?})",
+                candidate,
+                hide_executor_kind()
+            );
+            return Ok(candidate);
+        }
+        unsupported.push(candidate.to_string());
+    }
+
+    Err(crate::error::AppError::BadRequest(format!(
+        "No compatible hide executor found for limit-order flow (kind={:?}). Checked: {}",
+        hide_executor_kind(),
+        unsupported.join(", ")
+    )))
 }
 
 async fn resolve_limit_order_action_selector(
@@ -1025,7 +1107,7 @@ pub async fn create_order(
         && hide_balance_limit_order_relayer_pool_enabled()
         && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
-        let executor = resolve_private_action_executor_felt(&state.config)?;
+        let executor = resolve_private_action_executor_felt_for_limit_hide(&state).await?;
         let action_target = resolve_limit_order_target_felt(&state)?;
         let verifier_kind = parse_privacy_verifier_kind(
             req.privacy
@@ -1521,7 +1603,7 @@ pub async fn cancel_order(
         && hide_balance_limit_order_relayer_pool_enabled()
         && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
-        let executor = resolve_private_action_executor_felt(&state.config)?;
+        let executor = resolve_private_action_executor_felt_for_limit_hide(&state).await?;
         let action_target = resolve_limit_order_target_felt(&state)?;
         let verifier_kind = parse_privacy_verifier_kind(
             req.privacy

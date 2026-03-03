@@ -51,7 +51,6 @@ import {
   invokeStarknetCallsFromWallet,
   toHexFelt,
 } from "@/lib/onchain-trade"
-import { executeHideViaRelayer } from "@/lib/privacy-relayer"
 import { useLivePrices } from "@/hooks/use-live-prices"
 import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 
@@ -1059,29 +1058,8 @@ export function LimitOrder() {
         notifications.addNotification({
           type: "info",
           title: "Submitting private order",
-          message: "Submitting hide-mode limit order via Starknet relayer pool.",
+          message: "Submitting hide-mode limit order via backend relayer pool.",
         })
-        const relayed = await executeHideViaRelayer({
-          flow: "limit",
-          actionCall: createOrderCall,
-          tokenAddress: fromTokenAddress,
-          amount,
-          tokenDecimals: TOKEN_DECIMALS[fromToken.toUpperCase()] || 18,
-          providerHint: starknetProviderHint,
-          verifier: (payloadForBackend?.verifier || "garaga").trim() || "garaga",
-          txContext: {
-            flow: "limit_order",
-            from_token: fromToken,
-            to_token: toToken,
-            amount,
-            from_network: "starknet",
-            to_network: "starknet",
-          },
-        })
-        onchainTxHash = relayed.txHash
-        payloadForBackend = relayed.privacyPayload
-        persistTradePrivacyPayload(payloadForBackend)
-        setHasTradePrivacyPayload(true)
       }
       let response: Awaited<ReturnType<typeof createLimitOrder>>
       try {
@@ -1169,7 +1147,6 @@ export function LimitOrder() {
     try {
       const effectiveHideBalance = balanceHidden
       const useRelayerPoolHide = effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED
-      const targetOrder = orders.find((order) => order.id === orderId)
       if (!STARKNET_LIMIT_ORDER_BOOK_ADDRESS) {
         throw new Error(
           "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS is not set. Configure the limit order contract address in frontend/.env.local."
@@ -1248,34 +1225,8 @@ export function LimitOrder() {
         notifications.addNotification({
           type: "info",
           title: "Submitting private cancel",
-          message: "Submitting hide-mode cancel via Starknet relayer pool.",
+          message: "Submitting hide-mode cancel via backend relayer pool.",
         })
-        const cancelTokenSymbol = (targetOrder?.fromToken || targetOrder?.token || payToken.symbol).toUpperCase()
-        const cancelTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[cancelTokenSymbol]
-        if (!cancelTokenAddress) {
-          throw new Error(
-            `Token address for ${cancelTokenSymbol} is not configured for hide-mode relayer execution.`
-          )
-        }
-        const cancelAmount = String(targetOrder?.amount || "1")
-        const relayed = await executeHideViaRelayer({
-          flow: "limit",
-          actionCall: cancelCall,
-          tokenAddress: cancelTokenAddress,
-          amount: cancelAmount,
-          tokenDecimals: TOKEN_DECIMALS[cancelTokenSymbol] || 18,
-          providerHint: starknetProviderHint,
-          verifier: (payloadForBackend?.verifier || "garaga").trim() || "garaga",
-          txContext: {
-            flow: "limit_order_cancel",
-            from_network: "starknet",
-            to_network: "starknet",
-          },
-        })
-        onchainTxHash = relayed.txHash
-        payloadForBackend = relayed.privacyPayload
-        persistTradePrivacyPayload(payloadForBackend)
-        setHasTradePrivacyPayload(true)
       }
       try {
         await cancelLimitOrder(orderId, {

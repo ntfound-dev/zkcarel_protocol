@@ -30,7 +30,6 @@ import {
   decimalToU256Parts,
   invokeStarknetCallsFromWallet,
 } from "@/lib/onchain-trade"
-import { executeHideViaRelayer } from "@/lib/privacy-relayer"
 
 const poolMeta: Record<string, { name: string; icon: string; type: string; gradient: string }> = {
   USDT: { name: "Tether", icon: "₮", type: "Stablecoin", gradient: "from-green-400 to-emerald-600" },
@@ -1108,66 +1107,8 @@ export function StakeEarn() {
         notifications.addNotification({
           type: "info",
           title: "Submitting private stake",
-          message: "Submitting hide-mode stake via Starknet relayer pool.",
+          message: "Submitting hide-mode stake via backend relayer pool.",
         })
-        const symbol = selectedPool.symbol.toUpperCase()
-        const decimals = POOL_DECIMALS[symbol] ?? 18
-        const [amountLow, amountHigh] = decimalToU256Parts(stakeAmount, decimals)
-        let fundingToken = ""
-        let actionCall: { contractAddress: string; entrypoint: string; calldata: string[] }
-        if (symbol === "CAREL") {
-          fundingToken = TOKEN_CAREL_ADDRESS
-          actionCall = {
-            contractAddress: STARKNET_STAKING_CAREL_ADDRESS,
-            entrypoint: "stake",
-            calldata: [amountLow, amountHigh],
-          }
-        } else if (symbol === "USDC" || symbol === "USDT" || symbol === "STRK") {
-          fundingToken =
-            symbol === "USDC"
-              ? TOKEN_USDC_ADDRESS
-              : symbol === "USDT"
-              ? TOKEN_USDT_ADDRESS
-              : TOKEN_STRK_ADDRESS
-          actionCall = {
-            contractAddress: STARKNET_STAKING_STABLECOIN_ADDRESS,
-            entrypoint: "stake",
-            calldata: [fundingToken, amountLow, amountHigh],
-          }
-        } else if (symbol === "WBTC") {
-          fundingToken = TOKEN_WBTC_ADDRESS
-          actionCall = {
-            contractAddress: STARKNET_STAKING_BTC_ADDRESS,
-            entrypoint: "stake",
-            calldata: [fundingToken, amountLow, amountHigh],
-          }
-        } else {
-          throw new Error(`Pool ${symbol} is not supported for hide-mode staking relayer.`)
-        }
-        if (!fundingToken) {
-          throw new Error(`Funding token for ${symbol} is not configured for hide-mode relayer.`)
-        }
-        const relayed = await executeHideViaRelayer({
-          flow: "stake",
-          actionCall,
-          tokenAddress: fundingToken,
-          amount: stakeAmount,
-          tokenDecimals: decimals,
-          providerHint: starknetProviderHint,
-          verifier: (payloadForBackend?.verifier || "garaga").trim() || "garaga",
-          txContext: {
-            flow: "stake",
-            from_token: selectedPool.symbol,
-            to_token: selectedPool.symbol,
-            amount: stakeAmount,
-            from_network: "starknet",
-            to_network: "starknet",
-          },
-        })
-        onchainTxHash = relayed.txHash
-        payloadForBackend = relayed.privacyPayload
-        persistTradePrivacyPayload(payloadForBackend)
-        setHasTradePrivacyPayload(true)
       }
       let response: Awaited<ReturnType<typeof stakeDeposit>>
       try {

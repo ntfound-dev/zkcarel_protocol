@@ -106,11 +106,6 @@ const quickPromptsByTier: Record<number, string[]> = {
     "please limit order USDT/USDC amount 10 at 1.25 expiry 3d",
   ],
   3: [
-    "set hide tier $5",
-    "set hide tier $10",
-    "set hide tier $50",
-    "set hide tier $100",
-    "set hide tier $250",
     "please set price alert for WBTC",
     "please private swap CAREL to USDT with tier $10",
     "please private swap USDC to STRK with tier $50",
@@ -1051,15 +1046,6 @@ function parseHideTierFromCommand(command: string): number | null {
   const tier = Number.parseInt(amountMatch[1] || "", 10)
   if (!Number.isFinite(tier)) return null
   return AI_HIDE_USDT_TIER_OPTIONS.some((option) => option.minUsdt === tier) ? tier : null
-}
-
-function isHideTierOnlyCommand(command: string): boolean {
-  const normalized = normalizeMessageText(command)
-  if (!/\b(hide\s*tier|tier|denom|denomination)\b/i.test(normalized)) return false
-  if (/\bswap|stake|claim|limit|order|bridge|rebalance|alert|portfolio|chart|price\b/i.test(normalized)) {
-    return false
-  }
-  return true
 }
 
 // Internal helper that parses token pair/amount from limit-order commands.
@@ -2940,35 +2926,14 @@ export function FloatingAIAssistant() {
     }
 
     const requestedHideTier = activeTier >= 3 ? parseHideTierFromCommand(command) : null
-    if (requestedHideTier && requestedHideTier !== selectedAiHideTier.minUsdt) {
+    const isSwapCommand = /\bswap\b/i.test(normalizeMessageText(command))
+    if (requestedHideTier && isSwapCommand && requestedHideTier !== selectedAiHideTier.minUsdt) {
       setAiHideUsdtTierMin(requestedHideTier)
       notifications.addNotification({
         type: "info",
         title: "Hide tier updated",
         message: `AI L3 hide tier set to $${requestedHideTier}.`,
       })
-    }
-    if (activeTier >= 3 && requestedHideTier && isHideTierOnlyCommand(command)) {
-      if (!hasPendingConfirmation) {
-        appendMessagesForTier(activeTier, [
-          {
-            role: "user",
-            content: command,
-            timestamp: userMessageTimestamp,
-          },
-        ])
-        setInput("")
-      }
-      appendMessagesForTier(activeTier, [
-        {
-          role: "assistant",
-          content: normalizeMessageText(
-            `Hide tier set to $${requestedHideTier}. Next private swap will use this tier amount automatically.`
-          ),
-          timestamp: nowTimestampLabel(),
-        },
-      ])
-      return
     }
 
     const isBridgeCommand = BRIDGE_COMMAND_REGEX.test(command)
@@ -4316,36 +4281,10 @@ export function FloatingAIAssistant() {
           let txHash = ""
           if (tierUsesGaraga) {
             try {
-              const stakeCalls = buildStakeWalletCalls(token, amountText)
-              const fundingToken = (stakeCalls[0]?.contractAddress || "").trim()
-              const actionCall = stakeCalls[stakeCalls.length - 1]
-              if (!fundingToken || !actionCall) {
-                throw new Error("Unable to build stake calldata for hide relayer path.")
-              }
-              const relayed = await executeHideViaRelayer({
-                flow: "stake",
-                actionCall,
-                tokenAddress: fundingToken,
-                amount: amountText,
-                tokenDecimals: AI_TOKEN_DECIMALS[token] ?? 18,
-                providerHint,
-                verifier: "garaga",
-                txContext: {
-                  flow: "stake",
-                  from_token: token,
-                  to_token: token,
-                  amount: amountText,
-                  from_network: "starknet",
-                  to_network: "starknet",
-                },
-              })
-              txHash = relayed.txHash
               stakeResult = await stakeDeposit({
                 pool_id: token,
                 amount: amountText,
-                onchain_tx_hash: relayed.txHash,
                 hide_balance: true,
-                privacy: relayed.privacyPayload,
               })
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error ?? "")
@@ -4541,24 +4480,6 @@ export function FloatingAIAssistant() {
               )
             }
             try {
-              const relayed = await executeHideViaRelayer({
-                flow: "limit",
-                actionCall: createOrderCall,
-                tokenAddress: fromAddress,
-                amount: amountText,
-                tokenDecimals: AI_TOKEN_DECIMALS[fromToken] ?? 18,
-                providerHint,
-                verifier: "garaga",
-                txContext: {
-                  flow: "limit_order",
-                  from_token: fromToken,
-                  to_token: toToken,
-                  amount: amountText,
-                  from_network: "starknet",
-                  to_network: "starknet",
-                },
-              })
-              txHash = relayed.txHash
               limitResult = await createLimitOrder({
                 from_token: fromToken,
                 to_token: toToken,
@@ -4567,9 +4488,7 @@ export function FloatingAIAssistant() {
                 expiry,
                 recipient: null,
                 client_order_id: clientOrderId,
-                onchain_tx_hash: relayed.txHash,
                 hide_balance: true,
-                privacy: relayed.privacyPayload,
               })
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error ?? "")

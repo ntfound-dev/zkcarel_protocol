@@ -3,7 +3,7 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader};
 use crate::{
@@ -523,8 +523,12 @@ fn resolve_hide_pool_version(payload: Option<&ModelPrivacyVerificationPayload>) 
     hide_balance_pool_version_default()
 }
 
-// Internal helper that fetches data for `resolve_private_action_executor_felt`.
-fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Result<Felt> {
+// Internal helper that fetches data for `resolve_private_action_executor_candidates`.
+fn resolve_private_action_executor_candidates(
+    config: &crate::config::Config,
+) -> Result<Vec<Felt>> {
+    let mut out: Vec<Felt> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     for raw in [
         std::env::var("PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
         std::env::var("NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS").ok(),
@@ -537,11 +541,158 @@ fn resolve_private_action_executor_felt(config: &crate::config::Config) -> Resul
         if trimmed.is_empty() || trimmed.starts_with("0x0000") {
             continue;
         }
-        return parse_felt(trimmed);
+        match parse_felt(trimmed) {
+            Ok(parsed) => {
+                let key = parsed.to_string().to_ascii_lowercase();
+                if seen.insert(key) {
+                    out.push(parsed);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Ignoring invalid PrivateActionExecutor candidate '{}' for stake hide mode: {}",
+                    trimmed,
+                    err
+                );
+            }
+        }
+    }
+    if !out.is_empty() {
+        return Ok(out);
     }
     Err(crate::error::AppError::BadRequest(
         "PrivateActionExecutor is not configured. Set PRIVATE_ACTION_EXECUTOR_ADDRESS.".to_string(),
     ))
+}
+
+fn is_missing_entrypoint_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("entry_point_not_found") || lower.contains("entrypoint_not_found") {
+        return true;
+    }
+    let mentions_entrypoint =
+        lower.contains("entrypoint") || lower.contains("entry point") || lower.contains("selector");
+    let mentions_missing =
+        lower.contains("does not exist") || lower.contains("not found") || lower.contains("missing");
+    mentions_entrypoint && mentions_missing
+}
+
+fn is_transient_probe_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("gateway")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("invalid peer certificate")
+        || lower.contains("unknownissuer")
+        || lower.contains("connection reset")
+        || lower.contains("network")
+}
+
+fn is_contract_revert_probe_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("contracterror")
+        || lower.contains("contract error")
+        || lower.contains("revert_error")
+        || lower.contains("execution_error")
+        || lower.contains("innercontractexecutionerror")
+        || lower.contains("sender required")
+        || lower.contains("failed to deserialize param")
+}
+
+async fn contract_supports_selector(
+    state: &AppState,
+    contract: Felt,
+    selector: Felt,
+) -> Result<bool> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let probe = reader
+        .call(FunctionCall {
+            contract_address: contract,
+            entry_point_selector: selector,
+            calldata: vec![Felt::ONE],
+        })
+        .await;
+    match probe {
+        Ok(_) => Ok(true),
+        Err(crate::error::AppError::BlockchainRPC(message)) => {
+            if is_missing_entrypoint_error(&message) {
+                Ok(false)
+            } else if is_contract_revert_probe_error(&message) {
+                Ok(true)
+            } else if is_transient_probe_error(&message) {
+                Err(crate::error::AppError::BlockchainRPC(format!(
+                    "Failed to probe selector support on {}: {}",
+                    contract, message
+                )))
+            } else {
+                Err(crate::error::AppError::BlockchainRPC(format!(
+                    "Unexpected selector probe error on {}: {}",
+                    contract, message
+                )))
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn executor_supports_selectors(
+    state: &AppState,
+    executor: Felt,
+    selectors: &[&str],
+) -> Result<bool> {
+    for name in selectors {
+        let selector = get_selector_from_name(name)
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+        if !contract_supports_selector(state, executor, selector).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn resolve_private_action_executor_felt_for_stake_hide(state: &AppState) -> Result<Felt> {
+    let candidates = resolve_private_action_executor_candidates(&state.config)?;
+    let required_selectors: &[&str] = match hide_executor_kind() {
+        HideExecutorKind::PrivateActionExecutorV1 => &[
+            "preview_stake_intent_hash",
+            "submit_private_intent",
+            "execute_private_stake",
+        ],
+        HideExecutorKind::ShieldedPoolV2 => &[
+            "deposit_fixed_for",
+            "preview_stake_action_hash",
+            "submit_private_action",
+            "execute_private_stake",
+        ],
+        HideExecutorKind::ShieldedPoolV3 => &[
+            "deposit_fixed_v3",
+            "preview_stake_action_hash",
+            "submit_private_stake",
+            "execute_private_stake_with_payout",
+        ],
+    };
+
+    let mut unsupported: Vec<String> = Vec::new();
+    for candidate in candidates {
+        if executor_supports_selectors(state, candidate, required_selectors).await? {
+            tracing::info!(
+                "Using compatible stake hide executor {} (kind={:?})",
+                candidate,
+                hide_executor_kind()
+            );
+            return Ok(candidate);
+        }
+        unsupported.push(candidate.to_string());
+    }
+
+    Err(crate::error::AppError::BadRequest(format!(
+        "No compatible hide executor found for stake flow (kind={:?}). Checked: {}",
+        hide_executor_kind(),
+        unsupported.join(", ")
+    )))
 }
 
 // Internal helper that fetches data for `resolve_staking_target_felt`.
@@ -1714,7 +1865,7 @@ pub async fn deposit(
         should_hide && hide_balance_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
 
     let tx_hash = if use_relayer_pool_hide {
-        let executor = resolve_private_action_executor_felt(&state.config)?;
+        let executor = resolve_private_action_executor_felt_for_stake_hide(&state).await?;
         let verifier_kind = parse_privacy_verifier_kind(
             req.privacy
                 .as_ref()
@@ -2088,7 +2239,7 @@ pub async fn withdraw(
     let use_relayer_pool_hide =
         should_hide && hide_balance_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
-        let executor = resolve_private_action_executor_felt(&state.config)?;
+        let executor = resolve_private_action_executor_felt_for_stake_hide(&state).await?;
         let verifier_kind = parse_privacy_verifier_kind(
             req.privacy
                 .as_ref()
@@ -2434,7 +2585,7 @@ pub async fn claim(
     let use_relayer_pool_hide =
         should_hide && hide_balance_relayer_pool_enabled() && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
-        let executor = resolve_private_action_executor_felt(&state.config)?;
+        let executor = resolve_private_action_executor_felt_for_stake_hide(&state).await?;
         let verifier_kind = parse_privacy_verifier_kind(
             req.privacy
                 .as_ref()
