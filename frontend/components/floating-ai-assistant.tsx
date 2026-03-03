@@ -2820,6 +2820,13 @@ export function FloatingAIAssistant() {
     ]
   )
 
+  const isHideNoteRegistrationMissingMessage = React.useCallback((message: string): boolean => {
+    const lower = (message || "").toLowerCase()
+    return /note belum terdaftar|note not registered|nullifier note missing|unknown root|note missing/.test(
+      lower
+    )
+  }, [])
+
   /**
    * Handles `handleSend` logic.
    *
@@ -3627,12 +3634,9 @@ export function FloatingAIAssistant() {
                 }
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error ?? "")
-                const lower = message.toLowerCase()
                 const noteNotRegistered =
                   HIDE_BALANCE_SHIELDED_POOL_V3 &&
-                  /note belum terdaftar|note not registered|nullifier note missing|unknown root|note missing/.test(
-                    lower
-                  )
+                  isHideNoteRegistrationMissingMessage(message)
                 if (noteNotRegistered && privacyPayload) {
                   const depositResult = await ensureAiHideV3NoteDeposited({
                     payload: privacyPayload,
@@ -3724,11 +3728,7 @@ export function FloatingAIAssistant() {
                     } catch (retryError) {
                       const retryMessage =
                         retryError instanceof Error ? retryError.message : String(retryError ?? "")
-                      const retryLower = retryMessage.toLowerCase()
-                      const stillNotRegistered =
-                        /note belum terdaftar|note not registered|nullifier note missing|unknown root|note missing/.test(
-                          retryLower
-                        )
+                      const stillNotRegistered = isHideNoteRegistrationMissingMessage(retryMessage)
                       if (!stillNotRegistered || retryIndex >= noteRetryBackoffMs.length) {
                         if (stillNotRegistered && retryIndex >= noteRetryBackoffMs.length) {
                           throw new Error(
@@ -4279,18 +4279,158 @@ export function FloatingAIAssistant() {
           } else {
           let stakeResult: Awaited<ReturnType<typeof stakeDeposit>>
           let txHash = ""
+          let stakeAmountText = amountText
+          let stakePrivacyPayload: PrivacyVerificationPayload | undefined
           if (tierUsesGaraga) {
-            try {
-              stakeResult = await stakeDeposit({
-                pool_id: token,
-                amount: amountText,
-                hide_balance: true,
+            if (!HIDE_BALANCE_RELAYER_POOL_ENABLED) {
+              throw new Error(
+                "Hide relayer pool is not enabled. Set NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true and restart frontend/backend."
+              )
+            }
+            if (HIDE_BALANCE_SHIELDED_POOL_V3) {
+              stakeAmountText = await resolveAiHideTierAmountText({
+                fromToken: token,
+                fallbackAmountText: amountText,
+                providerHint,
+                requireOnchainRule: true,
               })
+            }
+            stakePrivacyPayload = await requestGaragaPayload(
+              "stake",
+              token,
+              token,
+              stakeAmountText,
+              HIDE_BALANCE_SHIELDED_POOL_V3
+                ? { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                : undefined
+            )
+            if (HIDE_BALANCE_SHIELDED_POOL_V3 && !(stakePrivacyPayload.denom_id || "").trim()) {
+              stakePrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+            }
+            const submitPrivateStake = async (privacyPayload: PrivacyVerificationPayload) =>
+              stakeDeposit({
+                pool_id: token,
+                amount: stakeAmountText,
+                hide_balance: true,
+                privacy: privacyPayload,
+              })
+            try {
+              notifications.addNotification({
+                type: "info",
+                title: "Submitting private stake",
+                message: "Submitting hide-mode stake via backend relayer pool.",
+              })
+              stakeResult = await submitPrivateStake(stakePrivacyPayload)
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error ?? "")
-              throw new Error(
-                `Hide relayer unavailable. Wallet fallback is disabled so stake details never leak in explorer. Detail: ${message}`
-              )
+              const noteNotRegistered =
+                HIDE_BALANCE_SHIELDED_POOL_V3 &&
+                isHideNoteRegistrationMissingMessage(message) &&
+                !!stakePrivacyPayload
+              if (noteNotRegistered && stakePrivacyPayload) {
+                const depositResult = await ensureAiHideV3NoteDeposited({
+                  payload: stakePrivacyPayload,
+                  fromToken: token,
+                  toToken: token,
+                  amountText: stakeAmountText,
+                  providerHint,
+                })
+                stakeAmountText = depositResult.amountText
+                const remainingWaitMs = Math.max(0, depositResult.spendableAtMs - Date.now())
+                if (remainingWaitMs > 0) {
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Mixing window active",
+                    message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Stake Privat now.`,
+                  })
+                }
+                if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
+                  throw new Error(
+                    `Hide note deposited. Wait ${formatDurationHhMmSs(
+                      remainingWaitMs
+                    )} then retry private stake.`
+                  )
+                }
+                if (remainingWaitMs > 0) {
+                  await waitMs(remainingWaitMs)
+                }
+                notifications.addNotification({
+                  type: "info",
+                  title: "Stake Privat now",
+                  message: "Cooldown selesai. Menjalankan private stake otomatis.",
+                })
+                const pinnedNoteCommitment = (
+                  stakePrivacyPayload.note_commitment ||
+                  stakePrivacyPayload.commitment ||
+                  ""
+                ).trim()
+                const pinnedNullifier = (stakePrivacyPayload.nullifier || "").trim()
+                stakePrivacyPayload = await requestGaragaPayload(
+                  "stake",
+                  token,
+                  token,
+                  stakeAmountText,
+                  {
+                    denomId: String(selectedAiHideTier.minUsdt),
+                    noteVersion: "v3",
+                    noteCommitment: pinnedNoteCommitment || undefined,
+                    nullifier: pinnedNullifier || undefined,
+                  }
+                )
+                if (!(stakePrivacyPayload.denom_id || "").trim()) {
+                  stakePrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                }
+                const noteRetryBackoffMs = [8000, 12000, 15000, 20000, 25000, 30000]
+                for (let retryIndex = 0; ; retryIndex += 1) {
+                  try {
+                    stakeResult = await submitPrivateStake(stakePrivacyPayload)
+                    break
+                  } catch (retryError) {
+                    const retryMessage =
+                      retryError instanceof Error ? retryError.message : String(retryError ?? "")
+                    const stillNotRegistered =
+                      isHideNoteRegistrationMissingMessage(retryMessage)
+                    if (!stillNotRegistered || retryIndex >= noteRetryBackoffMs.length) {
+                      if (stillNotRegistered && retryIndex >= noteRetryBackoffMs.length) {
+                        throw new Error(
+                          "Hide note is already deposited, but indexer is still syncing. Note is saved in Pending Hide Notes; retry private stake once status is Ready."
+                        )
+                      }
+                      throw retryError
+                    }
+                    const waitRetryMs =
+                      noteRetryBackoffMs[retryIndex] ??
+                      noteRetryBackoffMs[noteRetryBackoffMs.length - 1]
+                    notifications.addNotification({
+                      type: "info",
+                      title: "Indexer syncing",
+                      message: `Hide note belum terbaca penuh di indexer. Retry ${
+                        retryIndex + 2
+                      }/${noteRetryBackoffMs.length + 1} in ${formatDurationHhMmSs(waitRetryMs)}.`,
+                    })
+                    await waitMs(waitRetryMs)
+                    stakePrivacyPayload = await requestGaragaPayload(
+                      "stake",
+                      token,
+                      token,
+                      stakeAmountText,
+                      {
+                        denomId: String(selectedAiHideTier.minUsdt),
+                        noteVersion: "v3",
+                        noteCommitment: pinnedNoteCommitment || undefined,
+                        nullifier: pinnedNullifier || undefined,
+                      }
+                    )
+                    if (!(stakePrivacyPayload.denom_id || "").trim()) {
+                      stakePrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                    }
+                  }
+                }
+              } else {
+                throw new Error(
+                  `Hide relayer unavailable. Wallet fallback is disabled so stake details never leak in explorer. Detail: ${message}`
+                )
+              }
             }
           } else {
             const calls = buildStakeWalletCalls(token, amountText)
@@ -4317,14 +4457,34 @@ export function FloatingAIAssistant() {
               hide_balance: false,
             })
           }
-          const finalStakeTx = stakeResult.tx_hash || txHash
+          const finalStakeTx = stakeResult.tx_hash || txHash || stakeResult.privacy_tx_hash || ""
+          if (stakeResult.privacy_tx_hash) {
+            notifications.addNotification({
+              type: "info",
+              title: "Garaga verification submitted",
+              message: `Privacy tx ${stakeResult.privacy_tx_hash.slice(0, 12)}... was submitted on Starknet.`,
+              txHash: stakeResult.privacy_tx_hash,
+              txNetwork: "starknet",
+            })
+          }
           notifications.addNotification({
             type: "success",
             title: "Stake completed",
-            message: `Staked ${amountText} ${token}.`,
+            message: `Staked ${stakeAmountText} ${token}.`,
             txHash: finalStakeTx || undefined,
             txNetwork: finalStakeTx ? "starknet" : undefined,
           })
+          if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+            const consumedNoteCommitment = (
+              stakePrivacyPayload?.note_commitment ||
+              stakePrivacyPayload?.commitment ||
+              ""
+            ).trim()
+            const consumedNullifier = (stakePrivacyPayload?.nullifier || "").trim()
+            if (consumedNoteCommitment || consumedNullifier) {
+              removeAiPendingHideNote(consumedNoteCommitment, consumedNullifier)
+            }
+          }
           const stakeTxPreview = finalStakeTx ? `${finalStakeTx.slice(0, 14)}...` : "-"
           const stakeTxUrl = finalStakeTx ? buildTxExplorerUrl(finalStakeTx, "starknet") : ""
           const stakeEstimatedPoints = parseNumberish(stakeResult.estimated_points_earned)
@@ -4338,7 +4498,7 @@ export function FloatingAIAssistant() {
               ? `Discount NFT applied ${stakeDiscountPercent.toFixed(2)}% on this stake.`
               : "Discount: not active on this stake."
           directExecutionMessage = normalizeMessageText(
-            `✅ Stake executed: ${amountText} ${token}. Tx: ${stakeTxPreview}${stakeTxUrl ? `\nTrack tx: ${stakeTxUrl}` : ""}\n${stakePointsLine}\n${stakeDiscountLine}`
+            `✅ Stake executed: ${stakeAmountText} ${token}. Tx: ${stakeTxPreview}${stakeTxUrl ? `\nTrack tx: ${stakeTxUrl}` : ""}\n${stakePointsLine}\n${stakeDiscountLine}`
           )
           }
         }
@@ -4473,28 +4633,163 @@ export function FloatingAIAssistant() {
 
           let limitResult: Awaited<ReturnType<typeof createLimitOrder>>
           let txHash = ""
+          let orderAmountText = amountText
+          let limitPrivacyPayload: PrivacyVerificationPayload | undefined
           if (tierUsesGaraga) {
-            if (HIDE_BALANCE_SHIELDED_POOL_V2 && !HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED) {
+            if (!HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED) {
               throw new Error(
                 "Hide limit-order relayer is disabled. Enable NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true (frontend) and HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true (backend), then retry."
               )
             }
-            try {
-              limitResult = await createLimitOrder({
+            if (HIDE_BALANCE_SHIELDED_POOL_V3) {
+              orderAmountText = await resolveAiHideTierAmountText({
+                fromToken,
+                fallbackAmountText: amountText,
+                providerHint,
+                requireOnchainRule: true,
+              })
+            }
+            limitPrivacyPayload = await requestGaragaPayload(
+              "limit_order",
+              fromToken,
+              toToken,
+              orderAmountText,
+              HIDE_BALANCE_SHIELDED_POOL_V3
+                ? { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                : undefined
+            )
+            if (HIDE_BALANCE_SHIELDED_POOL_V3 && !(limitPrivacyPayload.denom_id || "").trim()) {
+              limitPrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+            }
+            const submitPrivateLimitOrder = async (privacyPayload: PrivacyVerificationPayload) =>
+              createLimitOrder({
                 from_token: fromToken,
                 to_token: toToken,
-                amount: amountText,
+                amount: orderAmountText,
                 price: priceText,
                 expiry,
                 recipient: null,
                 client_order_id: clientOrderId,
                 hide_balance: true,
+                privacy: privacyPayload,
               })
+            try {
+              notifications.addNotification({
+                type: "info",
+                title: "Submitting private order",
+                message: "Submitting hide-mode limit order via backend relayer pool.",
+              })
+              limitResult = await submitPrivateLimitOrder(limitPrivacyPayload)
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error ?? "")
-              throw new Error(
-                `Hide limit-order relayer unavailable. Wallet fallback is disabled so order details never leak in explorer. Detail: ${message}`
-              )
+              const noteNotRegistered =
+                HIDE_BALANCE_SHIELDED_POOL_V3 &&
+                isHideNoteRegistrationMissingMessage(message) &&
+                !!limitPrivacyPayload
+              if (noteNotRegistered && limitPrivacyPayload) {
+                const depositResult = await ensureAiHideV3NoteDeposited({
+                  payload: limitPrivacyPayload,
+                  fromToken,
+                  toToken,
+                  amountText: orderAmountText,
+                  providerHint,
+                })
+                orderAmountText = depositResult.amountText
+                const remainingWaitMs = Math.max(0, depositResult.spendableAtMs - Date.now())
+                if (remainingWaitMs > 0) {
+                  notifications.addNotification({
+                    type: "info",
+                    title: "Mixing window active",
+                    message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Limit Privat now.`,
+                  })
+                }
+                if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
+                  throw new Error(
+                    `Hide note deposited. Wait ${formatDurationHhMmSs(
+                      remainingWaitMs
+                    )} then retry private limit order.`
+                  )
+                }
+                if (remainingWaitMs > 0) {
+                  await waitMs(remainingWaitMs)
+                }
+                notifications.addNotification({
+                  type: "info",
+                  title: "Limit Privat now",
+                  message: "Cooldown selesai. Menjalankan private limit order otomatis.",
+                })
+                const pinnedNoteCommitment = (
+                  limitPrivacyPayload.note_commitment ||
+                  limitPrivacyPayload.commitment ||
+                  ""
+                ).trim()
+                const pinnedNullifier = (limitPrivacyPayload.nullifier || "").trim()
+                limitPrivacyPayload = await requestGaragaPayload(
+                  "limit_order",
+                  fromToken,
+                  toToken,
+                  orderAmountText,
+                  {
+                    denomId: String(selectedAiHideTier.minUsdt),
+                    noteVersion: "v3",
+                    noteCommitment: pinnedNoteCommitment || undefined,
+                    nullifier: pinnedNullifier || undefined,
+                  }
+                )
+                if (!(limitPrivacyPayload.denom_id || "").trim()) {
+                  limitPrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                }
+                const noteRetryBackoffMs = [8000, 12000, 15000, 20000, 25000, 30000]
+                for (let retryIndex = 0; ; retryIndex += 1) {
+                  try {
+                    limitResult = await submitPrivateLimitOrder(limitPrivacyPayload)
+                    break
+                  } catch (retryError) {
+                    const retryMessage =
+                      retryError instanceof Error ? retryError.message : String(retryError ?? "")
+                    const stillNotRegistered =
+                      isHideNoteRegistrationMissingMessage(retryMessage)
+                    if (!stillNotRegistered || retryIndex >= noteRetryBackoffMs.length) {
+                      if (stillNotRegistered && retryIndex >= noteRetryBackoffMs.length) {
+                        throw new Error(
+                          "Hide note is already deposited, but indexer is still syncing. Note is saved in Pending Hide Notes; retry private limit order once status is Ready."
+                        )
+                      }
+                      throw retryError
+                    }
+                    const waitRetryMs =
+                      noteRetryBackoffMs[retryIndex] ??
+                      noteRetryBackoffMs[noteRetryBackoffMs.length - 1]
+                    notifications.addNotification({
+                      type: "info",
+                      title: "Indexer syncing",
+                      message: `Hide note belum terbaca penuh di indexer. Retry ${
+                        retryIndex + 2
+                      }/${noteRetryBackoffMs.length + 1} in ${formatDurationHhMmSs(waitRetryMs)}.`,
+                    })
+                    await waitMs(waitRetryMs)
+                    limitPrivacyPayload = await requestGaragaPayload(
+                      "limit_order",
+                      fromToken,
+                      toToken,
+                      orderAmountText,
+                      {
+                        denomId: String(selectedAiHideTier.minUsdt),
+                        noteVersion: "v3",
+                        noteCommitment: pinnedNoteCommitment || undefined,
+                        nullifier: pinnedNullifier || undefined,
+                      }
+                    )
+                    if (!(limitPrivacyPayload.denom_id || "").trim()) {
+                      limitPrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                    }
+                  }
+                }
+              } else {
+                throw new Error(
+                  `Hide limit-order relayer unavailable. Wallet fallback is disabled so order details never leak in explorer. Detail: ${message}`
+                )
+              }
             }
           } else {
             notifications.addNotification({
@@ -4506,7 +4801,7 @@ export function FloatingAIAssistant() {
             limitResult = await createLimitOrder({
               from_token: fromToken,
               to_token: toToken,
-              amount: amountText,
+              amount: orderAmountText,
               price: priceText,
               expiry,
               recipient: null,
@@ -4520,6 +4815,26 @@ export function FloatingAIAssistant() {
             title: "Limit order created",
             message: `Order ${limitResult.order_id} submitted.`,
           })
+          if (limitResult.privacy_tx_hash) {
+            notifications.addNotification({
+              type: "info",
+              title: "Garaga verification submitted",
+              message: `Privacy tx ${limitResult.privacy_tx_hash.slice(0, 12)}... was submitted on Starknet.`,
+              txHash: limitResult.privacy_tx_hash,
+              txNetwork: "starknet",
+            })
+          }
+          if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+            const consumedNoteCommitment = (
+              limitPrivacyPayload?.note_commitment ||
+              limitPrivacyPayload?.commitment ||
+              ""
+            ).trim()
+            const consumedNullifier = (limitPrivacyPayload?.nullifier || "").trim()
+            if (consumedNoteCommitment || consumedNullifier) {
+              removeAiPendingHideNote(consumedNoteCommitment, consumedNullifier)
+            }
+          }
           const limitTxHash = (limitResult.privacy_tx_hash || txHash || "").trim()
           const limitTxPreview = limitTxHash ? `${limitTxHash.slice(0, 14)}...` : "-"
           const limitTxUrl = limitTxHash ? buildTxExplorerUrl(limitTxHash, "starknet") : ""
@@ -4534,7 +4849,7 @@ export function FloatingAIAssistant() {
               ? `Discount NFT active ${limitDiscountPercent.toFixed(2)}% (used when fee-discountable execution is applied).`
               : "Discount: not active on this limit order."
           directExecutionMessage = normalizeMessageText(
-            `✅ Limit order created: ${amountText} ${fromToken} -> ${toToken} at ${priceText} (${expiry}). Order: ${limitResult.order_id}. Tx: ${limitTxPreview}${limitTxUrl ? `\nTrack tx: ${limitTxUrl}` : ""}\n${limitPointsLine}\n${limitDiscountLine}`
+            `✅ Limit order created: ${orderAmountText} ${fromToken} -> ${toToken} at ${priceText} (${expiry}). Order: ${limitResult.order_id}. Tx: ${limitTxPreview}${limitTxUrl ? `\nTrack tx: ${limitTxUrl}` : ""}\n${limitPointsLine}\n${limitDiscountLine}`
           )
           }
         }
