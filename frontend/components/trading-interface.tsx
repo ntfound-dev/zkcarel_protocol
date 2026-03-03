@@ -1671,7 +1671,6 @@ export function TradingInterface() {
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [quote, setQuote] = React.useState<QuoteState | null>(null)
   const [isQuoteLoading, setIsQuoteLoading] = React.useState(false)
-  const [resolvedQuoteKey, setResolvedQuoteKey] = React.useState("")
   const [quoteError, setQuoteError] = React.useState<string | null>(null)
   const [liquidityMaxFromQuote, setLiquidityMaxFromQuote] = React.useState<number | null>(null)
   const quoteCacheRef = React.useRef<Map<string, QuoteCacheEntry>>(new Map())
@@ -1726,7 +1725,6 @@ export function TradingInterface() {
   const [lastBridgeRewards, setLastBridgeRewards] = React.useState<BridgeRewardsSnapshot | null>(null)
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
-  const [autoRunSelectedHideNoteSwap, setAutoRunSelectedHideNoteSwap] = React.useState(false)
   const [activePendingHideNoteSwapKey, setActivePendingHideNoteSwapKey] = React.useState<string | null>(null)
   const [tradeResultPopup, setTradeResultPopup] = React.useState<TradeResultPopupState | null>(null)
   const manualSelectedHideNoteRetryRef = React.useRef(0)
@@ -2468,7 +2466,6 @@ export function TradingInterface() {
       stableKeyNumber(slippageValue, 4),
       tradeMode,
     ].join("|")
-    setResolvedQuoteKey("")
 
     let cancelled = false
     const requestSeq = ++quoteRequestSeqRef.current
@@ -2489,7 +2486,6 @@ export function TradingInterface() {
           setToAmount(cached.toAmount)
           setQuote(cached.quote)
           setQuoteError(cached.quoteError)
-          setResolvedQuoteKey(quoteCacheKey)
           setLiquidityMaxFromQuote(
             parseLiquidityMaxFromQuoteError(cached.quoteError || "", fromSymbol)
           )
@@ -2609,7 +2605,6 @@ export function TradingInterface() {
           setToAmount(displayToAmount)
           setQuote(bridgeQuote)
           setQuoteError(bridgeQuoteError)
-          setResolvedQuoteKey(quoteCacheKey)
           setLiquidityMaxFromQuote(
             parseLiquidityMaxFromQuoteError(bridgeQuoteError || "", fromSymbol)
           )
@@ -2693,7 +2688,6 @@ export function TradingInterface() {
           setToAmount(swapQuote.toAmount)
           setQuote(swapQuote)
           setQuoteError(null)
-          setResolvedQuoteKey(quoteCacheKey)
           setLiquidityMaxFromQuote(null)
           saveQuoteToCache(swapQuote, swapQuote.toAmount, null)
         }
@@ -2701,7 +2695,6 @@ export function TradingInterface() {
         if (isStale()) return
         const message = error instanceof Error ? error.message : "Failed to fetch quote"
         setQuoteError(message)
-        setResolvedQuoteKey("")
         setLiquidityMaxFromQuote(parseLiquidityMaxFromQuoteError(message, fromSymbol))
         setToAmount("")
         setQuote(null)
@@ -2887,22 +2880,6 @@ export function TradingInterface() {
     : null
 
   const activeSlippage = customSlippage || slippage
-  const autoRunQuoteKey = React.useMemo(() => {
-    const amountValue = Number.parseFloat(fromAmount || "0")
-    if (!Number.isFinite(amountValue) || amountValue <= 0) return ""
-    const slippageValue = Number(customSlippage || slippage || "0.5")
-    const tradeMode = mevProtection ? "private" : "transparent"
-    return [
-      isCrossChain ? "bridge" : "swap",
-      fromChain,
-      toChain,
-      fromSymbol,
-      toSymbol,
-      stableKeyNumber(amountValue, 8),
-      stableKeyNumber(slippageValue, 4),
-      tradeMode,
-    ].join("|")
-  }, [customSlippage, fromAmount, fromChain, fromSymbol, isCrossChain, mevProtection, slippage, toChain, toSymbol])
   const routeLabel = isCrossChain ? (quote?.provider || "Bridge") : "Auto"
   const isSameTokenSwapPair = !isCrossChain && fromSymbol.toUpperCase() === toSymbol.toUpperCase()
   const isBtcGardenRoute =
@@ -3048,10 +3025,6 @@ export function TradingInterface() {
       (activeTradePrivacyPayload?.note_version || "").trim().toLowerCase() === "v3")
       ? (activeTradePrivacyPayload?.recipient || "").trim()
       : ""
-  const activeHideRecipientMismatched =
-    !!activeHideRecipient &&
-    !!resolvedReceiveAddress &&
-    normalizeFeltAddress(activeHideRecipient) !== normalizeFeltAddress(resolvedReceiveAddress)
   const activeHidePayloadIsV3 =
     hideBalanceOnchain &&
     ((activeTradePrivacyPayload?.note_version || "").trim().toLowerCase() === "v3" ||
@@ -3097,7 +3070,6 @@ export function TradingInterface() {
   }, [activeHideNoteCommitment, activeHideNoteNullifier, hasActiveHideV3Note, pendingHideNotes])
   const activeHideNoteTokenSymbol = (activeHideNoteRecord?.token_symbol || "").trim().toUpperCase()
   const activeHideNoteAmountText = (activeHideNoteRecord?.amount || "").trim()
-  const activeHideNoteAmountValue = Number.parseFloat(activeHideNoteAmountText || "NaN")
   const activeExecutorNormalized = normalizeExecutorAddress(PRIVATE_ACTION_EXECUTOR_ADDRESS)
   const activeHideNoteExecutor = normalizeExecutorAddress(activeHideNoteRecord?.executor_address)
   const activeHideExecutorMismatch =
@@ -3105,16 +3077,6 @@ export function TradingInterface() {
     !!activeHideNoteExecutor &&
     !!activeExecutorNormalized &&
     activeHideNoteExecutor !== activeExecutorNormalized
-  const activeHideNoteTokenMismatch =
-    hasActiveHideV3Note &&
-    !!activeHideNoteTokenSymbol &&
-    activeHideNoteTokenSymbol !== fromToken.symbol.toUpperCase()
-  const activeHideNoteAmountMismatch =
-    hasActiveHideV3Note &&
-    Number.isFinite(activeHideNoteAmountValue) &&
-    activeHideNoteAmountValue > 0 &&
-    Math.abs(fromAmountValue - activeHideNoteAmountValue) >
-      Math.max(1e-9, Math.pow(10, -Math.min(6, resolveTokenDecimals(fromToken.symbol))))
   const pendingHideNotesActive = React.useMemo(() => {
     return pendingHideNotes.filter((note) => {
       const commitment = (note.note_commitment || "").trim()
@@ -4330,8 +4292,6 @@ export function TradingInterface() {
     setSwapState("processing")
     let tradeFinalized = true
     let shouldClearTradePrivacyPayload = false
-    let preserveActivePendingHideNoteSwapKey = false
-    let scheduledManualNoteRetryMs: number | null = null
     let submittedSwapTxHash: string | null = null
     let successPopupPayload: TradeResultPopupState | null = null
     const requestedHideBalance = hideBalanceOnchain
@@ -5194,8 +5154,7 @@ export function TradingInterface() {
         return
       }
       if (rawErrorMessage.startsWith("HIDE_NOTE_INDEXER_WAIT::")) {
-        const [, waitRaw, indexedMessage] = rawErrorMessage.split("::", 3)
-        const waitMs = Number.parseInt(waitRaw || "0", 10)
+        const [, , indexedMessage] = rawErrorMessage.split("::", 3)
         notifications.addNotification({
           type: "info",
           title: "Indexer syncing",
@@ -5203,12 +5162,6 @@ export function TradingInterface() {
             indexedMessage?.trim() ||
             "Hide note belum terbaca penuh di indexer. Retry private swap in a few seconds.",
         })
-        if (manuallySelectedHideNoteRef.current && Number.isFinite(waitMs) && waitMs > 0) {
-          const { commitment, nullifier } = manuallySelectedHideNoteRef.current
-          preserveActivePendingHideNoteSwapKey = true
-          setActivePendingHideNoteSwapKey(`${commitment}:${nullifier}`)
-          scheduledManualNoteRetryMs = waitMs
-        }
         setSwapState("idle")
         return
       }
@@ -5297,19 +5250,11 @@ export function TradingInterface() {
       })
       setSwapState("error")
     } finally {
-      if (!preserveActivePendingHideNoteSwapKey) {
-        setActivePendingHideNoteSwapKey(null)
-      }
+      setActivePendingHideNoteSwapKey(null)
       if (hideBalanceOnchain && shouldClearTradePrivacyPayload) {
         clearTradePrivacyPayload()
         setHasTradePrivacyPayload(false)
         clearManuallySelectedHideNote()
-      }
-      if (scheduledManualNoteRetryMs && manuallySelectedHideNoteRef.current) {
-        window.setTimeout(() => {
-          if (!manuallySelectedHideNoteRef.current) return
-          setAutoRunSelectedHideNoteSwap(true)
-        }, scheduledManualNoteRetryMs)
       }
       setTimeout(() => {
         setSwapState("idle")
@@ -5320,64 +5265,6 @@ export function TradingInterface() {
   confirmTradeRef.current = () => {
     void confirmTrade()
   }
-
-  React.useEffect(() => {
-    if (!autoRunSelectedHideNoteSwap) return
-    if (swapState !== "idle") return
-
-    if (!walletConnectedForActions) {
-      setAutoRunSelectedHideNoteSwap(false)
-      setActivePendingHideNoteSwapKey(null)
-      return
-    }
-    if (isCrossChain) {
-      setAutoRunSelectedHideNoteSwap(false)
-      setActivePendingHideNoteSwapKey(null)
-      return
-    }
-    if (!hasActiveHideV3Note) return
-    if (activeHideNoteTokenMismatch || activeHideNoteAmountMismatch) return
-    if (hasInsufficientBalance || hasInsufficientLiquidityCap) {
-      setAutoRunSelectedHideNoteSwap(false)
-      setActivePendingHideNoteSwapKey(null)
-      notifications.addNotification({
-        type: "warning",
-        title: "Swap note blocked",
-        message:
-          hasInsufficientLiquidityCap && maxExecutableFromAllLimits > 0
-            ? `Current route liquidity is low. Max ${formatTokenAmount(maxExecutableFromAllLimits, 6)} ${fromToken.symbol}.`
-            : `Insufficient ${fromToken.symbol} balance for selected note amount.`,
-      })
-      return
-    }
-    if (isQuoteLoading) return
-    if (!hasValidQuote) return
-    if (!autoRunQuoteKey || resolvedQuoteKey !== autoRunQuoteKey) return
-    if (isStarknetPairSwap && !hasPreparedOnchainSwapCalls) return
-
-    setAutoRunSelectedHideNoteSwap(false)
-    confirmTradeRef.current()
-  }, [
-    autoRunSelectedHideNoteSwap,
-    swapState,
-    walletConnectedForActions,
-    isCrossChain,
-    hasActiveHideV3Note,
-    activeHideNoteTokenMismatch,
-    activeHideNoteAmountMismatch,
-    hasInsufficientBalance,
-    hasInsufficientLiquidityCap,
-    maxExecutableFromAllLimits,
-    fromToken.symbol,
-    notifications,
-    isQuoteLoading,
-    hasValidQuote,
-    autoRunQuoteKey,
-    resolvedQuoteKey,
-    isStarknetPairSwap,
-    hasPreparedOnchainSwapCalls,
-    setActivePendingHideNoteSwapKey,
-  ])
 
   return (
     <div className="w-full max-w-xl mx-auto px-2 sm:px-0 pb-28 md:pb-0">
@@ -5879,9 +5766,7 @@ export function TradingInterface() {
                       const noteUseBlocked = noteMissingSwapMetadata || noteExecutorMismatch
                       const isActiveNoteSwap =
                         activePendingHideNoteSwapKey === noteActionKey &&
-                        (autoRunSelectedHideNoteSwap ||
-                          swapState === "confirming" ||
-                          swapState === "processing")
+                        (swapState === "confirming" || swapState === "processing")
                       return (
                         <div
                           key={noteActionKey}
@@ -6068,10 +5953,10 @@ export function TradingInterface() {
                                     type: "info",
                                     title: "Hide note selected",
                                     message:
-                                      "Active note diganti ke pending note terpilih. Swap privat akan dijalankan sekarang.",
+                                      "Active note diganti ke pending note terpilih. Lanjut klik Execute Swap.",
                                   })
                                   setHidePanelOpen(false)
-                                  setAutoRunSelectedHideNoteSwap(true)
+                                  setActivePendingHideNoteSwapKey(null)
                                   } catch (error) {
                                     setActivePendingHideNoteSwapKey(null)
                                     notifications.addNotification({

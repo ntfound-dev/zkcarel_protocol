@@ -2131,7 +2131,7 @@ export function StakeEarn() {
                                   className="h-7 flex-1 text-[11px]"
                                   onClick={() => handleUsePendingHideNote(note)}
                                 >
-                                  Use For Stake
+                                  Private Stake now
                                 </Button>
                                 <Button
                                   type="button"
@@ -2440,7 +2440,7 @@ export function StakeEarn() {
                                       className="h-7 flex-1 text-[11px]"
                                       onClick={() => handleUsePendingHideNote(note)}
                                     >
-                                      Use For Stake
+                                      Private Stake now
                                     </Button>
                                     <Button
                                       type="button"

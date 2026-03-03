@@ -528,8 +528,6 @@ export function LimitOrder() {
   const [nowMs, setNowMs] = React.useState(() => Date.now())
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
-  const hideOrderAutoRetryTimerRef = React.useRef<number | null>(null)
-  const hideOrderAutoRetryAttemptsRef = React.useRef(0)
   const [chartCandles, setChartCandles] = React.useState<ChartCandle[]>([])
   const [activeNftDiscount, setActiveNftDiscount] = React.useState<NFTItem | null>(null)
   const [stakePointsMultiplier, setStakePointsMultiplier] = React.useState(1)
@@ -695,15 +693,6 @@ export function LimitOrder() {
 
     return () => {
       active = false
-    }
-  }, [])
-
-  React.useEffect(() => {
-    return () => {
-      if (hideOrderAutoRetryTimerRef.current !== null) {
-        window.clearTimeout(hideOrderAutoRetryTimerRef.current)
-        hideOrderAutoRetryTimerRef.current = null
-      }
     }
   }, [])
 
@@ -1400,7 +1389,6 @@ export function LimitOrder() {
       })
       return
     }
-    hideOrderAutoRetryAttemptsRef.current = 0
     setShowConfirmDialog(true)
   }
 
@@ -1419,10 +1407,6 @@ export function LimitOrder() {
         message: "Limit Order BTC Buy is still in final integration.",
       })
       return
-    }
-    if (hideOrderAutoRetryTimerRef.current !== null) {
-      window.clearTimeout(hideOrderAutoRetryTimerRef.current)
-      hideOrderAutoRetryTimerRef.current = null
     }
     setIsSubmitting(true)
     let orderCreated = false
@@ -1586,9 +1570,7 @@ export function LimitOrder() {
             Number(cachedPayload?.spendable_at_unix || 0)
           )
           if (existingSpendableAtUnix > 0) {
-            throw new Error(
-              "HIDE_NOTE_READY::Hide note is ready. Retrying private order automatically."
-            )
+            throw new Error("HIDE_NOTE_READY::Hide note is ready. Retry private order now.")
           }
           let spendableAtUnix: number | undefined
           try {
@@ -1657,7 +1639,6 @@ export function LimitOrder() {
 
       setOrders((prev) => [newOrder, ...prev])
       orderCreated = true
-      hideOrderAutoRetryAttemptsRef.current = 0
       setSubmitSuccess(true)
       notifications.addNotification({
         type: "success",
@@ -1670,29 +1651,10 @@ export function LimitOrder() {
       const rawMessage =
         error instanceof Error ? error.message : "Unexpected error while creating order"
       if (rawMessage.startsWith("HIDE_NOTE_WAIT::")) {
-        const waitMatch = rawMessage.match(/(\d{2}):(\d{2})/)
-        const remainingMs = waitMatch
-          ? (Number.parseInt(waitMatch[1] || "0", 10) * 60 +
-              Number.parseInt(waitMatch[2] || "0", 10)) *
-            1000
-          : 3_000
-        if (hideOrderAutoRetryTimerRef.current !== null) {
-          window.clearTimeout(hideOrderAutoRetryTimerRef.current)
-        }
-        hideOrderAutoRetryTimerRef.current = window.setTimeout(() => {
-          hideOrderAutoRetryTimerRef.current = null
-          hideOrderAutoRetryAttemptsRef.current += 1
-          void confirmOrder()
-        }, Math.max(remainingMs, 1000) + 1200)
         notifications.addNotification({
           type: "warning",
           title: "Mixing window active",
           message: rawMessage.replace("HIDE_NOTE_WAIT::", "").trim(),
-        })
-        notifications.addNotification({
-          type: "info",
-          title: "Auto retry scheduled",
-          message: "Private order will retry automatically after cooldown.",
         })
         return
       }
@@ -1702,16 +1664,6 @@ export function LimitOrder() {
           title: "Hide note deposited",
           message: rawMessage.replace("HIDE_NOTE_READY::", "").trim(),
         })
-        if (hideOrderAutoRetryAttemptsRef.current < 2) {
-          if (hideOrderAutoRetryTimerRef.current !== null) {
-            window.clearTimeout(hideOrderAutoRetryTimerRef.current)
-          }
-          hideOrderAutoRetryTimerRef.current = window.setTimeout(() => {
-            hideOrderAutoRetryTimerRef.current = null
-            hideOrderAutoRetryAttemptsRef.current += 1
-            void confirmOrder()
-          }, 1200)
-        }
         return
       }
       if (rawMessage.startsWith("HIDE_NOTE_SPENT::")) {
@@ -1720,16 +1672,6 @@ export function LimitOrder() {
           title: "Hide note refreshed",
           message: rawMessage.replace("HIDE_NOTE_SPENT::", "").trim(),
         })
-        if (hideOrderAutoRetryAttemptsRef.current < 2) {
-          if (hideOrderAutoRetryTimerRef.current !== null) {
-            window.clearTimeout(hideOrderAutoRetryTimerRef.current)
-          }
-          hideOrderAutoRetryTimerRef.current = window.setTimeout(() => {
-            hideOrderAutoRetryTimerRef.current = null
-            hideOrderAutoRetryAttemptsRef.current += 1
-            void confirmOrder()
-          }, 1200)
-        }
         return
       }
       notifications.addNotification({
