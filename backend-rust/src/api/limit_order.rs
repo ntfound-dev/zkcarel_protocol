@@ -390,6 +390,94 @@ fn resolve_limit_order_target_felt(state: &AppState) -> Result<Felt> {
     })
 }
 
+fn is_missing_entrypoint_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("entry_point_not_found") || lower.contains("entrypoint_not_found") {
+        return true;
+    }
+    let mentions_entrypoint =
+        lower.contains("entrypoint") || lower.contains("entry point") || lower.contains("selector");
+    let mentions_missing =
+        lower.contains("does not exist") || lower.contains("not found") || lower.contains("missing");
+    mentions_entrypoint && mentions_missing
+}
+
+fn is_transient_probe_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("gateway")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("invalid peer certificate")
+        || lower.contains("unknownissuer")
+        || lower.contains("connection reset")
+        || lower.contains("network")
+}
+
+fn is_contract_revert_probe_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("contracterror")
+        || lower.contains("contract error")
+        || lower.contains("revert_error")
+        || lower.contains("execution_error")
+        || lower.contains("innercontractexecutionerror")
+        || lower.contains("invalid caller")
+}
+
+async fn contract_supports_selector(
+    state: &AppState,
+    contract: Felt,
+    selector: Felt,
+) -> Result<bool> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let probe = reader
+        .call(FunctionCall {
+            contract_address: contract,
+            entry_point_selector: selector,
+            calldata: vec![Felt::ONE],
+        })
+        .await;
+    match probe {
+        Ok(_) => Ok(true),
+        Err(crate::error::AppError::BlockchainRPC(message)) => {
+            if is_missing_entrypoint_error(&message) {
+                Ok(false)
+            } else if is_contract_revert_probe_error(&message) {
+                Ok(true)
+            } else if is_transient_probe_error(&message) {
+                Err(crate::error::AppError::BlockchainRPC(format!(
+                    "Failed to probe selector support on {}: {}",
+                    contract, message
+                )))
+            } else {
+                Ok(true)
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn resolve_limit_order_action_selector(
+    state: &AppState,
+    action_target: Felt,
+    candidates: &[&str],
+) -> Result<Felt> {
+    for name in candidates {
+        let selector = get_selector_from_name(name)
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+        if contract_supports_selector(state, action_target, selector).await? {
+            return Ok(selector);
+        }
+    }
+    Err(crate::error::AppError::BadRequest(format!(
+        "Limit order contract {} does not expose supported entrypoint (tried: {}).",
+        state.config.limit_order_book_address.trim(),
+        candidates.join(", ")
+    )))
+}
+
 // Internal helper that parses or transforms values for `normalize_hex_items` in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn normalize_hex_items(items: &[String]) -> Vec<String> {
@@ -954,8 +1042,12 @@ pub async fn create_order(
         let (amount_low, amount_high) =
             parse_decimal_to_u256_parts(&req.amount, token_decimals(&req.from_token))?;
         let (price_low, price_high) = parse_decimal_to_u256_parts(&req.price, 18)?;
-        let action_selector = get_selector_from_name("create_limit_order")
-            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+        let action_selector = resolve_limit_order_action_selector(
+            &state,
+            action_target,
+            &["create_limit_order", "create_order"],
+        )
+        .await?;
         let action_calldata = vec![
             order_id_felt,
             from_token,
@@ -1436,8 +1528,12 @@ pub async fn cancel_order(
                 .as_ref()
                 .and_then(|payload| payload.verifier.as_deref()),
         )?;
-        let action_selector = get_selector_from_name("cancel_limit_order")
-            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+        let action_selector = resolve_limit_order_action_selector(
+            &state,
+            action_target,
+            &["cancel_limit_order", "cancel_order"],
+        )
+        .await?;
         let action_calldata = vec![parse_felt(&order_id)?];
         let approval_token = if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             token_address_for(&order.from_token)

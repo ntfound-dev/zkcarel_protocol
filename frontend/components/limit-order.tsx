@@ -911,12 +911,16 @@ export function LimitOrder() {
       return
     }
     const sourceToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
-    const available = resolveAvailableBalance(sourceToken)
-    if (parsedAmount > available) {
+    const available = Number(resolveAvailableBalance(sourceToken))
+    const hasUsableSnapshot = Number.isFinite(available) && available > 0
+    const tolerance = hasUsableSnapshot ? Math.max(available * 1e-6, 1e-8) : 0
+    if (hasUsableSnapshot && parsedAmount > available + tolerance) {
       notifications.addNotification({
         type: "error",
         title: "Insufficient balance",
-        message: `Amount exceeds your ${sourceToken} balance.`,
+        message: `Amount exceeds your ${sourceToken} balance (${available.toLocaleString(undefined, {
+          maximumFractionDigits: 8,
+        })}).`,
       })
       return
     }
