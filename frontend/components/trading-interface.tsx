@@ -708,6 +708,14 @@ const removePendingHideNote = (noteCommitment?: string, nullifier?: string) => {
   persistPendingHideNotes(next)
 }
 
+const FINALIZED_GARDEN_ORDER_STATUSES = new Set([
+  "completed",
+  "refunded",
+  "failed",
+  "cancelled",
+  "expired",
+])
+
 const loadPendingBtcDeposit = (): PendingBtcDepositState | null => {
   if (typeof window === "undefined") return null
   const raw = window.localStorage.getItem(TRADE_PENDING_BTC_DEPOSIT_KEY)
@@ -721,6 +729,12 @@ const loadPendingBtcDeposit = (): PendingBtcDepositState | null => {
     const destinationChain =
       typeof parsed.destinationChain === "string" ? parsed.destinationChain.trim() : ""
     if (!bridgeId || !depositAddress || !destinationChain || !Number.isFinite(amountSats) || amountSats < 0) {
+      return null
+    }
+    const normalizedStatus =
+      typeof parsed.status === "string" ? parsed.status.trim().toLowerCase() : ""
+    if (FINALIZED_GARDEN_ORDER_STATUSES.has(normalizedStatus)) {
+      // Completed/failed historical orders should not block current bridge UI on reload.
       return null
     }
     return {
@@ -1711,6 +1725,7 @@ export function TradingInterface() {
   const [xverseUserId, setXverseUserId] = React.useState("")
   const [btcVaultCopied, setBtcVaultCopied] = React.useState(false)
   const [pendingBtcDeposit, setPendingBtcDeposit] = React.useState<PendingBtcDepositState | null>(null)
+  const [bridgeStatusPopupOpen, setBridgeStatusPopupOpen] = React.useState(false)
   const [lastBridgeRewards, setLastBridgeRewards] = React.useState<BridgeRewardsSnapshot | null>(null)
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
@@ -1726,26 +1741,42 @@ export function TradingInterface() {
       tokenSymbol,
       denomId,
       fallbackAmount,
+      fallbackKind = "usd",
     }: {
       executorAddress?: string
       tokenSymbol?: string
       denomId?: string
       fallbackAmount?: string
+      fallbackKind?: "usd" | "token"
     }): Promise<string> => {
       const resolvedTokenSymbol = (tokenSymbol || fromToken.symbol).trim().toUpperCase()
       const resolvedDenomId = (denomId || "").trim()
       const decimals = resolveTokenDecimals(resolvedTokenSymbol || fromToken.symbol)
-      const fallback = sanitizeDecimalInput(fallbackAmount || "", decimals)
-      const fallbackFromDenom = sanitizeDecimalInput(resolvedDenomId, decimals)
+      const fallbackTokenAmount =
+        fallbackKind === "token" ? sanitizeDecimalInput(fallbackAmount || "", decimals) : ""
+      const fallbackUsdValue =
+        fallbackKind === "usd"
+          ? Number.parseFloat(fallbackAmount || resolvedDenomId || "0")
+          : Number.NaN
+      const fallbackFromUsd =
+        Number.isFinite(fallbackUsdValue) && fallbackUsdValue > 0
+          ? (() => {
+              const stable = resolvedTokenSymbol === "USDT" || resolvedTokenSymbol === "USDC"
+              const tokenUsdPrice = stable ? 1 : resolveTokenPrice(resolvedTokenSymbol)
+              if (!Number.isFinite(tokenUsdPrice) || tokenUsdPrice <= 0) return ""
+              const converted = fallbackUsdValue / tokenUsdPrice
+              return sanitizeDecimalInput(String(converted), decimals)
+            })()
+          : ""
 
       if (!resolvedDenomId) {
-        return fallback || ""
+        return fallbackFromUsd || fallbackTokenAmount || ""
       }
 
       const resolvedExecutor = (executorAddress || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
       const tokenAddress = resolveTokenAddress(resolvedTokenSymbol).trim()
       if (!resolvedExecutor || !tokenAddress) {
-        return fallbackFromDenom || fallback || ""
+        return fallbackFromUsd || fallbackTokenAmount || ""
       }
 
       try {
@@ -1766,9 +1797,9 @@ export function TradingInterface() {
         // fallback to cached/local values below
       }
 
-      return fallbackFromDenom || fallback || ""
+      return fallbackFromUsd || fallbackTokenAmount || ""
     },
-    [fromToken.symbol]
+    [fromToken.symbol, resolveTokenPrice]
   )
 
   React.useEffect(() => {
@@ -1785,6 +1816,7 @@ export function TradingInterface() {
         tokenSymbol: fromToken.symbol,
         denomId: inferredHideDenomId,
         fallbackAmount: String(selectedHideUsdtTier.minUsdt),
+        fallbackKind: "usd",
       })
       if (cancelled || !targetAmount) return
       if (fromAmount === targetAmount) return
@@ -2217,6 +2249,12 @@ export function TradingInterface() {
 
   React.useEffect(() => {
     persistPendingBtcDeposit(pendingBtcDeposit)
+  }, [pendingBtcDeposit])
+
+  React.useEffect(() => {
+    if (!pendingBtcDeposit) {
+      setBridgeStatusPopupOpen(false)
+    }
   }, [pendingBtcDeposit])
 
   React.useEffect(() => {
@@ -3489,6 +3527,7 @@ export function TradingInterface() {
         tokenSymbol,
         denomId,
         fallbackAmount: fromAmount,
+        fallbackKind: "token",
       })
       if (!denomAmountText) {
         throw new Error("Failed to resolve fixed note amount for selected hide denom.")
@@ -5946,9 +5985,7 @@ export function TradingInterface() {
         {showPendingBtcDeposit && pendingBtcDeposit && (
           <div className="mt-3 p-3 rounded-xl bg-primary/10 border border-primary/30 space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium text-foreground">
-                {pendingIsFinalized ? "BTC Bridge Status (Garden)" : "Pending BTC Deposit (Garden)"}
-              </p>
+              <p className="text-sm font-medium text-foreground">BTC Bridge Status (Garden)</p>
               <span className="text-[11px] text-muted-foreground">
                 Order {pendingBtcDeposit.bridgeId.slice(0, 10)}...
               </span>
@@ -5959,37 +5996,16 @@ export function TradingInterface() {
                 {pendingStatusLabel}
               </span>
             </div>
-            <p className="text-xs text-foreground break-all">
-              Send{" "}
-              <span className="font-semibold">
-                {formatBtcFromSats(pendingBtcDeposit.amountSats)}
-              </span>{" "}
-              to{" "}
-              <span className="font-mono">{pendingBtcDeposit.depositAddress}</span>
+            <p className="text-[11px] text-muted-foreground">
+              Bridge details moved to popup so layout stays compact.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                onClick={handleSendBtcDepositFromWallet}
-                disabled={
-                  isSendingBtcDeposit ||
-                  !wallet.btcAddress ||
-                  pendingBtcDeposit.amountSats <= 0 ||
-                  pendingIsFinalized ||
-                  !!pendingBtcDeposit.txHash
-                }
                 className="h-8 px-3 text-xs"
+                onClick={() => setBridgeStatusPopupOpen(true)}
               >
-                {isSendingBtcDeposit ? (
-                  <span className="inline-flex items-center gap-1">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Waiting signature...
-                  </span>
-                ) : pendingBtcDeposit.txHash ? (
-                  "Deposit Sent"
-                ) : (
-                  `Send BTC (${btcProviderLabel})`
-                )}
+                Open Bridge Status
               </Button>
               <Button
                 type="button"
@@ -6015,80 +6031,17 @@ export function TradingInterface() {
                   Open Garden Order
                 </Button>
               )}
-              {pendingCanClaimRefund && (
+              {pendingIsFinalized && (
                 <Button
                   type="button"
                   variant="outline"
                   className="h-8 px-3 text-xs"
-                  onClick={handleClaimInstantRefund}
-                  disabled={isClaimingRefund}
+                  onClick={() => setPendingBtcDeposit(null)}
                 >
-                  {isClaimingRefund ? (
-                    <span className="inline-flex items-center gap-1">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Claiming...
-                    </span>
-                  ) : (
-                    "Claim Refund"
-                  )}
-                </Button>
-              )}
-              {btcDepositExplorerUrl && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-8 px-3 text-xs"
-                  onClick={() => openExternalUrl(btcDepositExplorerUrl)}
-                >
-                  View Deposit Address
+                  Dismiss
                 </Button>
               )}
             </div>
-            {!wallet.btcAddress && (
-              <p className="text-[11px] text-warning">
-                Connect BTC wallet first so the send button can be used.
-              </p>
-            )}
-            {wallet.btcAddress && !isSendingBtcDeposit && !pendingBtcDeposit.txHash && (
-              <p className="text-[11px] text-muted-foreground">
-                Click Send button to show signature popup in {btcProviderLabel}.
-              </p>
-            )}
-            {pendingBtcDeposit.txHash && (
-              <p className="text-[11px] text-success break-all">
-                Last deposit tx: {pendingBtcDeposit.txHash}
-              </p>
-            )}
-            {pendingBtcDeposit.sourceInitiateTxHash && (
-              <p className="text-[11px] text-muted-foreground break-all">
-                Source initiate tx: {pendingBtcDeposit.sourceInitiateTxHash}
-              </p>
-            )}
-            {pendingBtcDeposit.destinationInitiateTxHash && (
-              <p className="text-[11px] text-muted-foreground break-all">
-                Destination initiate tx: {pendingBtcDeposit.destinationInitiateTxHash}
-              </p>
-            )}
-            {pendingBtcDeposit.destinationRedeemTxHash && (
-              <p className="text-[11px] text-success break-all">
-                Destination redeem tx: {pendingBtcDeposit.destinationRedeemTxHash}
-              </p>
-            )}
-            {pendingBtcDeposit.refundTxHash && (
-              <p className="text-[11px] text-success break-all">
-                Refund tx: {pendingBtcDeposit.refundTxHash}
-              </p>
-            )}
-            {pendingBtcDeposit.instantRefundHash && (
-              <p className="text-[11px] text-muted-foreground break-all">
-                Instant refund hash: {pendingBtcDeposit.instantRefundHash}
-              </p>
-            )}
-            {(pendingOrderStatus === "expired" || pendingOrderStatus === "failed") && (
-              <p className="text-[11px] text-warning">
-                Order is already {pendingOrderStatus}. Use Claim Refund button to process BTC return.
-              </p>
-            )}
           </div>
         )}
 
@@ -6241,6 +6194,164 @@ export function TradingInterface() {
           onConfirm={confirmTrade}
         />
       ) : null}
+
+      <Dialog
+        open={bridgeStatusPopupOpen && Boolean(pendingBtcDeposit)}
+        onOpenChange={setBridgeStatusPopupOpen}
+      >
+        <DialogContent className="max-w-2xl glass-strong border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between gap-2">
+              <span>BTC Bridge Status (Garden)</span>
+              {pendingBtcDeposit?.bridgeId ? (
+                <span className="text-[11px] font-normal text-muted-foreground">
+                  Order {pendingBtcDeposit.bridgeId.slice(0, 10)}...
+                </span>
+              ) : null}
+            </DialogTitle>
+          </DialogHeader>
+          {pendingBtcDeposit ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">Status</span>
+                <span className={cn("text-xs font-medium", pendingStatusClassName)}>
+                  {pendingStatusLabel}
+                </span>
+              </div>
+              <p className="text-xs text-foreground break-all">
+                Send{" "}
+                <span className="font-semibold">
+                  {formatBtcFromSats(pendingBtcDeposit.amountSats)}
+                </span>{" "}
+                to{" "}
+                <span className="font-mono">{pendingBtcDeposit.depositAddress}</span>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  onClick={handleSendBtcDepositFromWallet}
+                  disabled={
+                    isSendingBtcDeposit ||
+                    !wallet.btcAddress ||
+                    pendingBtcDeposit.amountSats <= 0 ||
+                    pendingIsFinalized ||
+                    !!pendingBtcDeposit.txHash
+                  }
+                  className="h-8 px-3 text-xs"
+                >
+                  {isSendingBtcDeposit ? (
+                    <span className="inline-flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Waiting signature...
+                    </span>
+                  ) : pendingBtcDeposit.txHash ? (
+                    "Deposit Sent"
+                  ) : (
+                    `Send BTC (${btcProviderLabel})`
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 px-3 text-xs"
+                  onClick={() =>
+                    void pollGardenBridgeOrder(
+                      pendingBtcDeposit.bridgeId,
+                      pendingBtcDeposit.destinationChain
+                    )
+                  }
+                  disabled={pendingIsFinalized}
+                >
+                  Refresh Status
+                </Button>
+                {pendingGardenOrderExplorerUrl && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 px-3 text-xs"
+                    onClick={() => openExternalUrl(pendingGardenOrderExplorerUrl)}
+                  >
+                    Open Garden Order
+                  </Button>
+                )}
+                {pendingCanClaimRefund && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 px-3 text-xs"
+                    onClick={handleClaimInstantRefund}
+                    disabled={isClaimingRefund}
+                  >
+                    {isClaimingRefund ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Claiming...
+                      </span>
+                    ) : (
+                      "Claim Refund"
+                    )}
+                  </Button>
+                )}
+                {btcDepositExplorerUrl && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 px-3 text-xs"
+                    onClick={() => openExternalUrl(btcDepositExplorerUrl)}
+                  >
+                    View Deposit Address
+                  </Button>
+                )}
+              </div>
+              {!wallet.btcAddress && (
+                <p className="text-[11px] text-warning">
+                  Connect BTC wallet first so the send button can be used.
+                </p>
+              )}
+              {wallet.btcAddress && !isSendingBtcDeposit && !pendingBtcDeposit.txHash && (
+                <p className="text-[11px] text-muted-foreground">
+                  Click Send button to show signature popup in {btcProviderLabel}.
+                </p>
+              )}
+              {pendingBtcDeposit.txHash && (
+                <p className="text-[11px] text-success break-all">
+                  Last deposit tx: {pendingBtcDeposit.txHash}
+                </p>
+              )}
+              {pendingBtcDeposit.sourceInitiateTxHash && (
+                <p className="text-[11px] text-muted-foreground break-all">
+                  Source initiate tx: {pendingBtcDeposit.sourceInitiateTxHash}
+                </p>
+              )}
+              {pendingBtcDeposit.destinationInitiateTxHash && (
+                <p className="text-[11px] text-muted-foreground break-all">
+                  Destination initiate tx: {pendingBtcDeposit.destinationInitiateTxHash}
+                </p>
+              )}
+              {pendingBtcDeposit.destinationRedeemTxHash && (
+                <p className="text-[11px] text-success break-all">
+                  Destination redeem tx: {pendingBtcDeposit.destinationRedeemTxHash}
+                </p>
+              )}
+              {pendingBtcDeposit.refundTxHash && (
+                <p className="text-[11px] text-success break-all">
+                  Refund tx: {pendingBtcDeposit.refundTxHash}
+                </p>
+              )}
+              {pendingBtcDeposit.instantRefundHash && (
+                <p className="text-[11px] text-muted-foreground break-all">
+                  Instant refund hash: {pendingBtcDeposit.instantRefundHash}
+                </p>
+              )}
+              {(pendingOrderStatus === "expired" || pendingOrderStatus === "failed") && (
+                <p className="text-[11px] text-warning">
+                  Order is already {pendingOrderStatus}. Use Claim Refund button to process BTC return.
+                </p>
+              )}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={Boolean(tradeResultPopup)}
