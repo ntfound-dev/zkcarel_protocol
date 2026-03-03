@@ -195,16 +195,6 @@ const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
 const HIDE_BALANCE_RELAYER_POOL_ENABLED =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true" &&
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED || "false").toLowerCase() === "true"
-const HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW =
-  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS || ""
-const HIDE_BALANCE_MIN_NOTE_AGE_SECS = Number.parseInt(
-  HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW || "3600",
-  10
-)
-const MIN_WAIT_MS =
-  (Number.isFinite(HIDE_BALANCE_MIN_NOTE_AGE_SECS) && HIDE_BALANCE_MIN_NOTE_AGE_SECS > 0
-    ? HIDE_BALANCE_MIN_NOTE_AGE_SECS
-    : 3600) * 1000
 
 const normalizeHexArray = (values?: string[] | null): string[] => {
   if (!Array.isArray(values)) return []
@@ -1284,7 +1274,7 @@ export function LimitOrder() {
         starknetProviderHint
       )
 
-      const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+      const spendableAtUnix = Math.floor(Date.now() / 1000)
       persistTradePrivacyPayload({
         ...payload,
         note_version: "v3",
@@ -1317,7 +1307,7 @@ export function LimitOrder() {
       notifications.addNotification({
         type: "success",
         title: "Hide note deposited",
-        message: `Note deposit submitted (${txHash.slice(0, 10)}...). Wait for mixing window before retrying private order.`,
+        message: `Note deposit submitted (${txHash.slice(0, 10)}...). Note is ready for private order.`,
         txHash,
         txNetwork: "starknet",
       })
@@ -1590,20 +1580,11 @@ export function LimitOrder() {
           /note belum terdaftar/i.test(message) &&
           payloadForBackend
         ) {
-          const nowUnix = Math.floor(Date.now() / 1000)
           const cachedPayload = loadTradePrivacyPayload()
           const existingSpendableAtUnix = Math.max(
             Number(payloadForBackend.spendable_at_unix || 0),
             Number(cachedPayload?.spendable_at_unix || 0)
           )
-          if (existingSpendableAtUnix > nowUnix) {
-            const remainingMs = Math.max(0, existingSpendableAtUnix * 1000 - Date.now())
-            throw new Error(
-              `HIDE_NOTE_WAIT::Hide note is still mixing. Retry in ${formatRemainingDuration(
-                remainingMs
-              )}.`
-            )
-          }
           if (existingSpendableAtUnix > 0) {
             throw new Error(
               "HIDE_NOTE_READY::Hide note is ready. Retrying private order automatically."
@@ -1624,19 +1605,13 @@ export function LimitOrder() {
               `Hide note belum terdaftar dan auto-deposit gagal. Detail: ${depositMessage}`
             )
           }
-          const remainingMs = Math.max(
-            0,
-            (spendableAtUnix || Math.floor((Date.now() + MIN_WAIT_MS) / 1000)) * 1000 - Date.now()
-          )
-          if (remainingMs > 1000) {
+          if (spendableAtUnix && spendableAtUnix > 0) {
             throw new Error(
-              `HIDE_NOTE_WAIT::Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
-                remainingMs
-              )} sebelum retry private order.`
+              "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private order now."
             )
           }
           throw new Error(
-            "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private order; backend akan enforce mixing window aktual."
+            "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private order now."
           )
         }
         if (useRelayerPoolHide) {
@@ -1700,7 +1675,7 @@ export function LimitOrder() {
           ? (Number.parseInt(waitMatch[1] || "0", 10) * 60 +
               Number.parseInt(waitMatch[2] || "0", 10)) *
             1000
-          : MIN_WAIT_MS
+          : 3_000
         if (hideOrderAutoRetryTimerRef.current !== null) {
           window.clearTimeout(hideOrderAutoRetryTimerRef.current)
         }
@@ -2492,7 +2467,7 @@ export function LimitOrder() {
                                       className="h-7 flex-1 text-[11px]"
                                       onClick={() => handleUsePendingHideNote(note)}
                                     >
-                                      Use For Order
+                                      Private Order now
                                     </Button>
                                     <Button
                                       type="button"
@@ -2791,7 +2766,7 @@ export function LimitOrder() {
                                       className="h-7 flex-1 text-[11px]"
                                       onClick={() => handleUsePendingHideNote(note)}
                                     >
-                                      Use For Order
+                                      Private Order now
                                     </Button>
                                     <Button
                                       type="button"

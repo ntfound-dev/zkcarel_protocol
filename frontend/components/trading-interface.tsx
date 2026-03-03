@@ -199,16 +199,6 @@ const HIDE_BALANCE_SHIELDED_POOL_V3 =
   HIDE_BALANCE_EXECUTOR_KIND === "shielded-v3" ||
   HIDE_BALANCE_EXECUTOR_KIND === "v3"
 const HIDE_BALANCE_SHIELDED_POOL = HIDE_BALANCE_SHIELDED_POOL_V2 || HIDE_BALANCE_SHIELDED_POOL_V3
-const HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW =
-  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS || ""
-const HIDE_BALANCE_MIN_NOTE_AGE_SECS = Number.parseInt(
-  HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW || "3600",
-  10
-)
-const MIN_WAIT_MS =
-  (Number.isFinite(HIDE_BALANCE_MIN_NOTE_AGE_SECS) && HIDE_BALANCE_MIN_NOTE_AGE_SECS > 0
-    ? HIDE_BALANCE_MIN_NOTE_AGE_SECS
-    : 3600) * 1000
 const USDT_POINTS_TIER_OPTIONS = [
   { minUsdt: 5, bonusPercent: 5 },
   { minUsdt: 10, bonusPercent: 10 },
@@ -554,7 +544,7 @@ const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
     ) {
       normalizedPayload.spendable_at_unix = Math.floor(existing.spendable_at_unix)
     } else {
-      normalizedPayload.spendable_at_unix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+      normalizedPayload.spendable_at_unix = Math.floor(Date.now() / 1000)
     }
   }
   window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(normalizedPayload))
@@ -3172,10 +3162,6 @@ export function TradingInterface() {
       ? "Receive address is required."
       : activeHideExecutorMismatch
       ? "Active hide note uses an old executor. Pick a note on current executor or withdraw old note."
-      : hideMixingWindowBlocked
-      ? `Hide Balance note masih dalam mixing window. Tunggu ${formatRemainingDuration(
-          hideMixingWindowRemainingMs
-        )}.`
       : null
   /**
    * Runs `executeButtonLabel` and handles related side effects.
@@ -3678,7 +3664,7 @@ export function TradingInterface() {
       )
 
       const depositedAtUnix = Math.floor(Date.now() / 1000)
-      const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+      const spendableAtUnix = depositedAtUnix
       persistTradePrivacyPayload({
         ...payload,
         note_version: "v3",
@@ -3710,7 +3696,7 @@ export function TradingInterface() {
       notifications.addNotification({
         type: "success",
         title: "Hide note deposited",
-        message: `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Tunggu mixing window sebelum swap hide.`,
+        message: `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Note is ready for private swap.`,
         txHash: depositTxHash,
         txNetwork: "starknet",
       })
@@ -5054,15 +5040,12 @@ export function TradingInterface() {
                 )
               }
               if (spendableAtUnix > 0) {
-                const remainingMs = Math.max(0, spendableAtUnix * 1000 - Date.now())
                 throw new Error(
-                  `HIDE_NOTE_WAIT::Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
-                    remainingMs
-                  )} sebelum retry private swap.`
+                  "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private swap now."
                 )
               }
               throw new Error(
-                "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private swap; backend akan enforce mixing window aktual."
+                "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private swap now."
               )
             }
             throw new Error(
@@ -5354,7 +5337,6 @@ export function TradingInterface() {
     }
     if (!hasActiveHideV3Note) return
     if (activeHideNoteTokenMismatch || activeHideNoteAmountMismatch) return
-    if (hideMixingWindowBlocked) return
     if (hasInsufficientBalance || hasInsufficientLiquidityCap) {
       setAutoRunSelectedHideNoteSwap(false)
       setActivePendingHideNoteSwapKey(null)
@@ -5383,7 +5365,6 @@ export function TradingInterface() {
     hasActiveHideV3Note,
     activeHideNoteTokenMismatch,
     activeHideNoteAmountMismatch,
-    hideMixingWindowBlocked,
     hasInsufficientBalance,
     hasInsufficientLiquidityCap,
     maxExecutableFromAllLimits,
@@ -5896,11 +5877,6 @@ export function TradingInterface() {
                         noteTargetTokenSymbol || toToken.symbol.toUpperCase()
                       const noteMissingSwapMetadata = !noteNullifier
                       const noteUseBlocked = noteMissingSwapMetadata || noteExecutorMismatch
-                      const noteRemainingMs =
-                        typeof note.spendable_at_unix === "number" &&
-                        Number.isFinite(note.spendable_at_unix)
-                          ? Math.max(0, note.spendable_at_unix * 1000 - nowMs)
-                          : 0
                       const isActiveNoteSwap =
                         activePendingHideNoteSwapKey === noteActionKey &&
                         (autoRunSelectedHideNoteSwap ||
@@ -5916,9 +5892,7 @@ export function TradingInterface() {
                           </p>
                           <p className="text-[11px] text-muted-foreground">
                             {note.amount || "?"} {noteSourceTokenSymbol} → {displayTargetToken} •{" "}
-                            {noteRemainingMs > 0
-                              ? `Ready in ${formatRemainingDuration(noteRemainingMs)}`
-                              : "Ready now"}
+                            Ready now
                           </p>
                           {noteMissingSwapMetadata && (
                             <p className="text-[11px] text-warning">
@@ -5939,8 +5913,7 @@ export function TradingInterface() {
                               disabled={
                                 swapState !== "idle" ||
                                 !!activePendingHideNoteSwapKey ||
-                                noteUseBlocked ||
-                                noteRemainingMs > 0
+                                noteUseBlocked
                               }
                               onClick={() => {
                                 void (async () => {
@@ -5953,17 +5926,6 @@ export function TradingInterface() {
                                         message: noteExecutorMismatch
                                           ? "Selected note uses old executor and cannot be swapped on current relayer. Withdraw it or choose another note."
                                           : "Note belum punya metadata lengkap untuk swap.",
-                                      })
-                                      setActivePendingHideNoteSwapKey(null)
-                                      return
-                                    }
-                                    if (noteRemainingMs > 0) {
-                                      notifications.addNotification({
-                                        type: "warning",
-                                        title: "Note belum ready",
-                                        message: `Tunggu ${formatRemainingDuration(
-                                          noteRemainingMs
-                                        )} sebelum swap privat.`,
                                       })
                                       setActivePendingHideNoteSwapKey(null)
                                       return

@@ -4,6 +4,7 @@ use crate::{
         EPOCH_DURATION_SECONDS, NFT_TIER_1_DISCOUNT, NFT_TIER_2_DISCOUNT, NFT_TIER_3_DISCOUNT,
         NFT_TIER_4_DISCOUNT, NFT_TIER_5_DISCOUNT, NFT_TIER_6_DISCOUNT,
     },
+    db::NftDiscountStateUpsert,
     error::Result,
     models::ApiResponse,
     services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader},
@@ -173,6 +174,102 @@ fn tier_for_discount(discount: f64) -> i32 {
         16..=25 => 3, // gold 25%
         26..=35 => 4, // platinum 35%
         _ => 5,       // onyx 50%+
+    }
+}
+
+// Internal helper that supports `current_nft_period_epoch` operations.
+fn current_nft_period_epoch() -> i64 {
+    let now = chrono::Utc::now().timestamp();
+    let period = (EPOCH_DURATION_SECONDS as i64).max(1);
+    if now <= 0 {
+        0
+    } else {
+        now / period
+    }
+}
+
+// Internal helper that parses or transforms values for `u128_to_i64_saturating`.
+fn u128_to_i64_saturating(value: u128) -> i64 {
+    if value > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        value as i64
+    }
+}
+
+// Internal helper that parses or transforms values for `derive_discount_state_from_owned_nfts`.
+fn derive_discount_state_from_owned_nfts(nfts: &[Nft]) -> Option<(i32, f64, bool, i64, i64)> {
+    let primary = nfts
+        .iter()
+        .find(|nft| !nft.used && nft.discount > 0.0)
+        .or_else(|| nfts.first())?;
+
+    let tier = primary.tier.max(0);
+    let discount_percent = if primary.used {
+        0.0
+    } else {
+        primary.discount.clamp(0.0, 100.0)
+    };
+    let chain_used_in_period = primary
+        .used_in_period
+        .map(u128_to_i64_saturating)
+        .unwrap_or(0);
+    let max_usage = match primary.max_usage {
+        Some(value) => u128_to_i64_saturating(value),
+        None => {
+            if discount_percent > 0.0 {
+                i64::MAX
+            } else {
+                0
+            }
+        }
+    };
+    let has_remaining_usage =
+        max_usage == i64::MAX || (max_usage > 0 && chain_used_in_period < max_usage);
+    let is_active = discount_percent > 0.0 && has_remaining_usage;
+
+    Some((
+        tier,
+        discount_percent,
+        is_active,
+        max_usage,
+        chain_used_in_period,
+    ))
+}
+
+// Internal helper that runs side-effecting logic for `sync_discount_state_from_owned_nfts`.
+async fn sync_discount_state_from_owned_nfts(
+    state: &AppState,
+    contract: &str,
+    user_address: &str,
+    nfts: &[Nft],
+) {
+    let Some((tier, discount_percent, is_active, max_usage, chain_used_in_period)) =
+        derive_discount_state_from_owned_nfts(nfts)
+    else {
+        return;
+    };
+
+    if let Err(err) = state
+        .db
+        .upsert_nft_discount_state_from_chain(NftDiscountStateUpsert {
+            contract_address: contract,
+            user_address,
+            period_epoch: current_nft_period_epoch(),
+            tier,
+            discount_percent,
+            is_active,
+            max_usage,
+            chain_used_in_period,
+        })
+        .await
+    {
+        tracing::warn!(
+            "nft_owned failed to sync local discount fallback state: user={} contract={} err={}",
+            user_address,
+            contract,
+            err
+        );
     }
 }
 
@@ -461,6 +558,7 @@ pub async fn get_owned_nfts(
     if let Some(cached) =
         get_cached_owned_nfts(&cache_key, Duration::from_secs(OWNED_NFT_CACHE_TTL_SECS)).await
     {
+        sync_discount_state_from_owned_nfts(&state, contract, &user_address, &cached).await;
         return Ok(Json(ApiResponse::success(cached)));
     }
 
@@ -469,6 +567,7 @@ pub async fn get_owned_nfts(
     if let Some(cached) =
         get_cached_owned_nfts(&cache_key, Duration::from_secs(OWNED_NFT_CACHE_TTL_SECS)).await
     {
+        sync_discount_state_from_owned_nfts(&state, contract, &user_address, &cached).await;
         return Ok(Json(ApiResponse::success(cached)));
     }
 
@@ -486,10 +585,13 @@ pub async fn get_owned_nfts(
                         user_address,
                         contract
                     );
+                    sync_discount_state_from_owned_nfts(&state, contract, &user_address, &stale)
+                        .await;
                     return Ok(Json(ApiResponse::success(stale)));
                 }
             }
             cache_owned_nfts(cache_key, nfts.clone()).await;
+            sync_discount_state_from_owned_nfts(&state, contract, &user_address, &nfts).await;
             Ok(Json(ApiResponse::success(nfts)))
         }
         Err(err) => {
@@ -502,6 +604,7 @@ pub async fn get_owned_nfts(
                     user_address,
                     contract
                 );
+                sync_discount_state_from_owned_nfts(&state, contract, &user_address, &stale).await;
                 return Ok(Json(ApiResponse::success(stale)));
             }
             Err(err)

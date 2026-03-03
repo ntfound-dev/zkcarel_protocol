@@ -8,13 +8,13 @@ use std::collections::{HashMap, HashSet};
 use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader};
 use crate::{
     constants::{
-        token_address_for, POINTS_MIN_STAKE_BTC, POINTS_MIN_STAKE_BTC_TESTNET,
-        POINTS_MIN_STAKE_CAREL, POINTS_MIN_STAKE_LP, POINTS_MIN_STAKE_LP_TESTNET,
-        POINTS_MIN_STAKE_STABLECOIN, POINTS_MIN_STAKE_STABLECOIN_TESTNET, POINTS_MIN_STAKE_STRK,
-        POINTS_MIN_STAKE_STRK_TESTNET, POINTS_MULTIPLIER_STAKE_BTC,
-        POINTS_MULTIPLIER_STAKE_CAREL_TIER_1, POINTS_MULTIPLIER_STAKE_CAREL_TIER_2,
-        POINTS_MULTIPLIER_STAKE_CAREL_TIER_3, POINTS_MULTIPLIER_STAKE_LP,
-        POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_STAKE,
+        token_address_for, EPOCH_DURATION_SECONDS, POINTS_MIN_STAKE_BTC,
+        POINTS_MIN_STAKE_BTC_TESTNET, POINTS_MIN_STAKE_CAREL, POINTS_MIN_STAKE_LP,
+        POINTS_MIN_STAKE_LP_TESTNET, POINTS_MIN_STAKE_STABLECOIN,
+        POINTS_MIN_STAKE_STABLECOIN_TESTNET, POINTS_MIN_STAKE_STRK, POINTS_MIN_STAKE_STRK_TESTNET,
+        POINTS_MULTIPLIER_STAKE_BTC, POINTS_MULTIPLIER_STAKE_CAREL_TIER_1,
+        POINTS_MULTIPLIER_STAKE_CAREL_TIER_2, POINTS_MULTIPLIER_STAKE_CAREL_TIER_3,
+        POINTS_MULTIPLIER_STAKE_LP, POINTS_MULTIPLIER_STAKE_STABLECOIN, POINTS_PER_USD_STAKE,
     },
     // 1. Import hasher agar fungsi di hash.rs terhitung "used"
     crypto::hash,
@@ -284,17 +284,86 @@ fn usdt_tier_bonus_percent(usdt_equivalent_volume: f64) -> f64 {
     }
 }
 
+const NFT_DISCOUNT_LOCAL_STALE_SECS: u64 = 1_800;
+
+// Internal helper that supports `discount_contract_address` operations.
+fn discount_contract_address(state: &AppState) -> Option<&str> {
+    state
+        .config
+        .discount_soulbound_address
+        .as_deref()
+        .filter(|addr| !addr.trim().is_empty() && !addr.starts_with("0x0000"))
+}
+
+// Internal helper that supports `current_nft_period_epoch` operations.
+fn current_nft_period_epoch() -> i64 {
+    let now = chrono::Utc::now().timestamp();
+    let period = (EPOCH_DURATION_SECONDS as i64).max(1);
+    if now <= 0 {
+        0
+    } else {
+        now / period
+    }
+}
+
+// Internal helper that fetches data for `fallback_nft_discount_from_local_state`.
+async fn fallback_nft_discount_from_local_state(state: &AppState, user_address: &str) -> f64 {
+    let Some(contract) = discount_contract_address(state) else {
+        return 0.0;
+    };
+    let period_epoch = current_nft_period_epoch();
+    match state
+        .db
+        .get_nft_discount_state(contract, user_address, period_epoch)
+        .await
+    {
+        Ok(Some(row)) => {
+            let age_secs = chrono::Utc::now()
+                .signed_duration_since(row.updated_at)
+                .num_seconds()
+                .max(0) as u64;
+            if age_secs > NFT_DISCOUNT_LOCAL_STALE_SECS {
+                return 0.0;
+            }
+            let effective_used = row.local_used_in_period.max(row.chain_used_in_period);
+            let has_remaining_usage =
+                row.max_usage == i64::MAX || (row.max_usage > 0 && effective_used < row.max_usage);
+            if row.is_active && has_remaining_usage {
+                row.discount_percent.clamp(0.0, 100.0)
+            } else {
+                0.0
+            }
+        }
+        Ok(None) => 0.0,
+        Err(err) => {
+            tracing::warn!(
+                "Stake local NFT discount fallback failed for user={}: {}",
+                user_address,
+                err
+            );
+            0.0
+        }
+    }
+}
+
 // Internal helper that supports `active_nft_discount_percent_for_response` operations.
 async fn active_nft_discount_percent_for_response(state: &AppState, user_address: &str) -> f64 {
     match read_active_discount_rate(&state.config, user_address).await {
-        Ok(discount) => discount.clamp(0.0, 100.0),
+        Ok(discount) => {
+            let normalized = discount.clamp(0.0, 100.0);
+            if normalized > 0.0 {
+                normalized
+            } else {
+                fallback_nft_discount_from_local_state(state, user_address).await
+            }
+        }
         Err(err) => {
             tracing::warn!(
                 "Stake response NFT discount check failed for user={}: {}",
                 user_address,
                 err
             );
-            0.0
+            fallback_nft_discount_from_local_state(state, user_address).await
         }
     }
 }
@@ -460,13 +529,6 @@ fn hide_balance_v2_redeem_only_enabled() -> bool {
     env_flag("HIDE_BALANCE_V2_REDEEM_ONLY", false)
 }
 
-fn hide_balance_min_note_age_secs() -> u64 {
-    std::env::var("HIDE_BALANCE_MIN_NOTE_AGE_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or(3600)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HideExecutorKind {
     PrivateActionExecutorV1,
@@ -524,9 +586,7 @@ fn resolve_hide_pool_version(payload: Option<&ModelPrivacyVerificationPayload>) 
 }
 
 // Internal helper that fetches data for `resolve_private_action_executor_candidates`.
-fn resolve_private_action_executor_candidates(
-    config: &crate::config::Config,
-) -> Result<Vec<Felt>> {
+fn resolve_private_action_executor_candidates(config: &crate::config::Config) -> Result<Vec<Felt>> {
     let mut out: Vec<Felt> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for raw in [
@@ -572,8 +632,9 @@ fn is_missing_entrypoint_error(message: &str) -> bool {
     }
     let mentions_entrypoint =
         lower.contains("entrypoint") || lower.contains("entry point") || lower.contains("selector");
-    let mentions_missing =
-        lower.contains("does not exist") || lower.contains("not found") || lower.contains("missing");
+    let mentions_missing = lower.contains("does not exist")
+        || lower.contains("not found")
+        || lower.contains("missing");
     mentions_entrypoint && mentions_missing
 }
 
@@ -2027,21 +2088,11 @@ pub async fn deposit(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu lalu tunggu mixing window."
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu."
                         .to_string(),
                 ));
             }
-            let min_age_secs = hide_balance_min_note_age_secs();
-            let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
-            let spendable_at = deposit_ts.saturating_add(min_age_secs);
-            payload.spendable_at_unix = Some(spendable_at);
-            if now_unix < spendable_at {
-                let remaining = spendable_at - now_unix;
-                return Err(crate::error::AppError::BadRequest(format!(
-                    "Hide Balance mixing window aktif: note age belum memenuhi minimum {} detik. Coba lagi dalam {} detik.",
-                    min_age_secs, remaining
-                )));
-            }
+            payload.spendable_at_unix = Some(deposit_ts);
         } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
@@ -2404,21 +2455,11 @@ pub async fn withdraw(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu lalu tunggu mixing window."
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu."
                         .to_string(),
                 ));
             }
-            let min_age_secs = hide_balance_min_note_age_secs();
-            let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
-            let spendable_at = deposit_ts.saturating_add(min_age_secs);
-            payload.spendable_at_unix = Some(spendable_at);
-            if now_unix < spendable_at {
-                let remaining = spendable_at - now_unix;
-                return Err(crate::error::AppError::BadRequest(format!(
-                    "Hide Balance mixing window aktif: note age belum memenuhi minimum {} detik. Coba lagi dalam {} detik.",
-                    min_age_secs, remaining
-                )));
-            }
+            payload.spendable_at_unix = Some(deposit_ts);
         } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
@@ -2748,21 +2789,11 @@ pub async fn claim(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu lalu tunggu mixing window."
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu."
                         .to_string(),
                 ));
             }
-            let min_age_secs = hide_balance_min_note_age_secs();
-            let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
-            let spendable_at = deposit_ts.saturating_add(min_age_secs);
-            payload.spendable_at_unix = Some(spendable_at);
-            if now_unix < spendable_at {
-                let remaining = spendable_at - now_unix;
-                return Err(crate::error::AppError::BadRequest(format!(
-                    "Hide Balance mixing window aktif: note age belum memenuhi minimum {} detik. Coba lagi dalam {} detik.",
-                    min_age_secs, remaining
-                )));
-            }
+            payload.spendable_at_unix = Some(deposit_ts);
         } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
@@ -3091,11 +3122,6 @@ mod tests {
             resolve_hide_pool_version(Some(&payload_v2)),
             HidePoolVersion::V2
         ));
-    }
-
-    #[test]
-    fn hide_balance_min_note_age_default_is_one_hour() {
-        assert_eq!(hide_balance_min_note_age_secs(), 3600);
     }
 
     #[test]

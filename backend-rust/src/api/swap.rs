@@ -183,13 +183,6 @@ fn hide_balance_v2_redeem_only_enabled() -> bool {
     env_flag("HIDE_BALANCE_V2_REDEEM_ONLY", false)
 }
 
-fn hide_balance_min_note_age_secs() -> u64 {
-    std::env::var("HIDE_BALANCE_MIN_NOTE_AGE_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or(3600)
-}
-
 fn hide_balance_max_uses_per_day() -> u64 {
     std::env::var("HIDE_BALANCE_MAX_USES_PER_DAY")
         .ok()
@@ -3256,21 +3249,11 @@ pub async fn execute_swap(
                     shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
                 if deposit_ts == 0 {
                     return Err(AppError::BadRequest(
-                        "Hide Balance V3 note belum terdaftar. Deposit note dulu lalu tunggu mixing window."
+                        "Hide Balance V3 note belum terdaftar. Deposit note dulu."
                             .to_string(),
                     ));
                 }
-                let min_age_secs = hide_balance_min_note_age_secs();
-                let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
-                let spendable_at = deposit_ts.saturating_add(min_age_secs);
-                payload.spendable_at_unix = Some(spendable_at);
-                if now_unix < spendable_at {
-                    let remaining = spendable_at - now_unix;
-                    return Err(AppError::BadRequest(format!(
-                        "Hide Balance mixing window aktif: note age belum memenuhi minimum {} detik. Coba lagi dalam {} detik.",
-                        min_age_secs, remaining
-                    )));
-                }
+                payload.spendable_at_unix = Some(deposit_ts);
                 ensure_hide_executor_has_input_balance(
                     &state,
                     executor,
@@ -3669,12 +3652,6 @@ mod tests {
         let mapped = payload_from_request(Some(&payload), "garaga").expect("payload must map");
         assert_eq!(mapped.note_version.as_deref(), Some("v3"));
         assert_eq!(mapped.root.as_deref(), Some("0x123"));
-    }
-
-    #[test]
-    fn hide_balance_min_note_age_default_is_one_hour() {
-        // Default hard gate (no env override) is 3600s.
-        assert_eq!(hide_balance_min_note_age_secs(), 3600);
     }
 
     #[test]

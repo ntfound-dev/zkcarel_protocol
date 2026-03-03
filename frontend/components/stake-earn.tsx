@@ -110,16 +110,6 @@ const HIDE_BALANCE_RELAYER_POOL_ENABLED =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true"
 const HIDE_BALANCE_RELAYER_APPROVE_MAX =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_APPROVE_MAX || "false").toLowerCase() === "true"
-const HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW =
-  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS || ""
-const HIDE_BALANCE_MIN_NOTE_AGE_SECS = Number.parseInt(
-  HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW || "3600",
-  10
-)
-const MIN_WAIT_MS =
-  (Number.isFinite(HIDE_BALANCE_MIN_NOTE_AGE_SECS) && HIDE_BALANCE_MIN_NOTE_AGE_SECS > 0
-    ? HIDE_BALANCE_MIN_NOTE_AGE_SECS
-    : 3600) * 1000
 const U256_MAX_LOW_HEX = "0xffffffffffffffffffffffffffffffff"
 const U256_MAX_HIGH_HEX = "0xffffffffffffffffffffffffffffffff"
 
@@ -1133,7 +1123,7 @@ export function StakeEarn() {
         starknetProviderHint
       )
 
-      const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+      const spendableAtUnix = Math.floor(Date.now() / 1000)
       persistTradePrivacyPayload({
         ...payload,
         note_version: "v3",
@@ -1165,7 +1155,7 @@ export function StakeEarn() {
       notifications.addNotification({
         type: "success",
         title: "Hide note deposited",
-        message: `Note deposit submitted (${txHash.slice(0, 10)}...). Wait for mixing window before retrying private stake.`,
+        message: `Note deposit submitted (${txHash.slice(0, 10)}...). Note is ready for private stake.`,
         txHash,
         txNetwork: "starknet",
       })
@@ -1593,19 +1583,13 @@ export function StakeEarn() {
               `Hide note belum terdaftar dan auto-deposit gagal. Detail: ${depositMessage}`
             )
           }
-          const remainingMs = Math.max(
-            0,
-            (spendableAtUnix || Math.floor((Date.now() + MIN_WAIT_MS) / 1000)) * 1000 - Date.now()
-          )
-          if (remainingMs > 1000) {
+          if (spendableAtUnix && spendableAtUnix > 0) {
             throw new Error(
-              `HIDE_NOTE_WAIT::Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
-                remainingMs
-              )} sebelum retry private stake.`
+              "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private stake now."
             )
           }
           throw new Error(
-            "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private stake; backend akan enforce mixing window aktual."
+            "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private stake now."
           )
         }
         if (useRelayerPoolHide) {
