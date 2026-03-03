@@ -1739,6 +1739,7 @@ export function TradingInterface() {
   const [autoRunSelectedHideNoteSwap, setAutoRunSelectedHideNoteSwap] = React.useState(false)
   const [activePendingHideNoteSwapKey, setActivePendingHideNoteSwapKey] = React.useState<string | null>(null)
   const [tradeResultPopup, setTradeResultPopup] = React.useState<TradeResultPopupState | null>(null)
+  const manualSelectedHideNoteRetryRef = React.useRef(0)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
   const gardenOrderPollingRef = React.useRef<Record<string, boolean>>({})
   const confirmTradeRef = React.useRef<() => void>(() => {})
@@ -3062,6 +3063,13 @@ export function TradingInterface() {
   const activeHideNoteTokenSymbol = (activeHideNoteRecord?.token_symbol || "").trim().toUpperCase()
   const activeHideNoteAmountText = (activeHideNoteRecord?.amount || "").trim()
   const activeHideNoteAmountValue = Number.parseFloat(activeHideNoteAmountText || "NaN")
+  const activeExecutorNormalized = normalizeExecutorAddress(PRIVATE_ACTION_EXECUTOR_ADDRESS)
+  const activeHideNoteExecutor = normalizeExecutorAddress(activeHideNoteRecord?.executor_address)
+  const activeHideExecutorMismatch =
+    hasActiveHideV3Note &&
+    !!activeHideNoteExecutor &&
+    !!activeExecutorNormalized &&
+    activeHideNoteExecutor !== activeExecutorNormalized
   const activeHideNoteTokenMismatch =
     hasActiveHideV3Note &&
     !!activeHideNoteTokenSymbol &&
@@ -3115,6 +3123,8 @@ export function TradingInterface() {
       ? "Quote on-chain calldata is not ready yet. Refresh the quote."
       : isCrossChain && !resolvedReceiveAddress
       ? "Receive address is required."
+      : activeHideExecutorMismatch
+      ? "Active hide note uses an old executor. Pick a note on current executor or withdraw old note."
       : hideMixingWindowBlocked
       ? `Hide Balance note masih dalam mixing window. Tunggu ${formatRemainingDuration(
           hideMixingWindowRemainingMs
@@ -4287,6 +4297,8 @@ export function TradingInterface() {
     setSwapState("processing")
     let tradeFinalized = true
     let shouldClearTradePrivacyPayload = false
+    let preserveActivePendingHideNoteSwapKey = false
+    let scheduledManualNoteRetryMs: number | null = null
     let submittedSwapTxHash: string | null = null
     let successPopupPayload: TradeResultPopupState | null = null
     const requestedHideBalance = hideBalanceOnchain
@@ -4934,6 +4946,20 @@ export function TradingInterface() {
               noteDepositPayload
             ) {
               if (manuallySelectedHideNoteRef.current) {
+                const maxRetries = 7
+                const retryAttempt = manualSelectedHideNoteRetryRef.current + 1
+                if (retryAttempt <= maxRetries) {
+                  manualSelectedHideNoteRetryRef.current = retryAttempt
+                  const retryDelaysMs = [8_000, 12_000, 15_000, 20_000, 25_000, 30_000, 35_000]
+                  const waitMs =
+                    retryDelaysMs[Math.min(retryAttempt - 1, retryDelaysMs.length - 1)] || 15_000
+                  throw new Error(
+                    `HIDE_NOTE_INDEXER_WAIT::${waitMs}::Hide note belum terbaca penuh di indexer. Retry ${retryAttempt}/${maxRetries} in ${formatRemainingDuration(
+                      waitMs
+                    )}.`
+                  )
+                }
+                manualSelectedHideNoteRetryRef.current = 0
                 throw new Error(
                   "Selected hide note is not recognized by the active executor/relayer. Auto-deposit is disabled for manually selected notes. Please choose another pending note or withdraw this note."
                 )
@@ -5118,6 +5144,7 @@ export function TradingInterface() {
     } catch (error) {
       const rawErrorMessage = error instanceof Error ? error.message : "Failed to execute trade"
       if (rawErrorMessage.startsWith("HIDE_NOTE_WAIT::")) {
+        manualSelectedHideNoteRetryRef.current = 0
         notifications.addNotification({
           type: "warning",
           title: "Hide note deposited",
@@ -5127,6 +5154,7 @@ export function TradingInterface() {
         return
       }
       if (rawErrorMessage.startsWith("HIDE_NOTE_READY::")) {
+        manualSelectedHideNoteRetryRef.current = 0
         notifications.addNotification({
           type: "info",
           title: "Hide note deposited",
@@ -5135,6 +5163,26 @@ export function TradingInterface() {
         setSwapState("idle")
         return
       }
+      if (rawErrorMessage.startsWith("HIDE_NOTE_INDEXER_WAIT::")) {
+        const [, waitRaw, indexedMessage] = rawErrorMessage.split("::", 3)
+        const waitMs = Number.parseInt(waitRaw || "0", 10)
+        notifications.addNotification({
+          type: "info",
+          title: "Indexer syncing",
+          message:
+            indexedMessage?.trim() ||
+            "Hide note belum terbaca penuh di indexer. Retry private swap in a few seconds.",
+        })
+        if (manuallySelectedHideNoteRef.current && Number.isFinite(waitMs) && waitMs > 0) {
+          const { commitment, nullifier } = manuallySelectedHideNoteRef.current
+          preserveActivePendingHideNoteSwapKey = true
+          setActivePendingHideNoteSwapKey(`${commitment}:${nullifier}`)
+          scheduledManualNoteRetryMs = waitMs
+        }
+        setSwapState("idle")
+        return
+      }
+      manualSelectedHideNoteRetryRef.current = 0
       const normalizedErrorMessage = rawErrorMessage.toLowerCase()
       const walletRejected =
         normalizedErrorMessage.includes("wallet signature was rejected") ||
@@ -5219,11 +5267,19 @@ export function TradingInterface() {
       })
       setSwapState("error")
     } finally {
-      setActivePendingHideNoteSwapKey(null)
+      if (!preserveActivePendingHideNoteSwapKey) {
+        setActivePendingHideNoteSwapKey(null)
+      }
       if (hideBalanceOnchain && shouldClearTradePrivacyPayload) {
         clearTradePrivacyPayload()
         setHasTradePrivacyPayload(false)
         clearManuallySelectedHideNote()
+      }
+      if (scheduledManualNoteRetryMs && manuallySelectedHideNoteRef.current) {
+        window.setTimeout(() => {
+          if (!manuallySelectedHideNoteRef.current) return
+          setAutoRunSelectedHideNoteSwap(true)
+        }, scheduledManualNoteRetryMs)
       }
       setTimeout(() => {
         setSwapState("idle")
@@ -5778,6 +5834,11 @@ export function TradingInterface() {
                       const noteNullifier = (note.nullifier || "").trim()
                       const noteActionKey = `${noteCommitment}:${noteNullifier}`
                       const noteSourceTokenSymbol = (note.token_symbol || "STRK").trim().toUpperCase()
+                      const noteExecutorNormalized = normalizeExecutorAddress(note.executor_address)
+                      const noteExecutorMismatch =
+                        !!noteExecutorNormalized &&
+                        !!activeExecutorNormalized &&
+                        noteExecutorNormalized !== activeExecutorNormalized
                       const noteTargetTokenSymbol = (
                         note.target_token_symbol ||
                         ""
@@ -5787,7 +5848,7 @@ export function TradingInterface() {
                       const displayTargetToken =
                         noteTargetTokenSymbol || toToken.symbol.toUpperCase()
                       const noteMissingSwapMetadata = !noteNullifier
-                      const noteUseBlocked = noteMissingSwapMetadata
+                      const noteUseBlocked = noteMissingSwapMetadata || noteExecutorMismatch
                       const noteRemainingMs =
                         typeof note.spendable_at_unix === "number" &&
                         Number.isFinite(note.spendable_at_unix)
@@ -5817,6 +5878,12 @@ export function TradingInterface() {
                               Metadata note belum lengkap untuk swap (nullifier).
                             </p>
                           )}
+                          {noteExecutorMismatch && (
+                            <p className="text-[11px] text-warning">
+                              Note memakai executor lama. Swap diblok untuk note ini; gunakan Withdraw
+                              atau pilih note lain.
+                            </p>
+                          )}
                           <div className="mt-2 grid grid-cols-2 gap-2">
                             <Button
                               type="button"
@@ -5836,7 +5903,9 @@ export function TradingInterface() {
                                       notifications.addNotification({
                                         type: "warning",
                                         title: "Use note blocked",
-                                        message: "Note belum punya metadata lengkap untuk swap.",
+                                        message: noteExecutorMismatch
+                                          ? "Selected note uses old executor and cannot be swapped on current relayer. Withdraw it or choose another note."
+                                          : "Note belum punya metadata lengkap untuk swap.",
                                       })
                                       setActivePendingHideNoteSwapKey(null)
                                       return
@@ -5985,6 +6054,7 @@ export function TradingInterface() {
                                     )
                                   }
                                   setHasTradePrivacyPayload(true)
+                                  manualSelectedHideNoteRetryRef.current = 0
                                   notifications.addNotification({
                                     type: "info",
                                     title: "Hide note selected",
