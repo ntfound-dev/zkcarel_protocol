@@ -270,6 +270,12 @@ const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
   window.dispatchEvent(new Event(LIMIT_PRIVACY_PAYLOAD_UPDATED_EVENT))
 }
 
+const clearTradePrivacyPayload = () => {
+  if (typeof window === "undefined") return
+  window.localStorage.removeItem(LIMIT_PRIVACY_PAYLOAD_KEY)
+  window.dispatchEvent(new Event(LIMIT_PRIVACY_PAYLOAD_UPDATED_EVENT))
+}
+
 const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
   if (typeof window === "undefined") return []
   const raw = window.localStorage.getItem(LIMIT_PRIVACY_PENDING_NOTES_KEY)
@@ -1415,6 +1421,7 @@ export function LimitOrder() {
    * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
    */
   const confirmOrder = async () => {
+    if (isSubmitting) return
     if (isBtcBuyComingSoon) {
       notifications.addNotification({
         type: "info",
@@ -1422,6 +1429,10 @@ export function LimitOrder() {
         message: "Limit Order BTC Buy is still in final integration.",
       })
       return
+    }
+    if (hideOrderAutoRetryTimerRef.current !== null) {
+      window.clearTimeout(hideOrderAutoRetryTimerRef.current)
+      hideOrderAutoRetryTimerRef.current = null
     }
     setIsSubmitting(true)
     let orderCreated = false
@@ -1559,6 +1570,21 @@ export function LimitOrder() {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "")
+        if (useRelayerPoolHide && /nullifier already spent/i.test(message)) {
+          const spentCommitment = (
+            payloadForBackend?.note_commitment ||
+            payloadForBackend?.commitment ||
+            ""
+          ).trim()
+          const spentNullifier = (payloadForBackend?.nullifier || "").trim()
+          removePendingHideNote(spentCommitment, spentNullifier)
+          setPendingHideNotes(loadPendingHideNotes())
+          clearTradePrivacyPayload()
+          setHasTradePrivacyPayload(false)
+          throw new Error(
+            "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retrying with a fresh payload."
+          )
+        }
         if (
           useRelayerPoolHide &&
           /note belum terdaftar/i.test(message) &&
@@ -1638,6 +1664,8 @@ export function LimitOrder() {
         const spentNullifier = (payloadForBackend?.nullifier || "").trim()
         removePendingHideNote(spentCommitment, spentNullifier)
         setPendingHideNotes(loadPendingHideNotes())
+        clearTradePrivacyPayload()
+        setHasTradePrivacyPayload(false)
       }
 
       const newOrder: UiOrder = {
@@ -1698,6 +1726,24 @@ export function LimitOrder() {
           type: "success",
           title: "Hide note deposited",
           message: rawMessage.replace("HIDE_NOTE_READY::", "").trim(),
+        })
+        if (hideOrderAutoRetryAttemptsRef.current < 2) {
+          if (hideOrderAutoRetryTimerRef.current !== null) {
+            window.clearTimeout(hideOrderAutoRetryTimerRef.current)
+          }
+          hideOrderAutoRetryTimerRef.current = window.setTimeout(() => {
+            hideOrderAutoRetryTimerRef.current = null
+            hideOrderAutoRetryAttemptsRef.current += 1
+            void confirmOrder()
+          }, 1200)
+        }
+        return
+      }
+      if (rawMessage.startsWith("HIDE_NOTE_SPENT::")) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Hide note refreshed",
+          message: rawMessage.replace("HIDE_NOTE_SPENT::", "").trim(),
         })
         if (hideOrderAutoRetryAttemptsRef.current < 2) {
           if (hideOrderAutoRetryTimerRef.current !== null) {
