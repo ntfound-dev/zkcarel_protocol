@@ -106,6 +106,16 @@ type ChartCandle = {
 
 const stableSymbols = new Set(["USDT", "USDC"])
 
+type UsdtTierOption = { minUsdt: number; bonusPercent: number }
+
+const USDT_POINTS_TIER_OPTIONS: UsdtTierOption[] = [
+  { minUsdt: 5, bonusPercent: 5 },
+  { minUsdt: 10, bonusPercent: 10 },
+  { minUsdt: 50, bonusPercent: 20 },
+  { minUsdt: 100, bonusPercent: 30 },
+  { minUsdt: 250, bonusPercent: 50 },
+]
+
 const usdtTierBonusPercent = (usdtEquivalentVolume: number): number => {
   if (!Number.isFinite(usdtEquivalentVolume) || usdtEquivalentVolume <= 0) return 0
   if (usdtEquivalentVolume >= 250) return 50
@@ -355,6 +365,7 @@ export function LimitOrder() {
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [submitSuccess, setSubmitSuccess] = React.useState(false)
   const [balanceHidden, setBalanceHidden] = React.useState(false)
+  const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(10)
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
@@ -516,7 +527,7 @@ export function LimitOrder() {
     setSelectedToken(nextSelected)
     setPayToken(nextPay)
     setReceiveToken(nextReceive)
-  }, [tokens])
+  }, [payToken.symbol, receiveToken.symbol, selectedToken.symbol, tokens])
 
   React.useEffect(() => {
     let active = true
@@ -798,6 +809,44 @@ export function LimitOrder() {
     ]
   )
 
+  const resolveUsdPrice = React.useCallback(
+    (symbol: string): number => {
+      const upper = symbol.toUpperCase()
+      if (stableSymbols.has(upper)) return 1
+      const tokenPrice =
+        tokens.find((token) => token.symbol.toUpperCase() === upper)?.price ?? 0
+      return Number.isFinite(tokenPrice) && tokenPrice > 0 ? tokenPrice : 0
+    },
+    [tokens]
+  )
+
+  const fromTokenForOrder = orderType === "buy" ? payToken.symbol : selectedToken.symbol
+  const selectedHideTier =
+    USDT_POINTS_TIER_OPTIONS.find((option) => option.minUsdt === hideUsdtTierMin) ||
+    USDT_POINTS_TIER_OPTIONS[1]
+  const hideTierFromTokenPrice = resolveUsdPrice(fromTokenForOrder)
+  const hideTierLockedAmount =
+    balanceHidden && hideTierFromTokenPrice > 0
+      ? selectedHideTier.minUsdt / hideTierFromTokenPrice
+      : null
+
+  React.useEffect(() => {
+    if (!balanceHidden) return
+    if (!Number.isFinite(hideTierLockedAmount || Number.NaN) || (hideTierLockedAmount || 0) <= 0) return
+
+    const decimals = TOKEN_DECIMALS[fromTokenForOrder.toUpperCase()] ?? 18
+    const precision = Math.min(decimals >= 10 ? 8 : 6, 8)
+    const nextAmount = Number(hideTierLockedAmount).toFixed(precision).replace(/\.?0+$/, "")
+    if (!nextAmount) return
+
+    const currentAmount = Number.parseFloat(amount || "0")
+    const drift = Math.abs(currentAmount - Number(hideTierLockedAmount))
+    const tolerance = Math.max(Number(hideTierLockedAmount) * 1e-6, 1e-8)
+    if (!Number.isFinite(currentAmount) || drift > tolerance) {
+      setAmount(nextAmount)
+    }
+  }, [amount, balanceHidden, fromTokenForOrder, hideTierLockedAmount])
+
   /**
    * Handles `handleAmountPreset` logic.
    *
@@ -811,25 +860,25 @@ export function LimitOrder() {
     setAmount((balance * percent / 100).toString())
   }
 
-  const estimatedTotal = currentPrice * (Number.parseFloat(amount) || 0)
   const amountValue = Number.parseFloat(amount) || 0
   const estimatedUsdValue =
     orderType === "buy"
       ? amountValue
       : amountValue * (Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : marketPrice)
+  const pointsUsdBasis = balanceHidden ? selectedHideTier.minUsdt : estimatedUsdValue
   const activeDiscountPercent = activeNftDiscount?.discount ?? 0
   const discountRate = activeDiscountPercent > 0 ? Math.min(activeDiscountPercent, 100) / 100 : 0
   const normalizedStakeMultiplier =
     Number.isFinite(stakePointsMultiplier) && stakePointsMultiplier > 0 ? stakePointsMultiplier : 1
   const nftPointsMultiplier = 1 + discountRate
-  const hideUsdtTierBonus = balanceHidden ? usdtTierBonusPercent(estimatedUsdValue) : 0
+  const hideUsdtTierBonus = balanceHidden ? selectedHideTier.bonusPercent : usdtTierBonusPercent(estimatedUsdValue)
   const hideUsdtTierMultiplier = 1 + hideUsdtTierBonus / 100
   const effectivePointsMultiplier =
     normalizedStakeMultiplier * nftPointsMultiplier * hideUsdtTierMultiplier
   const rawLimitFeeUsd = Math.max(0, estimatedUsdValue) * 0.002
   const limitFeeUsd = rawLimitFeeUsd * (1 - discountRate)
   const feeSavedUsd = Math.max(0, rawLimitFeeUsd - limitFeeUsd)
-  const basePoints = Math.max(0, estimatedUsdValue) * 12
+  const basePoints = Math.max(0, pointsUsdBasis) * 12
   const estimatedPoints =
     basePoints > 0 ? Math.floor(basePoints * effectivePointsMultiplier) : 0
   const isBtcBuyComingSoon = orderType === "buy" && selectedToken.symbol === "BTC"
@@ -1748,13 +1797,46 @@ export function LimitOrder() {
                       </button>
                     </div>
                     {balanceHidden && (
-                      <p className="text-[11px] text-muted-foreground">
-                        {hasTradePrivacyPayload
-                          ? "Garaga payload is ready."
-                          : isAutoPrivacyProvisioning
-                          ? "Preparing Garaga payload..."
-                          : "Garaga payload will be auto-prepared on submit."}
-                      </p>
+                      <div className="space-y-2 rounded-lg border border-border bg-surface/30 p-3">
+                        <p className="text-xs text-foreground">Hide Tier (USDT)</p>
+                        <div className="grid grid-cols-5 gap-2">
+                          {USDT_POINTS_TIER_OPTIONS.map((option) => {
+                            const selected = selectedHideTier.minUsdt === option.minUsdt
+                            return (
+                              <button
+                                key={option.minUsdt}
+                                type="button"
+                                onClick={() => setHideUsdtTierMin(option.minUsdt)}
+                                className={cn(
+                                  "rounded-md border px-2 py-1 text-[10px] transition-colors",
+                                  selected
+                                    ? "border-primary bg-primary/20 text-primary"
+                                    : "border-border bg-surface text-muted-foreground hover:border-primary/50"
+                                )}
+                              >
+                                <div>${option.minUsdt}</div>
+                                <div>+{option.bonusPercent}%</div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Nominal hide dikunci ke tier ${selectedHideTier.minUsdt}: ~
+                          {hideTierLockedAmount && Number.isFinite(hideTierLockedAmount)
+                            ? Number(hideTierLockedAmount).toLocaleString(undefined, {
+                                maximumFractionDigits: 6,
+                              })
+                            : "—"}{" "}
+                          {fromTokenForOrder.toUpperCase()} • Bonus +{selectedHideTier.bonusPercent}%.
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {hasTradePrivacyPayload
+                            ? "Garaga payload is ready."
+                            : isAutoPrivacyProvisioning
+                            ? "Preparing Garaga payload..."
+                            : "Garaga payload will be auto-prepared on submit."}
+                        </p>
+                      </div>
                     )}
                   </div>
 
@@ -1971,13 +2053,46 @@ export function LimitOrder() {
                       </button>
                     </div>
                     {balanceHidden && (
-                      <p className="text-[11px] text-muted-foreground">
-                        {hasTradePrivacyPayload
-                          ? "Garaga payload is ready."
-                          : isAutoPrivacyProvisioning
-                          ? "Preparing Garaga payload..."
-                          : "Garaga payload will be auto-prepared on submit."}
-                      </p>
+                      <div className="space-y-2 rounded-lg border border-border bg-surface/30 p-3">
+                        <p className="text-xs text-foreground">Hide Tier (USDT)</p>
+                        <div className="grid grid-cols-5 gap-2">
+                          {USDT_POINTS_TIER_OPTIONS.map((option) => {
+                            const selected = selectedHideTier.minUsdt === option.minUsdt
+                            return (
+                              <button
+                                key={option.minUsdt}
+                                type="button"
+                                onClick={() => setHideUsdtTierMin(option.minUsdt)}
+                                className={cn(
+                                  "rounded-md border px-2 py-1 text-[10px] transition-colors",
+                                  selected
+                                    ? "border-primary bg-primary/20 text-primary"
+                                    : "border-border bg-surface text-muted-foreground hover:border-primary/50"
+                                )}
+                              >
+                                <div>${option.minUsdt}</div>
+                                <div>+{option.bonusPercent}%</div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Nominal hide dikunci ke tier ${selectedHideTier.minUsdt}: ~
+                          {hideTierLockedAmount && Number.isFinite(hideTierLockedAmount)
+                            ? Number(hideTierLockedAmount).toLocaleString(undefined, {
+                                maximumFractionDigits: 6,
+                              })
+                            : "—"}{" "}
+                          {fromTokenForOrder.toUpperCase()} • Bonus +{selectedHideTier.bonusPercent}%.
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {hasTradePrivacyPayload
+                            ? "Garaga payload is ready."
+                            : isAutoPrivacyProvisioning
+                            ? "Preparing Garaga payload..."
+                            : "Garaga payload will be auto-prepared on submit."}
+                        </p>
+                      </div>
                     )}
                   </div>
 
@@ -2150,6 +2265,14 @@ export function LimitOrder() {
                       {balanceHidden ? "ON" : "OFF"}
                     </span>
                   </div>
+                  {balanceHidden && (
+                    <div className="flex justify-between mt-2">
+                      <span className="text-muted-foreground">Hide Tier</span>
+                      <span className="font-medium text-primary">
+                        ${selectedHideTier.minUsdt} (+{selectedHideTier.bonusPercent}%)
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-3 rounded-lg bg-secondary/10 border border-secondary/20">

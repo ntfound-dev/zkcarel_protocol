@@ -42,6 +42,16 @@ const poolMeta: Record<string, { name: string; icon: string; type: string; gradi
   CAREL: { name: "Carel Protocol", icon: "◐", type: "Crypto", gradient: "from-violet-400 to-purple-600" },
 }
 
+type UsdtTierOption = { minUsdt: number; bonusPercent: number }
+
+const USDT_POINTS_TIER_OPTIONS: UsdtTierOption[] = [
+  { minUsdt: 5, bonusPercent: 5 },
+  { minUsdt: 10, bonusPercent: 10 },
+  { minUsdt: 50, bonusPercent: 20 },
+  { minUsdt: 100, bonusPercent: 30 },
+  { minUsdt: 250, bonusPercent: 50 },
+]
+
 const STARKNET_STAKING_CAREL_ADDRESS =
   process.env.NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS ||
   process.env.NEXT_PUBLIC_STAKING_CAREL_ADDRESS ||
@@ -314,6 +324,7 @@ export function StakeEarn() {
   const [stakeSuccess, setStakeSuccess] = React.useState(false)
   const [claimingPositionId, setClaimingPositionId] = React.useState<string | null>(null)
   const [balanceHidden, setBalanceHidden] = React.useState(false)
+  const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(10)
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
@@ -677,6 +688,49 @@ export function StakeEarn() {
       setStakeAmount(amount.toString())
     }
   }
+
+  const selectedHideTier =
+    USDT_POINTS_TIER_OPTIONS.find((option) => option.minUsdt === hideUsdtTierMin) ||
+    USDT_POINTS_TIER_OPTIONS[1]
+
+  const resolvePoolUsdPrice = React.useCallback(
+    (poolSymbol: string): number => {
+      const symbol = poolSymbol.toUpperCase()
+      if (symbol === "USDT" || symbol === "USDC") return 1
+      const livePrice = tokenPrices[symbol]
+      if (Number.isFinite(livePrice) && livePrice > 0) return livePrice
+      const fallbackPrice =
+        pools.find((pool) => pool.symbol.toUpperCase() === symbol)?.spotPrice ?? 0
+      return Number.isFinite(fallbackPrice) && fallbackPrice > 0 ? fallbackPrice : 0
+    },
+    [pools, tokenPrices]
+  )
+
+  const selectedPoolSpotUsd =
+    selectedPool && selectedPool.symbol
+      ? resolvePoolUsdPrice(selectedPool.symbol)
+      : 0
+  const hideTierLockedStakeAmount =
+    balanceHidden && selectedPoolSpotUsd > 0
+      ? selectedHideTier.minUsdt / selectedPoolSpotUsd
+      : null
+
+  React.useEffect(() => {
+    if (!balanceHidden || !selectedPool) return
+    if (!Number.isFinite(hideTierLockedStakeAmount || Number.NaN) || (hideTierLockedStakeAmount || 0) <= 0) return
+
+    const decimals = POOL_DECIMALS[selectedPool.symbol.toUpperCase()] ?? 18
+    const precision = Math.min(decimals >= 10 ? 8 : 6, 8)
+    const nextAmount = Number(hideTierLockedStakeAmount).toFixed(precision).replace(/\.?0+$/, "")
+    if (!nextAmount) return
+
+    const currentAmount = Number.parseFloat(stakeAmount || "0")
+    const drift = Math.abs(currentAmount - Number(hideTierLockedStakeAmount))
+    const tolerance = Math.max(Number(hideTierLockedStakeAmount) * 1e-6, 1e-8)
+    if (!Number.isFinite(currentAmount) || drift > tolerance) {
+      setStakeAmount(nextAmount)
+    }
+  }, [balanceHidden, hideTierLockedStakeAmount, selectedPool, stakeAmount])
 
   const submitOnchainStakeTx = React.useCallback(
     async (
@@ -1572,13 +1626,48 @@ export function StakeEarn() {
                   </button>
                 </div>
                 {balanceHidden && (
-                  <p className="mt-2 text-[11px] text-muted-foreground">
-                    {hasTradePrivacyPayload
-                      ? "Garaga payload is ready."
-                      : isAutoPrivacyProvisioning
-                      ? "Preparing Garaga payload..."
-                      : "Garaga payload will be auto-prepared on submit."}
-                  </p>
+                  <div className="mt-2 space-y-2">
+                    <p className="text-[11px] text-foreground">Hide Tier (USDT)</p>
+                    <div className="grid grid-cols-5 gap-2">
+                      {USDT_POINTS_TIER_OPTIONS.map((option) => {
+                        const selected = selectedHideTier.minUsdt === option.minUsdt
+                        return (
+                          <button
+                            key={option.minUsdt}
+                            type="button"
+                            onClick={() => setHideUsdtTierMin(option.minUsdt)}
+                            className={cn(
+                              "rounded-md border px-2 py-1 text-[10px] transition-colors",
+                              selected
+                                ? "border-primary bg-primary/20 text-primary"
+                                : "border-border bg-surface text-muted-foreground hover:border-primary/50"
+                            )}
+                          >
+                            <div>${option.minUsdt}</div>
+                            <div>+{option.bonusPercent}%</div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {selectedPool && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Nominal hide stake dikunci ke tier ${selectedHideTier.minUsdt}: ~
+                        {hideTierLockedStakeAmount && Number.isFinite(hideTierLockedStakeAmount)
+                          ? Number(hideTierLockedStakeAmount).toLocaleString(undefined, {
+                              maximumFractionDigits: 6,
+                            })
+                          : "—"}{" "}
+                        {selectedPool.symbol} • Bonus +{selectedHideTier.bonusPercent}%.
+                      </p>
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      {hasTradePrivacyPayload
+                        ? "Garaga payload is ready."
+                        : isAutoPrivacyProvisioning
+                        ? "Preparing Garaga payload..."
+                        : "Garaga payload will be auto-prepared on submit."}
+                    </p>
+                  </div>
                 )}
               </div>
             </div>
@@ -1803,6 +1892,42 @@ export function StakeEarn() {
                         ))}
                       </div>
                     </div>
+
+                    {balanceHidden && (
+                      <div className="space-y-2 rounded-lg border border-border bg-surface/40 p-3">
+                        <p className="text-xs text-foreground">Hide Tier (USDT)</p>
+                        <div className="grid grid-cols-5 gap-2">
+                          {USDT_POINTS_TIER_OPTIONS.map((option) => {
+                            const selected = selectedHideTier.minUsdt === option.minUsdt
+                            return (
+                              <button
+                                key={option.minUsdt}
+                                type="button"
+                                onClick={() => setHideUsdtTierMin(option.minUsdt)}
+                                className={cn(
+                                  "rounded-md border px-2 py-1 text-[10px] transition-colors",
+                                  selected
+                                    ? "border-primary bg-primary/20 text-primary"
+                                    : "border-border bg-surface text-muted-foreground hover:border-primary/50"
+                                )}
+                              >
+                                <div>${option.minUsdt}</div>
+                                <div>+{option.bonusPercent}%</div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Nominal hide stake dikunci ke tier ${selectedHideTier.minUsdt}: ~
+                          {hideTierLockedStakeAmount && Number.isFinite(hideTierLockedStakeAmount)
+                            ? Number(hideTierLockedStakeAmount).toLocaleString(undefined, {
+                                maximumFractionDigits: 6,
+                              })
+                            : "—"}{" "}
+                          {selectedPool.symbol} • Bonus +{selectedHideTier.bonusPercent}%.
+                        </p>
+                      </div>
+                    )}
 
                     {Number.parseFloat(stakeAmount) > 0 && (
                       <div className="p-3 rounded-lg bg-success/10 border border-success/20">
