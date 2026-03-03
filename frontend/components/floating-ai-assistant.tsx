@@ -3063,9 +3063,8 @@ export function FloatingAIAssistant() {
         command,
         createdAt: Date.now(),
       })
-      const burnAddressHint = effectivePaymentAddress
-        ? `\nBurn address (CAREL): ${effectivePaymentAddress}`
-        : "\nBurn address (CAREL): not configured"
+      const burnTxHint =
+        "\nBurn transaction hash will be shown after you confirm the wallet signature."
       const hideDepositExecutorHint = (PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
         ? `\nHide deposit executor: ${(PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()}`
         : "\nHide deposit executor: not configured"
@@ -3076,7 +3075,7 @@ export function FloatingAIAssistant() {
         {
           role: "assistant",
           content:
-            `You're about to execute this REAL on-chain command:\n${command}\n\nReply \`yes\` to continue or \`no\` to cancel.\nThis will request wallet signature and burn ${executionBurnAmountCarel(activeTier)} CAREL on-chain for this execution.${burnAddressHint}${hideDepositExecutorHint}${bridgeConfirmHint}\nIf you have an active discount NFT, fee discount will be applied automatically.`,
+            `You're about to execute this REAL on-chain command:\n${command}\n\nReply \`yes\` to continue or \`no\` to cancel.\nThis will request wallet signature and burn ${executionBurnAmountCarel(activeTier)} CAREL on-chain for this execution.${burnTxHint}${hideDepositExecutorHint}${bridgeConfirmHint}\nIf you have an active discount NFT, fee discount will be applied automatically.`,
           timestamp: nowTimestampLabel(),
         },
       ])
@@ -5129,8 +5128,8 @@ export function FloatingAIAssistant() {
         title: "Wallet signature required",
         message:
           (AI_SETUP_SKIP_APPROVE
-            ? `Confirm submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn address: ${effectivePaymentAddress || "not configured"}`
-            : `Confirm CAREL approval (${approveAmountCarel}) + submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn address: ${effectivePaymentAddress || "not configured"}`) +
+            ? `Confirm submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn Tx hash will be shown after confirmation.`
+            : `Confirm CAREL approval (${approveAmountCarel}) + submit_action transaction in your Starknet wallet (burn ${executionBurnAmountCarel(selectedTier)} CAREL for this execution).\nBurn Tx hash will be shown after confirmation.`) +
           (setupBundle.usesTypedSignature
             ? ""
             : "\nSignature challenge is disabled, so setup+burn uses one wallet transaction."),
