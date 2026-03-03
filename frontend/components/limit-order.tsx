@@ -104,6 +104,23 @@ type ChartCandle = {
   close: number
 }
 
+type PendingHideNoteRecord = {
+  note_version: "v3"
+  note_commitment: string
+  nullifier?: string
+  executor_address?: string
+  verifier?: string
+  root?: string
+  proof?: string[]
+  public_inputs?: string[]
+  denom_id?: string
+  token_symbol?: string
+  target_token_symbol?: string
+  amount?: string
+  deposited_at_unix: number
+  spendable_at_unix?: number
+}
+
 const stableSymbols = new Set(["USDT", "USDC"])
 
 type UsdtTierOption = { minUsdt: number; bonusPercent: number }
@@ -159,7 +176,10 @@ const TOKEN_DECIMALS: Record<string, number> = {
   USDC: 6,
 }
 
-const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v2"
+const LIMIT_PRIVACY_PAYLOAD_KEY = "limit_privacy_garaga_payload_v2"
+const LIMIT_PRIVACY_PAYLOAD_UPDATED_EVENT = "limit-privacy-payload-updated"
+const LIMIT_PRIVACY_PENDING_NOTES_KEY = "limit_privacy_pending_notes_v3"
+const LIMIT_PRIVACY_PENDING_NOTES_UPDATED_EVENT = "limit-privacy-pending-notes-updated"
 const DEV_AUTO_GARAGA_PAYLOAD_ENABLED =
   process.env.NODE_ENV !== "production" &&
   (process.env.NEXT_PUBLIC_ENABLE_DEV_GARAGA_AUTOFILL || "false").toLowerCase() === "true"
@@ -196,7 +216,7 @@ const normalizeHexArray = (values?: string[] | null): string[] => {
 const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
   if (typeof window === "undefined") return undefined
   try {
-    const raw = window.localStorage.getItem(TRADE_PRIVACY_PAYLOAD_KEY)
+    const raw = window.localStorage.getItem(LIMIT_PRIVACY_PAYLOAD_KEY)
     if (!raw) return undefined
     const parsed = JSON.parse(raw) as PrivacyVerificationPayload
     const nullifier = parsed.nullifier?.trim()
@@ -210,7 +230,7 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
       proof[0]?.toLowerCase() === "0x1" &&
       publicInputs[0]?.toLowerCase() === "0x1"
     ) {
-      window.localStorage.removeItem(TRADE_PRIVACY_PAYLOAD_KEY)
+      window.localStorage.removeItem(LIMIT_PRIVACY_PAYLOAD_KEY)
       return undefined
     }
     return {
@@ -246,8 +266,110 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
  */
 const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
   if (typeof window === "undefined") return
-  window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(payload))
-  window.dispatchEvent(new Event("trade-privacy-payload-updated"))
+  window.localStorage.setItem(LIMIT_PRIVACY_PAYLOAD_KEY, JSON.stringify(payload))
+  window.dispatchEvent(new Event(LIMIT_PRIVACY_PAYLOAD_UPDATED_EVENT))
+}
+
+const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
+  if (typeof window === "undefined") return []
+  const raw = window.localStorage.getItem(LIMIT_PRIVACY_PENDING_NOTES_KEY)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const mapped = parsed
+      .map((entry): PendingHideNoteRecord | null => {
+        if (!entry || typeof entry !== "object") return null
+        const item = entry as Record<string, unknown>
+        const noteCommitment =
+          typeof item.note_commitment === "string" ? item.note_commitment.trim() : ""
+        if (!noteCommitment) return null
+        return {
+          note_version: "v3",
+          note_commitment: noteCommitment,
+          nullifier: typeof item.nullifier === "string" ? item.nullifier.trim() || undefined : undefined,
+          executor_address:
+            typeof item.executor_address === "string"
+              ? item.executor_address.trim() || undefined
+              : undefined,
+          verifier: typeof item.verifier === "string" ? item.verifier.trim() || undefined : undefined,
+          root: typeof item.root === "string" ? item.root.trim() || undefined : undefined,
+          proof: normalizeHexArray((item.proof as string[] | undefined) || []),
+          public_inputs: normalizeHexArray((item.public_inputs as string[] | undefined) || []),
+          denom_id: typeof item.denom_id === "string" ? item.denom_id.trim() || undefined : undefined,
+          token_symbol:
+            typeof item.token_symbol === "string" ? item.token_symbol.trim() || undefined : undefined,
+          target_token_symbol:
+            typeof item.target_token_symbol === "string"
+              ? item.target_token_symbol.trim() || undefined
+              : undefined,
+          amount: typeof item.amount === "string" ? item.amount.trim() || undefined : undefined,
+          deposited_at_unix:
+            typeof item.deposited_at_unix === "number" && Number.isFinite(item.deposited_at_unix)
+              ? Math.floor(item.deposited_at_unix)
+              : Math.floor(Date.now() / 1000),
+          spendable_at_unix:
+            typeof item.spendable_at_unix === "number" && Number.isFinite(item.spendable_at_unix)
+              ? Math.floor(item.spendable_at_unix)
+              : undefined,
+        }
+      })
+      .filter((item): item is PendingHideNoteRecord => item !== null)
+    return mapped.sort((a, b) => b.deposited_at_unix - a.deposited_at_unix)
+  } catch {
+    return []
+  }
+}
+
+const persistPendingHideNotes = (items: PendingHideNoteRecord[]) => {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(LIMIT_PRIVACY_PENDING_NOTES_KEY, JSON.stringify(items))
+  window.dispatchEvent(new Event(LIMIT_PRIVACY_PENDING_NOTES_UPDATED_EVENT))
+}
+
+const upsertPendingHideNote = (note: PendingHideNoteRecord) => {
+  const items = loadPendingHideNotes()
+  const normalizedCommitment = note.note_commitment.trim().toLowerCase()
+  const normalizedNullifier = (note.nullifier || "").trim().toLowerCase()
+  const existing = items.find((item) => {
+    const sameCommitment = item.note_commitment.trim().toLowerCase() === normalizedCommitment
+    const sameNullifier =
+      normalizedNullifier.length > 0 &&
+      (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+    return sameCommitment || sameNullifier
+  })
+  const merged: PendingHideNoteRecord = {
+    ...(existing || {}),
+    ...note,
+  }
+  const next = [
+    merged,
+    ...items.filter((item) => {
+      const sameCommitment = item.note_commitment.trim().toLowerCase() === normalizedCommitment
+      const sameNullifier =
+        normalizedNullifier.length > 0 &&
+        (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+      return !(sameCommitment || sameNullifier)
+    }),
+  ]
+  persistPendingHideNotes(next)
+}
+
+const removePendingHideNote = (noteCommitment?: string, nullifier?: string) => {
+  const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+  const normalizedNullifier = (nullifier || "").trim().toLowerCase()
+  if (!normalizedCommitment && !normalizedNullifier) return
+  const items = loadPendingHideNotes()
+  const next = items.filter((item) => {
+    const sameCommitment =
+      normalizedCommitment.length > 0 &&
+      item.note_commitment.trim().toLowerCase() === normalizedCommitment
+    const sameNullifier =
+      normalizedNullifier.length > 0 &&
+      (item.nullifier || "").trim().toLowerCase() === normalizedNullifier
+    return !(sameCommitment || sameNullifier)
+  })
+  persistPendingHideNotes(next)
 }
 
 /**
@@ -277,6 +399,16 @@ const formatRemainingDuration = (remainingMs: number) => {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+}
+
+const inferUsdtTierFromDenomId = (denomId: string): number => {
+  const parsed = Number.parseFloat((denomId || "").trim())
+  if (!Number.isFinite(parsed) || parsed <= 0) return 5
+  if (parsed >= 250) return 250
+  if (parsed >= 100) return 100
+  if (parsed >= 50) return 50
+  if (parsed >= 10) return 10
+  return 5
 }
 
 /**
@@ -396,6 +528,8 @@ export function LimitOrder() {
   const [balanceHidden, setBalanceHidden] = React.useState(false)
   const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(10)
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
+  const [pendingHideNotes, setPendingHideNotes] = React.useState<PendingHideNoteRecord[]>([])
+  const [nowMs, setNowMs] = React.useState(() => Date.now())
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
   const hideOrderAutoRetryTimerRef = React.useRef<number | null>(null)
@@ -416,6 +550,10 @@ export function LimitOrder() {
 
   const refreshTradePrivacyPayload = React.useCallback(() => {
     setHasTradePrivacyPayload(Boolean(loadTradePrivacyPayload()))
+  }, [])
+
+  const refreshPendingHideNotes = React.useCallback(() => {
+    setPendingHideNotes(loadPendingHideNotes())
   }, [])
 
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
@@ -650,11 +788,24 @@ export function LimitOrder() {
 
   React.useEffect(() => {
     refreshTradePrivacyPayload()
-    window.addEventListener("trade-privacy-payload-updated", refreshTradePrivacyPayload)
+    window.addEventListener(LIMIT_PRIVACY_PAYLOAD_UPDATED_EVENT, refreshTradePrivacyPayload)
     return () => {
-      window.removeEventListener("trade-privacy-payload-updated", refreshTradePrivacyPayload)
+      window.removeEventListener(LIMIT_PRIVACY_PAYLOAD_UPDATED_EVENT, refreshTradePrivacyPayload)
     }
   }, [refreshTradePrivacyPayload])
+
+  React.useEffect(() => {
+    refreshPendingHideNotes()
+    window.addEventListener(LIMIT_PRIVACY_PENDING_NOTES_UPDATED_EVENT, refreshPendingHideNotes)
+    return () => {
+      window.removeEventListener(LIMIT_PRIVACY_PENDING_NOTES_UPDATED_EVENT, refreshPendingHideNotes)
+    }
+  }, [refreshPendingHideNotes])
+
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   /**
    * Handles `intervalForPeriod` logic.
@@ -901,6 +1052,120 @@ export function LimitOrder() {
     balanceHidden && hideTierFromTokenPrice > 0
       ? selectedHideTier.minUsdt / hideTierFromTokenPrice
       : null
+  const pendingHideNotesActive = React.useMemo(
+    () =>
+      pendingHideNotes.filter((note) => {
+        const commitment = (note.note_commitment || "").trim()
+        return commitment.length > 0
+      }),
+    [pendingHideNotes]
+  )
+
+  const handleUsePendingHideNote = React.useCallback(
+    (note: PendingHideNoteRecord) => {
+      const tokenSymbol = (note.token_symbol || "").trim().toUpperCase()
+      const targetTokenSymbol = (note.target_token_symbol || "").trim().toUpperCase()
+      const payload: PrivacyVerificationPayload = {
+        verifier: (note.verifier || "garaga").trim() || "garaga",
+        note_version: "v3",
+        executor_address: note.executor_address?.trim() || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
+        root: note.root?.trim() || undefined,
+        nullifier: (note.nullifier || "").trim(),
+        commitment: note.note_commitment,
+        note_commitment: note.note_commitment,
+        denom_id: note.denom_id?.trim() || undefined,
+        spendable_at_unix: note.spendable_at_unix,
+        proof: normalizeHexArray(note.proof),
+        public_inputs: normalizeHexArray(note.public_inputs),
+      }
+      persistTradePrivacyPayload(payload)
+      setHasTradePrivacyPayload(true)
+      setBalanceHidden(true)
+      if (note.amount?.trim()) {
+        setAmount(note.amount.trim())
+      }
+      if (note.denom_id?.trim()) {
+        setHideUsdtTierMin(inferUsdtTierFromDenomId(note.denom_id.trim()))
+      }
+      if (tokenSymbol) {
+        const fromTokenItem = tokens.find((item) => item.symbol.toUpperCase() === tokenSymbol)
+        if (fromTokenItem) {
+          if (orderType === "buy") {
+            setPayToken(fromTokenItem)
+          } else {
+            setSelectedToken(fromTokenItem)
+          }
+        }
+      }
+      if (targetTokenSymbol) {
+        const targetTokenItem = tokens.find((item) => item.symbol.toUpperCase() === targetTokenSymbol)
+        if (targetTokenItem) {
+          if (orderType === "buy") {
+            setSelectedToken(targetTokenItem)
+          } else {
+            setReceiveToken(targetTokenItem)
+          }
+        }
+      }
+      notifications.addNotification({
+        type: "info",
+        title: "Hide note selected",
+        message: "Active note switched to selected pending note. Continue with Create Order.",
+      })
+    },
+    [notifications, orderType, tokens]
+  )
+
+  const handleWithdrawPendingHideNote = React.useCallback(
+    async (note: PendingHideNoteRecord) => {
+      const noteCommitment = (note.note_commitment || "").trim()
+      if (!noteCommitment) return
+      const executorAddress =
+        (note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+      if (!executorAddress) {
+        notifications.addNotification({
+          type: "error",
+          title: "Withdraw failed",
+          message: "Executor address is missing for this note.",
+        })
+        return
+      }
+      try {
+        notifications.addNotification({
+          type: "info",
+          title: "Wallet signature required",
+          message: "Confirm Withdraw to return note funds to your wallet.",
+        })
+        const txHash = await invokeStarknetCallsFromWallet(
+          [
+            {
+              contractAddress: executorAddress,
+              entrypoint: "withdraw_note_v3",
+              calldata: [toHexFelt(noteCommitment)],
+            },
+          ],
+          starknetProviderHint
+        )
+        removePendingHideNote(noteCommitment, note.nullifier)
+        setPendingHideNotes(loadPendingHideNotes())
+        notifications.addNotification({
+          type: "success",
+          title: "Hide note withdrawn",
+          message: `Note cancelled and funds returned (${txHash.slice(0, 10)}...).`,
+          txHash,
+          txNetwork: "starknet",
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || "")
+        notifications.addNotification({
+          type: "error",
+          title: "Withdraw failed",
+          message,
+        })
+      }
+    },
+    [notifications, starknetProviderHint]
+  )
 
   React.useEffect(() => {
     if (!balanceHidden) return
@@ -970,6 +1235,22 @@ export function LimitOrder() {
         const precision = Math.min(decimals >= 10 ? 8 : 6, 8)
         fixedAmountText = (fallbackTierUsdt / tokenPriceUsd).toFixed(precision).replace(/\.?0+$/, "")
       }
+      const fixedAmountValue = Number.parseFloat(fixedAmountText || "0")
+      const availableBalance = resolveAvailableBalance(symbol)
+      if (
+        Number.isFinite(fixedAmountValue) &&
+        fixedAmountValue > 0 &&
+        Number.isFinite(availableBalance) &&
+        availableBalance + 1e-12 < fixedAmountValue
+      ) {
+        throw new Error(
+          `Insufficient ${symbol} balance for selected hide tier. Required ${fixedAmountValue.toLocaleString(undefined, {
+            maximumFractionDigits: 8,
+          })} ${symbol}, available ${availableBalance.toLocaleString(undefined, {
+            maximumFractionDigits: 8,
+          })} ${symbol}.`
+        )
+      }
 
       const [amountLow, amountHigh] = decimalToU256Parts(
         fixedAmountText,
@@ -1009,6 +1290,23 @@ export function LimitOrder() {
         spendable_at_unix: spendableAtUnix,
       })
       setHasTradePrivacyPayload(true)
+      upsertPendingHideNote({
+        note_version: "v3",
+        note_commitment: noteCommitment,
+        nullifier,
+        executor_address: executorAddress,
+        verifier: (payload.verifier || "garaga").trim() || "garaga",
+        root: (payload.root || "").trim() || undefined,
+        proof: normalizeHexArray(payload.proof),
+        public_inputs: normalizeHexArray(payload.public_inputs),
+        denom_id: denomId,
+        token_symbol: symbol,
+        target_token_symbol: (orderType === "buy" ? selectedToken.symbol : receiveToken.symbol).toUpperCase(),
+        amount: fixedAmountText,
+        deposited_at_unix: Math.floor(Date.now() / 1000),
+        spendable_at_unix: spendableAtUnix,
+      })
+      setPendingHideNotes(loadPendingHideNotes())
 
       notifications.addNotification({
         type: "success",
@@ -1020,7 +1318,15 @@ export function LimitOrder() {
 
       return spendableAtUnix
     },
-    [notifications, resolveUsdPrice, starknetProviderHint]
+    [
+      notifications,
+      orderType,
+      receiveToken.symbol,
+      resolveAvailableBalance,
+      resolveUsdPrice,
+      selectedToken.symbol,
+      starknetProviderHint,
+    ]
   )
 
   /**
@@ -1322,6 +1628,16 @@ export function LimitOrder() {
           txHash: response.privacy_tx_hash,
           txNetwork: "starknet",
         })
+      }
+      if (effectiveHideBalance) {
+        const spentCommitment = (
+          payloadForBackend?.note_commitment ||
+          payloadForBackend?.commitment ||
+          ""
+        ).trim()
+        const spentNullifier = (payloadForBackend?.nullifier || "").trim()
+        removePendingHideNote(spentCommitment, spentNullifier)
+        setPendingHideNotes(loadPendingHideNotes())
       }
 
       const newOrder: UiOrder = {
@@ -2103,6 +2419,49 @@ export function LimitOrder() {
                             ? "Preparing Garaga payload..."
                             : "Garaga payload will be auto-prepared on submit."}
                         </p>
+                        {pendingHideNotesActive.length > 0 && (
+                          <div className="space-y-2 rounded-lg border border-border/70 bg-surface/50 p-2">
+                            <p className="text-[11px] font-medium text-foreground">
+                              Pending Hide Notes ({pendingHideNotesActive.length})
+                            </p>
+                            {pendingHideNotesActive.map((note) => {
+                              const spendableAt = Number(note.spendable_at_unix || 0)
+                              const remainingMs =
+                                spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
+                              const isReady = remainingMs <= 0
+                              const fromSymbol = (note.token_symbol || "Token").toUpperCase()
+                              const toSymbol = (note.target_token_symbol || "Token").toUpperCase()
+                              return (
+                                <div key={note.note_commitment} className="rounded-md border border-border/60 p-2">
+                                  <p className="text-[10px] font-mono text-muted-foreground">
+                                    {note.note_commitment.slice(0, 12)}...{note.note_commitment.slice(-6)}
+                                  </p>
+                                  <p className="text-[11px] text-foreground">
+                                    {(note.amount || "—").trim()} {fromSymbol} → {toSymbol} •{" "}
+                                    {isReady ? "Ready now" : `Ready in ${formatRemainingDuration(remainingMs)}`}
+                                  </p>
+                                  <div className="mt-2 flex gap-2">
+                                    <Button
+                                      type="button"
+                                      className="h-7 flex-1 text-[11px]"
+                                      onClick={() => handleUsePendingHideNote(note)}
+                                    >
+                                      Use For Order
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className="h-7 flex-1 text-[11px]"
+                                      onClick={() => void handleWithdrawPendingHideNote(note)}
+                                    >
+                                      Withdraw
+                                    </Button>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -2359,6 +2718,49 @@ export function LimitOrder() {
                             ? "Preparing Garaga payload..."
                             : "Garaga payload will be auto-prepared on submit."}
                         </p>
+                        {pendingHideNotesActive.length > 0 && (
+                          <div className="space-y-2 rounded-lg border border-border/70 bg-surface/50 p-2">
+                            <p className="text-[11px] font-medium text-foreground">
+                              Pending Hide Notes ({pendingHideNotesActive.length})
+                            </p>
+                            {pendingHideNotesActive.map((note) => {
+                              const spendableAt = Number(note.spendable_at_unix || 0)
+                              const remainingMs =
+                                spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
+                              const isReady = remainingMs <= 0
+                              const fromSymbol = (note.token_symbol || "Token").toUpperCase()
+                              const toSymbol = (note.target_token_symbol || "Token").toUpperCase()
+                              return (
+                                <div key={note.note_commitment} className="rounded-md border border-border/60 p-2">
+                                  <p className="text-[10px] font-mono text-muted-foreground">
+                                    {note.note_commitment.slice(0, 12)}...{note.note_commitment.slice(-6)}
+                                  </p>
+                                  <p className="text-[11px] text-foreground">
+                                    {(note.amount || "—").trim()} {fromSymbol} → {toSymbol} •{" "}
+                                    {isReady ? "Ready now" : `Ready in ${formatRemainingDuration(remainingMs)}`}
+                                  </p>
+                                  <div className="mt-2 flex gap-2">
+                                    <Button
+                                      type="button"
+                                      className="h-7 flex-1 text-[11px]"
+                                      onClick={() => handleUsePendingHideNote(note)}
+                                    >
+                                      Use For Order
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className="h-7 flex-1 text-[11px]"
+                                      onClick={() => void handleWithdrawPendingHideNote(note)}
+                                    >
+                                      Withdraw
+                                    </Button>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

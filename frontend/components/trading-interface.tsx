@@ -3526,14 +3526,41 @@ export function TradingInterface() {
         executorAddress,
         tokenSymbol,
         denomId,
-        fallbackAmount: fromAmount,
-        fallbackKind: "token",
+        fallbackAmount: denomId,
+        fallbackKind: "usd",
       })
       if (!denomAmountText) {
         throw new Error("Failed to resolve fixed note amount for selected hide denom.")
       }
       if (fromAmount !== denomAmountText) {
         setFromAmount(denomAmountText)
+      }
+      const requiredAmountDecimal = Number.parseFloat(denomAmountText || "0")
+      const availableBalance =
+        tokenSymbol === "STRK"
+          ? wallet.onchainBalance.STRK_L2 ?? wallet.balance.STRK ?? 0
+          : tokenSymbol === "CAREL"
+          ? wallet.onchainBalance.CAREL ?? wallet.balance.CAREL ?? 0
+          : tokenSymbol === "USDC"
+          ? wallet.onchainBalance.USDC ?? wallet.balance.USDC ?? 0
+          : tokenSymbol === "USDT"
+          ? wallet.onchainBalance.USDT ?? wallet.balance.USDT ?? 0
+          : tokenSymbol === "WBTC"
+          ? wallet.onchainBalance.WBTC ?? wallet.balance.WBTC ?? 0
+          : 0
+      if (
+        Number.isFinite(requiredAmountDecimal) &&
+        requiredAmountDecimal > 0 &&
+        Number.isFinite(availableBalance) &&
+        availableBalance + 1e-12 < requiredAmountDecimal
+      ) {
+        throw new Error(
+          `Insufficient ${tokenSymbol} balance for selected hide tier. Required ${requiredAmountDecimal.toLocaleString(undefined, {
+            maximumFractionDigits: 8,
+          })} ${tokenSymbol}, available ${availableBalance.toLocaleString(undefined, {
+            maximumFractionDigits: 8,
+          })} ${tokenSymbol}.`
+        )
       }
       const [amountLow, amountHigh] = decimalToU256Parts(
         denomAmountText,
@@ -3634,6 +3661,16 @@ export function TradingInterface() {
       starknetProviderHint,
       toToken.symbol,
       wallet.address,
+      wallet.balance.CAREL,
+      wallet.balance.STRK,
+      wallet.balance.USDC,
+      wallet.balance.USDT,
+      wallet.balance.WBTC,
+      wallet.onchainBalance.CAREL,
+      wallet.onchainBalance.STRK_L2,
+      wallet.onchainBalance.USDC,
+      wallet.onchainBalance.USDT,
+      wallet.onchainBalance.WBTC,
       wallet.starknetAddress,
     ]
   )

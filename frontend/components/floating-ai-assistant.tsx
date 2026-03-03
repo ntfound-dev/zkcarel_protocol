@@ -307,8 +307,8 @@ const AI_PANEL_EDGE_PADDING_PX = 16
 const AI_PANEL_WIDTH_PX = 460
 const AI_PANEL_MINIMIZED_HEIGHT_PX = 64
 const AI_PANEL_EXPANDED_HEIGHT_PX = 700
-const TRADE_PRIVACY_PENDING_NOTES_KEY = "trade_privacy_pending_notes_v3"
-const TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT = "trade-privacy-pending-notes-updated"
+const AI_PRIVACY_PENDING_NOTES_KEY = "ai_privacy_pending_notes_v3"
+const AI_PRIVACY_PENDING_NOTES_UPDATED_EVENT = "ai-privacy-pending-notes-updated"
 
 type BubblePosition = { x: number; y: number }
 
@@ -817,7 +817,7 @@ function normalizeHexArray(values?: string[] | null): string[] {
 
 function loadAiPendingHideNotes(): AiPendingHideNoteRecord[] {
   if (typeof window === "undefined") return []
-  const raw = window.localStorage.getItem(TRADE_PRIVACY_PENDING_NOTES_KEY)
+  const raw = window.localStorage.getItem(AI_PRIVACY_PENDING_NOTES_KEY)
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -872,8 +872,8 @@ function loadAiPendingHideNotes(): AiPendingHideNoteRecord[] {
 
 function persistAiPendingHideNotes(items: AiPendingHideNoteRecord[]) {
   if (typeof window === "undefined") return
-  window.localStorage.setItem(TRADE_PRIVACY_PENDING_NOTES_KEY, JSON.stringify(items))
-  window.dispatchEvent(new Event(TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT))
+  window.localStorage.setItem(AI_PRIVACY_PENDING_NOTES_KEY, JSON.stringify(items))
+  window.dispatchEvent(new Event(AI_PRIVACY_PENDING_NOTES_UPDATED_EVENT))
 }
 
 function upsertAiPendingHideNote(note: AiPendingHideNoteRecord) {
