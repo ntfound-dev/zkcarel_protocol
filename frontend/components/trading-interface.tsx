@@ -1416,30 +1416,32 @@ function TokenSelector({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-        <div
-          className={cn(
-            "flex-1 rounded-lg border border-border bg-surface/40 px-3 py-2 text-right transition-colors",
-            !readOnly && "focus-within:border-primary/70"
-          )}
-        >
-          <input
-            type="text"
-            value={amount}
-            inputMode={readOnly ? undefined : "decimal"}
-            autoComplete="off"
-            spellCheck={false}
-            aria-label={`${label} amount`}
-            onChange={(e) => {
-              if (readOnly) return
-              onAmountChange(sanitizeDecimalInput(e.target.value, tokenDecimals))
-            }}
-            readOnly={readOnly}
-            placeholder="0.0"
+        <div className="flex-1 text-right">
+          <div
             className={cn(
-              "w-full bg-transparent text-right text-xl sm:text-2xl font-bold text-foreground outline-none placeholder:text-muted-foreground/50",
-              readOnly && "cursor-default"
+              "rounded-lg border border-border bg-surface/40 px-3 py-2 transition-colors",
+              !readOnly && "focus-within:border-primary/70"
             )}
-          />
+          >
+            <input
+              type="text"
+              value={amount}
+              inputMode={readOnly ? undefined : "decimal"}
+              autoComplete="off"
+              spellCheck={false}
+              aria-label={`${label} amount`}
+              onChange={(e) => {
+                if (readOnly) return
+                onAmountChange(sanitizeDecimalInput(e.target.value, tokenDecimals))
+              }}
+              readOnly={readOnly}
+              placeholder="0.0"
+              className={cn(
+                "w-full bg-transparent text-right text-xl sm:text-2xl font-bold text-foreground outline-none placeholder:text-muted-foreground/50",
+                readOnly && "cursor-default"
+              )}
+            />
+          </div>
           <p className="mt-1 text-sm text-muted-foreground">
             ≈ {hasPrice
               ? `$${usdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
