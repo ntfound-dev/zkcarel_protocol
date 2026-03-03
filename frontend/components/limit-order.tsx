@@ -175,6 +175,16 @@ const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
 const HIDE_BALANCE_RELAYER_POOL_ENABLED =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true" &&
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED || "false").toLowerCase() === "true"
+const HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW =
+  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS || ""
+const HIDE_BALANCE_MIN_NOTE_AGE_SECS = Number.parseInt(
+  HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW || "3600",
+  10
+)
+const MIN_WAIT_MS =
+  (Number.isFinite(HIDE_BALANCE_MIN_NOTE_AGE_SECS) && HIDE_BALANCE_MIN_NOTE_AGE_SECS > 0
+    ? HIDE_BALANCE_MIN_NOTE_AGE_SECS
+    : 3600) * 1000
 
 const normalizeHexArray = (values?: string[] | null): string[] => {
   if (!Array.isArray(values)) return []
@@ -205,8 +215,19 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
     }
     return {
       verifier: (parsed.verifier || "garaga").trim() || "garaga",
+      note_version: parsed.note_version?.trim() || undefined,
+      executor_address: parsed.executor_address?.trim() || undefined,
+      root: parsed.root?.trim() || undefined,
       nullifier,
       commitment,
+      recipient: parsed.recipient?.trim() || undefined,
+      note_commitment: parsed.note_commitment?.trim() || undefined,
+      denom_id: parsed.denom_id?.trim() || undefined,
+      spendable_at_unix:
+        typeof parsed.spendable_at_unix === "number" &&
+        Number.isFinite(parsed.spendable_at_unix)
+          ? Math.floor(parsed.spendable_at_unix)
+          : undefined,
       proof,
       public_inputs: publicInputs,
     }
@@ -249,6 +270,14 @@ const createDevTradePrivacyPayload = (): PrivacyVerificationPayload => ({
   proof: ["0x1"],
   public_inputs: ["0x1"],
 })
+
+const formatRemainingDuration = (remainingMs: number) => {
+  const safeMs = Math.max(0, remainingMs)
+  const totalSeconds = Math.ceil(safeMs / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+}
 
 /**
  * Builds inputs required by `buildHideBalancePrivacyCall`.
@@ -408,6 +437,7 @@ export function LimitOrder() {
 
       setIsAutoPrivacyProvisioning(true)
       try {
+        const cachedPayload = loadTradePrivacyPayload()
         const response = await autoSubmitPrivacyAction({
           verifier: "garaga",
           submit_onchain: false,
@@ -418,14 +448,36 @@ export function LimitOrder() {
             amount,
             from_network: "starknet",
             to_network: "starknet",
+            note_version: "v3",
+            denom_id: String(hideUsdtTierMin),
+            note_commitment: cachedPayload?.note_commitment || cachedPayload?.commitment,
+            nullifier: cachedPayload?.nullifier,
+            root: cachedPayload?.root,
+            spendable_at_unix: cachedPayload?.spendable_at_unix,
           },
         })
+        const responseProof = normalizeHexArray(response.payload?.proof)
+        const responsePublicInputs = normalizeHexArray(response.payload?.public_inputs)
         const payload: PrivacyVerificationPayload = {
           verifier: (response.payload?.verifier || "garaga").trim() || "garaga",
+          note_version: response.payload?.note_version?.trim() || "v3",
+          executor_address: response.payload?.executor_address?.trim() || undefined,
+          root: response.payload?.root?.trim() || undefined,
           nullifier: response.payload?.nullifier?.trim(),
           commitment: response.payload?.commitment?.trim(),
-          proof: normalizeHexArray(response.payload?.proof),
-          public_inputs: normalizeHexArray(response.payload?.public_inputs),
+          recipient: response.payload?.recipient?.trim() || undefined,
+          note_commitment:
+            response.payload?.note_commitment?.trim() ||
+            response.payload?.commitment?.trim() ||
+            undefined,
+          denom_id: response.payload?.denom_id?.trim() || String(hideUsdtTierMin),
+          spendable_at_unix:
+            typeof response.payload?.spendable_at_unix === "number" &&
+            Number.isFinite(response.payload.spendable_at_unix)
+              ? Math.floor(response.payload.spendable_at_unix)
+              : undefined,
+          proof: responseProof,
+          public_inputs: responsePublicInputs,
         }
         const proof = normalizeHexArray(payload.proof)
         const publicInputs = normalizeHexArray(payload.public_inputs)
@@ -442,8 +494,15 @@ export function LimitOrder() {
         }
         const normalizedPayload: PrivacyVerificationPayload = {
           verifier: payload.verifier,
+          note_version: payload.note_version,
+          executor_address: payload.executor_address,
+          root: payload.root,
           nullifier: payload.nullifier,
           commitment: payload.commitment,
+          recipient: payload.recipient,
+          note_commitment: payload.note_commitment,
+          denom_id: payload.denom_id,
+          spendable_at_unix: payload.spendable_at_unix,
           proof,
           public_inputs: publicInputs,
         }
@@ -474,6 +533,7 @@ export function LimitOrder() {
     orderType,
     payToken.symbol,
     receiveToken.symbol,
+    hideUsdtTierMin,
     selectedToken.symbol,
     wallet.isConnected,
   ])
@@ -848,6 +908,110 @@ export function LimitOrder() {
     }
   }, [amount, balanceHidden, fromTokenForOrder, hideTierLockedAmount])
 
+  const ensureHideV3NoteDeposited = React.useCallback(
+    async ({
+      payload,
+      tokenSymbol,
+      amountText,
+      fallbackTierUsdt,
+    }: {
+      payload: PrivacyVerificationPayload
+      tokenSymbol: string
+      amountText: string
+      fallbackTierUsdt: number
+    }): Promise<number> => {
+      const executorAddress =
+        (payload.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+      if (!executorAddress) {
+        throw new Error(
+          "NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS is not configured for hide note deposit."
+        )
+      }
+
+      const symbol = tokenSymbol.toUpperCase()
+      const tokenAddress = (STARKNET_TOKEN_ADDRESS_MAP[symbol] || "").trim()
+      if (!tokenAddress) {
+        throw new Error(`Token address for ${symbol} is not configured.`)
+      }
+
+      const noteCommitment = (payload.note_commitment || payload.commitment || "").trim()
+      if (!noteCommitment) {
+        throw new Error("Hide note commitment missing in privacy payload.")
+      }
+      const nullifier = (payload.nullifier || "").trim()
+      if (!nullifier) {
+        throw new Error("Hide nullifier missing in privacy payload.")
+      }
+
+      const denomId = (payload.denom_id || String(fallbackTierUsdt)).trim()
+      if (!denomId) {
+        throw new Error("Hide denom_id missing in privacy payload.")
+      }
+
+      let fixedAmountText = (amountText || "").trim()
+      const parsedAmount = Number.parseFloat(fixedAmountText || "0")
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        const tokenPriceUsd = resolveUsdPrice(symbol)
+        if (!Number.isFinite(tokenPriceUsd) || tokenPriceUsd <= 0) {
+          throw new Error(`Cannot derive fixed amount for ${symbol}: token price is unavailable.`)
+        }
+        const decimals = TOKEN_DECIMALS[symbol] ?? 18
+        const precision = Math.min(decimals >= 10 ? 8 : 6, 8)
+        fixedAmountText = (fallbackTierUsdt / tokenPriceUsd).toFixed(precision).replace(/\.?0+$/, "")
+      }
+
+      const [amountLow, amountHigh] = decimalToU256Parts(
+        fixedAmountText,
+        TOKEN_DECIMALS[symbol] ?? 18
+      )
+      const approvalCall = {
+        contractAddress: tokenAddress,
+        entrypoint: "approve",
+        calldata: [executorAddress, amountLow, amountHigh],
+      }
+      const depositCall = {
+        contractAddress: executorAddress,
+        entrypoint: "deposit_fixed_v3",
+        calldata: [tokenAddress, toHexFelt(denomId), toHexFelt(noteCommitment), toHexFelt(nullifier)],
+      }
+
+      notifications.addNotification({
+        type: "info",
+        title: "Wallet signature required",
+        message: `Confirm approve + hide note deposit (${fixedAmountText} ${symbol}) in one transaction.`,
+      })
+
+      const txHash = await invokeStarknetCallsFromWallet(
+        [approvalCall, depositCall],
+        starknetProviderHint
+      )
+
+      const spendableAtUnix = Math.floor((Date.now() + MIN_WAIT_MS) / 1000)
+      persistTradePrivacyPayload({
+        ...payload,
+        note_version: "v3",
+        executor_address: executorAddress,
+        note_commitment: noteCommitment,
+        commitment: payload.commitment || noteCommitment,
+        nullifier,
+        denom_id: denomId,
+        spendable_at_unix: spendableAtUnix,
+      })
+      setHasTradePrivacyPayload(true)
+
+      notifications.addNotification({
+        type: "success",
+        title: "Hide note deposited",
+        message: `Note deposit submitted (${txHash.slice(0, 10)}...). Wait for mixing window before retrying private order.`,
+        txHash,
+        txNetwork: "starknet",
+      })
+
+      return spendableAtUnix
+    },
+    [notifications, resolveUsdPrice, starknetProviderHint]
+  )
+
   /**
    * Handles `handleAmountPreset` logic.
    *
@@ -1077,6 +1241,41 @@ export function LimitOrder() {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "")
+        if (
+          useRelayerPoolHide &&
+          /note belum terdaftar/i.test(message) &&
+          payloadForBackend
+        ) {
+          let spendableAtUnix: number | undefined
+          try {
+            spendableAtUnix = await ensureHideV3NoteDeposited({
+              payload: payloadForBackend,
+              tokenSymbol: fromToken,
+              amountText: amount,
+              fallbackTierUsdt: selectedHideTier.minUsdt,
+            })
+          } catch (depositError) {
+            const depositMessage =
+              depositError instanceof Error ? depositError.message : String(depositError || "")
+            throw new Error(
+              `Hide note belum terdaftar dan auto-deposit gagal. Detail: ${depositMessage}`
+            )
+          }
+          const remainingMs = Math.max(
+            0,
+            (spendableAtUnix || Math.floor((Date.now() + MIN_WAIT_MS) / 1000)) * 1000 - Date.now()
+          )
+          if (remainingMs > 1000) {
+            throw new Error(
+              `HIDE_NOTE_WAIT::Hide note berhasil dideposit. Tunggu ${formatRemainingDuration(
+                remainingMs
+              )} sebelum retry private order.`
+            )
+          }
+          throw new Error(
+            "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private order; backend akan enforce mixing window aktual."
+          )
+        }
         if (useRelayerPoolHide) {
           throw new Error(
             `Hide relayer unavailable. Wallet fallback is disabled so order details never leak in explorer. Detail: ${message}`
@@ -1117,10 +1316,28 @@ export function LimitOrder() {
         txNetwork: "starknet",
       })
     } catch (error) {
+      const rawMessage =
+        error instanceof Error ? error.message : "Unexpected error while creating order"
+      if (rawMessage.startsWith("HIDE_NOTE_WAIT::")) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Mixing window active",
+          message: rawMessage.replace("HIDE_NOTE_WAIT::", "").trim(),
+        })
+        return
+      }
+      if (rawMessage.startsWith("HIDE_NOTE_READY::")) {
+        notifications.addNotification({
+          type: "success",
+          title: "Hide note deposited",
+          message: rawMessage.replace("HIDE_NOTE_READY::", "").trim(),
+        })
+        return
+      }
       notifications.addNotification({
         type: "error",
         title: "Failed to create order",
-        message: error instanceof Error ? error.message : "Unexpected error while creating order",
+        message: rawMessage,
       })
     } finally {
       setIsSubmitting(false)
