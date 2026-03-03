@@ -177,6 +177,12 @@ const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
   window.dispatchEvent(new Event(STAKE_PRIVACY_PAYLOAD_UPDATED_EVENT))
 }
 
+const clearTradePrivacyPayload = () => {
+  if (typeof window === "undefined") return
+  window.localStorage.removeItem(STAKE_PRIVACY_PAYLOAD_KEY)
+  window.dispatchEvent(new Event(STAKE_PRIVACY_PAYLOAD_UPDATED_EVENT))
+}
+
 const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
   if (typeof window === "undefined") return []
   const raw = window.localStorage.getItem(STAKE_PRIVACY_PENDING_NOTES_KEY)
@@ -1563,6 +1569,27 @@ export function StakeEarn() {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "")
+        if (useRelayerPoolHide && /nullifier already spent/i.test(message)) {
+          const spentCommitment = (
+            payloadForBackend?.note_commitment ||
+            payloadForBackend?.commitment ||
+            resolvedPrivacyPayload?.note_commitment ||
+            resolvedPrivacyPayload?.commitment ||
+            ""
+          ).trim()
+          const spentNullifier = (
+            payloadForBackend?.nullifier ||
+            resolvedPrivacyPayload?.nullifier ||
+            ""
+          ).trim()
+          removePendingHideNote(spentCommitment, spentNullifier)
+          setPendingHideNotes(loadPendingHideNotes())
+          clearTradePrivacyPayload()
+          setHasTradePrivacyPayload(false)
+          throw new Error(
+            "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retry with a new note."
+          )
+        }
         if (
           useRelayerPoolHide &&
           /note belum terdaftar/i.test(message) &&
@@ -1653,6 +1680,14 @@ export function StakeEarn() {
           type: "success",
           title: "Hide note deposited",
           message: rawMessage.replace("HIDE_NOTE_READY::", "").trim(),
+        })
+        return
+      }
+      if (rawMessage.startsWith("HIDE_NOTE_SPENT::")) {
+        notifications.addNotification({
+          type: "warning",
+          title: "Hide note refreshed",
+          message: rawMessage.replace("HIDE_NOTE_SPENT::", "").trim(),
         })
         return
       }
