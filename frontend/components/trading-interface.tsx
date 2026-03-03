@@ -3139,8 +3139,10 @@ export function TradingInterface() {
       return !expiredByLocalClock
     })
   }, [nowMs, pendingHideNotes])
+  const walletConnectedForActions =
+    wallet.isConnected || !!(wallet.starknetAddress || wallet.address || "").trim()
   const executeDisabledReason =
-    !wallet.isConnected
+    !walletConnectedForActions
       ? "Connect your wallet first."
       : isCancellingHideNote
       ? "Cancelling hide note..."
@@ -5340,7 +5342,7 @@ export function TradingInterface() {
     if (!autoRunSelectedHideNoteSwap) return
     if (swapState !== "idle") return
 
-    if (!wallet.isConnected) {
+    if (!walletConnectedForActions) {
       setAutoRunSelectedHideNoteSwap(false)
       setActivePendingHideNoteSwapKey(null)
       return
@@ -5376,7 +5378,7 @@ export function TradingInterface() {
   }, [
     autoRunSelectedHideNoteSwap,
     swapState,
-    wallet.isConnected,
+    walletConnectedForActions,
     isCrossChain,
     hasActiveHideV3Note,
     activeHideNoteTokenMismatch,
