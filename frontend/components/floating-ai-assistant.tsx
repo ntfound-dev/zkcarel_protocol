@@ -266,7 +266,7 @@ const AI_HIDE_USDT_TIER_OPTIONS = [
 ] as const
 const U256_MAX_WORD_HEX = "0xffffffffffffffffffffffffffffffff"
 const SUPPORTED_SWAP_TOKENS = new Set(["USDT", "USDC", "STRK", "WBTC", "CAREL"])
-const SUPPORTED_LIMIT_ORDER_TOKENS = new Set(["USDT", "USDC", "STRK", "CAREL"])
+const SUPPORTED_LIMIT_ORDER_TOKENS = new Set(["USDT", "USDC", "STRK", "WBTC", "CAREL"])
 const SUPPORTED_STAKE_TOKENS = new Set(["CAREL", "USDC", "USDT", "STRK", "WBTC"])
 const L3_GARAGA_BRIDGE_ENABLED =
   (process.env.NEXT_PUBLIC_L3_GARAGA_BRIDGE_ENABLED || "false").toLowerCase() === "true"
@@ -4599,7 +4599,7 @@ export function FloatingAIAssistant() {
         const priceText = Number.isFinite(price) && price > 0 ? String(price) : ""
         if (fromToken && toToken && amountText && priceText) {
           if (!SUPPORTED_LIMIT_ORDER_TOKENS.has(fromToken) || !SUPPORTED_LIMIT_ORDER_TOKENS.has(toToken)) {
-            directExecutionMessage = `Limit order token ${fromToken}/${toToken} is not listed. Supported: USDT, USDC, STRK, CAREL.`
+            directExecutionMessage = `Limit order token ${fromToken}/${toToken} is not listed. Supported: USDT, USDC, STRK, WBTC, CAREL.`
           } else {
           const fromAddress = AI_TOKEN_ADDRESS_MAP[fromToken]?.trim() || ""
           const toAddress = AI_TOKEN_ADDRESS_MAP[toToken]?.trim() || ""

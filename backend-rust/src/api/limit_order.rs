@@ -198,7 +198,7 @@ fn build_order_id(
 fn is_supported_limit_order_token(token: &str) -> bool {
     matches!(
         token.trim().to_ascii_uppercase().as_str(),
-        "USDT" | "USDC" | "STRK" | "CAREL"
+        "USDT" | "USDC" | "STRK" | "WBTC" | "CAREL"
     )
 }
 
@@ -212,7 +212,7 @@ fn ensure_supported_limit_order_pair(from_token: &str, to_token: &str) -> Result
     }
     if !is_supported_limit_order_token(from_token) || !is_supported_limit_order_token(to_token) {
         return Err(crate::error::AppError::BadRequest(
-            "Limit order token is not listed. Supported symbols: USDT, USDC, STRK, CAREL."
+            "Limit order token is not listed. Supported symbols: USDT, USDC, STRK, WBTC, CAREL."
                 .to_string(),
         ));
     }
@@ -1994,7 +1994,8 @@ mod tests {
     fn ensure_supported_limit_order_pair_accepts_listed_tokens() {
         assert!(ensure_supported_limit_order_pair("STRK", "USDT").is_ok());
         assert!(ensure_supported_limit_order_pair("CAREL", "USDC").is_ok());
-        assert!(ensure_supported_limit_order_pair("WBTC", "USDT").is_err());
+        assert!(ensure_supported_limit_order_pair("WBTC", "USDT").is_ok());
+        assert!(ensure_supported_limit_order_pair("USDC", "WBTC").is_ok());
         assert!(ensure_supported_limit_order_pair("ETH", "USDT").is_err());
         assert!(ensure_supported_limit_order_pair("USDT", "USDT").is_err());
     }
