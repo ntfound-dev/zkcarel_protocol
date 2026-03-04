@@ -423,6 +423,9 @@ const mapStakeUiErrorMessage = (error: unknown, fallback: string) => {
   const normalized = message.toLowerCase()
   const operation = fallback.toLowerCase()
 
+  if (normalized.includes("nullifier already spent")) {
+    return "HIDE_NOTE_SPENT::Hide note already used. Select another pending note (or deposit a new one), then retry."
+  }
   if (normalized.includes("erc20: insufficient balance")) {
     if (operation.includes("claim")) {
       return "Claim failed because staking reward liquidity is insufficient on-chain. Top up reward pool balance, then retry."
@@ -637,6 +640,21 @@ export function StakeEarn() {
       return commitmentMatch || nullifierMatch
     },
     []
+  )
+
+  const consumeUsedHidePayload = React.useCallback(
+    (payload?: PrivacyVerificationPayload) => {
+      const spentCommitment = (payload?.note_commitment || payload?.commitment || "").trim()
+      const spentNullifier = (payload?.nullifier || "").trim()
+      removePendingHideNote(spentCommitment, spentNullifier)
+      setPendingHideNotes(loadPendingHideNotes())
+      if (isManuallySelectedHideNote(spentCommitment, spentNullifier)) {
+        clearManuallySelectedHideNote()
+      }
+      clearTradePrivacyPayload()
+      setHasTradePrivacyPayload(false)
+    },
+    [clearManuallySelectedHideNote, isManuallySelectedHideNote]
   )
 
   const resolveHideBalancePrivacyPayload = React.useCallback(async (txContext?: {
@@ -1746,26 +1764,8 @@ export function StakeEarn() {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "")
-        if (useRelayerPoolHide && /nullifier already spent/i.test(message)) {
-          const spentCommitment = (
-            payloadForBackend?.note_commitment ||
-            payloadForBackend?.commitment ||
-            resolvedPrivacyPayload?.note_commitment ||
-            resolvedPrivacyPayload?.commitment ||
-            ""
-          ).trim()
-          const spentNullifier = (
-            payloadForBackend?.nullifier ||
-            resolvedPrivacyPayload?.nullifier ||
-            ""
-          ).trim()
-          removePendingHideNote(spentCommitment, spentNullifier)
-          setPendingHideNotes(loadPendingHideNotes())
-          if (isManuallySelectedHideNote(spentCommitment, spentNullifier)) {
-            clearManuallySelectedHideNote()
-          }
-          clearTradePrivacyPayload()
-          setHasTradePrivacyPayload(false)
+        if (/nullifier already spent/i.test(message)) {
+          consumeUsedHidePayload(payloadForBackend || resolvedPrivacyPayload)
           throw new Error(
             "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retry with a new note."
           )
@@ -1845,17 +1845,7 @@ export function StakeEarn() {
         })
       }
       if (effectiveHideBalance) {
-        const spentCommitment = (
-          payloadForBackend?.note_commitment ||
-          payloadForBackend?.commitment ||
-          ""
-        ).trim()
-        const spentNullifier = (payloadForBackend?.nullifier || "").trim()
-        removePendingHideNote(spentCommitment, spentNullifier)
-        setPendingHideNotes(loadPendingHideNotes())
-        if (isManuallySelectedHideNote(spentCommitment, spentNullifier)) {
-          clearManuallySelectedHideNote()
-        }
+        consumeUsedHidePayload(payloadForBackend || resolvedPrivacyPayload)
       }
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       await refreshPositions()
@@ -1886,6 +1876,7 @@ export function StakeEarn() {
         return
       }
       if (rawMessage.startsWith("HIDE_NOTE_SPENT::")) {
+        consumeUsedHidePayload(loadTradePrivacyPayload())
         notifications.addNotification({
           type: "warning",
           title: "Hide note refreshed",
@@ -1976,6 +1967,12 @@ export function StakeEarn() {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "")
+        if (/nullifier already spent/i.test(message)) {
+          consumeUsedHidePayload(payloadForBackend || resolvedPrivacyPayload)
+          throw new Error(
+            "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retry with a new note."
+          )
+        }
         if (
           useRelayerPoolHide &&
           /(insufficient allowance|shielded note funding failed|deposit_fixed_for|allowance)/i.test(
@@ -1983,15 +1980,27 @@ export function StakeEarn() {
           )
         ) {
           await approveRelayerFundingForStake(target.pool.symbol, target.amount.toString())
-          response = await stakeWithdraw({
-            position_id: positionId,
-            amount: target.amount.toString(),
-            onchain_tx_hash: onchainTxHash,
-            hide_balance: effectiveHideBalance,
-            privacy: effectiveHideBalance
-              ? payloadForBackend || resolvedPrivacyPayload
-              : undefined,
-          })
+          try {
+            response = await stakeWithdraw({
+              position_id: positionId,
+              amount: target.amount.toString(),
+              onchain_tx_hash: onchainTxHash,
+              hide_balance: effectiveHideBalance,
+              privacy: effectiveHideBalance
+                ? payloadForBackend || resolvedPrivacyPayload
+                : undefined,
+            })
+          } catch (retryError) {
+            const retryMessage =
+              retryError instanceof Error ? retryError.message : String(retryError || "")
+            if (/nullifier already spent/i.test(retryMessage)) {
+              consumeUsedHidePayload(payloadForBackend || resolvedPrivacyPayload)
+              throw new Error(
+                "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retry with a new note."
+              )
+            }
+            throw retryError
+          }
         } else {
           throw error
         }
@@ -2015,6 +2024,9 @@ export function StakeEarn() {
           txNetwork: "starknet",
         })
       }
+      if (effectiveHideBalance) {
+        consumeUsedHidePayload(payloadForBackend || resolvedPrivacyPayload)
+      }
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       await refreshPositions()
       notifications.addNotification({
@@ -2028,10 +2040,20 @@ export function StakeEarn() {
       setPositions((prev) =>
         prev.map((p) => (p.id === positionId ? { ...p, status: "active" as const } : p))
       )
+      const rawMessage = mapStakeUiErrorMessage(error, "Unable to complete unstake")
+      if (rawMessage.startsWith("HIDE_NOTE_SPENT::")) {
+        consumeUsedHidePayload(loadTradePrivacyPayload())
+        notifications.addNotification({
+          type: "warning",
+          title: "Hide note refreshed",
+          message: rawMessage.replace("HIDE_NOTE_SPENT::", "").trim(),
+        })
+        return
+      }
       notifications.addNotification({
         type: "error",
         title: "Unstake failed",
-        message: mapStakeUiErrorMessage(error, "Unable to complete unstake"),
+        message: rawMessage,
       })
     }
   }
@@ -2100,6 +2122,12 @@ export function StakeEarn() {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "")
+        if (/nullifier already spent/i.test(message)) {
+          consumeUsedHidePayload(payloadForBackend || resolvedPrivacyPayload)
+          throw new Error(
+            "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retry with a new note."
+          )
+        }
         if (
           useRelayerPoolHide &&
           /(insufficient allowance|shielded note funding failed|deposit_fixed_for|allowance)/i.test(
@@ -2107,14 +2135,26 @@ export function StakeEarn() {
           )
         ) {
           await approveRelayerFundingForStake(target.pool.symbol, "1")
-          response = await stakeClaim({
-            position_id: positionId,
-            onchain_tx_hash: onchainTxHash,
-            hide_balance: effectiveHideBalance,
-            privacy: effectiveHideBalance
-              ? payloadForBackend || resolvedPrivacyPayload
-              : undefined,
-          })
+          try {
+            response = await stakeClaim({
+              position_id: positionId,
+              onchain_tx_hash: onchainTxHash,
+              hide_balance: effectiveHideBalance,
+              privacy: effectiveHideBalance
+                ? payloadForBackend || resolvedPrivacyPayload
+                : undefined,
+            })
+          } catch (retryError) {
+            const retryMessage =
+              retryError instanceof Error ? retryError.message : String(retryError || "")
+            if (/nullifier already spent/i.test(retryMessage)) {
+              consumeUsedHidePayload(payloadForBackend || resolvedPrivacyPayload)
+              throw new Error(
+                "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retry with a new note."
+              )
+            }
+            throw retryError
+          }
         } else {
           throw error
         }
@@ -2138,6 +2178,9 @@ export function StakeEarn() {
           txNetwork: "starknet",
         })
       }
+      if (effectiveHideBalance) {
+        consumeUsedHidePayload(payloadForBackend || resolvedPrivacyPayload)
+      }
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       await refreshPositions()
       notifications.addNotification({
@@ -2148,10 +2191,20 @@ export function StakeEarn() {
         txNetwork: "starknet",
       })
     } catch (error) {
+      const rawMessage = mapStakeUiErrorMessage(error, "Unable to claim staking rewards")
+      if (rawMessage.startsWith("HIDE_NOTE_SPENT::")) {
+        consumeUsedHidePayload(loadTradePrivacyPayload())
+        notifications.addNotification({
+          type: "warning",
+          title: "Hide note refreshed",
+          message: rawMessage.replace("HIDE_NOTE_SPENT::", "").trim(),
+        })
+        return
+      }
       notifications.addNotification({
         type: "error",
         title: "Claim failed",
-        message: mapStakeUiErrorMessage(error, "Unable to claim staking rewards"),
+        message: rawMessage,
       })
     } finally {
       setClaimingPositionId((current) => (current === positionId ? null : current))
