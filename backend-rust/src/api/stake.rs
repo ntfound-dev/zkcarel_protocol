@@ -74,6 +74,12 @@ pub struct StakingPosition {
     pub unlock_at: Option<i64>,
 }
 
+#[derive(Debug, FromRow)]
+struct StakePoolTotalRow {
+    token: String,
+    net_amount: Decimal,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DepositRequest {
     pub pool_id: String,
@@ -130,6 +136,7 @@ const WBTC_STAKING_NOT_REGISTERED_MSG: &str =
     "WBTC staking token is not registered on StakingBTC yet. Admin must call add_btc_token first.";
 const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 20.0;
 const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 40.0;
+const TWO_POW_128_F64: f64 = 340282366920938463463374607431768211456.0;
 
 // Internal helper that supports `min_stake_for_pool_token` operations.
 fn min_stake_for_pool_token(token: &str, is_testnet: bool) -> Option<f64> {
@@ -450,6 +457,84 @@ fn is_starknet_onchain_pool(token: &str) -> bool {
     STARKNET_ONCHAIN_STAKE_POOLS
         .iter()
         .any(|supported| supported.eq_ignore_ascii_case(token))
+}
+
+// Internal helper that aggregates pool totals from processed stake/unstake transactions.
+async fn load_pool_totals_from_ledger(state: &AppState) -> HashMap<String, f64> {
+    let rows = sqlx::query_as::<_, StakePoolTotalRow>(
+        r#"
+        SELECT
+            UPPER(token_in) AS token,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN tx_type = 'stake' THEN amount_in
+                        WHEN tx_type = 'unstake' THEN -amount_in
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS net_amount
+        FROM transactions
+        WHERE token_in IS NOT NULL
+          AND tx_type IN ('stake', 'unstake')
+        GROUP BY UPPER(token_in)
+        "#,
+    )
+    .fetch_all(state.db.pool())
+    .await
+    .unwrap_or_default();
+
+    let mut out = HashMap::new();
+    for row in rows {
+        let token = row.token.trim().to_ascii_uppercase();
+        if token.is_empty() {
+            continue;
+        }
+        let Some(net) = row.net_amount.to_f64() else {
+            continue;
+        };
+        if net.is_finite() && net > 0.0 {
+            out.insert(token, net);
+        }
+    }
+    out
+}
+
+// Internal helper that converts u256 split parts into decimal token amount.
+fn u256_parts_to_decimal_amount(low: Felt, high: Felt, decimals: u32) -> Result<f64> {
+    let low_u = felt_to_u128(&low)? as f64;
+    let high_u = felt_to_u128(&high)? as f64;
+    let scale = 10_f64.powi(decimals as i32);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(crate::error::AppError::Internal(
+            "Invalid token decimal scale".to_string(),
+        ));
+    }
+    let raw = high_u.mul_add(TWO_POW_128_F64, low_u);
+    if !raw.is_finite() {
+        return Err(crate::error::AppError::Internal(
+            "u256 to f64 conversion overflow".to_string(),
+        ));
+    }
+    Ok((raw / scale).max(0.0))
+}
+
+// Internal helper that reads staked token balance from staking contract as pool total.
+async fn read_onchain_pool_total_staked(state: &AppState, token: &str) -> Result<Option<f64>> {
+    if !is_starknet_onchain_pool(token) {
+        return Ok(None);
+    }
+    let token_upper = token.trim().to_ascii_uppercase();
+    let Some(token_address) = token_address_for(&token_upper) else {
+        return Ok(None);
+    };
+    let staking_contract = resolve_staking_target_felt(state, &token_upper)?;
+    let reader = OnchainReader::from_config(&state.config)?;
+    let token_felt = parse_felt(token_address)?;
+    let (low, high) = read_erc20_balance_parts(&reader, token_felt, staking_contract).await?;
+    let amount = u256_parts_to_decimal_amount(low, high, token_decimals(&token_upper))?;
+    Ok(Some(amount))
 }
 
 // Internal helper that parses or transforms values for `parse_pool_from_position_id`.
@@ -1801,7 +1886,7 @@ pub async fn get_pools(
         StakingPool {
             pool_id: "CAREL".to_string(),
             token: "CAREL".to_string(),
-            total_staked: 50_000_000.0,
+            total_staked: 0.0,
             tvl_usd: 0.0,
             apy: 8.0,
             rewards_per_day: 10958.9,
@@ -1814,7 +1899,7 @@ pub async fn get_pools(
         StakingPool {
             pool_id: "STRK".to_string(),
             token: "STRK".to_string(),
-            total_staked: 250_000.0,
+            total_staked: 0.0,
             tvl_usd: 0.0,
             apy: 7.0,
             rewards_per_day: 47.95,
@@ -1827,7 +1912,7 @@ pub async fn get_pools(
         StakingPool {
             pool_id: "WBTC".to_string(),
             token: "WBTC".to_string(),
-            total_staked: 10.43,
+            total_staked: 0.0,
             tvl_usd: 0.0,
             apy: 6.0,
             rewards_per_day: 0.017,
@@ -1839,7 +1924,7 @@ pub async fn get_pools(
         StakingPool {
             pool_id: "USDT".to_string(),
             token: "USDT".to_string(),
-            total_staked: 2_400_000.0,
+            total_staked: 0.0,
             tvl_usd: 0.0,
             apy: 7.0,
             rewards_per_day: 460.27,
@@ -1852,7 +1937,7 @@ pub async fn get_pools(
         StakingPool {
             pool_id: "USDC".to_string(),
             token: "USDC".to_string(),
-            total_staked: 2_500_000.0,
+            total_staked: 0.0,
             tvl_usd: 0.0,
             apy: 7.0,
             rewards_per_day: 479.45,
@@ -1863,6 +1948,31 @@ pub async fn get_pools(
             status_message: None,
         },
     ];
+
+    let ledger_totals = load_pool_totals_from_ledger(&state).await;
+    for pool in &mut pools {
+        let token = pool.token.to_ascii_uppercase();
+        if let Some(total) = ledger_totals.get(&token).copied() {
+            pool.total_staked = total.max(0.0);
+        }
+    }
+
+    for pool in &mut pools {
+        let token = pool.token.to_ascii_uppercase();
+        match read_onchain_pool_total_staked(&state, &token).await {
+            Ok(Some(onchain_total)) if onchain_total.is_finite() => {
+                pool.total_staked = onchain_total.max(0.0);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    "Stake pool on-chain total fallback to ledger for token {}: {}",
+                    token,
+                    err
+                );
+            }
+        }
+    }
 
     let pool_tokens = pools
         .iter()
@@ -2120,8 +2230,7 @@ pub async fn deposit(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu."
-                        .to_string(),
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                 ));
             }
             payload.spendable_at_unix = Some(deposit_ts);
@@ -2153,11 +2262,15 @@ pub async fn deposit(
             append_shielded_note_registration_calls(&state, &mut relayer_calls, &shielded_input)
                 .await?;
         }
-        if !action_calldata.is_empty() && action_calldata.len() >= 3 && approval_token != Felt::ZERO {
+        if !action_calldata.is_empty() && action_calldata.len() >= 3 && approval_token != Felt::ZERO
+        {
             // action_calldata layout for non-CAREL stake: [token, amount_low, amount_high]
             // CAREL stake uses [amount_low, amount_high], so we fallback to parsed amount parts.
             let (stake_amount_low, stake_amount_high) = if action_calldata.len() >= 3 {
-                (action_calldata[action_calldata.len() - 2], action_calldata[action_calldata.len() - 1])
+                (
+                    action_calldata[action_calldata.len() - 2],
+                    action_calldata[action_calldata.len() - 1],
+                )
             } else {
                 parse_decimal_to_u256_parts(&req.amount, token_decimals(pool_token))?
             };
@@ -2506,8 +2619,7 @@ pub async fn withdraw(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu."
-                        .to_string(),
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                 ));
             }
             payload.spendable_at_unix = Some(deposit_ts);
@@ -2840,8 +2952,7 @@ pub async fn claim(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu."
-                        .to_string(),
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                 ));
             }
             payload.spendable_at_unix = Some(deposit_ts);
