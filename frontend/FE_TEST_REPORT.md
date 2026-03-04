@@ -1,61 +1,71 @@
 # Frontend Test Report
 
 ## Metadata
-- Date: 2026-02-25
-- Time: 15:03:09 UTC
+- Date: 2026-03-05
 - Module: `frontend`
 
-## Environment
+## Environment and Commands
+
+### Run A (existing system Node)
+Environment:
 - Node: `v18.19.1`
-- npm: available
+- npm: `9.2.0`
 
-## Executed Commands
-
-### 1) Lint
-Command:
+Commands:
 ```bash
 npm run lint
-```
-
-Result: **FAILED**
-
-Key output:
-```text
-ESLint couldn't find a configuration file.
-```
-
-Implication:
-- Script `lint` belum bisa jadi quality gate karena konfigurasi ESLint belum tersedia di frontend.
-
-### 2) Build
-Command:
-```bash
 npm run build
 ```
 
-Result: **FAILED**
+Results:
+- `npm run lint`: **PASS** (warnings only, no errors)
+- `npm run build`: **FAILED**
 
-Key output:
+Key build output:
 ```text
 You are using Node.js 18.19.1. For Next.js, Node.js version ">=20.9.0" is required.
 ```
 
-Implication:
-- Build harus dijalankan dengan Node >= 20.9.0.
+### Run B (required Node version)
+Environment:
+- Node: `v20.11.1`
+- npm: `10.2.4`
+
+Commands:
+```bash
+source ~/.nvm/nvm.sh
+nvm install 20.11.1
+nvm use 20.11.1
+npm run lint
+npm run build
+```
+
+Results:
+- `npm run lint`: **PASS** (no warnings, no errors)
+- `npm run build`: **PASS**
+
+Key build output:
+```text
+Compiled successfully
+Generating static pages ...
+```
+
+## Lint Summary
+- ESLint completed with **0 errors** and **0 warnings**.
 
 ## Conclusion
-- Frontend belum lolos verifikasi lokal pada environment saat report ini diambil.
-- Bukan karena runtime feature broken, tetapi karena:
-  - Tooling lint belum dikonfigurasi.
-  - Versi Node belum memenuhi requirement Next.js 16.
+- Frontend build is healthy on the required Node runtime (`>=20.9.0`), validated with Node `20.11.1`.
+- Lint is now clean (no warnings, no errors) under the current ESLint profile.
 
 ## Scope Note
-- Report ini hanya untuk module frontend.
-- Backend dan smartcontract punya report terpisah dengan status pass.
+- This report covers only the frontend module.
+- Backend and smart contract modules have separate reports.
 
-## Action Items
-1. Gunakan Node `20.11.1` (`nvm use` di `frontend/`).
-2. Tambah konfigurasi ESLint frontend agar `npm run lint` valid.
-3. Jalankan ulang:
-   - `npm run lint`
-   - `npm run build`
+## Recommended Commands
+```bash
+cd /mnt/c/Users/frend/zkcare_protocol/frontend
+source ~/.nvm/nvm.sh
+nvm use 20.11.1
+npm run lint
+npm run build
+```

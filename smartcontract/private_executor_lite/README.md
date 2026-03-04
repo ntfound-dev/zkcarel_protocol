@@ -1,58 +1,59 @@
 # private_executor_lite (Hide Mode)
 
-Package ini adalah jalur default hide mode di MVP CAREL. Tujuannya iterasi cepat tanpa compile verifier Garaga real yang berat.
+This package is the default hide-mode execution path for the CAREL MVP.
+It is optimized for fast iteration without requiring heavy real-verifier compilation.
 
 ## Table of Contents
-- Scope
-- Status Pemakaian
-- Contracts
-- Hide Mode Flow (Ringkas)
-- Build and Test
-- Deploy
-- Env Integration
-- Current Constraints
+- [Scope](#scope)
+- [Runtime Status](#runtime-status)
+- [Contracts](#contracts)
+- [Hide Mode Flow (Summary)](#hide-mode-flow-summary)
+- [Build and Test](#build-and-test)
+- [Deploy](#deploy)
+- [Environment Integration](#environment-integration)
+- [Current Constraints](#current-constraints)
 
 ## Scope
 - Target: Starknet Sepolia (MVP testnet).
-- Jalur eksekusi: relayer + `ShieldedPoolV3` (default baru), dengan `ShieldedPoolV2` legacy.
-- Proof bisa real atau mock/dev sesuai env backend.
+- Execution path: relayer + `ShieldedPoolV3` as the current baseline, with `ShieldedPoolV2` kept for legacy compatibility.
+- Proof payload can be real or mock/dev depending on backend environment settings.
 
-## Status Pemakaian
-- Dipakai aktif untuk hide mode dengan `ShieldedPoolV3`.
-- `ShieldedPoolV2` dipertahankan sementara untuk redeem note lama (dual-pool migration).
-- `PrivateActionExecutor` tetap ada untuk kompatibilitas flow lama.
-- Source-of-truth mode di env (backend): `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`.
-- Source-of-truth mode di env (frontend): `NEXT_PUBLIC_HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`.
-- Status test lokal terakhir: `19/19` passing (`asdf exec snforge test`).
+## Runtime Status
+- Active hide mode baseline uses `ShieldedPoolV3`.
+- `ShieldedPoolV2` is retained for legacy note redemption (`v2 redeem-only` migration window).
+- `PrivateActionExecutor` remains for older deployment compatibility.
+- Backend source-of-truth mode: `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`.
+- Frontend source-of-truth mode: `NEXT_PUBLIC_HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`.
+- Latest local test snapshot: `19/19` passing (`asdf exec snforge test`).
 
 ## Contracts
 | Contract | Path | Notes |
 | --- | --- | --- |
-| `ShieldedPoolV3` | `src/shielded_pool_v3.cairo` | Kontrak utama baru (nullifier-based, action_hash binding, recipient dari proof output). Mendukung swap/limit/stake private submit+execute path. |
-| `ShieldedPoolV2` | `src/shielded_pool_v2.cairo` | Kontrak utama hide mode. Menyimpan note, nullifier, commitment, action hash binding. Mendukung single dan batch execution via relayer. |
-| `PrivateActionExecutor` | `src/private_action_executor.cairo` | Executor generasi awal untuk kompatibilitas deployment lama. |
+| `ShieldedPoolV3` | `src/shielded_pool_v3.cairo` | Current baseline contract (nullifier-based flow, action-hash binding, recipient bound from proof output). Supports private swap/limit/stake submit+execute path. |
+| `ShieldedPoolV2` | `src/shielded_pool_v2.cairo` | Legacy contract retained during migration. |
+| `PrivateActionExecutor` | `src/private_action_executor.cairo` | Early-generation executor for legacy compatibility. |
 
-## Hide Mode Flow (Ringkas)
-1. Admin set root dan aturan aset lewat `set_root` + `set_asset_rule(token, denom_id, amount)`.
-2. User deposit note lewat `deposit_fixed_v3(token, denom_id, note_commitment, nullifier)`.
-3. User submit intent privat berbasis nullifier:
+## Hide Mode Flow (Summary)
+1. Admin sets root and asset rules via `set_root` + `set_asset_rule(token, denom_id, amount)`.
+2. User deposits a note via `deposit_fixed_v3(token, denom_id, note_commitment, nullifier)`.
+3. User submits private intent keyed by nullifier:
    - `submit_private_swap(root, nullifier, proof)`
    - `submit_private_limit(root, nullifier, proof)`
    - `submit_private_stake(root, nullifier, proof)`
-4. Relayer/admin eksekusi aksi privat tanpa `recipient` bebas:
+4. Relayer/admin executes the private action path:
    - `execute_private_swap_with_payout(...)`
    - `execute_private_limit_with_payout(...)`
    - `execute_private_stake_with_payout(...)`
-5. User punya jalur cancel aman saat mixing:
+5. User has a safe cancel path during mix window:
    - `withdraw_note_v3(note_commitment)`
 
 ## Build and Test
-Dari root repo:
+From repository root:
 ```bash
 bash smartcontract/scripts/test_private_executor_lite.sh
 ```
 
-Atau dari folder package:
+Or from package directory:
 ```bash
 cd smartcontract/private_executor_lite
 asdf exec snforge test
@@ -65,14 +66,14 @@ cd smartcontract/private_executor_lite
 # declare
 asdf exec sncast --wait -a sepolia declare --contract-name ShieldedPoolV3 --url <RPC>
 
-# deploy (pakai class hash hasil declare)
+# deploy (use class hash from declare)
 asdf exec sncast --wait -a sepolia deploy \
   --class-hash <CLASS_HASH> \
   --constructor-calldata <ADMIN> <VERIFIER> <RELAYER> \
   --url <RPC>
 ```
 
-Jika butuh executor lama:
+If legacy executor is needed:
 ```bash
 asdf exec sncast --wait -a sepolia declare --contract-name PrivateActionExecutor --url <RPC>
 asdf exec sncast --wait -a sepolia deploy \
@@ -81,19 +82,19 @@ asdf exec sncast --wait -a sepolia deploy \
   --url <RPC>
 ```
 
-## Env Integration
-Pastikan env terisi dan konsisten:
-- `PRIVATE_ACTION_EXECUTOR_ADDRESS=<ShieldedPoolV3>`
+## Environment Integration
+Ensure these keys are present and aligned:
+- `PRIVATE_ACTION_EXECUTOR_ADDRESS=<ShieldedPoolV3 runtime address>`
 - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
 - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
 - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
 - `HIDE_BALANCE_MIN_NOTE_AGE_SECS=3600`
-- `GARAGA_VERIFIER_ADDRESS` (atau mock verifier jika testnet dev)
+- `GARAGA_VERIFIER_ADDRESS` (or mock verifier for dev/testnet)
 
-Untuk profile demo saat ini:
-- `PRIVATE_ACTION_EXECUTOR_ADDRESS=0x060549e87e71903ffe1e6449aaa1e77d941de1a5117be3beabd0026d847c61fb`
+Current runtime profile example:
+- `PRIVATE_ACTION_EXECUTOR_ADDRESS=0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2`
 
 ## Current Constraints
-- Package ini tidak membawa verifier BLS real.
-- Proof format harus konsisten dengan backend (real/mock/dev).
-- Hide mode mengurangi linkability tapi metadata chain publik tetap ada.
+- This package does not include the heavy real BLS verifier implementation.
+- Proof format must remain aligned with backend payload generation (real/mock/dev).
+- Hide mode reduces linkability but public chain metadata remains visible.

@@ -1,45 +1,45 @@
 # smartcontract/scripts
 
-Dokumen ini menjelaskan fungsi setiap script dan urutan eksekusi yang direkomendasikan untuk deploy/wiring/test.
+This document explains each script and the recommended execution order for deploy, wiring, and tests.
 
 ## Table of Contents
-- Scope
-- Script Index
-- Recommended Order
-- Environment Notes
+- [Scope](#scope)
+- [Script Index](#script-index)
+- [Recommended Order](#recommended-order)
+- [Environment Notes](#environment-notes)
 
 ## Scope
-- Semua script di folder ini dipakai untuk setup testnet, deploy, wiring, dan test automation.
-- Target utama: Starknet Sepolia (MVP).
+- Scripts in this folder are used for testnet setup, deployment, wiring, and test automation.
+- Primary target: Starknet Sepolia (MVP).
 
 ## Script Index
 Setup:
-- `01_setup_testnet.sh` Initialize testnet config dan scaffolding.
-- `02_init_tokenomics.sh` Init distribusi/tokenomics awal.
-- `03_fill_env_from_wallets.sh` Isi `.env` dari wallet/account lokal.
+- `01_setup_testnet.sh` Initialize testnet config and scaffolding.
+- `02_init_tokenomics.sh` Initialize tokenomics baseline distribution.
+- `03_fill_env_from_wallets.sh` Fill `.env` from local wallet/account data.
 
 Deploy:
-- `04_deploy_adapters.sh` Deploy adapter dan registry terkait privacy/verifier.
+- `04_deploy_adapters.sh` Deploy privacy/verifier-related adapters and registry.
 - `05_deploy_price_oracle.sh` Deploy price oracle.
-- `06_deploy_remaining.sh` Deploy kontrak utama yang tersisa.
-- `deploy_garaga_verifier_windows.ps1` Deploy khusus verifier Garaga real + wiring adapter/router (Windows + WSL helper).
-- `10_redeploy_ai_executor.sh` Redeploy AIExecutor saat perlu upgrade API/ABI.
-- `11_deploy_privacy_intermediary.sh` Deploy `PrivacyIntermediary` + sinkron env FE/BE/SC.
-- `deploy.sh` Shortcut deploy minimal.
+- `06_deploy_remaining.sh` Deploy remaining core contracts.
+- `deploy_garaga_verifier_windows.ps1` Deploy real Garaga verifier plus adapter/router wiring (Windows + WSL helper).
+- `10_redeploy_ai_executor.sh` Redeploy AIExecutor when API/ABI upgrade is needed.
+- `11_deploy_privacy_intermediary.sh` Deploy `PrivacyIntermediary` and sync FE/BE/SC env values.
+- `deploy.sh` Minimal deploy shortcut.
 
 Wiring:
-- `07_wire_privacy_router_v2.sh` Wiring router V2 dan verifier registry.
-- `09_register_staking_tokens.sh` Register token staking di kontrak staking.
-- `08_rebalance_liquidity_healthcheck.sh` Healthcheck + rebalance liquidity.
+- `07_wire_privacy_router_v2.sh` Wire Privacy Router V2 and verifier registry.
+- `09_register_staking_tokens.sh` Register staking tokens in staking contracts.
+- `08_rebalance_liquidity_healthcheck.sh` Liquidity healthcheck and rebalance utility.
 
 Testing:
-- `test_core_fast.sh` Test paket utama `smartcontract`.
-- `test_private_executor_lite.sh` Test hide mode `private_executor_lite`.
-- `test_garaga_fast.sh` Test `garaga_real_bls` (opsional).
-- `test_garaga_fork.sh` Fork test (lebih berat).
+- `test_core_fast.sh` Test core `smartcontract` package.
+- `test_private_executor_lite.sh` Test `private_executor_lite` hide-mode package.
+- `test_garaga_fast.sh` Test `garaga_real_bls` package (optional).
+- `test_garaga_fork.sh` Fork test path (heavier).
 
 Utilities:
-- `load_stress.sh` Stress/load test.
+- `load_stress.sh` Stress/load test helper.
 
 ## Recommended Order
 1. `01_setup_testnet.sh`
@@ -51,14 +51,15 @@ Utilities:
 7. `07_wire_privacy_router_v2.sh`
 8. `09_register_staking_tokens.sh`
 9. `08_rebalance_liquidity_healthcheck.sh`
-10. `11_deploy_privacy_intermediary.sh` (jika memakai relayer+intermediary path)
+10. `11_deploy_privacy_intermediary.sh` (if using relayer + intermediary path)
 
 ## Environment Notes
-- Semua script membaca `smartcontract/.env` dan beberapa juga menulis balik alamat hasil deploy.
-- Pastikan RPC endpoint mendukung JSON-RPC `v0_10` dan account/keystore sudah benar sebelum menjalankan.
-- Untuk ZAN keyed endpoint, gunakan format: `https://api.zan.top/node/v1/starknet/sepolia/<key>/rpc/v0_10`.
-- Untuk detail env per script, lihat komentar di masing-masing file.
-- Khusus `10_redeploy_ai_executor.sh`, parameter produksi AI bisa diatur lewat env:
+- Scripts read from `smartcontract/.env`; several scripts also write deployed addresses back to that file.
+- Ensure RPC endpoint supports JSON-RPC `v0_10` and account/keystore settings are valid before execution.
+- For ZAN keyed endpoint, use format:
+  `https://api.zan.top/node/v1/starknet/sepolia/<key>/rpc/v0_10`
+- For script-specific env details, read comments inside each script.
+- For `10_redeploy_ai_executor.sh`, production AI parameters can be configured via env:
   - `AI_EXECUTOR_LEVEL2_PRICE_WEI` (default `1e18`)
   - `AI_EXECUTOR_LEVEL3_PRICE_WEI` (default `2e18`)
   - `AI_EXECUTOR_FEE_ENABLED` (`1/0`)
@@ -66,10 +67,10 @@ Utilities:
   - `AI_EXECUTOR_MAX_PENDING_SCAN`, `AI_EXECUTOR_MAX_ACTIONS_PER_USER`, `AI_EXECUTOR_MAX_BATCH_EXECUTE`
   - `SNCAST_WAIT_TIMEOUT`, `SNCAST_WAIT_RETRY_INTERVAL`
   - `CONTRACT_READY_RETRIES`, `CONTRACT_READY_SLEEP_SECS`
-- Jika dipakai untuk demo runtime frontend/backend, sinkronkan hasil deploy ke:
+- If script output is used for FE/BE runtime demos, sync results to:
   - `backend-rust/.env`
   - `frontend/.env.local`
-- Khusus `deploy_garaga_verifier_windows.ps1` mode `-UseWsl`, pastikan path ini valid:
+- For `deploy_garaga_verifier_windows.ps1` with `-UseWsl`, ensure these paths are valid:
   - `WslSncastPath` (default: `/home/frend/.asdf/installs/starknet-foundry/0.56.0/bin/sncast`)
   - `WslScarbPath` (default: `/home/frend/.asdf/installs/scarb/2.11.4/bin/scarb`)
   - `WslUscPath` (default: `/home/frend/.local/bin/universal-sierra-compiler`)

@@ -1,7 +1,7 @@
 # Smart Contract Test Report
 
 **Project:** CAREL Protocol Smart Contracts
-**Date:** February 26, 2026
+**Date:** March 5, 2026
 **Prepared by:** Local test run summary
 
 ## Scope
@@ -14,7 +14,7 @@
 
 ## Executive Summary
 - Main package tests: **172/172 passed**
-- `private_executor_lite` tests: **12/12 passed**
+- `private_executor_lite` tests: **22/22 passed**
 - No failing tests observed.
 
 ## Detailed Results
@@ -36,8 +36,8 @@ cd /mnt/c/Users/frend/zkcare_protocol/smartcontract
 bash scripts/test_private_executor_lite.sh
 ```
 Result:
-- Collected: `12 test(s)`
-- Passed: `12`
+- Collected: `22 test(s)`
+- Passed: `22`
 - Failed: `0`
 
 ## Recommended Canonical Commands
@@ -54,5 +54,5 @@ bash scripts/test_garaga_fast.sh
 ```
 
 ## Scope Note
-- Report ini hanya untuk smartcontract package (`smartcontract` + `private_executor_lite`).
-- Frontend dan backend punya report terpisah.
+- This report covers only the smart contract packages (`smartcontract` + `private_executor_lite`).
+- Frontend and backend have separate reports.

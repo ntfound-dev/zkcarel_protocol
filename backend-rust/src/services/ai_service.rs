@@ -143,7 +143,8 @@ fn parse_swap_parameters(text: &str) -> (String, String, f64) {
         to.clear();
     }
 
-    let amount = extract_hide_tier_amount(&normalized).unwrap_or_else(|| extract_amount_from_text(&normalized));
+    let amount = extract_hide_tier_amount(&normalized)
+        .unwrap_or_else(|| extract_amount_from_text(&normalized));
     (from, to, amount)
 }
 
@@ -2197,7 +2198,8 @@ mod tests {
     #[test]
     // Internal helper that parses or transforms values for `parse_swap_parameters_supports_private_tier_without_explicit_amount`.
     fn parse_swap_parameters_supports_private_tier_without_explicit_amount() {
-        let (from, to, amount) = parse_swap_parameters("please private swap carel to usdt with tier $10");
+        let (from, to, amount) =
+            parse_swap_parameters("please private swap carel to usdt with tier $10");
         assert_eq!(from, "CAREL");
         assert_eq!(to, "USDT");
         assert!((amount - 10.0).abs() < f64::EPSILON);
@@ -2206,7 +2208,8 @@ mod tests {
     #[test]
     // Internal helper that parses or transforms values for `parse_swap_parameters_supports_private_tier_pair_variants`.
     fn parse_swap_parameters_supports_private_tier_pair_variants() {
-        let (from, to, amount) = parse_swap_parameters("please private swap wbtc to strk with tier $50");
+        let (from, to, amount) =
+            parse_swap_parameters("please private swap wbtc to strk with tier $50");
         assert_eq!(from, "WBTC");
         assert_eq!(to, "STRK");
         assert!((amount - 50.0).abs() < f64::EPSILON);

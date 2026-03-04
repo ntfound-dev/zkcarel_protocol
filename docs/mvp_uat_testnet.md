@@ -27,7 +27,7 @@ Pass criteria:
 
 - [ ] Login with Sumo token once.
 - [ ] Verify same Sumo subject resolves to the same account on relogin.
-- [ ] Verify wallet yang sama (Starknet/EVM/BTC) tidak bisa membuat user baru; harus resolve ke user lama.
+- [ ] Verify the same wallet set (Starknet/EVM/BTC) cannot create a new user; it must resolve to the existing user.
 - [ ] Set `display_name` once (or update as expected by product rule).
 - [ ] Bind referral code on first login.
 - [ ] Try rebinding referral with another code (must be rejected / ignored).
@@ -55,14 +55,14 @@ Pass criteria:
 ## 3) Bridge BTC native -> Starknet settlement
 
 Prerequisite:
-- [ ] Gunakan wallet BTC native (disarankan UniSat) di chain `BITCOIN_TESTNET4`.
-- [ ] Gunakan faucet BTC testnet4 (bukan testnet3) untuk top-up saldo uji.
-- [ ] `BTC_VAULT_ADDRESS` backend dan `NEXT_PUBLIC_BTC_VAULT_ADDRESS` frontend harus sama.
+- [ ] Use a native BTC wallet (UniSat recommended) on chain `BITCOIN_TESTNET4`.
+- [ ] Use a BTC testnet4 faucet (not testnet3) to top up test balance.
+- [ ] Backend `BTC_VAULT_ADDRESS` and frontend `NEXT_PUBLIC_BTC_VAULT_ADDRESS` must match.
 
 Flow:
-- [ ] Submit bridge request dari UI (Garden order dibuat dulu).
-- [ ] Pastikan response berisi `order_id`, `deposit_address` (`result.to`), dan `deposit_amount`.
-- [ ] Send BTC testnet sesuai `deposit_amount` ke `deposit_address` order (bukan testnet3).
+- [ ] Submit bridge request from UI (Garden order is created first).
+- [ ] Ensure response contains `order_id`, `deposit_address` (`result.to`), and `deposit_amount`.
+- [ ] Send BTC testnet exactly as `deposit_amount` to the order `deposit_address` (not testnet3).
 - [ ] Confirm txid deposit exists in Mempool explorer (testnet4).
 - [ ] Confirm bridge record saved with BTC source.
 - [ ] (Garden) Monitor status order sampai selesai, minimal melewati:
@@ -74,8 +74,8 @@ Points:
 
 Pass criteria:
 - BTC native flow works with Garden order lifecycle + dynamic deposit address; rule 25/$ and min $100 applied.
-- Untuk mode API Garden, app hanya membuat quote/order + tracking status. Eksekusi script HTLC
-  (initiate/redeem/refund/instant-refund berbasis Taproot/P2TR) ditangani oleh protokol/solver.
+- For Garden API mode, the app only handles quote/order creation + status tracking. HTLC script execution
+  (`initiate/redeem/refund/instant-refund` based on Taproot/P2TR) is handled by protocol/solver infrastructure.
 
 ## 4) Swap on Starknet (user-sign onchain)
 
@@ -120,18 +120,18 @@ Pass criteria:
 
 ## 8) NFT discount impact
 
-- [ ] Sebelum mint, pastikan current tier UI = `None`.
-- [ ] Mint Bronze NFT on-chain, pastikan tier aktif berubah ke `Bronze`.
-- [ ] Repeat satu aksi (bridge/swap/limit/stake) sebelum vs sesudah NFT aktif.
+- [ ] Before minting, ensure current UI tier = `None`.
+- [ ] Mint Bronze NFT on-chain, then ensure active tier changes to `Bronze`.
+- [ ] Repeat one action (bridge/swap/limit/stake) before vs after NFT activation.
 - [ ] Verify effective points increase matches NFT discount factor.
-- [ ] Gunakan NFT sampai `max_usage` habis, pastikan status discount jadi inactive (tanpa burn token).
-- [ ] Mint ulang (remint) tier yang sama atau lebih tinggi, pastikan tier aktif kembali.
-- [ ] Verifikasi tidak ada auto-reset usage tanpa remint.
+- [ ] Use NFT until `max_usage` is exhausted, then ensure discount becomes inactive (without token burn).
+- [ ] Remint the same or higher tier and ensure active tier is restored.
+- [ ] Verify there is no auto-reset of usage without remint.
 
 Pass criteria:
 - NFT discount modifies points outcome as configured.
-- Tier progression mengikuti NFT aktif on-chain, bukan total points raw.
-- Usage berkurang hanya pada transaksi yang sukses.
+- Tier progression follows active on-chain NFT state, not raw total points.
+- Usage decreases only on successful transactions.
 
 ## 9) Leaderboard and totals
 
@@ -148,7 +148,7 @@ Pass criteria:
 MVP is accepted only if all below are true:
 
 - [ ] No backend-mode execution for swap/bridge/limit-order/stake.
-- [ ] Onchain tx hash required and validated untuk source Starknet/Ethereum; source BTC native pakai flow order-first (deposit address dari Garden).
+- [ ] On-chain tx hash is required and validated for Starknet/Ethereum source; BTC native source uses order-first flow (deposit address from Garden).
 - [ ] Points formulas are correct:
   - BTC bridge: 25/$, min $100
   - ETH bridge: 15/$, min $10

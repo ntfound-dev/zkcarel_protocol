@@ -1,23 +1,23 @@
 # Frontend Deploy Testnet (Starknet Sepolia)
 
-Dokumen ini khusus deployment frontend CAREL.
+This document is focused on CAREL frontend deployment.
 
 ## Scope
-- Deploy frontend Next.js ke local atau Vercel.
-- Menggunakan backend Rust yang sudah expose endpoint publik/stabil.
+- Deploy the Next.js frontend locally or on Vercel.
+- Use a Rust backend that already exposes stable/public endpoints.
 
 ## Runtime Profile (MVP Proof)
-Untuk konsisten dengan bukti tx di README:
+To stay consistent with proof transactions in the root README:
 - Frontend profile: `frontend/.env.local`
-- Backend profile pasangan: `backend-rust/.env`
-- Nilai URL backend bisa lokal (`http://localhost:<PORT>`) atau tunnel publik aktif.
-- Cek nilai aktual di `frontend/.env.local` dan pastikan backend target benar-benar menjalankan profile `backend-rust/.env`.
-- Jika backend pakai port lain (mis. `3000` dari template), update `NEXT_PUBLIC_BACKEND_URL` dan `NEXT_PUBLIC_BACKEND_WS_URL`.
+- Paired backend profile: `backend-rust/.env`
+- Backend URL can be local (`http://localhost:<PORT>`) or an active public tunnel.
+- Check actual values in `frontend/.env.local` and ensure the target backend is running with `backend-rust/.env`.
+- If backend uses a different port (for example `3000` from template), update `NEXT_PUBLIC_BACKEND_URL` and `NEXT_PUBLIC_BACKEND_WS_URL`.
 
 ## Prerequisites
-- Node `>=20.9.0` (disarankan `20.11.1` sesuai `.nvmrc`)
+- Node `>=20.9.0` (recommended `20.11.1` matching `.nvmrc`)
 - npm
-- Env frontend sudah diisi (`.env.local` atau Vercel Environment Variables)
+- Frontend env already filled (`.env.local` or Vercel Environment Variables)
 
 ## 1) Local Run (Development/Test)
 ```bash
@@ -27,7 +27,7 @@ npm install
 npm run dev
 ```
 
-Buka: `http://localhost:3000`
+Open: `http://localhost:3000`
 
 ## 2) Production Build (Local Validation)
 ```bash
@@ -38,21 +38,23 @@ npm run start
 ```
 
 ## 3) Vercel Deploy (Recommended for Demo)
-1. Import project `frontend/` ke Vercel.
-2. Set semua `NEXT_PUBLIC_*` wajib dari `.env.example`.
-3. Pastikan backend URL pakai endpoint publik stabil (bukan URL tunnel sementara jika tidak perlu).
-4. Pastikan profile backend yang dituju memakai alamat kontrak yang sama dengan profile frontend.
+1. Import project `frontend/` to Vercel.
+2. Set all required `NEXT_PUBLIC_*` variables from `.env.example`.
+3. Ensure backend URL uses a stable public endpoint (not a temporary tunnel unless needed).
+4. Ensure target backend profile uses the same contract addresses as frontend profile.
 5. Deploy.
-6. Setiap ada perubahan `NEXT_PUBLIC_*`, lakukan redeploy (`without cache` disarankan).
+6. After any `NEXT_PUBLIC_*` change, redeploy (recommended `without cache`).
 
 ## 4) Post-Deploy Checklist
-- Wallet connect Starknet/EVM/BTC berhasil.
-- Swap normal berhasil.
-- Swap hide berhasil (sender relayer).
-- Stake normal + hide berhasil.
-- Limit order normal + hide berhasil.
-- Bridge quote + execute berhasil.
-- Explorer links dan tx hash tampil benar.
+- Starknet/EVM/BTC wallet connection works.
+- Normal swap works.
+- Hide swap works (relayer as sender).
+- Normal + hide stake works.
+- Normal + hide limit order works.
+- Bridge quote + execute works.
+- AI bridge (`bridge btc ...` / `bridge eth ...`) runs from Level 2.
+- AI Level 3 bridge is disabled by default (`AI_LEVEL3_BRIDGE_ENABLED=false`).
+- Explorer links and tx hashes are displayed correctly.
 
 ## 5) MVP Proof Links
 - Normal Swap: https://sepolia.voyager.online/tx/0x22a53b1af0f7d62e19569a99b38d67e9165faad2804ca50a1b0a53f289bab98

@@ -1,32 +1,41 @@
 # CAREL Backend (Rust + Axum)
 
-Backend ini menangani API, relayer hide mode, indexing on-chain events, points/rewards processing, dan integrasi bridge/oracle untuk CAREL Protocol.
+Backend service for CAREL Protocol.
+
+This document is backend-only and covers:
+- API domains
+- relayer and hide-mode execution path
+- worker architecture
+- runtime environment profile
+- deployment and constraints
 
 ## Table of Contents
-- Scope
-- Repository Structure
-- Runtime Architecture
-- API Domains
-- Background Workers
-- Build and Test
-- Run Local
-- Runtime Profile
-- Environment Variables
-- Environment Audit Split
-- Signer Semantics
-- AI Production Guardrails
-- Deployment Notes
-- Current Constraints
-- Development Plan
+- [Scope](#scope)
+- [Repository Structure](#repository-structure)
+- [Runtime Architecture](#runtime-architecture)
+- [API Domains](#api-domains)
+- [Background Workers](#background-workers)
+- [Build and Test](#build-and-test)
+- [Run Local](#run-local)
+- [Runtime Profile](#runtime-profile)
+- [Environment Variables](#environment-variables)
+- [V3 Migration Profile](#v3-migration-profile)
+- [Environment Audit Split](#environment-audit-split)
+- [Signer Semantics](#signer-semantics)
+- [AI Production Guardrails](#ai-production-guardrails)
+- [Planned Shadow Bridge V4 (Not Yet Delivered)](#planned-shadow-bridge-v4-not-yet-delivered)
+- [Deployment Notes](#deployment-notes)
+- [Current Constraints](#current-constraints)
+- [Development Plan](#development-plan)
 
 ## Scope
 - Runtime: Rust (`axum`, `tokio`).
-- Storage: PostgreSQL (`sqlx`) dan Redis.
-- Chain integration: Starknet Sepolia, Ethereum Sepolia, BTC testnet (provider dependent).
-- Fokus backend:
-  - API layer untuk auth, trading, privacy, rewards, social, AI.
-  - Relayer path untuk hide mode (`swap`, `limit order`, `stake`).
-  - Worker untuk indexer, prices, points, dan order execution.
+- Storage: PostgreSQL (`sqlx`) and Redis.
+- Networks: Starknet Sepolia, Ethereum Sepolia, Bitcoin testnet (provider dependent).
+- Core backend responsibilities:
+  - API layer for auth, trading, bridge, privacy, rewards, AI.
+  - Relayer path for hide mode (`swap`, `limit order`, `stake`).
+  - Background workers for indexing, pricing, points, execution support.
 
 ## Repository Structure
 ```text
@@ -42,9 +51,9 @@ backend-rust/
     main.rs                 # App bootstrap
     config.rs               # Env parsing and runtime config
   migrations/               # SQL migrations
-  scripts/                  # Prover, smoke test, utilities
+  scripts/                  # Prover and smoke-test utilities
   Cargo.toml                # Rust crate manifest
-  .env.testnet.example      # Example env for testnet
+  .env.testnet.example      # Example env profile
   BE_TEST_REPORT.md         # Backend test report
 ```
 
@@ -61,8 +70,8 @@ flowchart LR
     API --> AI["AI Intent + Command Parsing"]
 
     PRIV --> RELAYER["Relayer Signer"]
-    AI --> RELAYER
     TRADE --> RELAYER
+    AI --> RELAYER
 
     API --> PG[("PostgreSQL")]
     API --> REDIS[("Redis")]
@@ -90,7 +99,7 @@ Core background components:
 - Indexing: `src/services/event_indexer.rs`, `src/indexer/`
 - Route/price logic: `src/services/route_optimizer.rs`, `src/services/price_guard.rs`, `src/services/price_chart_service.rs`
 - Rewards/points: `src/services/point_calculator.rs`, `src/services/snapshot_manager.rs`, `src/services/nft_discount.rs`
-- Trading execution: `src/services/limit_order_executor.rs`, `src/services/liquidity_aggregator.rs`
+- Trading execution support: `src/services/limit_order_executor.rs`, `src/services/liquidity_aggregator.rs`
 - Privacy verification: `src/services/privacy_verifier.rs`
 
 ## Build and Test
@@ -100,13 +109,13 @@ cd backend-rust
 cargo build
 ```
 
-Run all tests:
+Run tests:
 ```bash
 cd backend-rust
 cargo test
 ```
 
-Latest local result (Feb 25, 2026):
+Latest recorded local snapshot (2026-02-25):
 - `188 passed, 0 failed`
 
 Detailed report: `backend-rust/BE_TEST_REPORT.md`.
@@ -118,46 +127,40 @@ cp .env.testnet.example .env
 cargo run
 ```
 
-Jika shell Anda pernah `export` env lama (mis. `RUST_LOG`, `DATABASE_URL`, endpoint RPC), nilai shell akan override `.env`.
-Untuk start bersih sesuai file `.env`, jalankan:
+If shell-exported vars override `.env`, use a clean env shell:
 ```bash
 cd backend-rust
 env -i HOME="$HOME" PATH="$PATH" TERM="$TERM" bash -lc 'set -a; source .env; set +a; cargo run'
 ```
 
-Catatan binary:
-- Binary utama runtime API adalah `carel-backend` (default untuk `cargo run`).
-- `src/bin/ai_e2e_tools.rs` adalah utility CLI internal untuk tooling tanda tangan AI E2E, bukan server backend.
-- Jika perlu explicit:
-```bash
-cargo run --bin carel-backend
-```
-
-Default bind:
-- `HOST=0.0.0.0`
-- `PORT` default template: `3000`
-- Runtime repo saat ini (`backend-rust/.env`): `8080`
+Binary notes:
+- Main API runtime binary: `carel-backend`
+- `src/bin/ai_e2e_tools.rs` is an internal CLI utility, not the API server.
 
 ## Runtime Profile
-Untuk jalur bukti MVP yang dipakai frontend:
-- Backend runtime profile aktif ada di `backend-rust/.env`.
-- Frontend runtime profile aktif ada di `frontend/.env.local`.
-- Pastikan `NEXT_PUBLIC_BACKEND_URL`/`NEXT_PUBLIC_BACKEND_WS_URL` mengarah ke backend runtime yang benar (`HOST` + `PORT` atau public tunnel URL aktif).
-- Contoh lokal dari template: backend `PORT=3000` dengan `NEXT_PUBLIC_BACKEND_URL=http://localhost:3000`.
-- Contoh local-docker yang umum di repo ini: backend `PORT=8080` dengan `NEXT_PUBLIC_BACKEND_URL=http://localhost:8080`.
+For active FE/BE execution proof flow:
+- Backend runtime profile: `backend-rust/.env`
+- Frontend runtime profile: `frontend/.env.local` (plus fallback to `frontend/.env`)
+
+Backend endpoint alignment:
+- Ensure `NEXT_PUBLIC_BACKEND_URL` and `NEXT_PUBLIC_BACKEND_WS_URL` point to this backend runtime.
+- Typical local values:
+  - `PORT=3000` or `PORT=8080` depending on profile.
 
 ## Environment Variables
 Use `backend-rust/.env.testnet.example` as baseline.
 
 Minimum required groups:
-- Boot and security:
+
+- Boot/security:
   - `DATABASE_URL`
   - `STARKNET_RPC_URL`
   - `ETHEREUM_RPC_URL`
   - `BACKEND_PRIVATE_KEY`
   - `BACKEND_PUBLIC_KEY`
-  - `BACKEND_ACCOUNT_ADDRESS` (required for on-chain signer flows)
+  - `BACKEND_ACCOUNT_ADDRESS`
   - `JWT_SECRET`
+
 - Core on-chain bindings:
   - `CAREL_TOKEN_ADDRESS`
   - `POINT_STORAGE_ADDRESS`
@@ -167,6 +170,7 @@ Minimum required groups:
   - `AI_EXECUTOR_ADDRESS`
   - `AI_SIGNATURE_VERIFIER_ADDRESS`
   - `BRIDGE_AGGREGATOR_ADDRESS`
+
 - Hide mode bindings:
   - `PRIVATE_ACTION_EXECUTOR_ADDRESS`
   - `PRIVACY_INTERMEDIARY_ADDRESS`
@@ -176,7 +180,7 @@ Minimum required groups:
   - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
   - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
   - `HIDE_BALANCE_MIN_NOTE_AGE_SECS=3600`
-  - `HIDE_BALANCE_MAX_USES_PER_DAY=3` (0 untuk tanpa limit harian)
+  - `HIDE_BALANCE_MAX_USES_PER_DAY=3`
   - `ZK_PRIVACY_ROUTER_ADDRESS`
 
 Recommended optional:
@@ -184,26 +188,23 @@ Recommended optional:
 - `PRIVACY_AUTO_GARAGA_PROVER_CMD`
 - `GARAGA_DYNAMIC_BINDING=true`
 - `GARDEN_APP_ID`
-- `AI_LEVEL3_BRIDGE_ENABLED=true` (only if you want bridge commands allowed at AI Level 3)
+- `AI_LEVEL3_BRIDGE_ENABLED=false` (default; keep bridge on AI Level 2 for current public provider flow)
 
-Real prover command (production testnet):
-- `GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=false`
-- `GARAGA_PROVE_CMD="python3 scripts/garaga_auto_prover.py --prove"`
-- `GARAGA_REAL_PROVER_CMD="python3 /opt/garaga-real-prover/prove.py --context \"$GARAGA_CONTEXT_PATH\" --proof \"$GARAGA_PROOF_PATH\" --public-inputs \"$GARAGA_PUBLIC_INPUTS_PATH\""`
-- Local WSL/dev example: `GARAGA_REAL_PROVER_CMD="python3 ./garaga-real-prover/prove.py --context \"$GARAGA_CONTEXT_PATH\" --proof \"$GARAGA_PROOF_PATH\" --public-inputs \"$GARAGA_PUBLIC_INPUTS_PATH\""`
-- Pastikan file prover real benar-benar ada; jika lokasi berbeda, ganti path `/opt/garaga-real-prover/prove.py` sesuai host/container Anda.
-
-Dual-pool migration (V2 -> V3):
+## V3 Migration Profile
+Active hide-mode baseline in backend runtime:
 - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
 - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
-- `HIDE_BALANCE_V2_REDEEM_ONLY=true` (V2 hanya redeem note lama; no new deposit)
-- Keep V2 contract deployed sementara grace period berlangsung.
-- Frontend harus kirim `note_version=v3`, `root`, `nullifier`, `proof`, `public_inputs` untuk flow baru.
+- `HIDE_BALANCE_V2_REDEEM_ONLY=true`
+
+Operational meaning:
+- New notes should be routed to V3.
+- V2 stays deployed for legacy note redemption during migration window.
+- FE payloads should include V3-compatible fields (`note_version=v3`, `root`, `nullifier`, `proof`, `public_inputs`).
 
 ## Environment Audit Split
-Audit ini memisahkan variabel dari `backend-rust/.env` berdasarkan pemakaian kode runtime saat ini.
+Audit of `backend-rust/.env` (runtime usage):
 
-### 1) Active MVP (dipakai flow utama FE/BE)
+### 1) Active MVP keys
 - `STARKNET_SWAP_CONTRACT_ADDRESS`
 - `BRIDGE_AGGREGATOR_ADDRESS`
 - `LIMIT_ORDER_BOOK_ADDRESS`
@@ -219,14 +220,14 @@ Audit ini memisahkan variabel dari `backend-rust/.env` berdasarkan pemakaian kod
 - `SNAPSHOT_DISTRIBUTOR_ADDRESS`
 - `PRICE_ORACLE_ADDRESS`
 
-### 2) Backend-only optional (tidak dipakai frontend saat ini)
+### 2) Backend-only optional keys
 - `PRIVATE_BTC_SWAP_ADDRESS`
 - `DARK_POOL_ADDRESS`
 - `PRIVATE_PAYMENTS_ADDRESS`
 - `ANONYMOUS_CREDENTIALS_ADDRESS`
 - `BATTLESHIP_GARAGA_ADDRESS`
 
-### 3) Script-only / prover tooling
+### 3) Prover/tooling keys
 - `GARAGA_PRECOMPUTED_PAYLOAD_PATH`
 - `GARAGA_ALLOW_PRECOMPUTED_PAYLOAD`
 - `GARAGA_DYNAMIC_BINDING`
@@ -238,59 +239,72 @@ Audit ini memisahkan variabel dari `backend-rust/.env` berdasarkan pemakaian kod
 - `GARAGA_UVX_CMD`
 - `GARAGA_REAL_PROVER_CMD`
 
-### 4) Currently unused in backend runtime
+### 4) Currently unused keys in runtime logic
 - `FAUCET_WALLET_PRIVATE_KEY`
 - `INDEXER_DIAGNOSTICS`
 
-Catatan:
-- `RUST_LOG` tetap dipakai secara implicit oleh `tracing_subscriber::EnvFilter::try_from_default_env()`.
-- Audit detail lintas FE/BE ada di `docs/ENV_RUNTIME_AUDIT_MVP.md`.
+Cross-layer env audit reference: `docs/ENV_RUNTIME_AUDIT_MVP.md`.
 
 ## Signer Semantics
-Supaya tidak ambigu:
-- `BACKEND_PRIVATE_KEY` = private key akun backend/relayer Starknet (bukan API key LLM/AI model).
-- `BACKEND_ACCOUNT_ADDRESS` = account contract address pasangan key tersebut.
-- `BACKEND_PUBLIC_KEY` = public key signer backend.
-- Di kontrak, role signer backend biasanya direferensikan sebagai `BACKEND_SIGNER` (lihat `smartcontract/.env`).
+To avoid signer ambiguity:
+- `BACKEND_PRIVATE_KEY`: Starknet relayer private key.
+- `BACKEND_ACCOUNT_ADDRESS`: Starknet account contract for that signer.
+- `BACKEND_PUBLIC_KEY`: corresponding public key.
+- These are unrelated to LLM provider API keys.
 
 ## AI Production Guardrails
-Saat `ENVIRONMENT=production|prod|mainnet`, backend sekarang fail-fast jika konfigurasi AI tidak aman:
-- Wajib terisi valid: `AI_EXECUTOR_ADDRESS`, `AI_SIGNATURE_VERIFIER_ADDRESS`, `BACKEND_ACCOUNT_ADDRESS`, `TREASURY_ADDRESS`.
-- Wajib ada minimal 1 provider key AI: `LLM_API_KEY` / `OPENAI_API_KEY` / `CAIRO_CODER_API_KEY` / `GEMINI_API_KEY`.
-- `AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION` harus `false`.
-- Mode verifier default sekarang `account` (real Starknet account signature). Jika tetap pakai mode legacy `allowlist` di production, wajib eksplisit set:
-  - `AI_SIGNATURE_VERIFIER_MODE=allowlist`
-  - `AI_ALLOWLIST_VERIFIER_ACCEPT_RISK=true`
+When `ENVIRONMENT=production|prod|mainnet`, backend applies fail-fast checks:
+- Must be set and valid: `AI_EXECUTOR_ADDRESS`, `AI_SIGNATURE_VERIFIER_ADDRESS`, `BACKEND_ACCOUNT_ADDRESS`, `TREASURY_ADDRESS`.
+- At least one provider key required: `LLM_API_KEY` or `OPENAI_API_KEY` or `CAIRO_CODER_API_KEY` or `GEMINI_API_KEY`.
+- `AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION` must be `false`.
+- Default verifier mode is `account`.
+- If using legacy allowlist mode in production, explicit risk flags are required.
+
+## Planned Shadow Bridge V4 (Not Yet Delivered)
+Planned backend stream (roadmap only, not marked as shipped):
+- Private BTC-native to wBTC route in hide mode.
+- Denomination-tier quote path to reduce amount-correlation.
+- Multi-stage order state machine (`created` -> `source_seen` -> `source_finalized` -> `zk_verifying` -> destination states).
+- Referral and loyalty hooks at post-redeem stage.
+- Retry queue + DLQ + auto-refund operational controls.
+
+Suggested endpoint surface for this roadmap stream:
+- `GET /api/v1/bridge/quote`
+- `POST /api/v1/bridge/execute`
+- `GET /api/v1/bridge/status/:order_id`
+- `POST /api/v1/referral/generate`
+- `POST /api/v1/referral/validate`
+- `GET /api/v1/referral/stats/:code`
 
 ## Deployment Notes
-- Apply migrations before production run:
+Run migrations before deployment:
 ```bash
 cd backend-rust
 sqlx migrate run
 ```
-- Verify env consistency with deployed contract addresses before startup.
-- For testnet smoke test, use:
+
+Optional API smoke test:
 ```bash
 cd backend-rust
 bash scripts/smoke_test_api.sh
 ```
 
 ## Current Constraints
-- Hide mode privacy still inherits public chain metadata leakage (timing/fees/graph).
-- Bridge behavior depends on external provider uptime and API limits.
-- RPC quota instability can impact indexer and quote latency.
-- Some advanced privacy flows still rely on strict prover payload correctness.
+- Hide mode reduces linkability but public chain metadata remains observable.
+- Bridge quality depends on external provider uptime, API limits, and liquidity.
+- RPC quota/availability can affect indexer and quote latency.
+- Advanced privacy flows remain sensitive to prover payload correctness.
 
 ## Development Plan
-- Short-term
+- Short term:
   - Improve RPC failover and backpressure handling.
-  - Tighten validation and observability for hide mode relayer paths.
-  - Expand API smoke tests for high-impact endpoints.
-- Mid-term
-  - Strengthen worker isolation (indexer vs API hot path).
-  - Add richer telemetry for bridge route quality and failure causes.
-  - Improve replay/nullifier analytics for privacy operations.
-- Long-term
-  - Production hardening for multi-region RPC strategy.
-  - Deeper queue-based execution model for burst traffic.
-  - Formal runbook for incident response and recovery.
+  - Tighten relayer-path validation and observability.
+  - Expand smoke tests for high-impact APIs.
+- Mid term:
+  - Strengthen worker isolation from API hot path.
+  - Add richer bridge-route telemetry and failure classification.
+  - Improve nullifier/replay analytics.
+- Long term:
+  - Multi-region runtime hardening.
+  - Queue-centric execution model for burst traffic.
+  - Incident runbook and recovery automation.

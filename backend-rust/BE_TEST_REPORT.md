@@ -1,14 +1,14 @@
 # Backend Test Report
 
 **Project:** CAREL Protocol Backend (`backend-rust`)
-**Date:** February 25, 2026
+**Date:** March 5, 2026
 **Command:** `cargo test`
 
 ## Summary
 - Build profile: `test` (unoptimized + debuginfo)
 - Compile result: success
-- Collected tests: `188`
-- Passed: `188`
+- Collected tests (main suite): `208`
+- Passed: `208`
 - Failed: `0`
 - Ignored: `0`
 - Measured: `0`
@@ -22,7 +22,11 @@ cargo test
 ```
 
 Observed tail:
-- `test result: ok. 188 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`
+- `running 208 tests`
+- `test result: ok. 208 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`
+
+Notes:
+- `src/bin/ai_e2e_tools.rs` has `0` tests and completed successfully.
 
 ## Coverage Notes
 Executed suites include:
@@ -33,11 +37,11 @@ Executed suites include:
 - WebSocket payload behavior
 
 ## Conclusion
-Backend automated tests are healthy for this run: **188/188 passing**.
+Backend automated tests are healthy for this run: **208/208 passing**.
 
 ## Scope Note
-- Report ini hanya untuk module backend (`backend-rust`).
-- Frontend dan smartcontract punya report terpisah.
+- This report covers only the backend module (`backend-rust`).
+- Frontend and smart contract modules have separate reports.
 
 ## Recommended Commands
 ```bash

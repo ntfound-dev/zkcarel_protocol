@@ -1,14 +1,14 @@
 # ENV Runtime Audit (MVP)
 
-Snapshot audit dari env aktif:
+Snapshot audit of active env profiles:
 - `backend-rust/.env`
 - `frontend/.env.local`
 
-Tanggal audit: 2026-02-26 (local).
+Audit date: 2026-03-05 (local, V3 baseline update).
 
 ## Backend Split
 
-### Active MVP (dipakai flow frontend/backend utama)
+### Active MVP (used by main frontend/backend runtime flow)
 - `STARKNET_SWAP_CONTRACT_ADDRESS`
 - `BRIDGE_AGGREGATOR_ADDRESS`
 - `LIMIT_ORDER_BOOK_ADDRESS`
@@ -23,9 +23,11 @@ Tanggal audit: 2026-02-26 (local).
 - `POINT_STORAGE_ADDRESS`
 - `SNAPSHOT_DISTRIBUTOR_ADDRESS`
 - `PRICE_ORACLE_ADDRESS`
-- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2`
+- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
+- `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
+- `HIDE_BALANCE_V2_REDEEM_ONLY=true`
 
-### Backend-only optional (deployed, tidak dipakai frontend saat ini)
+### Backend-only optional (deployed, not used by frontend runtime right now)
 - `PRIVATE_BTC_SWAP_ADDRESS`
 - `DARK_POOL_ADDRESS`
 - `PRIVATE_PAYMENTS_ADDRESS`
@@ -47,12 +49,12 @@ Tanggal audit: 2026-02-26 (local).
 - `FAUCET_WALLET_PRIVATE_KEY`
 - `INDEXER_DIAGNOSTICS`
 
-Catatan:
-- `RUST_LOG` tetap dipakai secara implicit oleh tracing (`EnvFilter::try_from_default_env`).
+Note:
+- `RUST_LOG` is still used implicitly by tracing (`EnvFilter::try_from_default_env`).
 
 ## Frontend Split
 
-### Active MVP (dipakai langsung di code)
+### Active MVP (used directly in code)
 - `NEXT_PUBLIC_BACKEND_URL`
 - `NEXT_PUBLIC_BACKEND_WS_URL`
 - `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS`
@@ -78,7 +80,7 @@ Catatan:
 - `NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS`
 - `NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS`
 
-Dua key di atas dipakai runtime, tetapi pada snapshot ini nilainya diambil dari `frontend/.env` karena belum diisi di `.env.local`.
+The two keys above are used at runtime, but in this snapshot their values are read from `frontend/.env` because they were not set in `.env.local`.
 
 ### Legacy alias optional
 - `NEXT_PUBLIC_LIMIT_ORDER_BOOK_ADDRESS`
@@ -86,11 +88,11 @@ Dua key di atas dipakai runtime, tetapi pada snapshot ini nilainya diambil dari 
 - `NEXT_PUBLIC_AI_EXECUTOR_ADDRESS`
 - `NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS`
 
-Alias ini kompatibilitas saja; jika key `NEXT_PUBLIC_STARKNET_*` sudah ada, alias tidak wajib.
+These aliases are for compatibility only. If `NEXT_PUBLIC_STARKNET_*` keys are present, aliases are not required.
 
 ## Address Alignment Check (FE/BE)
 
-Hasil alignment utama:
+Primary alignment result:
 - `STARKNET_SWAP_CONTRACT_ADDRESS` == `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` (MATCH)
 - `BRIDGE_AGGREGATOR_ADDRESS` == `NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS` (MATCH)
 - `LIMIT_ORDER_BOOK_ADDRESS` == `NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS` (MATCH)
@@ -100,6 +102,6 @@ Hasil alignment utama:
 
 ## Architecture Impact
 
-Karena scope MVP aktif:
-- `DarkPool` dan `PrivateBTCSwap` tidak dimasukkan dalam diagram arsitektur MVP aktif.
-- Keduanya tetap dicatat sebagai deployed optional (backend-only) untuk mencegah kebingungan scope.
+Because this is the active MVP scope:
+- `DarkPool` and `PrivateBTCSwap` are not included in the active MVP architecture diagram.
+- Both are still documented as deployed optional modules (backend-only) to avoid scope confusion.

@@ -3249,8 +3249,7 @@ pub async fn execute_swap(
                     shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
                 if deposit_ts == 0 {
                     return Err(AppError::BadRequest(
-                        "Hide Balance V3 note belum terdaftar. Deposit note dulu."
-                            .to_string(),
+                        "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                     ));
                 }
                 payload.spendable_at_unix = Some(deposit_ts);

@@ -1,80 +1,80 @@
-# CAREL - Template Pitch 3 Menit (Tanpa Arsitektur)
+# CAREL - 3-Minute Pitch Template (No Architecture Slides)
 
-Dokumen ini untuk rekaman 3 menit: fokus ke **problem -> solution -> demo -> impact**.
+This document is for a 3-minute recording focused on **problem -> solution -> demo -> impact**.
 
-Jika perlu versi dengan gambar arsitektur (full + normal + hide), gunakan:
+If you need the architecture-slide version (full + normal + hide), use:
 - `docs/architecture_mvp_modes.md`
 
 ## Slide 1 - Problem (0:00-0:35)
-Judul:
-`Cross-chain DeFi masih rumit, lambat, dan riskan untuk user retail`
+Title:
+`Cross-chain DeFi is still complex, slow, and risky for retail users`
 
-Isi singkat (3 poin):
-- User harus pindah-pindah chain, wallet, dan flow transaksi.
-- Banyak flow gagal di tengah jalan (likuiditas/range), bikin waktu terbuang.
-- Privasi transaksi dan eksekusi AI yang aman masih sulit dipakai user biasa.
+Short content (3 points):
+- Users must jump across chains, wallets, and transaction flows.
+- Many flows fail mid-way (liquidity/range), causing wasted time.
+- Transaction privacy and safe AI execution are still hard for mainstream users.
 
 Visual:
-- Screenshot UI wallet + notifikasi error kecil (sebagai konteks pain point).
+- Wallet UI screenshot + small error notification screenshot (pain-point context).
 
 ## Slide 2 - Solution (0:35-1:10)
-Judul:
+Title:
 `CAREL Protocol: AI-assisted execution + privacy-first flow`
 
-Isi singkat (4 poin):
-- Satu antarmuka untuk swap, bridge, stake, dan limit order lintas chain.
-- AI assistant bantu eksekusi action dengan konfirmasi wallet user.
-- Hide mode (Garaga/private path) untuk menjaga privasi eksekusi.
-- Pre-check sebelum burn/setup untuk menekan gagal transaksi yang mahal.
+Short content (4 points):
+- One interface for swap, bridge, stake, and cross-chain limit orders.
+- AI assistant helps execute actions with explicit wallet confirmation.
+- Hide mode (Garaga/private path) protects execution privacy.
+- Pre-check before burn/setup reduces costly failed transactions.
 
 Visual:
-- 1 screenshot dashboard utama + 1 screenshot AI panel.
+- One main dashboard screenshot + one AI panel screenshot.
 
 ## Slide 3 - Demo Outcome & Value (2:20-3:00)
-Judul:
-`Hasil: flow lebih cepat dipahami, lebih aman, dan lebih siap untuk adopsi`
+Title:
+`Result: faster understanding, safer flow, better adoption readiness`
 
-Isi singkat (3 poin):
-- End-to-end flow bisa ditunjukkan dalam satu sesi singkat (connect -> execute -> verify).
-- User tetap memegang kontrol penuh karena final approval selalu di wallet.
-- Cocok untuk onboarding user baru DeFi yang butuh pengalaman lebih sederhana.
+Short content (3 points):
+- End-to-end flow can be shown in one short session (connect -> execute -> verify).
+- User keeps full control because final approval always stays in user wallet.
+- Strong fit for onboarding new DeFi users who need a simpler experience.
 
 Visual:
-- Screenshot tx/order sukses + 1 poin ringkas roadmap.
+- Success tx/order screenshot + one concise roadmap point.
 
 ---
 
-## Script Narasi 3 Menit (Siap Rekam)
+## 3-Minute Narration Script (Recording-Ready)
 
 ### 0:00-0:15 - Hook
-`Di DeFi lintas chain, masalah terbesar user bukan cuma biaya, tapi kompleksitas. Satu aksi sederhana sering butuh banyak langkah, banyak konfirmasi, dan rawan gagal di tengah jalan.`
+`In cross-chain DeFi, the biggest user problem is not only cost, but complexity. One simple action often requires many steps, many confirmations, and can still fail in the middle.`
 
 ### 0:15-0:35 - Problem
-`User harus berpindah antar wallet dan network, lalu masih menghadapi error seperti route tidak valid atau likuiditas tidak cukup. Untuk user retail, ini bikin friksi tinggi dan pengalaman jadi tidak ramah.`
+`Users move across wallets and networks, and still face errors like invalid routes or insufficient liquidity. For retail users, this creates high friction and a poor experience.`
 
 ### 0:35-1:10 - Solution
-`CAREL Protocol menyederhanakan itu dalam satu antarmuka. User bisa swap, bridge, stake, dan limit order dengan bantuan AI assistant, tetap dengan approval langsung dari wallet. Untuk kebutuhan privasi, kami sediakan hide mode berbasis Garaga/private execution, dan ada pre-check untuk mencegah eksekusi yang tidak layak sebelum user membayar biaya yang tidak perlu.`
+`CAREL Protocol simplifies this into one interface. Users can swap, bridge, stake, and create limit orders with AI assistant support, while keeping direct wallet approval. For privacy-sensitive execution, we provide Garaga/private hide mode, plus pre-checks to prevent non-viable execution before users pay unnecessary cost.`
 
-### 1:10-2:20 - Demo (inti, 1 flow paling aman)
-`Di demo ini, saya tunjukkan satu flow end-to-end: pertama connect wallet, lalu jalankan satu aksi dari AI assistant. Setelah quote dan pre-check lolos, user konfirmasi di wallet, transaksi dieksekusi, dan hasilnya langsung bisa diverifikasi dari hash/order link.`
+### 1:10-2:20 - Demo (core, safest one-flow path)
+`In this demo, I show one end-to-end flow: connect wallet, execute one action from AI assistant, pass quote and pre-check, confirm in wallet, execute transaction, and verify result from tx hash/order link.`
 
-`Poin pentingnya: user tidak kehilangan kontrol, karena approval final tetap di wallet user. Jadi AI membantu orkestrasi, tapi otorisasi tetap di tangan user.`
+`The key point: users never lose control. Final approval always remains in user wallet. AI orchestrates, but authorization stays with the user.`
 
 ### 2:20-2:45 - Value
-`Dengan pendekatan ini, CAREL menurunkan friksi teknis untuk user baru, meningkatkan kejelasan alur eksekusi, dan mengurangi kegagalan yang merugikan dari sisi pengalaman.`
+`With this approach, CAREL lowers technical friction for new users, improves execution clarity, and reduces experience-damaging failures.`
 
 ### 2:45-3:00 - Closing
-`Target kami adalah membuat eksekusi DeFi lintas chain menjadi lebih sederhana, lebih aman, dan lebih private untuk penggunaan sehari-hari. Itu CAREL Protocol.`
+`Our goal is to make cross-chain DeFi execution simpler, safer, and more private for daily use. That is CAREL Protocol.`
 
 ---
 
-## Shot List Rekaman (biar cepat edit)
-- `Shot 1`: Slide 1 (problem) 15-20 detik.
-- `Shot 2`: Slide 2 (solution) 25-30 detik.
-- `Shot 3`: Demo UI live 60-70 detik.
-- `Shot 4`: Hasil tx/order + Slide 3 (impact + closing) 30-40 detik.
+## Recording Shot List (Fast Editing)
+- `Shot 1`: Slide 1 (problem) 15-20 seconds.
+- `Shot 2`: Slide 2 (solution) 25-30 seconds.
+- `Shot 3`: Live demo UI 60-70 seconds.
+- `Shot 4`: Success tx/order + Slide 3 (impact + closing) 30-40 seconds.
 
-## Catatan Eksekusi
-- Simpan arsitektur untuk Q&A saja (tidak perlu masuk video 3 menit).
-- Gunakan 1 demo flow yang paling stabil, jangan banyak cabang.
-- Potong semua jeda loading di proses edit video.
+## Execution Notes
+- Keep architecture content for Q&A only (not required in the 3-minute video).
+- Use one stable demo flow; avoid too many branch paths.
+- Cut all loading pauses during editing.

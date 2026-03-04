@@ -56,19 +56,19 @@ scarb build
 | 22 | `PrivateActionExecutor` (legacy/compatibility) | `admin`, `verifier`, `relayer`, `swap_target`, `limit_target`, `staking_target` |
 
 ## Profile Alignment (Important)
-Untuk menghindari mismatch saat demo:
-- `smartcontract/.env` dipakai sebagai katalog deploy/contracts inventory.
-- Runtime bukti MVP biasanya memakai:
+To avoid runtime/address mismatch during demo:
+- `smartcontract/.env` is used as the deploy catalog / contracts inventory.
+- MVP runtime proof usually uses:
   - `backend-rust/.env`
   - `frontend/.env.local`
 
-Setelah deploy/wiring kontrak:
-1. Sinkronkan alamat dari `smartcontract/.env` ke `backend-rust/.env`.
-2. Sinkronkan alamat dari backend ke `frontend/.env.local`.
+After contract deploy/wiring:
+1. Sync addresses from `smartcontract/.env` to `backend-rust/.env`.
+2. Sync addresses from backend to `frontend/.env.local`.
 3. Restart backend + frontend.
 
-Catatan:
-- Jika alamat `ZK_PRIVACY_ROUTER_ADDRESS` di runtime profile berbeda dengan katalog smartcontract, bukti tx akan mengikuti runtime profile aktif.
+Note:
+- If `ZK_PRIVACY_ROUTER_ADDRESS` in runtime profile differs from smartcontract catalog, transaction proof references follow the active runtime profile.
 
 ## Optional: Real Garaga Verifier (BLS12-381)
 Use this section when moving from mock verification to real BLS12-381 proof verification.

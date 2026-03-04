@@ -1284,8 +1284,7 @@ pub async fn create_order(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu."
-                        .to_string(),
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                 ));
             }
             payload.spendable_at_unix = Some(deposit_ts);
@@ -1818,8 +1817,7 @@ pub async fn cancel_order(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu."
-                        .to_string(),
+                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                 ));
             }
             payload.spendable_at_unix = Some(deposit_ts);

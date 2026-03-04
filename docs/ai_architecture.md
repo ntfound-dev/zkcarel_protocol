@@ -2,20 +2,20 @@
 
 ## Context
 
-Semua transaksi privacy di sistem menggunakan kontrak Garaga yang sama, untuk dua flow:
+All privacy transactions in this system use the same Garaga contract surface across two flow families:
 
-- User Manual:
+- User manual flows:
   - Swap + Hide mode
   - Limit Order + Hide mode
   - Stake + Hide mode
-- Via AI:
+- AI-driven flows:
   - L1
   - L2
-  - L3 (`swap/stake/limit order` saja, tanpa bridge)
+  - L3 (`swap/stake/limit order` only, no bridge)
 
-Karena semua flow memukul surface kontrak yang sama, dua bug berikut harus diperbaiki serentak.
+Because these flows hit the same contract surface, the two bugs below must be fixed together.
 
-## Bug #1 — Proof Static (Semua Transaksi Proof Identik)
+## Bug #1 — Static Proof (Identical Proof Across Transactions)
 
 ### Root Cause
 
@@ -24,11 +24,11 @@ GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=true
 GARAGA_PROVE_CMD=
 ```
 
-Runtime membaca satu payload JSON precomputed, sehingga proof bisa identik lintas user/action/amount.
+Runtime reads one precomputed JSON payload, so proof can become identical across users/actions/amounts.
 
-### Fix Wajib
+### Required Fix
 
-1. Update `.env` backend:
+1. Update backend `.env`:
 
 ```env
 GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=false
@@ -38,7 +38,7 @@ GARAGA_VK_PATH=./garaga_vk.json
 GARAGA_PUBLIC_INPUTS_PATH=./garaga_public_inputs.json
 ```
 
-2. Update `backend-rust/scripts/garaga_auto_prover.py` agar intent hash mengikat konteks transaksi:
+2. Update `backend-rust/scripts/garaga_auto_prover.py` so intent hash binds transaction context:
 
 ```python
 # Swap
@@ -51,37 +51,37 @@ intent_hash = hash(user_address, from_token, to_token, amount, price, nonce)
 intent_hash = hash(user_address, token, amount, pool, nonce)
 ```
 
-3. Tambahkan queue proof generation berbasis Redis:
+3. Add Redis-based proof generation queue:
    - Max concurrency: `2`
    - Timeout per job: `30s`
-   - Jika timeout/gagal: return error deterministik ke caller (jangan fallback ke payload statis)
+   - On timeout/failure: return deterministic error to caller (do not fallback to static payload)
 
-4. Verifikasi:
+4. Verify:
 
 ```bash
 python3 scripts/garaga_auto_prover.py --test
 ```
 
-Jalankan dua kali dengan input berbeda. Proof harus berbeda.
+Run twice with different inputs. Proof must be different.
 
-## Bug #2 — User Address Bocor On-Chain
+## Bug #2 — User Address Leakage On-Chain
 
-### Root Cause (2 Layer)
+### Root Cause (2 Layers)
 
-1. Layer tx sender:
-   - `tx.from = user wallet` terlihat di explorer.
-2. Layer calldata:
-   - field yang langsung mengandung identitas/konteks user masih terbaca on-chain (contoh depositor/recipient/token/amount/target/min_payout).
+1. Tx sender layer:
+   - `tx.from = user wallet` is visible in explorer.
+2. Calldata layer:
+   - fields that directly encode user identity/context are still visible on-chain (for example depositor/recipient/token/amount/target/min_payout).
 
-Yang sudah aman dan tidak diubah:
+Already correct and not changed:
 
 - ZK proof validity
 - Nullifier
 - Commitment
 
-## Fix Arsitektur — Relayer + PrivacyIntermediary (Kombinasi)
+## Architecture Fix — Relayer + PrivacyIntermediary (Combined)
 
-Gunakan relayer untuk submit tx on-chain, dan kontrak intermediary untuk atomic fund movement sebelum private execution.
+Use relayer for on-chain tx submission and intermediary contract for atomic fund movement before private execution.
 
 ```mermaid
 sequenceDiagram
@@ -100,43 +100,43 @@ sequenceDiagram
     I->>E: execute(params)
 ```
 
-### Invariant Penting (Saldo Pasti Berkurang)
+### Critical Invariant (User Balance Must Decrease)
 
-- `transferFrom(user, intermediary, amount)` wajib dieksekusi sebelum action.
-- User harus melakukan `approve(intermediary, amount)` lebih dulu.
-- Atomicity: jika `transferFrom` gagal, seluruh tx revert.
-- Tidak boleh ada jalur di mana action sukses tapi token user tidak berpindah.
+- `transferFrom(user, intermediary, amount)` must execute before action.
+- User must call `approve(intermediary, amount)` first.
+- Atomicity: if `transferFrom` fails, whole tx reverts.
+- There must be no path where action succeeds but user token is not moved.
 
-## Detail Implementasi per Layer
+## Implementation Detail by Layer
 
-1. Contract baru `PrivacyIntermediary` (Cairo):
-   - Verifikasi signature user.
-   - `transferFrom` user ke intermediary sebelum forwarding.
-   - Forward call ke `private_action_executor`.
+1. New Cairo contract `PrivacyIntermediary`:
+   - Verify user signature.
+   - `transferFrom` from user to intermediary before forwarding.
+   - Forward call to `private_action_executor`.
 
 2. Update `private_action_executor.cairo`:
-   - Hanya menerima caller dari whitelist intermediary.
-   - `depositor` dan `recipient` diisi `get_caller_address()` (intermediary), bukan user wallet.
+   - Accept caller only from whitelisted intermediary.
+   - Set `depositor` and `recipient` from `get_caller_address()` (intermediary), not user wallet.
 
 3. Backend relayer `backend-rust/src/services/relayer.rs`:
-   - Menerima signed params dari frontend.
-   - Submit tx dengan wallet relayer.
-   - Monitor status tx, return result final.
+   - Accept signed params from frontend.
+   - Submit tx with relayer wallet.
+   - Monitor tx status and return final result.
 
 4. Frontend `frontend/lib/onchain-trade.ts`:
-   - Sign params off-chain (bukan broadcast langsung user wallet).
-   - Submit signature + params ke endpoint relayer.
-   - Tambah step approve ke intermediary sebelum eksekusi privacy.
+   - Sign params off-chain (not direct wallet broadcast).
+   - Submit signature + params to relayer endpoint.
+   - Add intermediary approve step before privacy execution.
 
 5. Frontend `frontend/components/floating-ai-assistant.tsx`:
-   - Semua hide mode (`swap/limit/stake`) lewat relayer path.
-   - AI execution L1/L2/L3 privacy juga lewat relayer path.
+   - All hide mode actions (`swap/limit/stake`) use relayer path.
+   - AI L1/L2/L3 privacy execution also uses relayer path.
 
 6. Backend API `backend-rust/src/api/ai.rs`:
-   - Build params dari AI intent.
-   - Delegasi submit ke relayer service.
+   - Build params from AI intent.
+   - Delegate submission to relayer service.
 
-## Scope Coverage (Wajib 6 Mode)
+## Scope Coverage (Required 6 Modes)
 
 | Mode | Flow | Bug #1 Static Proof | Bug #2 Address Leak |
 |------|------|---------------------|---------------------|
@@ -147,24 +147,24 @@ sequenceDiagram
 | L2 | AI | Fix | Fix |
 | L3 (swap/stake/limit) | AI | Fix | Fix |
 
-## Prioritas Eksekusi
+## Execution Priority
 
-1. Bug #1: jadikan proof dynamic terlebih dulu.
-2. Bug #2: lanjut relayer + intermediary setelah dynamic proof stabil.
+1. Bug #1: make proof dynamic first.
+2. Bug #2: continue with relayer + intermediary after dynamic proof is stable.
 
-## Yang Tidak Boleh Diubah
+## Must Not Change
 
-- Garaga proof verification semantics on-chain.
-- Burn CAREL logic yang sudah berlaku per level.
-- Verifier contract flow untuk setup signature AI.
-- Typed data pada setup sign flow yang saat ini sudah benar.
+- Garaga on-chain verification semantics.
+- CAREL burn logic already enforced by level.
+- Verifier contract flow for AI setup signature.
+- Typed-data setup sign flow that is already correct.
 
 ## Definition of Done
 
-- [ ] Dua transaksi berbeda menghasilkan proof berbeda.
-- [ ] `tx.from` on-chain adalah relayer address, bukan user wallet.
-- [ ] `depositor` dan `recipient` on-chain adalah intermediary address, bukan user wallet.
-- [ ] Saldo user berkurang benar pada setiap transaksi sukses.
-- [ ] Jika `transferFrom` gagal, seluruh transaksi revert (tanpa partial execution).
-- [ ] Semua 6 mode ter-cover (`swap/limit/stake hide` + `AI L1/L2/L3`).
-- [ ] Uji dua wallet berbeda: proof berbeda, address tidak bocor, saldo keduanya berkurang sesuai eksekusi.
+- [ ] Two different transactions produce different proofs.
+- [ ] On-chain `tx.from` is relayer address, not user wallet.
+- [ ] On-chain `depositor` and `recipient` are intermediary address, not user wallet.
+- [ ] User balance decreases correctly on every successful transaction.
+- [ ] If `transferFrom` fails, full transaction reverts (no partial execution).
+- [ ] All 6 modes are covered (`swap/limit/stake hide` + `AI L1/L2/L3`).
+- [ ] Test two different wallets: proofs differ, no address leakage, both balances decrease correctly.

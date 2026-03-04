@@ -1,67 +1,67 @@
 # Integration Update - 2026-02-13
 
-Dokumen ini merangkum perubahan implementasi terbaru untuk flow on-chain bridge, provider routing, dan dynamic privacy verifier selector.
+This document summarizes implementation updates for on-chain bridge flow, provider routing, and dynamic privacy verifier selection.
 
-## Scope Perubahan
+## Change Scope
 
-1. Bridge verification diperketat agar benar-benar on-chain.
-2. Pemilihan provider bridge tidak lagi diam-diam fallback ke simulasi saat config kosong.
-3. Selector verifier `garaga|tongo|semaphore` sekarang dinamis per request, tetap backward-compatible default `garaga`.
-4. Dokumentasi env/config dan endpoint diperbarui.
+1. Bridge verification was hardened to enforce true on-chain checks.
+2. Bridge provider selection no longer silently falls back to simulation when config is empty.
+3. Privacy verifier selector `garaga|tongo|semaphore` is now dynamic per request, with backward-compatible default `garaga`.
+4. Env/config and endpoint documentation was updated.
 
 ## 1) Bridge On-Chain Verification (Backend)
 
-Perubahan:
-1. `onchain_tx_hash` bridge sekarang diverifikasi ke chain sesuai `from_chain`:
-2. `starknet`: cek receipt, finality, dan status revert.
-3. `ethereum`: panggil `eth_getTransactionReceipt`, validasi `status` dan `blockNumber`.
-4. `bitcoin`: tetap validasi format txid, settlement asinkron via provider.
-5. `block_number` transaksi bridge di DB sekarang diisi dari hasil verifikasi chain (bukan default `0`).
+Changes:
+1. Bridge `onchain_tx_hash` is now validated against chain based on `from_chain`.
+2. `starknet`: check receipt, finality, and revert status.
+3. `ethereum`: call `eth_getTransactionReceipt`, validate `status` and `blockNumber`.
+4. `bitcoin`: keep txid format validation; settlement remains asynchronous via provider.
+5. Bridge transaction `block_number` in DB is now filled from chain verification result (not default `0`).
 
-File terkait:
+Related file:
 1. `backend-rust/src/api/bridge.rs`
 
-## 2) Provider Routing Tanpa Fallback Diam-Diam
+## 2) Provider Routing Without Silent Fallback
 
-Perubahan:
-1. `RouteOptimizer` hanya memilih provider yang benar-benar aktif/configured.
-2. Konfigurasi dianggap non-aktif jika kosong atau nilai sentinel (`DISABLED`, `CHANGE_ME`, `REPLACE_ME`).
-3. Atomiq bisa dinonaktifkan eksplisit via env tanpa menghapus kode.
+Changes:
+1. `RouteOptimizer` now chooses only providers that are actually active/configured.
+2. Config is treated as inactive if empty or using sentinel values (`DISABLED`, `CHANGE_ME`, `REPLACE_ME`).
+3. Atomiq can now be disabled explicitly via env without removing code.
 
-File terkait:
+Related file:
 1. `backend-rust/src/services/route_optimizer.rs`
 
-## 3) Adapter Provider Real API
+## 3) Real Provider API Adapters
 
-Perubahan `LayerSwap`:
-1. Menggunakan header `X-LS-APIKEY`.
-2. Endpoint quote/execute diperbarui sesuai integrasi API saat ini.
-3. Error API sekarang di-return eksplisit (tidak fallback simulasi diam-diam).
+`LayerSwap` updates:
+1. Uses `X-LS-APIKEY` header.
+2. Quote/execute endpoints updated to match current API integration.
+3. API errors are returned explicitly (no silent simulation fallback).
 
-Perubahan `Garden`:
-1. Menggunakan header `garden-app-id`.
-2. Menggunakan endpoint `v2` untuk quote/order.
-3. Konversi amount ke base units dan parsing response `v2`.
-4. Error API di-return eksplisit.
+`Garden` updates:
+1. Uses `garden-app-id` header.
+2. Uses `v2` endpoints for quote/order.
+3. Converts amount into base units and parses `v2` response schema.
+4. API errors are returned explicitly.
 
-File terkait:
+Related files:
 1. `backend-rust/src/integrations/bridge/layerswap.rs`
 2. `backend-rust/src/integrations/bridge/garden.rs`
 
 ## 4) Dynamic Privacy Verifier Selector (Backward-Compatible)
 
-Perubahan:
-1. Request private flow bisa memilih verifier via field opsional:
-2. `garaga`, `tongo`, atau `semaphore`.
-3. Jika field tidak dikirim, default otomatis `garaga`.
-4. Router address per verifier diambil dari env map:
+Changes:
+1. Private-flow requests can choose verifier through optional field:
+2. `garaga`, `tongo`, or `semaphore`.
+3. If field is missing, default is `garaga`.
+4. Router address per verifier is read from env map:
 5. `PRIVACY_VERIFIER_ROUTERS=garaga:0x...,tongo:0x...,semaphore:0x...`
-6. Flow ini diterapkan di:
+6. Applied on:
 7. `POST /api/v1/swap/execute` (via `privacy.verifier`)
 8. `POST /api/v1/bridge/execute` (via `privacy.verifier`)
 9. `POST /api/v1/privacy/submit` (via `verifier`)
 
-File terkait:
+Related files:
 1. `backend-rust/src/services/privacy_verifier.rs`
 2. `backend-rust/src/api/swap.rs`
 3. `backend-rust/src/api/bridge.rs`
@@ -70,23 +70,23 @@ File terkait:
 6. `backend-rust/.env`
 7. `backend-rust/.env.testnet.example`
 
-## 5) Konfigurasi Environment Baru
+## 5) New Environment Configuration
 
-Tambahan config:
+Added config:
 1. `PRIVACY_VERIFIER_ROUTERS`
 
-Contoh:
+Example:
 ```env
 PRIVACY_VERIFIER_ROUTERS=garaga:0x00694e35433fe3ce49431e1816f4d4df9ab6d550a3f73f8f07f9c2cc69b6891b,tongo:0x...,semaphore:0x...
 ```
 
-Catatan:
-1. Jika hanya `garaga` yang diisi, request `tongo`/`semaphore` akan ditolak dengan error konfigurasi.
-2. Ini sengaja agar tidak ada fallback salah-verifier secara silent.
+Notes:
+1. If only `garaga` is configured, `tongo`/`semaphore` requests are rejected with configuration error.
+2. This is intentional to prevent silent wrong-verifier fallback.
 
-## 6) Contoh Payload
+## 6) Example Payloads
 
-Swap execute (private + default verifier garaga):
+Swap execute (private + default `garaga`):
 ```json
 {
   "from_token": "STRK",
@@ -104,7 +104,7 @@ Swap execute (private + default verifier garaga):
 }
 ```
 
-Bridge execute (private + verifier tongo):
+Bridge execute (private + `tongo` verifier):
 ```json
 {
   "from_chain": "starknet",
@@ -122,7 +122,7 @@ Bridge execute (private + verifier tongo):
 }
 ```
 
-Privacy submit (verifier semaphore):
+Privacy submit (`semaphore` verifier):
 ```json
 {
   "verifier": "semaphore",
@@ -133,7 +133,7 @@ Privacy submit (verifier semaphore):
 }
 ```
 
-## Referensi & Link Resmi
+## References & Official Links
 
 Tongo:
 1. https://github.com/fatlabsxyz/tongo
@@ -167,66 +167,66 @@ Garden Finance:
 3. https://docs.garden.finance/contracts/bitcoin
 4. https://docs.garden.finance/api-reference/quickstart
 
-## 7) Update Swap On-Chain Real Transfer (2026-02-13)
+## 7) Swap On-Chain Real Transfer Update (2026-02-13)
 
-Perubahan:
-1. `SwapAggregator.execute_swap` sekarang benar-benar memindahkan token on-chain:
-2. `transfer_from(user -> swap_aggregator)` untuk token input.
-3. fee (`dev_fee`, `lp_fee`, `mev_fee`) benar-benar ditransfer ke fee recipient.
-4. route oracle (`dex_id='ORCL'`) sekarang executable (bukan diblok).
-5. output token ditransfer ke user pada akhir eksekusi.
+Changes:
+1. `SwapAggregator.execute_swap` now performs real on-chain token movement:
+2. `transfer_from(user -> swap_aggregator)` for input token.
+3. Fees (`dev_fee`, `lp_fee`, `mev_fee`) are truly transferred to fee recipient.
+4. Oracle route (`dex_id='ORCL'`) is now executable (not blocked).
+5. Output token is transferred to user at execution end.
 
-File kontrak:
+Contract file:
 1. `smartcontract/src/bridge/swap_aggregator.cairo`
 
-Sinkronisasi backend:
-1. quote/execute swap memakai `expected_amount_out` dari route on-chain agar angka UI sinkron dengan calldata wallet.
-2. validasi amount > 0 ditambahkan.
+Backend synchronization:
+1. Swap quote/execute now uses `expected_amount_out` from on-chain route so UI values stay aligned with wallet calldata.
+2. Validation for `amount > 0` was added.
 
-File backend:
+Backend file:
 1. `backend-rust/src/api/swap.rs`
 
-Deploy kontrak baru:
+New contract deployment:
 1. Class Hash: `0x0420029c0c5729d05e56db72ef60fe645d13e96b6a0ac80e6a6998bccc32315f`
 2. Contract Address: `0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28`
 
-Link deploy:
+Deployment links:
 1. Starkscan class: https://sepolia.starkscan.co/class/0x0420029c0c5729d05e56db72ef60fe645d13e96b6a0ac80e6a6998bccc32315f
 2. Starkscan deploy tx: https://sepolia.starkscan.co/tx/0x0483969d37f9fb616ffc27d8b7c68773a95fce337c1b1e9c5cb9b79ba5aa53f4
 3. Voyager contract: https://sepolia.voyager.online/contract/0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28
 4. Voyager deploy tx: https://sepolia.voyager.online/tx/0x0483969d37f9fb616ffc27d8b7c68773a95fce337c1b1e9c5cb9b79ba5aa53f4
 
-Contoh verifikasi tx swap real transfer:
+Example real-transfer swap tx verification:
 1. STRK -> CAREL tx: `0x0669e087ff25125535ff906ef617e416b7df202dea8b09359e16810b886247a7`
 2. CAREL -> STRK tx: `0x00c1e9afaf136c7fa239f04e8dd81caba840fb1fa420bf6d37a9e2fb8a57714a`
 3. Voyager tx1: https://sepolia.voyager.online/tx/0x0669e087ff25125535ff906ef617e416b7df202dea8b09359e16810b886247a7
 4. Voyager tx2: https://sepolia.voyager.online/tx/0x00c1e9afaf136c7fa239f04e8dd81caba840fb1fa420bf6d37a9e2fb8a57714a
 
-Catatan operasional:
-1. ORCL route butuh likuiditas output token pada kontrak swap aggregator.
-2. Untuk pair STRK<->CAREL sudah diisi likuiditas awal agar eksekusi real transfer berjalan.
-3. Pair USDC/USDT/WBTC tetap butuh address token Starknet yang valid + likuiditas sebelum diaktifkan ke user.
+Operational notes:
+1. ORCL route requires output-token liquidity in swap aggregator contract.
+2. Initial liquidity was seeded for `STRK<->CAREL` to enable real transfer execution.
+3. `USDC/USDT/WBTC` pairs still require valid Starknet token addresses + liquidity before user rollout.
 
-## 8) Aktivasi USDC/USDT/WBTC Starknet (On-Chain)
+## 8) Activation of Starknet USDC/USDT/WBTC (On-Chain)
 
 Status:
-1. Sudah dibuat token Starknet valid untuk USDC/USDT/WBTC (custom decimals 6/6/8).
-2. Sudah di-wire ke `SwapAggregator` + `PriceOracle` + backend/frontend env.
-3. Sudah di-fund liquidity ke kontrak swap agar pair lintas token bisa execute real transfer.
+1. Valid Starknet tokens for `USDC/USDT/WBTC` were created (custom decimals `6/6/8`).
+2. Wiring completed for `SwapAggregator` + `PriceOracle` + backend/frontend env.
+3. Liquidity funded into swap contract so cross-token pairs can execute real transfer.
 
-Kontrak baru:
+New contracts:
 1. MockERC20 class: `0x027f9bbf49962b137afa2245a81892129cc853f7fa623c5a07cae46e99901824`
 2. USDC: `0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8`
 3. USDT: `0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5`
 4. WBTC: `0x016f2d46ab5cc2244aeeb195cf76f75e7a316a92b71d56618c1bf1b69ab70998`
 
-Link deploy:
+Deployment links:
 1. MockERC20 class: https://sepolia.starkscan.co/class/0x027f9bbf49962b137afa2245a81892129cc853f7fa623c5a07cae46e99901824
 2. Deploy USDC tx: https://sepolia.starkscan.co/tx/0x04ba5c5e4d955aa790b706cea6d81e19ad115e9107820885fbfd6cf47bcc91f1
 3. Deploy USDT tx: https://sepolia.starkscan.co/tx/0x023e8904fe1b729b6b39acd62434161e4a7b3436dba3196406bc3f6452643f84
 4. Deploy WBTC tx: https://sepolia.starkscan.co/tx/0x0286bcc785d86bf4f2bf9e2be49fa6ec979e296777d5f72d80c90a5a84564f97
 
-Wiring env utama:
+Main env wiring:
 1. `backend-rust/.env`:
 2. `TOKEN_USDC_ADDRESS=0x0179...29d8`
 3. `TOKEN_USDT_ADDRESS=0x030f...53e5`
@@ -238,41 +238,41 @@ Wiring env utama:
 9. `NEXT_PUBLIC_TOKEN_WBTC_ADDRESS=0x016f...0998`
 10. `NEXT_PUBLIC_TOKEN_BTC_ADDRESS=0x016f...0998`
 
-Contoh quote API setelah aktivasi:
-1. `STRK -> USDC` sukses.
-2. `USDC -> WBTC` sukses.
-3. `WBTC -> USDT` sukses.
-4. `USDT -> CAREL` sukses.
+Example quote API after activation:
+1. `STRK -> USDC` success.
+2. `USDC -> WBTC` success.
+3. `WBTC -> USDT` success.
+4. `USDT -> CAREL` success.
 
-## 9) Verifikasi Full Pair + Real Transfer (2026-02-14)
+## 9) Full Pair + Real Transfer Verification (2026-02-14)
 
-Matrix quote backend (`POST /api/v1/swap/quote`) untuk semua arah pair:
-1. `STRK/WBTC/USDT/USDC/CAREL` antar-sesama pair (20 arah, tanpa self-pair) seluruhnya `OK`.
-2. Tidak ada pair `FAIL` pada whitelist token on-chain saat ini.
+Backend quote matrix (`POST /api/v1/swap/quote`) for all pair directions:
+1. `STRK/WBTC/USDT/USDC/CAREL` cross-pair matrix (20 directions, excluding self-pair) all `OK`.
+2. No `FAIL` pair in current on-chain token whitelist.
 
-Contoh transaksi execute real transfer terbaru:
+Latest real-transfer execution examples:
 1. `approve STRK` tx: https://sepolia.starkscan.co/tx/0x06397fde2f81597f3686dd90a965f7af802e58749be88fd80767ac7d4316920c
 2. `execute_swap STRK -> USDC` tx: https://sepolia.starkscan.co/tx/0x07ae4b8addb30debacb3df7aa31a1c9876ffa540d23a9973dcfea8db4dd62927
 3. `approve USDT` tx: https://sepolia.starkscan.co/tx/0x04add10ae61c37f3d8fc53e083428a682d3c9f26241135feccdd48b852d71847
 4. `execute_swap USDT -> WBTC` tx: https://sepolia.starkscan.co/tx/0x0408f9718e757aa8775e44536a672a3eebf7c91bdf4d1a46d470b295598567e0
 
-Validasi saldo setelah execute:
-1. `STRK -> USDC`: saldo STRK user turun, saldo USDC user naik.
-2. `USDT -> WBTC`: saldo USDT user turun, saldo WBTC user naik.
-3. Ini memastikan transfer token real (bukan event-only).
+Balance validation after execute:
+1. `STRK -> USDC`: user STRK balance decreases, user USDC balance increases.
+2. `USDT -> WBTC`: user USDT balance decreases, user WBTC balance increases.
+3. This confirms real token transfer behavior (not event-only).
 
-## 10) Otomasi Rebalance Liquidity + Health Check
+## 10) Automated Liquidity Rebalance + Health Check
 
-Script baru:
+New script:
 1. `smartcontract/scripts/08_rebalance_liquidity_healthcheck.sh`
 
-Fungsi:
-1. Rebalance liquidity otomatis ke `SWAP_AGGREGATOR_ADDRESS` jika balance token di bawah minimum.
-2. Health check liquidity per token (`STRK/WBTC/USDT/USDC/CAREL`).
-3. Health check route on-chain seluruh pair (20 arah) via `get_best_swap_route`.
-4. Retry otomatis saat RPC rate-limit/nonce transient.
+Functions:
+1. Automatically rebalance liquidity to `SWAP_AGGREGATOR_ADDRESS` when token balance is below minimum.
+2. Liquidity health check per token (`STRK/WBTC/USDT/USDC/CAREL`).
+3. On-chain route health check across full pair matrix (20 directions) via `get_best_swap_route`.
+4. Automatic retry for RPC rate-limit/nonce transient errors.
 
-Mode eksekusi:
+Execution modes:
 1. Full (rebalance + health):
 ```bash
 cd smartcontract
@@ -288,96 +288,96 @@ ACTION_MODE=health ./scripts/08_rebalance_liquidity_healthcheck.sh
 cd smartcontract
 ACTION_MODE=rebalance ./scripts/08_rebalance_liquidity_healthcheck.sh
 ```
-4. Dry-run (tanpa invoke write tx):
+4. Dry-run (no write invoke tx):
 ```bash
 cd smartcontract
 DRY_RUN=true ACTION_MODE=full ./scripts/08_rebalance_liquidity_healthcheck.sh
 ```
 
-Variabel penting (opsional override):
+Important variables (optional override):
 1. `SNCAST_ACCOUNT` (default: `sepolia`)
-2. `ALLOW_MINT` (default: `true`) untuk token mintable testnet.
+2. `ALLOW_MINT` (default: `true`) for mintable testnet tokens.
 3. `MINTABLE_SYMBOLS` (default: `USDC,USDT,WBTC`)
-4. `LIQ_MIN_<SYMBOL>` dan `LIQ_TARGET_<SYMBOL>` dalam base units:
-5. contoh: `LIQ_MIN_USDC=200000000`, `LIQ_TARGET_USDC=1000000000`
-6. `HEALTH_PROBE_<SYMBOL>` untuk nominal probe quote per token.
-7. `SLEEP_BETWEEN_CALLS` untuk jeda antar call jika RPC sering 429.
+4. `LIQ_MIN_<SYMBOL>` and `LIQ_TARGET_<SYMBOL>` in base units.
+5. Example: `LIQ_MIN_USDC=200000000`, `LIQ_TARGET_USDC=1000000000`
+6. `HEALTH_PROBE_<SYMBOL>` for per-token quote probe amounts.
+7. `SLEEP_BETWEEN_CALLS` for spacing between calls when RPC returns frequent 429.
 
-Contoh jadwal berkala (setiap 5 menit):
+Example periodic schedule (every 5 minutes):
 ```bash
 */5 * * * * cd /mnt/c/Users/frend/zkcare_protocol/smartcontract && ./scripts/08_rebalance_liquidity_healthcheck.sh >> /tmp/zkcare_rebalance.log 2>&1
 ```
 
-## 11) Fix Live Balance UI + Aktivasi Faucet CAREL (2026-02-14)
+## 11) Live Balance UI Fix + CAREL Faucet Activation (2026-02-14)
 
-Masalah:
-1. Swap sukses on-chain, tetapi saldo `CAREL/USDC/USDT/WBTC` di UI tidak langsung naik.
-2. Penyebab utama: frontend live on-chain balance sebelumnya hanya membaca `STRK/ETH/BTC`, token Starknet lain fallback ke portfolio backend (bisa delay).
+Issue:
+1. Swap succeeded on-chain, but `CAREL/USDC/USDT/WBTC` balances in UI did not update immediately.
+2. Main cause: frontend live on-chain balance previously read only `STRK/ETH/BTC`; other Starknet tokens fell back to backend portfolio (could lag).
 
 Patch:
-1. Backend endpoint `POST /api/v1/wallet/onchain-balances` sekarang mengembalikan:
-2. `carel`, `usdc`, `usdt`, `wbtc` (selain `strk_l2/strk_l1/eth/btc`).
-3. Frontend `useWallet` sekarang menyimpan dan refresh nilai on-chain untuk:
+1. Backend endpoint `POST /api/v1/wallet/onchain-balances` now returns:
+2. `carel`, `usdc`, `usdt`, `wbtc` (in addition to `strk_l2/strk_l1/eth/btc`).
+3. Frontend `useWallet` now stores and refreshes on-chain values for:
 4. `CAREL`, `USDC`, `USDT`, `WBTC`.
-5. Trading UI sekarang membaca source balance live on-chain untuk token Starknet tersebut.
+5. Trading UI now reads live on-chain source balance for those Starknet tokens.
 
-File terkait:
+Related files:
 1. `backend-rust/src/api/wallet.rs`
 2. `frontend/lib/api.ts`
 3. `frontend/hooks/use-wallet.tsx`
 4. `frontend/components/trading-interface.tsx`
 
-Faucet CAREL:
-1. `FAUCET_CAREL_AMOUNT` diset ke `25` di `backend-rust/.env`.
-2. `FAUCET_CAREL_UNLIMITED=true` diaktifkan untuk mode testnet QA (claim CAREL tanpa cooldown).
-3. Backend signer/faucet wallet ditop-up CAREL via mint:
-4. Tx mint: https://sepolia.starkscan.co/tx/0x05e3c540952f4bd6949d4e5a5c0fd74a7c1cd18a1261ff0442a6adf4e8ab8617
-5. Saldo CAREL backend signer setelah top-up: `1000.04243 CAREL` (base unit: `1000042430000000000000`).
+CAREL faucet:
+1. `FAUCET_CAREL_AMOUNT` set to `25` in `backend-rust/.env`.
+2. `FAUCET_CAREL_UNLIMITED=true` enabled for testnet QA mode (claim CAREL without cooldown).
+3. Backend signer/faucet wallet topped up with CAREL via mint.
+4. Mint tx: https://sepolia.starkscan.co/tx/0x05e3c540952f4bd6949d4e5a5c0fd74a7c1cd18a1261ff0442a6adf4e8ab8617
+5. Backend signer CAREL balance after top-up: `1000.04243 CAREL` (base unit: `1000042430000000000000`).
 
-## 12) Catatan Sementara Sebelum Fokus Limit Order
+## 12) Temporary Notes Before Limit-Order Focus
 
-1. Swap aggregator dan transfer swap berjalan on-chain real.
-2. CAREL menggunakan token kontrak utama proyek.
-3. USDC/USDT/WBTC pada fase ini masih token mock Starknet testnet untuk kebutuhan QA internal.
-4. CAREL faucet backend saat ini diset unlimited (khusus testnet/dev) agar pengujian limit order tidak terhambat saldo.
+1. Swap aggregator and token transfer flow are running as real on-chain execution.
+2. CAREL uses the project's main token contract.
+3. In this phase, `USDC/USDT/WBTC` are still Starknet testnet mock tokens for internal QA.
+4. Backend CAREL faucet is currently set to unlimited (testnet/dev only) to prevent balance bottlenecks during limit-order testing.
 
-## 13) Update NFT Discount Soulbound (2026-02-15)
+## 13) Discount Soulbound NFT Update (2026-02-15)
 
-Perubahan model bisnis yang sudah diimplementasikan:
-1. Tier ditentukan oleh NFT discount aktif on-chain, bukan langsung dari total points.
-2. Points lifetime user tetap bisa naik tanpa batas.
-3. Points current dipakai untuk mint NFT dan berkurang saat mint.
-4. NFT bersifat soulbound (non-transferable).
-5. NFT tidak diburn saat usage habis; status berubah menjadi inactive.
-6. Unlimited remint diaktifkan (user bisa mint lagi selama points cukup).
+Implemented business-model changes:
+1. Tier is determined by active on-chain discount NFT, not directly by total points.
+2. User lifetime points can keep increasing without limit.
+3. Current points are used for NFT mint and decrease on mint.
+4. NFT is soulbound (non-transferable).
+5. NFT is not burned when usage is exhausted; status changes to inactive.
+6. Unlimited remint is enabled (user can mint again while points are sufficient).
 
-Konfigurasi tier aktif saat ini:
-1. Bronze: biaya `5000`, discount `5%`, max use `5`
-2. Silver: biaya `15000`, discount `10%`, max use `7`
-3. Gold: biaya `50000`, discount `25%`, max use `10`
-4. Platinum: biaya `150000`, discount `35%`, max use `15`
-5. Onyx: biaya `500000`, discount `50%`, max use `20`
+Current active tier config:
+1. Bronze: cost `5000`, discount `5%`, max use `5`
+2. Silver: cost `15000`, discount `10%`, max use `7`
+3. Gold: cost `50000`, discount `25%`, max use `10`
+4. Platinum: cost `150000`, discount `35%`, max use `15`
+5. Onyx: cost `500000`, discount `50%`, max use `20`
 
-File terkait:
+Related files:
 1. `smartcontract/src/nft/discount_soulbound.cairo`
 2. `frontend/components/rewards-hub.tsx`
 3. `backend-rust/src/api/nft.rs`
 
-## 14) Redeploy DiscountSoulbound + Fix Authorization (2026-02-15)
+## 14) DiscountSoulbound Redeploy + Authorization Fix (2026-02-15)
 
-Masalah:
-1. Mint NFT gagal dengan error `Caller is not authorized`.
-2. Akar penyebab: kontrak `DiscountSoulbound` baru belum terdaftar sebagai `authorized_consumer` di `PointStorage`.
+Issue:
+1. NFT mint failed with error `Caller is not authorized`.
+2. Root cause: new `DiscountSoulbound` contract was not yet registered as `authorized_consumer` in `PointStorage`.
 
-Perbaikan:
-1. Redeploy kontrak `DiscountSoulbound`.
-2. Update env address:
+Fix:
+1. Redeploy `DiscountSoulbound` contract.
+2. Update env addresses:
 3. `backend-rust/.env` -> `DISCOUNT_SOULBOUND_ADDRESS`
-4. `frontend/.env` + `frontend/.env.local` -> `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` dan `NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS`
-5. Invoke `PointStorage.add_consumer(DISCOUNT_SOULBOUND_ADDRESS)` agar `mint_nft -> consume_points` authorized.
-6. Patch script deploy agar otomatis add consumer setelah redeploy.
+4. `frontend/.env` + `frontend/.env.local` -> `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` and `NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS`
+5. Invoke `PointStorage.add_consumer(DISCOUNT_SOULBOUND_ADDRESS)` so `mint_nft -> consume_points` is authorized.
+6. Patch deploy script to auto-add consumer after redeploy.
 
-Deploy details:
+Deployment details:
 1. Class hash: `0x02639624ccc7d46135fef2c78bfcd47a5b9bbab24e03339655deb5cb5e1774c7`
 2. Contract address: `0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809`
 3. Declare tx: `0x029ca8e1aa78e661abe2178fff9bb8530e9d17b54e7c7346239154724292217d`
@@ -390,7 +390,7 @@ Explorer links:
 3. Voyager contract: https://sepolia.voyager.online/contract/0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809
 
 Script patch:
-1. `smartcontract/scripts/06_deploy_remaining.sh` kini otomatis invoke:
+1. `smartcontract/scripts/06_deploy_remaining.sh` now automatically invokes:
 ```bash
 sncast invoke --network sepolia \
   --contract-address $POINT_STORAGE_ADDRESS \

@@ -1,62 +1,70 @@
-# CAREL Architecture (MVP) - Full, Normal, Hide
+# CAREL Architecture (MVP) - Runtime-Accurate View
 
-Dokumen ini menjawab 2 hal:
-1. Kenapa tidak semua kontrak dipakai backend sekarang.
-2. Gambar arsitektur yang mudah dibaca juri: full system, normal mode, hide mode.
+This document explains the current runtime architecture with emphasis on execution accuracy for:
+- normal mode,
+- hide mode V3,
+- bridge path,
+- optional/legacy privacy paths.
 
-## Source of Truth yang Dipakai
-- Runtime backend: `backend-rust/.env`
-- Runtime frontend: `frontend/.env.local`
-- Smart contract workspace: `smartcontract/src` + `smartcontract/private_executor_lite`
+## Source of Truth and Profile Split
+Runtime source of truth:
+- Backend runtime: `backend-rust/.env`
+- Frontend runtime: `frontend/.env.local` (fallback: `frontend/.env`)
 
-Catatan penting implementasi saat ini:
-- Hide mode aktif memakai `ShieldedPoolV2` (`HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v2`).
-- Verifier/prover masih bisa berjalan dalam mode testnet mock/dev/precomputed saat pengembangan.
-- Level 3 bridge default masih dibatasi di backend (`AI_LEVEL3_BRIDGE_ENABLED` default `false`).
+Contract catalog source of truth:
+- `smartcontract/.env`
 
-## 1) Arsitektur Menyeluruh (MVP + Modular Roadmap)
+Profile note:
+- Runtime profile and catalog profile can differ by address. This is expected when migration and historical deployments coexist.
 
+## Runtime Baseline (Current)
+Hide-mode baseline currently used by runtime:
+- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
+- `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
+- `HIDE_BALANCE_V2_REDEEM_ONLY=true`
+- Runtime executor: `PRIVATE_ACTION_EXECUTOR_ADDRESS=0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2`
+- AI bridge routing baseline: bridge commands run on AI Level 2; `AI_LEVEL3_BRIDGE_ENABLED=false` by default.
+
+## 1) System Architecture (Runtime)
 ```mermaid
 flowchart LR
-    subgraph USER["User & Wallets"]
+    subgraph USER["User and Wallets"]
         U["User"]
-        UI["Frontend UI\n(Manual + AI Assistant)"]
-        SNW["Starknet Wallet"]
-        EVMW["MetaMask (EVM)"]
-        BTCW["UniSat/Xverse (BTC)"]
-        U --> UI
-        UI --> SNW
-        UI --> EVMW
-        UI --> BTCW
+        FE["Frontend UI"]
+        SW["Starknet Wallet"]
+        EW["EVM Wallet"]
+        BW["BTC Wallet"]
+        U --> FE
+        FE --> SW
+        FE --> EW
+        FE --> BW
     end
 
     subgraph BE["Backend (Rust / Axum)"]
-        API["API Layer\nquote/execute/ai/rewards"]
-        AI["AI Guard + Parser"]
-        RELAYER["Relayer Signer"]
-        PROVER["Garaga Prover\n(real OR mock/dev payload)"]
-        IDX["Indexer + Point Calculator"]
+        API["API Layer\nquote/execute/privacy/rewards"]
+        PROVER["Garaga payload generator\n(real or mock/dev)"]
+        RELAYER["Relayer signer"]
+        IDX["Indexer + points workers"]
         DB[("PostgreSQL")]
         REDIS[("Redis")]
-        API --> AI
+        API --> PROVER
+        API --> RELAYER
         API --> DB
         API --> REDIS
         IDX --> DB
     end
 
-    subgraph SC["Starknet Contracts (MVP Active)"]
+    subgraph SC["Starknet Contracts (Runtime-relevant)"]
         SWAP["SwapAggregator"]
-        BRIDGE["BridgeAggregator"]
-        LOB["KeeperNetwork\n(Limit Order Book)"]
-        STAKING["StakingCarel / Stable / BTC"]
-        EXEC["ShieldedPoolV2\n(private_executor_lite)"]
-        ZKV1["ZkPrivacyRouter (V1)"]
-        ZKV2["PrivacyRouter (V2)"]
+        LOB["LimitOrderBook (KeeperNetwork class)"]
+        STAKE["Staking contracts"]
+        EXECV3["ShieldedPoolV3\n(private_executor_lite)"]
+        INTERM["PrivacyIntermediary\n(optional relayer path)"]
+        ZKV1["ZkPrivacyRouter V1\n(optional privacy endpoint path)"]
         AIEXEC["AIExecutor"]
         NFT["DiscountSoulbound"]
         POINTS["PointStorage"]
         SNAP["SnapshotDistributor"]
-        CAREL["CAREL Token"]
     end
 
     subgraph EXT["External"]
@@ -65,165 +73,137 @@ flowchart LR
         BTC["Bitcoin testnet4"]
     end
 
-    UI <--> API
+    FE <--> API
 
-    UI -->|"Normal mode tx"| SWAP
-    UI -->|"Normal mode tx"| BRIDGE
-    UI -->|"Normal mode tx"| LOB
-    UI -->|"Normal mode tx"| STAKING
+    FE -->|"Normal mode tx"| SWAP
+    FE -->|"Normal mode tx"| LOB
+    FE -->|"Normal mode tx"| STAKE
 
-    API --> PROVER
-    API --> RELAYER
-    RELAYER -->|"Hide mode tx"| EXEC
-    EXEC --> SWAP
-    EXEC --> LOB
-    EXEC --> STAKING
+    API -->|"Hide mode: prepare payload"| PROVER
+    RELAYER -->|"Default V3 direct batch"| EXECV3
+    RELAYER -->|"Optional signed relay path"| INTERM
+
+    EXECV3 --> SWAP
+    EXECV3 --> LOB
+    EXECV3 --> STAKE
 
     API --> NFT
-    API --> AIEXEC
-    AIEXEC --> CAREL
     IDX --> POINTS
     API --> SNAP
-    SNAP --> CAREL
+    API --> AIEXEC
 
-    BRIDGE --> GARDEN
+    API -->|"Bridge quote/route"| GARDEN
     GARDEN --> ETH
     GARDEN --> BTC
 ```
 
-## Kenapa Tidak Semua Kontrak Dipakai Bersamaan
-
-| Status | Contoh Kontrak | Penjelasan |
-| --- | --- | --- |
-| Aktif runtime MVP | `SwapAggregator`, `BridgeAggregator`, `KeeperNetwork`, `Staking*`, `ShieldedPoolV2`, `AIExecutor`, `DiscountSoulbound`, `PointStorage`, `SnapshotDistributor` | Dipakai langsung di flow user harian (manual + AI). |
-| Aktif tapi scope terbatas | `ZkPrivacyRouter`, `PrivacyRouter`, `DarkPool`, `PrivatePayments`, `AnonymousCredentials`, `PrivateBTCSwap` | Dipakai per fitur tertentu, bukan semua user flow setiap saat. |
-| Disiapkan untuk tahap lanjut | `Governance`, `Timelock`, `AccessControlContract`, `EmergencyPause`, `VestingManager`, `FeeCollector` | Arsitektur modular. Tidak semua modul harus aktif di MVP demo. |
-
-## 2) Arsitektur Normal Mode (Direct Wallet Execution)
-
+## 2) Normal Mode Flow (Direct Wallet Execution)
 ```mermaid
 sequenceDiagram
     autonumber
     participant User
     participant FE as Frontend
     participant BE as Backend
-    participant W as Wallet User
-    participant SC as Target Contract
+    participant W as Wallet
+    participant T as Target Contract
     participant IDX as Indexer/Points
-    participant NFT as DiscountSoulbound
-    participant AIEX as AIExecutor
 
-    User->>FE: Pilih action (swap/bridge/stake/limit)
-    FE->>BE: minta quote + precheck
-    BE->>NFT: cek status discount NFT
-    BE-->>FE: calldata + fee + estimasi points
-    FE->>W: minta signature user
-    W->>SC: invoke direct (normal mode)
-    SC-->>FE: tx hash
-    IDX->>BE: index tx + hitung points
-    BE-->>FE: update points / status
-
-    opt Command AI level 2/3
-        FE->>AIEX: submit_action
-        AIEX->>AIEX: charge CAREL (L2=1, L3=2)
-    end
+    User->>FE: Choose action (swap/bridge/stake/limit)
+    FE->>BE: Request quote and pre-check
+    BE-->>FE: Quote + route + risk checks
+    FE->>W: Request signature
+    W->>T: Direct execute_* transaction
+    T-->>FE: tx_hash
+    IDX->>BE: Index tx and update points/status
+    BE-->>FE: Updated status
 ```
 
-Normal mode ringkas:
-- Sender transaksi action utama adalah wallet user.
-- Tidak ada `submit_private_action`.
-- Cocok untuk flow paling sederhana dan cepat.
+Normal mode properties:
+- Final sender is user wallet.
+- No private note submit/execute path.
 
-## 3) Arsitektur Hide Mode (Relayer + ZK Binding)
-
+## 3) Hide Mode V3 Flow (Default Runtime Path)
 ```mermaid
 sequenceDiagram
     autonumber
     participant User
     participant FE as Frontend
     participant BE as Backend
-    participant P as Prover (Garaga / mock-dev)
+    participant P as Garaga Payload Generator
     participant R as Relayer
-    participant SP as ShieldedPoolV2
+    participant E as ShieldedPoolV3
     participant T as Target Contract
 
-    User->>FE: pilih hide mode (swap/stake/limit)
-    FE->>BE: request privacy payload
-    BE->>P: generate proof payload
-    P-->>BE: nullifier + commitment + proof + public_inputs
-    BE-->>FE: payload siap
-    FE->>BE: execute hide action
-    BE->>R: invoke relayer batch
-    R->>SP: submit_private_action(...)
-    R->>SP: execute_private_*(...)
-    SP->>T: call target action
-    T-->>SP: hasil action
-    SP-->>BE: tx hash final
-    BE-->>FE: privacy tx hash
+    User->>FE: Select hide mode (swap/stake/limit)
+    FE->>BE: Prepare privacy payload
+    BE->>P: Generate payload (note_version=v3)
+    P-->>BE: root + nullifier + proof + public_inputs
+    BE-->>FE: Prepared payload
+
+    FE->>BE: Execute action (hide_balance=true)
+    BE->>R: Submit Starknet call batch
+    R->>E: set_asset_rule(...)
+    R->>E: deposit_fixed_for(...)
+    R->>E: submit_private_{swap|limit|stake}(root, nullifier, proof)
+    R->>E: execute_private_*_with_payout(...)
+    E->>T: Call target action contract
+    T-->>E: Action result
+    E-->>BE: privacy tx_hash
+    BE-->>FE: Execution result
 ```
 
-Hide mode ringkas:
-- Sender transaksi private execute adalah relayer.
-- Nullifier + commitment mencegah replay/double-spend.
-- Wallet user bisa tetap muncul di tx setup/approval terpisah jika flow memerlukannya.
-- Bridge hide level 3 masih terbatas by default pada env backend saat ini.
+Hide mode V3 properties:
+- Final sender is relayer account.
+- V3 path binds action to nullifier/root/proof context.
+- `v2` contract remains for redemption-only migration window.
 
-## AI, NFT, Points, Tokenomics (Current Code State)
+## 4) Optional Intermediary Relay Flow
+Used when `relay_private_execution` endpoint is invoked with signed user payload.
 
-### AI Level
-| Level | Fungsi utama | Biaya CAREL |
+```mermaid
+sequenceDiagram
+    autonumber
+    participant FE as Frontend
+    participant BE as Backend
+    participant R as Relayer
+    participant I as PrivacyIntermediary
+    participant E as Executor
+
+    FE->>BE: relay_private_execution request
+    BE->>R: submit call to intermediary.execute(...)
+    R->>I: execute(user, token, amount, signature, params, proof, public_inputs, action_calldata)
+    I->>E: call submit_selector(...)
+    I->>E: call execute_selector(...)
+```
+
+Notes:
+- This is an optional relay path, not the only hide-mode path.
+- Runtime verification logic supports both intermediary and direct invoke patterns.
+
+## 5) Active vs Optional Contract Scope
+| Status | Contracts | Notes |
 | --- | --- | --- |
-| 1 | Read-only assistant | 0 |
-| 2 | Eksekusi on-chain standar | 1 CAREL/action |
-| 3 | Multi-step/private scope lebih lanjut | 2 CAREL/action |
+| Active runtime core | `SwapAggregator`, `BridgeAggregator`, `LimitOrderBook`, `Staking*`, `ShieldedPoolV3`, `AIExecutor`, `DiscountSoulbound`, `PointStorage`, `SnapshotDistributor` | Used by default runtime flows. |
+| Active but path-specific | `PrivacyIntermediary`, `ZkPrivacyRouter`, `PrivacyRouter` | Used by specific privacy flows/endpoints, not every action path. |
+| Deployed optional | `DarkPool`, `PrivatePayments`, `AnonymousCredentials`, `PrivateBTCSwap` | Not default frontend path in current MVP runtime. |
+| Legacy compatibility | `ShieldedPoolV2`, `PrivateActionExecutor` | Retained for migration/backward compatibility. |
 
-Catatan:
-- Bonus points AI di calculator backend: level 2 `+20%`, level 3 `+40%`.
-- Bridge level 3 default dibatasi kecuali `AI_LEVEL3_BRIDGE_ENABLED=true`.
-
-### NFT Discount
-| Tier | Discount |
-| --- | --- |
-| Bronze | 5% |
-| Silver | 10% |
-| Gold | 25% |
-| Platinum | 35% |
-| Onyx | 50% |
-
-### CAREL Stake Multiplier (points)
-| CAREL staked | Multiplier |
-| --- | --- |
-| `<100` | 1x |
-| `100 - 999` | 2x |
-| `1,000 - 9,999` | 3x |
-| `>=10,000` | 5x |
-
-### Tokenomics Ringkas
-- Total supply: `1,000,000,000 CAREL`.
-- Distribusi: Ecosystem 40%, Team 15%, Investor 15%, Treasury 10%, Listing 10%, Marketing 7%, Early Access 3%.
-- Burn/fee terkait operasi:
-  - AIExecutor burn saat submit action (level 2/3 pricing).
-  - Claim rewards memakai fee split 5% (2.5% management + 2.5% dev) sebelum net claim user.
-
-## Contoh Link Verifikasi Transaksi (Data Demo Saat Ini)
-- Normal Swap: https://sepolia.voyager.online/tx/0x22a53b1af0f7d62e19569a99b38d67e9165faad2804ca50a1b0a53f289bab98
+## 6) Historical Proof Links (Context)
+These hide tx links are historical MVP proof links from the earlier phase before V3 baseline finalization:
 - Hide Swap: https://sepolia.voyager.online/tx/0x71b6c99287c78b082d105dc7169faa56b419a3e2568b3ea9a70ef1ff653a2d2
-- Normal Stake: https://sepolia.voyager.online/tx/0x3ffda88b060ad41b752e8410b13b567c2cca3aa1e32b29f60cf75d9f8b42d60
 - Hide Stake: https://sepolia.voyager.online/tx/0x5fcac3b4578ebe8cf32dde9b0c6ab2390f1f1aa6bea731c3f779575abbdd4cf
-- Normal Limit: https://sepolia.voyager.online/tx/0x737c40659dc5c7872ab1a89222d879bca68163b890a61f09b1875d52e4747a6
 - Hide Limit: https://sepolia.voyager.online/tx/0x523c9721e57f69fddff4ed3be3935cce3b5782ca2c3b454df565c0be6b22ba3
-- BTC bridge tx: https://mempool.space/testnet4/tx/d26a8f5d0213b4448722cde81e1f47e68b8efbd00c56ce4802e39c9b0898db4c
-- Garden order: https://testnet-explorer.garden.finance/order/237be68816b9144b9d3533ca3ec8c4eb1e7c00b1649e9ec216d89469fd014e70
-- ETH bridge tx: https://sepolia.etherscan.io/tx/0xab25b9261dc9f703e44cb89a34831ff03024b8fe89e32cce4a7e58b5d6dcdef3
 
-## Referensi Internal Repo
+Keep these links as historical evidence, not as a claim that runtime baseline is still V2.
+
+## 7) Code References
 - `backend-rust/src/api/swap.rs`
 - `backend-rust/src/api/stake.rs`
 - `backend-rust/src/api/limit_order.rs`
+- `backend-rust/src/api/privacy.rs`
+- `backend-rust/src/api/onchain_privacy.rs`
 - `backend-rust/src/api/bridge.rs`
-- `backend-rust/src/api/ai.rs`
 - `backend-rust/src/services/point_calculator.rs`
-- `backend-rust/src/constants.rs`
-- `backend-rust/src/tokenomics.rs`
-- `smartcontract/src/ai/ai_executor.cairo`
-- `smartcontract/private_executor_lite/src/shielded_pool_v2.cairo`
+- `smartcontract/private_executor_lite/src/shielded_pool_v3.cairo`
+- `smartcontract/private_executor_lite/src/shielded_pool_v2.cairo` (legacy)
+- `smartcontract/src/privacy_intermediary.cairo`
