@@ -3734,10 +3734,14 @@ export function TradingInterface() {
         }
       }
 
+      const approvalAmountLow = U256_MAX_LOW_HEX
+      const approvalAmountHigh = U256_MAX_HIGH_HEX
+      const approvalTargetAmount =
+        BigInt(approvalAmountLow) + (BigInt(approvalAmountHigh) << BigInt(128))
       const approvalCall = {
         contractAddress: tokenAddress,
         entrypoint: "approve",
-        calldata: [executorAddress, amountLow, amountHigh],
+        calldata: [executorAddress, approvalAmountLow, approvalAmountHigh],
       }
       const depositCall = {
         contractAddress: executorAddress,
@@ -3756,7 +3760,7 @@ export function TradingInterface() {
         title: "Wallet signature required",
         message: hasEnoughAllowance
           ? `Confirm hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`
-          : `Confirm approve + hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`,
+          : `Confirm one-time approve + hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`,
       })
       let depositTxHash = ""
       try {
@@ -3767,7 +3771,7 @@ export function TradingInterface() {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "")
         const allowanceFailure = /insufficient allowance/i.test(message)
-        if (!allowanceFailure || hasEnoughAllowance) {
+        if (!allowanceFailure) {
           throw error
         }
 
@@ -3775,9 +3779,22 @@ export function TradingInterface() {
           type: "warning",
           title: "Retry deposit with separate approval",
           message:
-            "Wallet multicall hit allowance issue. Approve will be sent first, then hide note deposit.",
+            "Wallet multicall hit allowance issue. One-time approve will be sent first, then hide note deposit.",
         })
 
+        let allowanceBeforeApprove: bigint | null = null
+        if (ownerAddress) {
+          try {
+            allowanceBeforeApprove = await readStarknetErc20AllowanceFromWallet(
+              tokenAddress,
+              ownerAddress,
+              executorAddress,
+              starknetProviderHint
+            )
+          } catch {
+            allowanceBeforeApprove = null
+          }
+        }
         await invokeStarknetCallsFromWallet([approvalCall], starknetProviderHint)
 
         // Wait until approve is visible on-chain before sending deposit.
@@ -3791,7 +3808,13 @@ export function TradingInterface() {
               executorAddress,
               starknetProviderHint
             )
-            if (currentAllowance !== null && currentAllowance >= requiredAmount) {
+            const meetsRequired = currentAllowance !== null && currentAllowance >= requiredAmount
+            const meetsApprovalTarget =
+              currentAllowance !== null && currentAllowance >= approvalTargetAmount
+            const increasedFromPrevious =
+              allowanceBeforeApprove === null ||
+              (currentAllowance !== null && currentAllowance > allowanceBeforeApprove)
+            if ((meetsRequired && increasedFromPrevious) || meetsApprovalTarget) {
               allowanceReady = true
               break
             }

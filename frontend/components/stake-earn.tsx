@@ -1195,21 +1195,17 @@ export function StakeEarn() {
         )
       }
 
-      const [amountLow, amountHigh] = decimalToU256Parts(
-        fixedAmountText,
-        POOL_DECIMALS[tokenSymbol] ?? 18
-      )
       notifications.addNotification({
         type: "info",
         title: "Wallet signature required",
-        message: `Confirm approve + hide note deposit (${fixedAmountText} ${tokenSymbol}) in one transaction.`,
+        message: `Confirm one-time approve + hide note deposit (${fixedAmountText} ${tokenSymbol}) in one transaction.`,
       })
       const txHash = await invokeStarknetCallsFromWallet(
         [
           {
             contractAddress: tokenAddress,
             entrypoint: "approve",
-            calldata: [executorAddress, amountLow, amountHigh],
+            calldata: [executorAddress, U256_MAX_LOW_HEX, U256_MAX_HIGH_HEX],
           },
           {
             contractAddress: executorAddress,
