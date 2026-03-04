@@ -487,6 +487,10 @@ export function StakeEarn() {
   const [nowMs, setNowMs] = React.useState(() => Date.now())
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
+  const manuallySelectedHideNoteRef = React.useRef<{
+    noteCommitment: string
+    nullifier?: string
+  } | null>(null)
   const [pools, setPools] = React.useState<StakingPool[]>([])
   const [positions, setPositions] = React.useState<StakingPosition[]>([])
   const [activeNftDiscount, setActiveNftDiscount] = React.useState<NFTItem | null>(null)
@@ -566,6 +570,43 @@ export function StakeEarn() {
   const refreshPendingHideNotes = React.useCallback(() => {
     setPendingHideNotes(loadPendingHideNotes())
   }, [])
+
+  const setManuallySelectedHideNote = React.useCallback(
+    (noteCommitment?: string, nullifier?: string) => {
+      const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+      const normalizedNullifier = (nullifier || "").trim().toLowerCase()
+      if (!normalizedCommitment && !normalizedNullifier) {
+        manuallySelectedHideNoteRef.current = null
+        return
+      }
+      manuallySelectedHideNoteRef.current = {
+        noteCommitment: normalizedCommitment,
+        nullifier: normalizedNullifier || undefined,
+      }
+    },
+    []
+  )
+
+  const clearManuallySelectedHideNote = React.useCallback(() => {
+    manuallySelectedHideNoteRef.current = null
+  }, [])
+
+  const isManuallySelectedHideNote = React.useCallback(
+    (noteCommitment?: string, nullifier?: string) => {
+      const selected = manuallySelectedHideNoteRef.current
+      if (!selected) return false
+      const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+      const normalizedNullifier = (nullifier || "").trim().toLowerCase()
+      const commitmentMatch =
+        !!selected.noteCommitment &&
+        !!normalizedCommitment &&
+        selected.noteCommitment === normalizedCommitment
+      const nullifierMatch =
+        !!selected.nullifier && !!normalizedNullifier && selected.nullifier === normalizedNullifier
+      return commitmentMatch || nullifierMatch
+    },
+    []
+  )
 
   const resolveHideBalancePrivacyPayload = React.useCallback(async (txContext?: {
     flow?: string
@@ -948,6 +989,7 @@ export function StakeEarn() {
       persistTradePrivacyPayload(payload)
       setHasTradePrivacyPayload(true)
       setBalanceHidden(true)
+      setManuallySelectedHideNote(note.note_commitment, note.nullifier)
       if (tokenSymbol) {
         const pool = pools.find((item) => item.symbol.toUpperCase() === tokenSymbol)
         if (pool) {
@@ -966,7 +1008,7 @@ export function StakeEarn() {
         message: "Active note switched to selected pending note. Continue with Stake.",
       })
     },
-    [notifications, pools]
+    [notifications, pools, setManuallySelectedHideNote]
   )
 
   const handleWithdrawPendingHideNote = React.useCallback(
@@ -1001,6 +1043,9 @@ export function StakeEarn() {
         )
         removePendingHideNote(noteCommitment, note.nullifier)
         setPendingHideNotes(loadPendingHideNotes())
+        if (isManuallySelectedHideNote(noteCommitment, note.nullifier)) {
+          clearManuallySelectedHideNote()
+        }
         notifications.addNotification({
           type: "success",
           title: "Hide note withdrawn",
@@ -1017,7 +1062,7 @@ export function StakeEarn() {
         })
       }
     },
-    [notifications, starknetProviderHint]
+    [clearManuallySelectedHideNote, isManuallySelectedHideNote, notifications, starknetProviderHint]
   )
 
   React.useEffect(() => {
@@ -1584,6 +1629,9 @@ export function StakeEarn() {
           ).trim()
           removePendingHideNote(spentCommitment, spentNullifier)
           setPendingHideNotes(loadPendingHideNotes())
+          if (isManuallySelectedHideNote(spentCommitment, spentNullifier)) {
+            clearManuallySelectedHideNote()
+          }
           clearTradePrivacyPayload()
           setHasTradePrivacyPayload(false)
           throw new Error(
@@ -1596,6 +1644,19 @@ export function StakeEarn() {
           (payloadForBackend || resolvedPrivacyPayload)
         ) {
           const payload = payloadForBackend || resolvedPrivacyPayload
+          const selectedCommitment = (
+            payload?.note_commitment ||
+            payload?.commitment ||
+            ""
+          )
+            .trim()
+            .toLowerCase()
+          const selectedNullifier = (payload?.nullifier || "").trim().toLowerCase()
+          if (isManuallySelectedHideNote(selectedCommitment, selectedNullifier)) {
+            throw new Error(
+              "Selected hide note is not recognized by the active executor/relayer. Auto-deposit is disabled for manually selected notes. Please choose another pending note or withdraw this note."
+            )
+          }
           let spendableAtUnix: number | undefined
           try {
             spendableAtUnix = await ensureHideV3NoteDeposited({
@@ -1660,6 +1721,9 @@ export function StakeEarn() {
         const spentNullifier = (payloadForBackend?.nullifier || "").trim()
         removePendingHideNote(spentCommitment, spentNullifier)
         setPendingHideNotes(loadPendingHideNotes())
+        if (isManuallySelectedHideNote(spentCommitment, spentNullifier)) {
+          clearManuallySelectedHideNote()
+        }
       }
       await Promise.allSettled([wallet.refreshPortfolio(), wallet.refreshOnchainBalances()])
       await refreshPositions()

@@ -528,6 +528,10 @@ export function LimitOrder() {
   const [nowMs, setNowMs] = React.useState(() => Date.now())
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
+  const manuallySelectedHideNoteRef = React.useRef<{
+    noteCommitment: string
+    nullifier?: string
+  } | null>(null)
   const [chartCandles, setChartCandles] = React.useState<ChartCandle[]>([])
   const [activeNftDiscount, setActiveNftDiscount] = React.useState<NFTItem | null>(null)
   const [stakePointsMultiplier, setStakePointsMultiplier] = React.useState(1)
@@ -549,6 +553,43 @@ export function LimitOrder() {
   const refreshPendingHideNotes = React.useCallback(() => {
     setPendingHideNotes(loadPendingHideNotes())
   }, [])
+
+  const setManuallySelectedHideNote = React.useCallback(
+    (noteCommitment?: string, nullifier?: string) => {
+      const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+      const normalizedNullifier = (nullifier || "").trim().toLowerCase()
+      if (!normalizedCommitment && !normalizedNullifier) {
+        manuallySelectedHideNoteRef.current = null
+        return
+      }
+      manuallySelectedHideNoteRef.current = {
+        noteCommitment: normalizedCommitment,
+        nullifier: normalizedNullifier || undefined,
+      }
+    },
+    []
+  )
+
+  const clearManuallySelectedHideNote = React.useCallback(() => {
+    manuallySelectedHideNoteRef.current = null
+  }, [])
+
+  const isManuallySelectedHideNote = React.useCallback(
+    (noteCommitment?: string, nullifier?: string) => {
+      const selected = manuallySelectedHideNoteRef.current
+      if (!selected) return false
+      const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
+      const normalizedNullifier = (nullifier || "").trim().toLowerCase()
+      const commitmentMatch =
+        !!selected.noteCommitment &&
+        !!normalizedCommitment &&
+        selected.noteCommitment === normalizedCommitment
+      const nullifierMatch =
+        !!selected.nullifier && !!normalizedNullifier && selected.nullifier === normalizedNullifier
+      return commitmentMatch || nullifierMatch
+    },
+    []
+  )
 
   const resolveHideBalancePrivacyPayload = React.useCallback(async (): Promise<PrivacyVerificationPayload | undefined> => {
     if (autoPrivacyPayloadPromiseRef.current) return autoPrivacyPayloadPromiseRef.current
@@ -1066,6 +1107,7 @@ export function LimitOrder() {
       persistTradePrivacyPayload(payload)
       setHasTradePrivacyPayload(true)
       setBalanceHidden(true)
+      setManuallySelectedHideNote(note.note_commitment, note.nullifier)
       if (note.amount?.trim()) {
         setAmount(note.amount.trim())
       }
@@ -1098,7 +1140,7 @@ export function LimitOrder() {
         message: "Active note switched to selected pending note. Continue with Create Order.",
       })
     },
-    [notifications, orderType, tokens]
+    [notifications, orderType, setManuallySelectedHideNote, tokens]
   )
 
   const handleWithdrawPendingHideNote = React.useCallback(
@@ -1133,6 +1175,9 @@ export function LimitOrder() {
         )
         removePendingHideNote(noteCommitment, note.nullifier)
         setPendingHideNotes(loadPendingHideNotes())
+        if (isManuallySelectedHideNote(noteCommitment, note.nullifier)) {
+          clearManuallySelectedHideNote()
+        }
         notifications.addNotification({
           type: "success",
           title: "Hide note withdrawn",
@@ -1149,7 +1194,7 @@ export function LimitOrder() {
         })
       }
     },
-    [notifications, starknetProviderHint]
+    [clearManuallySelectedHideNote, isManuallySelectedHideNote, notifications, starknetProviderHint]
   )
 
   React.useEffect(() => {
@@ -1553,6 +1598,9 @@ export function LimitOrder() {
           const spentNullifier = (payloadForBackend?.nullifier || "").trim()
           removePendingHideNote(spentCommitment, spentNullifier)
           setPendingHideNotes(loadPendingHideNotes())
+          if (isManuallySelectedHideNote(spentCommitment, spentNullifier)) {
+            clearManuallySelectedHideNote()
+          }
           clearTradePrivacyPayload()
           setHasTradePrivacyPayload(false)
           throw new Error(
@@ -1564,6 +1612,19 @@ export function LimitOrder() {
           /note belum terdaftar/i.test(message) &&
           payloadForBackend
         ) {
+          const selectedCommitment = (
+            payloadForBackend.note_commitment ||
+            payloadForBackend.commitment ||
+            ""
+          )
+            .trim()
+            .toLowerCase()
+          const selectedNullifier = (payloadForBackend.nullifier || "").trim().toLowerCase()
+          if (isManuallySelectedHideNote(selectedCommitment, selectedNullifier)) {
+            throw new Error(
+              "Selected hide note is not recognized by the active executor/relayer. Auto-deposit is disabled for manually selected notes. Please choose another pending note or withdraw this note."
+            )
+          }
           const cachedPayload = loadTradePrivacyPayload()
           const existingSpendableAtUnix = Math.max(
             Number(payloadForBackend.spendable_at_unix || 0),
@@ -1621,6 +1682,9 @@ export function LimitOrder() {
         const spentNullifier = (payloadForBackend?.nullifier || "").trim()
         removePendingHideNote(spentCommitment, spentNullifier)
         setPendingHideNotes(loadPendingHideNotes())
+        if (isManuallySelectedHideNote(spentCommitment, spentNullifier)) {
+          clearManuallySelectedHideNote()
+        }
         clearTradePrivacyPayload()
         setHasTradePrivacyPayload(false)
       }
