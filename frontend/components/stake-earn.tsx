@@ -1000,6 +1000,12 @@ export function StakeEarn() {
       }),
     [pendingHideNotes]
   )
+  const hidePayloadStatusLabel = hasTradePrivacyPayload
+    ? "payload ready"
+    : isAutoPrivacyProvisioning
+    ? "preparing payload"
+    : "payload auto on submit"
+  const hideBalanceCompactSummary = `Tier $${selectedHideTier.minUsdt} (+${selectedHideTier.bonusPercent}%) • ${hidePayloadStatusLabel} • ${pendingHideNotesActive.length} pending notes • Click for details`
 
   const handleUsePendingHideNote = async (note: PendingHideNoteRecord) => {
     const spendableAt = Number(note.spendable_at_unix || 0)
@@ -2294,27 +2300,13 @@ export function StakeEarn() {
                   </button>
                 </div>
                 {balanceHidden && (
-                  <div className="mt-2 space-y-2">
-                    <p className="text-[11px] text-muted-foreground">
-                      Tier ${selectedHideTier.minUsdt} (+{selectedHideTier.bonusPercent}%) •{" "}
-                      {hasTradePrivacyPayload
-                        ? "Garaga payload ready."
-                        : isAutoPrivacyProvisioning
-                        ? "Preparing Garaga payload..."
-                        : "Garaga payload will be auto-prepared on submit."}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      Pending Hide Notes: {pendingHideNotesActive.length}
-                    </p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-8 w-full text-xs"
-                      onClick={() => setHideBalancePopupOpen(true)}
-                    >
-                      Open Hide Balance Popup
-                    </Button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setHideBalancePopupOpen(true)}
+                    className="mt-2 w-full rounded-lg border border-border bg-surface/30 px-3 py-2 text-left transition-colors hover:border-primary/50"
+                  >
+                    <p className="text-[11px] text-muted-foreground">{hideBalanceCompactSummary}</p>
+                  </button>
                 )}
               </div>
             </div>
@@ -2645,27 +2637,13 @@ export function StakeEarn() {
                     </div>
 
                     {balanceHidden && (
-                      <div className="space-y-2 rounded-lg border border-border bg-surface/40 p-3">
-                        <p className="text-[11px] text-muted-foreground">
-                          Tier ${selectedHideTier.minUsdt} (+{selectedHideTier.bonusPercent}%) •{" "}
-                          {hasTradePrivacyPayload
-                            ? "Garaga payload ready."
-                            : isAutoPrivacyProvisioning
-                            ? "Preparing Garaga payload..."
-                            : "Garaga payload will be auto-prepared on submit."}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          Pending Hide Notes: {pendingHideNotesActive.length}
-                        </p>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="h-8 w-full text-xs"
-                          onClick={() => setHideBalancePopupOpen(true)}
-                        >
-                          Open Hide Balance Popup
-                        </Button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setHideBalancePopupOpen(true)}
+                        className="w-full rounded-lg border border-border bg-surface/40 px-3 py-2 text-left transition-colors hover:border-primary/50"
+                      >
+                        <p className="text-[11px] text-muted-foreground">{hideBalanceCompactSummary}</p>
+                      </button>
                     )}
 
                     {Number.parseFloat(stakeAmount) > 0 && (
