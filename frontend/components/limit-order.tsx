@@ -96,6 +96,17 @@ type UiOrder = {
   createdAt: string
 }
 
+type ConfirmOrderOptions = {
+  manualExecuteFromPendingNote?: boolean
+  overridePayload?: PrivacyVerificationPayload
+  overrideOrderType?: "buy" | "sell"
+  overrideFromToken?: string
+  overrideToToken?: string
+  overrideAmount?: string
+  overridePrice?: string
+  overrideExpiry?: string
+}
+
 type ChartCandle = {
   timestamp: number
   open: number
@@ -526,6 +537,7 @@ export function LimitOrder() {
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
   const [pendingHideNotes, setPendingHideNotes] = React.useState<PendingHideNoteRecord[]>([])
   const [nowMs, setNowMs] = React.useState(() => Date.now())
+  const [pendingNoteActionCommitment, setPendingNoteActionCommitment] = React.useState<string | null>(null)
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
   const manuallySelectedHideNoteRef = React.useRef<{
@@ -1087,61 +1099,116 @@ export function LimitOrder() {
     [pendingHideNotes]
   )
 
-  const handleUsePendingHideNote = React.useCallback(
-    (note: PendingHideNoteRecord) => {
-      const tokenSymbol = (note.token_symbol || "").trim().toUpperCase()
-      const targetTokenSymbol = (note.target_token_symbol || "").trim().toUpperCase()
-      const payload: PrivacyVerificationPayload = {
-        verifier: (note.verifier || "garaga").trim() || "garaga",
-        note_version: "v3",
-        executor_address: note.executor_address?.trim() || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
-        root: note.root?.trim() || undefined,
-        nullifier: (note.nullifier || "").trim(),
-        commitment: note.note_commitment,
-        note_commitment: note.note_commitment,
-        denom_id: note.denom_id?.trim() || undefined,
-        spendable_at_unix: note.spendable_at_unix,
-        proof: normalizeHexArray(note.proof),
-        public_inputs: normalizeHexArray(note.public_inputs),
-      }
-      persistTradePrivacyPayload(payload)
-      setHasTradePrivacyPayload(true)
-      setBalanceHidden(true)
-      setManuallySelectedHideNote(note.note_commitment, note.nullifier)
-      if (note.amount?.trim()) {
-        setAmount(note.amount.trim())
-      }
-      if (note.denom_id?.trim()) {
-        setHideUsdtTierMin(inferUsdtTierFromDenomId(note.denom_id.trim()))
-      }
-      if (tokenSymbol) {
-        const fromTokenItem = tokens.find((item) => item.symbol.toUpperCase() === tokenSymbol)
-        if (fromTokenItem) {
-          if (orderType === "buy") {
-            setPayToken(fromTokenItem)
-          } else {
-            setSelectedToken(fromTokenItem)
-          }
-        }
-      }
-      if (targetTokenSymbol) {
-        const targetTokenItem = tokens.find((item) => item.symbol.toUpperCase() === targetTokenSymbol)
-        if (targetTokenItem) {
-          if (orderType === "buy") {
-            setSelectedToken(targetTokenItem)
-          } else {
-            setReceiveToken(targetTokenItem)
-          }
-        }
-      }
+  const handleUsePendingHideNote = async (note: PendingHideNoteRecord) => {
+    const spendableAt = Number(note.spendable_at_unix || 0)
+    const remainingMs = spendableAt > 0 ? Math.max(0, spendableAt * 1000 - Date.now()) : 0
+    if (remainingMs > 0) {
       notifications.addNotification({
-        type: "info",
-        title: "Hide note selected",
-        message: "Active note switched to selected pending note. Continue with Create Order.",
+        type: "warning",
+        title: "Mixing window active",
+        message: `Hide note is still mixing. Ready in ${formatRemainingDuration(remainingMs)}.`,
       })
-    },
-    [notifications, orderType, setManuallySelectedHideNote, tokens]
-  )
+      return
+    }
+
+    const fromSymbol = (note.token_symbol || "").trim().toUpperCase()
+    const toSymbol = (note.target_token_symbol || "").trim().toUpperCase()
+    if (!fromSymbol || !toSymbol) {
+      notifications.addNotification({
+        type: "error",
+        title: "Hide note invalid",
+        message: "Selected note is missing token route metadata.",
+      })
+      return
+    }
+    const fromTokenItem = tokens.find((item) => item.symbol.toUpperCase() === fromSymbol)
+    const toTokenItem = tokens.find((item) => item.symbol.toUpperCase() === toSymbol)
+    if (!fromTokenItem || !toTokenItem) {
+      notifications.addNotification({
+        type: "error",
+        title: "Unsupported token route",
+        message: `Cannot execute pending note route ${fromSymbol} -> ${toSymbol}.`,
+      })
+      return
+    }
+
+    const routeOrderType: "buy" | "sell" = stableSymbols.has(fromSymbol) ? "buy" : "sell"
+    const payload: PrivacyVerificationPayload = {
+      verifier: (note.verifier || "garaga").trim() || "garaga",
+      note_version: "v3",
+      executor_address: note.executor_address?.trim() || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
+      root: note.root?.trim() || undefined,
+      nullifier: (note.nullifier || "").trim(),
+      commitment: note.note_commitment,
+      note_commitment: note.note_commitment,
+      denom_id: note.denom_id?.trim() || undefined,
+      spendable_at_unix: note.spendable_at_unix,
+      proof: normalizeHexArray(note.proof),
+      public_inputs: normalizeHexArray(note.public_inputs),
+    }
+    const noteAmountText = (note.amount || "").trim() || amount
+    if (!noteAmountText || Number.parseFloat(noteAmountText) <= 0) {
+      notifications.addNotification({
+        type: "error",
+        title: "Invalid note amount",
+        message: "Selected note amount is invalid. Deposit a new note and retry.",
+      })
+      return
+    }
+
+    const pricedTokenSymbol = routeOrderType === "buy" ? toSymbol : fromSymbol
+    const pricedToken = tokens.find((item) => item.symbol.toUpperCase() === pricedTokenSymbol)
+    const fallbackPrice = Number.isFinite(pricedToken?.price || 0) ? Number(pricedToken?.price || 0) : 0
+    const executionPriceText =
+      Number.parseFloat(price) > 0 ? price : fallbackPrice > 0 ? String(fallbackPrice) : ""
+    if (Number.parseFloat(executionPriceText) <= 0) {
+      notifications.addNotification({
+        type: "error",
+        title: "Price is required",
+        message: "Set target price first before running Private Order now.",
+      })
+      return
+    }
+
+    persistTradePrivacyPayload(payload)
+    setHasTradePrivacyPayload(true)
+    setBalanceHidden(true)
+    setManuallySelectedHideNote(note.note_commitment, note.nullifier)
+    setOrderType(routeOrderType)
+    if (routeOrderType === "buy") {
+      setPayToken(fromTokenItem)
+      setSelectedToken(toTokenItem)
+    } else {
+      setSelectedToken(fromTokenItem)
+      setReceiveToken(toTokenItem)
+    }
+    setAmount(noteAmountText)
+    if (note.denom_id?.trim()) {
+      setHideUsdtTierMin(inferUsdtTierFromDenomId(note.denom_id.trim()))
+    }
+
+    notifications.addNotification({
+      type: "info",
+      title: "Submitting private order",
+      message: `Running Private Order now for ${noteAmountText} ${fromSymbol} -> ${toSymbol}.`,
+    })
+
+    setPendingNoteActionCommitment(note.note_commitment)
+    try {
+      await confirmOrder({
+        manualExecuteFromPendingNote: true,
+        overridePayload: payload,
+        overrideOrderType: routeOrderType,
+        overrideFromToken: fromSymbol,
+        overrideToToken: toSymbol,
+        overrideAmount: noteAmountText,
+        overridePrice: executionPriceText,
+        overrideExpiry: expiry,
+      })
+    } finally {
+      setPendingNoteActionCommitment(null)
+    }
+  }
 
   const handleWithdrawPendingHideNote = React.useCallback(
     async (note: PendingHideNoteRecord) => {
@@ -1443,9 +1510,39 @@ export function LimitOrder() {
    * @returns Result consumed by caller flow, UI state updates, or async chaining.
    * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
    */
-  const confirmOrder = async () => {
+  const confirmOrder = async (options?: ConfirmOrderOptions) => {
     if (isSubmitting) return
-    if (isBtcBuyComingSoon) {
+    const effectiveOrderType = options?.overrideOrderType || orderType
+    const effectiveAmount = (options?.overrideAmount || amount || "").trim()
+    const effectivePrice = (options?.overridePrice || price || "").trim()
+    const effectiveExpiry = (options?.overrideExpiry || expiry || "").trim() || expiry
+    const effectiveFromToken = (
+      options?.overrideFromToken ||
+      (effectiveOrderType === "buy" ? payToken.symbol : selectedToken.symbol)
+    ).toUpperCase()
+    const effectiveToToken = (
+      options?.overrideToToken ||
+      (effectiveOrderType === "buy" ? selectedToken.symbol : receiveToken.symbol)
+    ).toUpperCase()
+    const parsedAmount = Number.parseFloat(effectiveAmount)
+    const parsedPrice = Number.parseFloat(effectivePrice)
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      notifications.addNotification({
+        type: "error",
+        title: "Price is required",
+        message: "Set a valid target price before creating the order.",
+      })
+      return
+    }
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      notifications.addNotification({
+        type: "error",
+        title: "Amount is required",
+        message: "Set a valid amount before creating the order.",
+      })
+      return
+    }
+    if (effectiveOrderType === "buy" && effectiveToToken === "BTC") {
       notifications.addNotification({
         type: "info",
         title: "Coming Soon",
@@ -1457,13 +1554,21 @@ export function LimitOrder() {
     let orderCreated = false
     try {
       const effectiveHideBalance = balanceHidden
-      const fromToken = orderType === "buy" ? payToken.symbol : selectedToken.symbol
-      const toToken = orderType === "buy" ? selectedToken.symbol : receiveToken.symbol
-      if (fromToken.toUpperCase() === toToken.toUpperCase()) {
+      if (effectiveFromToken === effectiveToToken) {
         throw new Error("Source and destination tokens cannot be the same.")
       }
-      const fromTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[fromToken.toUpperCase()]
-      const toTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[toToken.toUpperCase()]
+      const available = Number(resolveAvailableBalance(effectiveFromToken))
+      const hasUsableSnapshot = Number.isFinite(available) && available > 0
+      const tolerance = hasUsableSnapshot ? Math.max(available * 1e-6, 1e-8) : 0
+      if (hasUsableSnapshot && parsedAmount > available + tolerance) {
+        throw new Error(
+          `Amount exceeds your ${effectiveFromToken} balance (${available.toLocaleString(undefined, {
+            maximumFractionDigits: 8,
+          })}).`
+        )
+      }
+      const fromTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[effectiveFromToken]
+      const toTokenAddress = STARKNET_TOKEN_ADDRESS_MAP[effectiveToToken]
       if (!fromTokenAddress || !toTokenAddress) {
         throw new Error("Token pair is not supported for Starknet on-chain limit orders.")
       }
@@ -1472,15 +1577,39 @@ export function LimitOrder() {
           "NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS is not set. Configure the limit order contract address in frontend/.env.local."
         )
       }
+      const useRelayerPoolHide = effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED
+      const manualPendingExecution = Boolean(options?.manualExecuteFromPendingNote)
+      const shouldDepositOnly = useRelayerPoolHide && effectiveHideBalance && !manualPendingExecution
+
+      if (shouldDepositOnly) {
+        clearManuallySelectedHideNote()
+        clearTradePrivacyPayload()
+        setHasTradePrivacyPayload(false)
+      }
+
       const clientOrderId = generateClientOrderId()
-      const [amountLow, amountHigh] = decimalToU256Parts(amount, TOKEN_DECIMALS[fromToken.toUpperCase()] || 18)
-      const [priceLow, priceHigh] = decimalToU256Parts(price, 18)
-      const expiryTs = Math.floor(Date.now() / 1000) + expiryToSeconds(expiry)
-      const resolvedPrivacyPayload = effectiveHideBalance
-        ? await resolveHideBalancePrivacyPayload()
-        : undefined
+      const [amountLow, amountHigh] = decimalToU256Parts(
+        effectiveAmount,
+        TOKEN_DECIMALS[effectiveFromToken] || 18
+      )
+      const [priceLow, priceHigh] = decimalToU256Parts(effectivePrice, 18)
+      const expiryTs = Math.floor(Date.now() / 1000) + expiryToSeconds(effectiveExpiry)
+      const resolvedPrivacyPayload =
+        options?.overridePayload ||
+        (effectiveHideBalance ? await resolveHideBalancePrivacyPayload() : undefined)
       if (effectiveHideBalance && !resolvedPrivacyPayload) {
         throw new Error("Garaga payload is not ready for Hide Balance. Check backend auto-proof config.")
+      }
+      let payloadForBackend = resolvedPrivacyPayload
+
+      if (shouldDepositOnly && payloadForBackend) {
+        await ensureHideV3NoteDeposited({
+          payload: payloadForBackend,
+          tokenSymbol: effectiveFromToken,
+          amountText: effectiveAmount,
+          fallbackTierUsdt: selectedHideTier.minUsdt,
+        })
+        throw new Error("HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private order now.")
       }
 
       const createOrderCall = {
@@ -1497,9 +1626,8 @@ export function LimitOrder() {
           toHexFelt(expiryTs),
         ],
       }
-      let payloadForBackend = resolvedPrivacyPayload
+
       let preparedCalls = [createOrderCall]
-      const useRelayerPoolHide = effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED
       if (effectiveHideBalance && resolvedPrivacyPayload && !useRelayerPoolHide) {
         let usedPrivateExecutor = false
         if (HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED) {
@@ -1511,9 +1639,9 @@ export function LimitOrder() {
               action_calldata: createOrderCall.calldata,
               tx_context: {
                 flow: "limit_order",
-                from_token: fromToken,
-                to_token: toToken,
-                amount,
+                from_token: effectiveFromToken,
+                to_token: effectiveToToken,
+                amount: effectiveAmount,
                 from_network: "starknet",
                 to_network: "starknet",
               },
@@ -1555,14 +1683,11 @@ export function LimitOrder() {
           title: "Wallet signature required",
           message: "Confirm create limit order transaction in your Starknet wallet.",
         })
-        onchainTxHash = await invokeStarknetCallsFromWallet(
-          preparedCalls,
-          starknetProviderHint
-        )
+        onchainTxHash = await invokeStarknetCallsFromWallet(preparedCalls, starknetProviderHint)
         notifications.addNotification({
           type: "info",
           title: "Order pending",
-          message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} submitted on-chain.`,
+          message: `Order ${effectiveOrderType === "buy" ? "buy" : "sell"} ${effectiveAmount} ${effectiveFromToken} submitted on-chain.`,
           txHash: onchainTxHash,
           txNetwork: "starknet",
         })
@@ -1576,11 +1701,11 @@ export function LimitOrder() {
       let response: Awaited<ReturnType<typeof createLimitOrder>>
       try {
         response = await createLimitOrder({
-          from_token: fromToken,
-          to_token: toToken,
-          amount,
-          price,
-          expiry,
+          from_token: effectiveFromToken,
+          to_token: effectiveToToken,
+          amount: effectiveAmount,
+          price: effectivePrice,
+          expiry: effectiveExpiry,
           recipient: null,
           client_order_id: clientOrderId,
           onchain_tx_hash: onchainTxHash,
@@ -1607,11 +1732,7 @@ export function LimitOrder() {
             "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retrying with a fresh payload."
           )
         }
-        if (
-          useRelayerPoolHide &&
-          /note belum terdaftar/i.test(message) &&
-          payloadForBackend
-        ) {
+        if (useRelayerPoolHide && /note belum terdaftar/i.test(message) && payloadForBackend) {
           const selectedCommitment = (
             payloadForBackend.note_commitment ||
             payloadForBackend.commitment ||
@@ -1625,37 +1746,7 @@ export function LimitOrder() {
               "Selected hide note is not recognized by the active executor/relayer. Auto-deposit is disabled for manually selected notes. Please choose another pending note or withdraw this note."
             )
           }
-          const cachedPayload = loadTradePrivacyPayload()
-          const existingSpendableAtUnix = Math.max(
-            Number(payloadForBackend.spendable_at_unix || 0),
-            Number(cachedPayload?.spendable_at_unix || 0)
-          )
-          if (existingSpendableAtUnix > 0) {
-            throw new Error("HIDE_NOTE_READY::Hide note is ready. Retry private order now.")
-          }
-          let spendableAtUnix: number | undefined
-          try {
-            spendableAtUnix = await ensureHideV3NoteDeposited({
-              payload: payloadForBackend,
-              tokenSymbol: fromToken,
-              amountText: amount,
-              fallbackTierUsdt: selectedHideTier.minUsdt,
-            })
-          } catch (depositError) {
-            const depositMessage =
-              depositError instanceof Error ? depositError.message : String(depositError || "")
-            throw new Error(
-              `Hide note belum terdaftar dan auto-deposit gagal. Detail: ${depositMessage}`
-            )
-          }
-          if (spendableAtUnix && spendableAtUnix > 0) {
-            throw new Error(
-              "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private order now."
-            )
-          }
-          throw new Error(
-            "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private order now."
-          )
+          throw new Error("Hide Balance V3 note belum terdaftar. Deposit note dulu lalu tunggu mixing window.")
         }
         if (useRelayerPoolHide) {
           throw new Error(
@@ -1691,12 +1782,12 @@ export function LimitOrder() {
 
       const newOrder: UiOrder = {
         id: response.order_id,
-        type: orderType,
-        token: selectedToken.symbol,
-        fromToken,
-        amount,
-        price,
-        expiry,
+        type: effectiveOrderType,
+        token: effectiveOrderType === "buy" ? effectiveToToken : effectiveFromToken,
+        fromToken: effectiveFromToken,
+        amount: effectiveAmount,
+        price: effectivePrice,
+        expiry: effectiveExpiry,
         status: "active",
         createdAt: "Just now",
       }
@@ -1707,7 +1798,7 @@ export function LimitOrder() {
       notifications.addNotification({
         type: "success",
         title: "Order created",
-        message: `Order ${orderType === "buy" ? "buy" : "sell"} ${amount} ${selectedToken.symbol} created successfully`,
+        message: `Order ${effectiveOrderType === "buy" ? "buy" : "sell"} ${effectiveAmount} ${effectiveFromToken} created successfully`,
         txHash: onchainTxHash || response.privacy_tx_hash,
         txNetwork: "starknet",
       })
@@ -1720,6 +1811,7 @@ export function LimitOrder() {
           title: "Mixing window active",
           message: rawMessage.replace("HIDE_NOTE_WAIT::", "").trim(),
         })
+        setShowConfirmDialog(false)
         return
       }
       if (rawMessage.startsWith("HIDE_NOTE_READY::")) {
@@ -1728,6 +1820,7 @@ export function LimitOrder() {
           title: "Hide note deposited",
           message: rawMessage.replace("HIDE_NOTE_READY::", "").trim(),
         })
+        setShowConfirmDialog(false)
         return
       }
       if (rawMessage.startsWith("HIDE_NOTE_SPENT::")) {
@@ -1736,6 +1829,7 @@ export function LimitOrder() {
           title: "Hide note refreshed",
           message: rawMessage.replace("HIDE_NOTE_SPENT::", "").trim(),
         })
+        setShowConfirmDialog(false)
         return
       }
       notifications.addNotification({
@@ -2456,6 +2550,8 @@ export function LimitOrder() {
                               const remainingMs =
                                 spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
                               const isReady = remainingMs <= 0
+                              const isNoteSubmitting =
+                                pendingNoteActionCommitment === note.note_commitment
                               const fromSymbol = (note.token_symbol || "Token").toUpperCase()
                               const toSymbol = (note.target_token_symbol || "Token").toUpperCase()
                               return (
@@ -2471,14 +2567,16 @@ export function LimitOrder() {
                                     <Button
                                       type="button"
                                       className="h-7 flex-1 text-[11px]"
+                                      disabled={!isReady || isSubmitting || isNoteSubmitting}
                                       onClick={() => handleUsePendingHideNote(note)}
                                     >
-                                      Private Order now
+                                      {isNoteSubmitting ? "Processing..." : "Private Order now"}
                                     </Button>
                                     <Button
                                       type="button"
                                       variant="outline"
                                       className="h-7 flex-1 text-[11px]"
+                                      disabled={isSubmitting || isNoteSubmitting}
                                       onClick={() => void handleWithdrawPendingHideNote(note)}
                                     >
                                       Withdraw
@@ -2755,6 +2853,8 @@ export function LimitOrder() {
                               const remainingMs =
                                 spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
                               const isReady = remainingMs <= 0
+                              const isNoteSubmitting =
+                                pendingNoteActionCommitment === note.note_commitment
                               const fromSymbol = (note.token_symbol || "Token").toUpperCase()
                               const toSymbol = (note.target_token_symbol || "Token").toUpperCase()
                               return (
@@ -2770,14 +2870,16 @@ export function LimitOrder() {
                                     <Button
                                       type="button"
                                       className="h-7 flex-1 text-[11px]"
+                                      disabled={!isReady || isSubmitting || isNoteSubmitting}
                                       onClick={() => handleUsePendingHideNote(note)}
                                     >
-                                      Private Order now
+                                      {isNoteSubmitting ? "Processing..." : "Private Order now"}
                                     </Button>
                                     <Button
                                       type="button"
                                       variant="outline"
                                       className="h-7 flex-1 text-[11px]"
+                                      disabled={isSubmitting || isNoteSubmitting}
                                       onClick={() => void handleWithdrawPendingHideNote(note)}
                                     >
                                       Withdraw
@@ -2990,7 +3092,7 @@ export function LimitOrder() {
                   Batal
                 </Button>
                 <Button
-                  onClick={confirmOrder}
+                  onClick={() => void confirmOrder()}
                   disabled={isSubmitting}
                   className={cn(
                     "flex-1",
