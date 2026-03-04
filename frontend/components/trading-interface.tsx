@@ -3453,7 +3453,14 @@ export function TradingInterface() {
             setHasTradePrivacyPayload(true)
 
             const prefixCalls =
-              swapActionIndex > 0 ? preparedCalls.slice(0, swapActionIndex) : []
+              swapActionIndex > 0
+                ? preparedCalls
+                    .slice(0, swapActionIndex)
+                    // Legacy quote usually prefixes `approve -> execute_swap`.
+                    // Once execute_swap is replaced by private-executor calls, that approve can target
+                    // the wrong spender and trigger confusing allowance failures.
+                    .filter((call) => call.entrypoint.toLowerCase() !== "approve")
+                : []
             const executorCalls = preparedPrivate.onchain_calls
               .filter(
                 (call) =>
@@ -3556,6 +3563,51 @@ export function TradingInterface() {
       })
 
       await invokeStarknetCallsFromWallet([approveCall], starknetProviderHint)
+
+      // Wait until allowance is visible on-chain before sending the swap call.
+      // Some wallets/nodes simulate the next tx against stale state right after approve submission.
+      const ownerAddress = (wallet.starknetAddress || wallet.address || "").trim()
+      const approveSpender = String(approveCall.calldata?.[0] || "").trim()
+      const approveLow = String(approveCall.calldata?.[1] || "0").trim()
+      const approveHigh = String(approveCall.calldata?.[2] || "0").trim()
+      let requiredAllowance = BigInt(0)
+      try {
+        requiredAllowance = BigInt(approveLow || "0") + (BigInt(approveHigh || "0") << BigInt(128))
+      } catch {
+        requiredAllowance = BigInt(0)
+      }
+
+      if (
+        ownerAddress &&
+        approveSpender &&
+        approveCall.contractAddress.trim() &&
+        requiredAllowance > BigInt(0)
+      ) {
+        const waitUntil = Date.now() + 30_000
+        let allowanceReady = false
+        while (Date.now() < waitUntil) {
+          try {
+            const currentAllowance = await readStarknetErc20AllowanceFromWallet(
+              approveCall.contractAddress.trim(),
+              ownerAddress,
+              approveSpender,
+              starknetProviderHint
+            )
+            if (currentAllowance !== null && currentAllowance >= requiredAllowance) {
+              allowanceReady = true
+              break
+            }
+          } catch {
+            // Ignore transient RPC/indexer reads while waiting for state propagation.
+          }
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 1500))
+        }
+        if (!allowanceReady) {
+          throw new Error(
+            "Approval transaction sudah dikirim, tapi allowance belum terbaca di node. Tunggu 10-30 detik lalu retry swap."
+          )
+        }
+      }
       return invokeStarknetCallsFromWallet(remainingCalls, starknetProviderHint)
     }
     },
@@ -3577,6 +3629,8 @@ export function TradingInterface() {
       toToken.network,
       toToken.symbol,
       resolveHideBalancePrivacyPayload,
+      wallet.address,
+      wallet.starknetAddress,
     ]
   )
 
