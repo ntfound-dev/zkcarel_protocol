@@ -269,7 +269,7 @@ function MiniChart({ data, className }: { data: ChartPoint[]; className?: string
             <stop offset="100%" stopColor="#7c3aed" />
           </linearGradient>
           <filter id={`chartGlow-${chartUid}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.3" result="blur" />
+            <feGaussianBlur stdDeviation="0.9" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
               <feMergeNode in="SourceGraphic" />
@@ -312,7 +312,7 @@ function MiniChart({ data, className }: { data: ChartPoint[]; className?: string
           fill="none"
           stroke="#a78bfa"
           strokeOpacity="0.5"
-          strokeWidth="1.35"
+          strokeWidth="0.95"
           strokeDasharray="2 2.6"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -322,7 +322,7 @@ function MiniChart({ data, className }: { data: ChartPoint[]; className?: string
           points={linePoints}
           fill="none"
           stroke={`url(#chartLine-${chartUid})`}
-          strokeWidth="2.2"
+          strokeWidth="1.5"
           strokeLinecap="round"
           strokeLinejoin="round"
           filter={`url(#chartGlow-${chartUid})`}
