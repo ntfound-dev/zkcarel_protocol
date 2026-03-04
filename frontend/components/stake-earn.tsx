@@ -510,6 +510,7 @@ export function StakeEarn() {
   const [stakeSuccess, setStakeSuccess] = React.useState(false)
   const [claimingPositionId, setClaimingPositionId] = React.useState<string | null>(null)
   const [balanceHidden, setBalanceHidden] = React.useState(false)
+  const [hideBalancePopupOpen, setHideBalancePopupOpen] = React.useState(false)
   const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(10)
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
   const [pendingHideNotes, setPendingHideNotes] = React.useState<PendingHideNoteRecord[]>([])
@@ -2294,93 +2295,25 @@ export function StakeEarn() {
                 </div>
                 {balanceHidden && (
                   <div className="mt-2 space-y-2">
-                    <p className="text-[11px] text-foreground">Hide Tier (USDT)</p>
-                    <div className="grid grid-cols-5 gap-2">
-                      {USDT_POINTS_TIER_OPTIONS.map((option) => {
-                        const selected = selectedHideTier.minUsdt === option.minUsdt
-                        return (
-                          <button
-                            key={option.minUsdt}
-                            type="button"
-                            onClick={() => setHideUsdtTierMin(option.minUsdt)}
-                            className={cn(
-                              "rounded-md border px-2 py-1 text-[10px] transition-colors",
-                              selected
-                                ? "border-primary bg-primary/20 text-primary"
-                                : "border-border bg-surface text-muted-foreground hover:border-primary/50"
-                            )}
-                          >
-                            <div>${option.minUsdt}</div>
-                            <div>+{option.bonusPercent}%</div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                    {selectedPool && (
-                      <p className="text-[11px] text-muted-foreground">
-                        Nominal hide stake dikunci ke tier ${selectedHideTier.minUsdt}: ~
-                        {hideTierLockedStakeAmount && Number.isFinite(hideTierLockedStakeAmount)
-                          ? Number(hideTierLockedStakeAmount).toLocaleString(undefined, {
-                              maximumFractionDigits: 6,
-                            })
-                          : "—"}{" "}
-                        {selectedPool.symbol} • Bonus +{selectedHideTier.bonusPercent}%.
-                      </p>
-                    )}
                     <p className="text-[11px] text-muted-foreground">
+                      Tier ${selectedHideTier.minUsdt} (+{selectedHideTier.bonusPercent}%) •{" "}
                       {hasTradePrivacyPayload
-                        ? "Garaga payload is ready."
+                        ? "Garaga payload ready."
                         : isAutoPrivacyProvisioning
                         ? "Preparing Garaga payload..."
                         : "Garaga payload will be auto-prepared on submit."}
                     </p>
-                    {pendingHideNotesActive.length > 0 && (
-                      <div className="space-y-2 rounded-lg border border-border/70 bg-surface/50 p-2">
-                        <p className="text-[11px] font-medium text-foreground">
-                          Pending Hide Notes ({pendingHideNotesActive.length})
-                        </p>
-                        {pendingHideNotesActive.map((note) => {
-                          const spendableAt = Number(note.spendable_at_unix || 0)
-                          const remainingMs =
-                            spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
-                          const isReady = remainingMs <= 0
-                          const isNoteSubmitting =
-                            pendingNoteActionCommitment === note.note_commitment
-                          const fromSymbol = (note.token_symbol || "Token").toUpperCase()
-                          const toSymbol = (note.target_token_symbol || fromSymbol).toUpperCase()
-                          return (
-                            <div key={note.note_commitment} className="rounded-md border border-border/60 p-2">
-                              <p className="text-[10px] font-mono text-muted-foreground">
-                                {note.note_commitment.slice(0, 12)}...{note.note_commitment.slice(-6)}
-                              </p>
-                              <p className="text-[11px] text-foreground">
-                                {(note.amount || "—").trim()} {fromSymbol} → {toSymbol} •{" "}
-                                {isReady ? "Ready now" : `Ready in ${formatRemainingDuration(remainingMs)}`}
-                              </p>
-                              <div className="mt-2 flex gap-2">
-                                <Button
-                                  type="button"
-                                  className="h-7 flex-1 text-[11px]"
-                                  onClick={() => void handleUsePendingHideNote(note)}
-                                  disabled={!isReady || isStaking || isNoteSubmitting}
-                                >
-                                  {isNoteSubmitting ? "Processing..." : "Private Stake now"}
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className="h-7 flex-1 text-[11px]"
-                                  onClick={() => void handleWithdrawPendingHideNote(note)}
-                                  disabled={isStaking || isNoteSubmitting}
-                                >
-                                  Withdraw
-                                </Button>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      Pending Hide Notes: {pendingHideNotesActive.length}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-8 w-full text-xs"
+                      onClick={() => setHideBalancePopupOpen(true)}
+                    >
+                      Open Hide Balance Popup
+                    </Button>
                   </div>
                 )}
               </div>
@@ -2520,6 +2453,110 @@ export function StakeEarn() {
         </div>
       </div>
 
+      <Dialog open={hideBalancePopupOpen} onOpenChange={setHideBalancePopupOpen}>
+        <DialogContent className="max-w-lg glass-strong border-border max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Hide Balance</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <p className="text-sm text-muted-foreground">
+              Add Garaga privacy proof in the same on-chain transaction.
+            </p>
+            <div className="space-y-2 rounded-lg border border-border bg-surface/40 p-3">
+              <p className="text-xs text-foreground">Hide Tier (USDT)</p>
+              <div className="grid grid-cols-5 gap-2">
+                {USDT_POINTS_TIER_OPTIONS.map((option) => {
+                  const selected = selectedHideTier.minUsdt === option.minUsdt
+                  return (
+                    <button
+                      key={option.minUsdt}
+                      type="button"
+                      onClick={() => setHideUsdtTierMin(option.minUsdt)}
+                      className={cn(
+                        "rounded-md border px-2 py-1 text-[10px] transition-colors",
+                        selected
+                          ? "border-primary bg-primary/20 text-primary"
+                          : "border-border bg-surface text-muted-foreground hover:border-primary/50"
+                      )}
+                    >
+                      <div>${option.minUsdt}</div>
+                      <div>+{option.bonusPercent}%</div>
+                    </button>
+                  )
+                })}
+              </div>
+              {selectedPool && (
+                <p className="text-[11px] text-muted-foreground">
+                  Nominal hide stake dikunci ke tier ${selectedHideTier.minUsdt}: ~
+                  {hideTierLockedStakeAmount && Number.isFinite(hideTierLockedStakeAmount)
+                    ? Number(hideTierLockedStakeAmount).toLocaleString(undefined, {
+                        maximumFractionDigits: 6,
+                      })
+                    : "—"}{" "}
+                  {selectedPool.symbol} • Bonus +{selectedHideTier.bonusPercent}%.
+                </p>
+              )}
+            </div>
+            <div className="rounded-lg border border-border bg-surface/40 p-3">
+              <p className="text-[11px] text-muted-foreground">
+                {hasTradePrivacyPayload
+                  ? "Garaga payload is ready."
+                  : isAutoPrivacyProvisioning
+                  ? "Preparing Garaga payload..."
+                  : "Garaga payload will be auto-prepared on submit."}
+              </p>
+            </div>
+            {pendingHideNotesActive.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-border bg-surface/40 p-3">
+                <p className="text-[11px] font-medium text-foreground">
+                  Pending Hide Notes ({pendingHideNotesActive.length})
+                </p>
+                {pendingHideNotesActive.map((note) => {
+                  const spendableAt = Number(note.spendable_at_unix || 0)
+                  const remainingMs =
+                    spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
+                  const isReady = remainingMs <= 0
+                  const isNoteSubmitting =
+                    pendingNoteActionCommitment === note.note_commitment
+                  const fromSymbol = (note.token_symbol || "Token").toUpperCase()
+                  const toSymbol = (note.target_token_symbol || fromSymbol).toUpperCase()
+                  return (
+                    <div key={note.note_commitment} className="rounded-md border border-border/60 p-2">
+                      <p className="text-[10px] font-mono text-muted-foreground">
+                        {note.note_commitment.slice(0, 12)}...{note.note_commitment.slice(-6)}
+                      </p>
+                      <p className="text-[11px] text-foreground">
+                        {(note.amount || "—").trim()} {fromSymbol} → {toSymbol} •{" "}
+                        {isReady ? "Ready now" : `Ready in ${formatRemainingDuration(remainingMs)}`}
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          type="button"
+                          className="h-7 flex-1 text-[11px]"
+                          onClick={() => void handleUsePendingHideNote(note)}
+                          disabled={!isReady || isStaking || isNoteSubmitting}
+                        >
+                          {isNoteSubmitting ? "Processing..." : "Private Stake now"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-7 flex-1 text-[11px]"
+                          onClick={() => void handleWithdrawPendingHideNote(note)}
+                          disabled={isStaking || isNoteSubmitting}
+                        >
+                          Withdraw
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Stake Dialog */}
       <Dialog open={stakeDialogOpen} onOpenChange={setStakeDialogOpen}>
         <DialogContent className="max-w-md glass-strong border-border">
@@ -2609,91 +2646,25 @@ export function StakeEarn() {
 
                     {balanceHidden && (
                       <div className="space-y-2 rounded-lg border border-border bg-surface/40 p-3">
-                        <p className="text-xs text-foreground">Hide Tier (USDT)</p>
-                        <div className="grid grid-cols-5 gap-2">
-                          {USDT_POINTS_TIER_OPTIONS.map((option) => {
-                            const selected = selectedHideTier.minUsdt === option.minUsdt
-                            return (
-                              <button
-                                key={option.minUsdt}
-                                type="button"
-                                onClick={() => setHideUsdtTierMin(option.minUsdt)}
-                                className={cn(
-                                  "rounded-md border px-2 py-1 text-[10px] transition-colors",
-                                  selected
-                                    ? "border-primary bg-primary/20 text-primary"
-                                    : "border-border bg-surface text-muted-foreground hover:border-primary/50"
-                                )}
-                              >
-                                <div>${option.minUsdt}</div>
-                                <div>+{option.bonusPercent}%</div>
-                              </button>
-                            )
-                          })}
-                        </div>
                         <p className="text-[11px] text-muted-foreground">
-                          Nominal hide stake dikunci ke tier ${selectedHideTier.minUsdt}: ~
-                          {hideTierLockedStakeAmount && Number.isFinite(hideTierLockedStakeAmount)
-                            ? Number(hideTierLockedStakeAmount).toLocaleString(undefined, {
-                                maximumFractionDigits: 6,
-                              })
-                            : "—"}{" "}
-                          {selectedPool.symbol} • Bonus +{selectedHideTier.bonusPercent}%.
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
+                          Tier ${selectedHideTier.minUsdt} (+{selectedHideTier.bonusPercent}%) •{" "}
                           {hasTradePrivacyPayload
-                            ? "Garaga payload is ready."
+                            ? "Garaga payload ready."
                             : isAutoPrivacyProvisioning
                             ? "Preparing Garaga payload..."
                             : "Garaga payload will be auto-prepared on submit."}
                         </p>
-                        {pendingHideNotesActive.length > 0 && (
-                          <div className="space-y-2 rounded-lg border border-border/70 bg-surface/50 p-2">
-                            <p className="text-[11px] font-medium text-foreground">
-                              Pending Hide Notes ({pendingHideNotesActive.length})
-                            </p>
-                            {pendingHideNotesActive.map((note) => {
-                              const spendableAt = Number(note.spendable_at_unix || 0)
-                              const remainingMs =
-                                spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
-                              const isReady = remainingMs <= 0
-                              const isNoteSubmitting =
-                                pendingNoteActionCommitment === note.note_commitment
-                              const fromSymbol = (note.token_symbol || "Token").toUpperCase()
-                              const toSymbol = (note.target_token_symbol || fromSymbol).toUpperCase()
-                              return (
-                                <div key={note.note_commitment} className="rounded-md border border-border/60 p-2">
-                                  <p className="text-[10px] font-mono text-muted-foreground">
-                                    {note.note_commitment.slice(0, 12)}...{note.note_commitment.slice(-6)}
-                                  </p>
-                                  <p className="text-[11px] text-foreground">
-                                    {(note.amount || "—").trim()} {fromSymbol} → {toSymbol} •{" "}
-                                    {isReady ? "Ready now" : `Ready in ${formatRemainingDuration(remainingMs)}`}
-                                  </p>
-                                  <div className="mt-2 flex gap-2">
-                                    <Button
-                                      type="button"
-                                      className="h-7 flex-1 text-[11px]"
-                                      onClick={() => void handleUsePendingHideNote(note)}
-                                      disabled={!isReady || isStaking || isNoteSubmitting}
-                                    >
-                                      {isNoteSubmitting ? "Processing..." : "Private Stake now"}
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      className="h-7 flex-1 text-[11px]"
-                                      onClick={() => void handleWithdrawPendingHideNote(note)}
-                                      disabled={isStaking || isNoteSubmitting}
-                                    >
-                                      Withdraw
-                                    </Button>
-                                  </div>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
+                        <p className="text-[11px] text-muted-foreground">
+                          Pending Hide Notes: {pendingHideNotesActive.length}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-8 w-full text-xs"
+                          onClick={() => setHideBalancePopupOpen(true)}
+                        >
+                          Open Hide Balance Popup
+                        </Button>
                       </div>
                     )}
 
