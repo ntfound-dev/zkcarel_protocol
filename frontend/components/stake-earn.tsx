@@ -1619,6 +1619,12 @@ export function StakeEarn() {
             "HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private stake now."
           )
         }
+        if (
+          useRelayerPoolHide &&
+          /hide note\/pool balance tidak cukup/i.test(message)
+        ) {
+          throw new Error(message)
+        }
         if (useRelayerPoolHide) {
           throw new Error(
             `Hide relayer unavailable. Wallet fallback is disabled so stake details never leak in explorer. Detail: ${message}`

@@ -1466,6 +1466,38 @@ async fn read_erc20_balance_parts(
     Ok((out[0], out[1]))
 }
 
+// Internal helper that validates hide executor liquidity before private stake execution.
+// Prevents opaque ERC20 reverts (e.g. u256_sub overflow / insufficient balance) by surfacing
+// an actionable message before submitting the relayer call.
+async fn ensure_hide_executor_has_stake_input_balance(
+    state: &AppState,
+    executor: Felt,
+    token: Felt,
+    amount_low: Felt,
+    amount_high: Felt,
+    token_symbol: &str,
+    requested_amount_text: &str,
+) -> Result<()> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let (available_low, available_high) =
+        read_erc20_balance_parts(&reader, token, executor).await?;
+    if u256_is_greater(
+        amount_low,
+        amount_high,
+        available_low,
+        available_high,
+        "requested private stake amount",
+        "executor token balance",
+    )? {
+        return Err(crate::error::AppError::BadRequest(format!(
+            "Hide note/pool balance tidak cukup untuk stake ini. Requested {} {}, tetapi saldo note/pool executor belum mencukupi. Pilih note lebih kecil atau deposit note baru.",
+            requested_amount_text,
+            token_symbol.to_ascii_uppercase()
+        )));
+    }
+    Ok(())
+}
+
 // Internal helper that fetches data for `read_erc20_allowance_parts`.
 async fn read_erc20_allowance_parts(
     reader: &OnchainReader,
@@ -2120,6 +2152,25 @@ pub async fn deposit(
             };
             append_shielded_note_registration_calls(&state, &mut relayer_calls, &shielded_input)
                 .await?;
+        }
+        if !action_calldata.is_empty() && action_calldata.len() >= 3 && approval_token != Felt::ZERO {
+            // action_calldata layout for non-CAREL stake: [token, amount_low, amount_high]
+            // CAREL stake uses [amount_low, amount_high], so we fallback to parsed amount parts.
+            let (stake_amount_low, stake_amount_high) = if action_calldata.len() >= 3 {
+                (action_calldata[action_calldata.len() - 2], action_calldata[action_calldata.len() - 1])
+            } else {
+                parse_decimal_to_u256_parts(&req.amount, token_decimals(pool_token))?
+            };
+            ensure_hide_executor_has_stake_input_balance(
+                &state,
+                executor,
+                approval_token,
+                stake_amount_low,
+                stake_amount_high,
+                pool_token,
+                &req.amount,
+            )
+            .await?;
         }
         let submit_call = build_submit_private_intent_call(executor, &payload)?;
         let execute_call =
