@@ -465,6 +465,13 @@ type PendingHideNoteRecord = {
   spendable_at_unix?: number
 }
 
+type ConfirmStakeOptions = {
+  manualExecuteFromPendingNote?: boolean
+  overridePayload?: PrivacyVerificationPayload
+  overridePoolSymbol?: string
+  overrideAmount?: string
+}
+
 /**
  * Runs `StakeEarn` and handles related side effects.
  *
@@ -484,6 +491,7 @@ export function StakeEarn() {
   const [hideUsdtTierMin, setHideUsdtTierMin] = React.useState<number>(10)
   const [hasTradePrivacyPayload, setHasTradePrivacyPayload] = React.useState(false)
   const [pendingHideNotes, setPendingHideNotes] = React.useState<PendingHideNoteRecord[]>([])
+  const [pendingNoteActionCommitment, setPendingNoteActionCommitment] = React.useState<string | null>(null)
   const [nowMs, setNowMs] = React.useState(() => Date.now())
   const [isAutoPrivacyProvisioning, setIsAutoPrivacyProvisioning] = React.useState(false)
   const autoPrivacyPayloadPromiseRef = React.useRef<Promise<PrivacyVerificationPayload | undefined> | null>(null)
@@ -970,46 +978,89 @@ export function StakeEarn() {
     [pendingHideNotes]
   )
 
-  const handleUsePendingHideNote = React.useCallback(
-    (note: PendingHideNoteRecord) => {
-      const tokenSymbol = (note.token_symbol || "").trim().toUpperCase()
-      const payload: PrivacyVerificationPayload = {
-        verifier: (note.verifier || "garaga").trim() || "garaga",
-        note_version: "v3",
-        executor_address: note.executor_address?.trim() || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
-        root: note.root?.trim() || undefined,
-        nullifier: (note.nullifier || "").trim(),
-        commitment: note.note_commitment,
-        note_commitment: note.note_commitment,
-        denom_id: note.denom_id?.trim() || undefined,
-        spendable_at_unix: note.spendable_at_unix,
-        proof: normalizeHexArray(note.proof),
-        public_inputs: normalizeHexArray(note.public_inputs),
-      }
-      persistTradePrivacyPayload(payload)
-      setHasTradePrivacyPayload(true)
-      setBalanceHidden(true)
-      setManuallySelectedHideNote(note.note_commitment, note.nullifier)
-      if (tokenSymbol) {
-        const pool = pools.find((item) => item.symbol.toUpperCase() === tokenSymbol)
-        if (pool) {
-          setSelectedPool(pool)
-        }
-      }
-      if (note.amount?.trim()) {
-        setStakeAmount(note.amount.trim())
-      }
-      if (note.denom_id?.trim()) {
-        setHideUsdtTierMin(inferUsdtTierFromDenomId(note.denom_id.trim()))
-      }
+  const handleUsePendingHideNote = async (note: PendingHideNoteRecord) => {
+    const spendableAt = Number(note.spendable_at_unix || 0)
+    const remainingMs = spendableAt > 0 ? Math.max(0, spendableAt * 1000 - Date.now()) : 0
+    if (remainingMs > 0) {
       notifications.addNotification({
-        type: "info",
-        title: "Hide note selected",
-        message: "Active note switched to selected pending note. Continue with Stake.",
+        type: "warning",
+        title: "Mixing window active",
+        message: `Hide note is still mixing. Ready in ${formatRemainingDuration(remainingMs)}.`,
       })
-    },
-    [notifications, pools, setManuallySelectedHideNote]
-  )
+      return
+    }
+
+    const tokenSymbol = (note.token_symbol || "").trim().toUpperCase()
+    if (!tokenSymbol) {
+      notifications.addNotification({
+        type: "error",
+        title: "Hide note invalid",
+        message: "Selected note is missing token metadata.",
+      })
+      return
+    }
+    const pool = pools.find((item) => item.symbol.toUpperCase() === tokenSymbol)
+    if (!pool) {
+      notifications.addNotification({
+        type: "error",
+        title: "Unsupported pool",
+        message: `Cannot execute pending note for ${tokenSymbol}.`,
+      })
+      return
+    }
+
+    const noteAmountText = (note.amount || "").trim()
+    if (!noteAmountText || Number.parseFloat(noteAmountText) <= 0) {
+      notifications.addNotification({
+        type: "error",
+        title: "Invalid note amount",
+        message: "Selected note amount is invalid. Deposit a new note and retry.",
+      })
+      return
+    }
+
+    const payload: PrivacyVerificationPayload = {
+      verifier: (note.verifier || "garaga").trim() || "garaga",
+      note_version: "v3",
+      executor_address: note.executor_address?.trim() || PRIVATE_ACTION_EXECUTOR_ADDRESS || undefined,
+      root: note.root?.trim() || undefined,
+      nullifier: (note.nullifier || "").trim(),
+      commitment: note.note_commitment,
+      note_commitment: note.note_commitment,
+      denom_id: note.denom_id?.trim() || undefined,
+      spendable_at_unix: note.spendable_at_unix,
+      proof: normalizeHexArray(note.proof),
+      public_inputs: normalizeHexArray(note.public_inputs),
+    }
+
+    persistTradePrivacyPayload(payload)
+    setHasTradePrivacyPayload(true)
+    setBalanceHidden(true)
+    setManuallySelectedHideNote(note.note_commitment, note.nullifier)
+    setSelectedPool(pool)
+    setStakeAmount(noteAmountText)
+    if (note.denom_id?.trim()) {
+      setHideUsdtTierMin(inferUsdtTierFromDenomId(note.denom_id.trim()))
+    }
+
+    notifications.addNotification({
+      type: "info",
+      title: "Submitting private stake",
+      message: `Running Private Stake now for ${noteAmountText} ${tokenSymbol}.`,
+    })
+
+    setPendingNoteActionCommitment(note.note_commitment)
+    try {
+      await confirmStake({
+        manualExecuteFromPendingNote: true,
+        overridePayload: payload,
+        overridePoolSymbol: tokenSymbol,
+        overrideAmount: noteAmountText,
+      })
+    } finally {
+      setPendingNoteActionCommitment(null)
+    }
+  }
 
   const handleWithdrawPendingHideNote = React.useCallback(
     async (note: PendingHideNoteRecord) => {
@@ -1545,9 +1596,15 @@ export function StakeEarn() {
    * @returns Result consumed by caller flow, UI state updates, or async chaining.
    * @remarks May trigger network calls, Hide Mode processing, or local state mutations.
    */
-  const confirmStake = async () => {
-    if (!selectedPool) return
-    if (selectedPool.symbol === "BTC") {
+  const confirmStake = async (options?: ConfirmStakeOptions) => {
+    const effectivePool =
+      options?.overridePoolSymbol && options.overridePoolSymbol.trim()
+        ? pools.find(
+            (pool) => pool.symbol.toUpperCase() === options.overridePoolSymbol?.trim().toUpperCase()
+          ) || null
+        : selectedPool
+    if (!effectivePool) return
+    if (effectivePool.symbol === "BTC") {
       notifications.addNotification({
         type: "info",
         title: "Not Available",
@@ -1555,24 +1612,55 @@ export function StakeEarn() {
       })
       return
     }
-    
+    const effectiveAmount = (options?.overrideAmount || stakeAmount || "").trim()
+    const parsedAmount = Number.parseFloat(effectiveAmount)
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      notifications.addNotification({
+        type: "error",
+        title: "Amount is required",
+        message: "Set a valid stake amount before submitting.",
+      })
+      return
+    }
+
     setIsStaking(true)
     try {
       const effectiveHideBalance = balanceHidden
       const useRelayerPoolHide = effectiveHideBalance && HIDE_BALANCE_RELAYER_POOL_ENABLED
-      const resolvedPrivacyPayload = effectiveHideBalance
+      const manualPendingExecution = Boolean(options?.manualExecuteFromPendingNote)
+      const shouldDepositOnly = useRelayerPoolHide && effectiveHideBalance && !manualPendingExecution
+
+      if (shouldDepositOnly) {
+        clearManuallySelectedHideNote()
+        clearTradePrivacyPayload()
+        setHasTradePrivacyPayload(false)
+      }
+
+      const resolvedPrivacyPayload =
+        options?.overridePayload ||
+        (effectiveHideBalance
         ? await resolveHideBalancePrivacyPayload({
             flow: "stake",
-            fromToken: selectedPool.symbol,
-            toToken: selectedPool.symbol,
-            amount: stakeAmount,
+            fromToken: effectivePool.symbol,
+            toToken: effectivePool.symbol,
+            amount: effectiveAmount,
           })
-        : undefined
+        : undefined)
       if (effectiveHideBalance && !resolvedPrivacyPayload) {
         throw new Error("Garaga payload is not ready for Hide Balance. Check backend auto-proof config.")
       }
       let onchainTxHash: string | undefined
       let payloadForBackend = resolvedPrivacyPayload
+
+      if (shouldDepositOnly && payloadForBackend) {
+        await ensureHideV3NoteDeposited({
+          payload: payloadForBackend,
+          symbol: effectivePool.symbol,
+          amountText: effectiveAmount,
+        })
+        throw new Error("HIDE_NOTE_READY::Hide note berhasil dideposit. Retry private stake now.")
+      }
+
       if (!useRelayerPoolHide) {
         notifications.addNotification({
           type: "info",
@@ -1580,9 +1668,9 @@ export function StakeEarn() {
           message: "Confirm staking transaction in your Starknet wallet.",
         })
         const submitted = await submitOnchainStakeTx(
-          selectedPool.symbol,
+          effectivePool.symbol,
           "stake",
-          stakeAmount,
+          effectiveAmount,
           resolvedPrivacyPayload
         )
         onchainTxHash = submitted.txHash
@@ -1590,7 +1678,7 @@ export function StakeEarn() {
         notifications.addNotification({
           type: "info",
           title: "Staking pending",
-          message: `Stake ${stakeAmount} ${selectedPool.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
+          message: `Stake ${effectiveAmount} ${effectivePool.symbol} submitted on-chain (${onchainTxHash.slice(0, 10)}...).`,
           txHash: onchainTxHash,
           txNetwork: "starknet",
         })
@@ -1604,8 +1692,8 @@ export function StakeEarn() {
       let response: Awaited<ReturnType<typeof stakeDeposit>>
       try {
         response = await stakeDeposit({
-          pool_id: selectedPool.symbol,
-          amount: stakeAmount,
+          pool_id: effectivePool.symbol,
+          amount: effectiveAmount,
           onchain_tx_hash: onchainTxHash,
           hide_balance: effectiveHideBalance,
           privacy: effectiveHideBalance
@@ -1661,8 +1749,8 @@ export function StakeEarn() {
           try {
             spendableAtUnix = await ensureHideV3NoteDeposited({
               payload: payload as PrivacyVerificationPayload,
-              symbol: selectedPool.symbol,
-              amountText: stakeAmount,
+              symbol: effectivePool.symbol,
+              amountText: effectiveAmount,
             })
           } catch (depositError) {
             const depositMessage =
@@ -1698,7 +1786,7 @@ export function StakeEarn() {
         notifications.addNotification({
           type: "info",
           title: "Staking pending",
-          message: `Stake ${stakeAmount} ${selectedPool.symbol} submitted on-chain (${finalTxHash.slice(0, 10)}...).`,
+          message: `Stake ${effectiveAmount} ${effectivePool.symbol} submitted on-chain (${finalTxHash.slice(0, 10)}...).`,
           txHash: finalTxHash,
           txNetwork: "starknet",
         })
@@ -1731,7 +1819,7 @@ export function StakeEarn() {
       notifications.addNotification({
         type: "success",
         title: "Staking successful",
-        message: `Stake   completed successfully`,
+        message: `Stake ${effectiveAmount} ${effectivePool.symbol} completed successfully`,
         txHash: finalTxHash,
         txNetwork: "starknet",
       })
@@ -2219,6 +2307,8 @@ export function StakeEarn() {
                           const remainingMs =
                             spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
                           const isReady = remainingMs <= 0
+                          const isNoteSubmitting =
+                            pendingNoteActionCommitment === note.note_commitment
                           const fromSymbol = (note.token_symbol || "Token").toUpperCase()
                           const toSymbol = (note.target_token_symbol || fromSymbol).toUpperCase()
                           return (
@@ -2234,15 +2324,17 @@ export function StakeEarn() {
                                 <Button
                                   type="button"
                                   className="h-7 flex-1 text-[11px]"
-                                  onClick={() => handleUsePendingHideNote(note)}
+                                  onClick={() => void handleUsePendingHideNote(note)}
+                                  disabled={!isReady || isStaking || isNoteSubmitting}
                                 >
-                                  Private Stake now
+                                  {isNoteSubmitting ? "Processing..." : "Private Stake now"}
                                 </Button>
                                 <Button
                                   type="button"
                                   variant="outline"
                                   className="h-7 flex-1 text-[11px]"
                                   onClick={() => void handleWithdrawPendingHideNote(note)}
+                                  disabled={isStaking || isNoteSubmitting}
                                 >
                                   Withdraw
                                 </Button>
@@ -2528,6 +2620,8 @@ export function StakeEarn() {
                               const remainingMs =
                                 spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
                               const isReady = remainingMs <= 0
+                              const isNoteSubmitting =
+                                pendingNoteActionCommitment === note.note_commitment
                               const fromSymbol = (note.token_symbol || "Token").toUpperCase()
                               const toSymbol = (note.target_token_symbol || fromSymbol).toUpperCase()
                               return (
@@ -2543,15 +2637,17 @@ export function StakeEarn() {
                                     <Button
                                       type="button"
                                       className="h-7 flex-1 text-[11px]"
-                                      onClick={() => handleUsePendingHideNote(note)}
+                                      onClick={() => void handleUsePendingHideNote(note)}
+                                      disabled={!isReady || isStaking || isNoteSubmitting}
                                     >
-                                      Private Stake now
+                                      {isNoteSubmitting ? "Processing..." : "Private Stake now"}
                                     </Button>
                                     <Button
                                       type="button"
                                       variant="outline"
                                       className="h-7 flex-1 text-[11px]"
                                       onClick={() => void handleWithdrawPendingHideNote(note)}
+                                      disabled={isStaking || isNoteSubmitting}
                                     >
                                       Withdraw
                                     </Button>
@@ -2593,7 +2689,7 @@ export function StakeEarn() {
                     </div>
 
                     <Button
-                      onClick={confirmStake}
+                      onClick={() => void confirmStake()}
                       disabled={
                         !stakeAmount ||
                         Number.parseFloat(stakeAmount) < Number.parseFloat(selectedPool.minStake) ||
