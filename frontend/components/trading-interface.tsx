@@ -5951,12 +5951,14 @@ export function TradingInterface() {
                                   manualSelectedHideNoteRetryRef.current = 0
                                   notifications.addNotification({
                                     type: "info",
-                                    title: "Hide note selected",
+                                    title: "Submitting private swap",
                                     message:
-                                      "Active note diganti ke pending note terpilih. Lanjut klik Execute Swap.",
+                                      "Active note dipilih. Menjalankan Swap Privat now.",
                                   })
                                   setHidePanelOpen(false)
-                                  setActivePendingHideNoteSwapKey(null)
+                                  window.setTimeout(() => {
+                                    confirmTradeRef.current?.()
+                                  }, 0)
                                   } catch (error) {
                                     setActivePendingHideNoteSwapKey(null)
                                     notifications.addNotification({
