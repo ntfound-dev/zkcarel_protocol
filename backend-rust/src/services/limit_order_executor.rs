@@ -1,4 +1,4 @@
-use crate::services::onchain::{parse_felt, OnchainInvoker};
+use crate::services::onchain::{parse_felt, resolve_backend_account, OnchainInvoker};
 use crate::{
     config::Config,
     constants::{DEX_EKUBO, ORDER_EXECUTOR_INTERVAL_SECS},
@@ -26,6 +26,11 @@ fn is_order_expired(
 // Internal helper that checks conditions for `should_execute_price`.
 fn should_execute_price(current_price: f64, target_price: f64) -> bool {
     current_price <= target_price * 1.005
+}
+
+// Internal helper that checks conditions for `is_unauthorized_keeper_error`.
+fn is_unauthorized_keeper_error(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("unauthorized keeper")
 }
 
 // Internal helper that supports `to_u256_felts` operations.
@@ -105,6 +110,12 @@ impl LimitOrderExecutor {
                         }
                         Err(e) => {
                             tracing::error!("Failed to execute order {}: {}", order.order_id, e);
+                            if is_unauthorized_keeper_error(&e.to_string()) {
+                                tracing::error!(
+                                    "Limit order executor paused for this cycle because backend signer is not a registered keeper."
+                                );
+                                break;
+                            }
                         }
                     }
                 }
@@ -263,7 +274,22 @@ impl LimitOrderExecutor {
             selector,
             calldata: vec![order_id, amount_u256.0, amount_u256.1],
         };
-        let tx_hash = invoker.invoke(call).await?;
+        let tx_hash = match invoker.invoke(call).await {
+            Ok(value) => value,
+            Err(error) => {
+                let text = error.to_string();
+                if is_unauthorized_keeper_error(&text) {
+                    let backend_account = resolve_backend_account(&self.config)
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "<missing BACKEND_ACCOUNT_ADDRESS>".to_string());
+                    return Err(crate::error::AppError::BadRequest(format!(
+                        "Unauthorized keeper for LIMIT_ORDER_BOOK_ADDRESS {}. Register backend account {} via register_keeper(), then retry.",
+                        contract, backend_account
+                    )));
+                }
+                return Err(error);
+            }
+        };
         Ok(tx_hash.to_string())
     }
 
