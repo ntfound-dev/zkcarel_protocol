@@ -49,6 +49,7 @@ import {
 import {
   decimalToU256Parts,
   invokeStarknetCallsFromWallet,
+  readStarknetShieldedPoolV3FixedAmountFromWallet,
   toHexFelt,
 } from "@/lib/onchain-trade"
 import { useLivePrices } from "@/hooks/use-live-prices"
@@ -186,8 +187,27 @@ const TOKEN_DECIMALS: Record<string, number> = {
   USDT: 6,
   USDC: 6,
 }
-const U256_MAX_LOW_HEX = "0xffffffffffffffffffffffffffffffff"
-const U256_MAX_HIGH_HEX = "0xffffffffffffffffffffffffffffffff"
+const U256_MASK_128 = (BigInt(1) << BigInt(128)) - BigInt(1)
+
+const scaledBigIntToDecimalString = (value: bigint, decimals: number): string => {
+  if (decimals <= 0) return value.toString()
+  const base = BigInt(10) ** BigInt(decimals)
+  const whole = value / base
+  const fraction = value % base
+  if (fraction === BigInt(0)) return whole.toString()
+  const fractionRaw = fraction
+    .toString()
+    .padStart(decimals, "0")
+    .replace(/0+$/, "")
+  return `${whole.toString()}.${fractionRaw}`
+}
+
+const toU256HexPartsFromBigInt = (value: bigint): [string, string] => {
+  const safe = value < BigInt(0) ? BigInt(0) : value
+  const low = safe & U256_MASK_128
+  const high = safe >> BigInt(128)
+  return [toHexFelt(low), toHexFelt(high)]
+}
 
 const LIMIT_PRIVACY_PAYLOAD_KEY = "limit_privacy_garaga_payload_v2"
 const LIMIT_PRIVACY_PAYLOAD_UPDATED_EVENT = "limit-privacy-payload-updated"
@@ -1323,14 +1343,27 @@ export function LimitOrder() {
         throw new Error("Hide denom_id missing in privacy payload.")
       }
 
+      const decimals = TOKEN_DECIMALS[symbol] ?? 18
       let fixedAmountText = (amountText || "").trim()
+      try {
+        const fixedAmountRaw = await readStarknetShieldedPoolV3FixedAmountFromWallet(
+          executorAddress,
+          tokenAddress,
+          denomId,
+          starknetProviderHint
+        )
+        if (fixedAmountRaw !== null && fixedAmountRaw > BigInt(0)) {
+          fixedAmountText = scaledBigIntToDecimalString(fixedAmountRaw, decimals)
+        }
+      } catch {
+        // fallback to local estimate
+      }
       const parsedAmount = Number.parseFloat(fixedAmountText || "0")
       if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
         const tokenPriceUsd = resolveUsdPrice(symbol)
         if (!Number.isFinite(tokenPriceUsd) || tokenPriceUsd <= 0) {
           throw new Error(`Cannot derive fixed amount for ${symbol}: token price is unavailable.`)
         }
-        const decimals = TOKEN_DECIMALS[symbol] ?? 18
         const precision = Math.min(decimals >= 10 ? 8 : 6, 8)
         fixedAmountText = (fallbackTierUsdt / tokenPriceUsd).toFixed(precision).replace(/\.?0+$/, "")
       }
@@ -1350,11 +1383,17 @@ export function LimitOrder() {
           })} ${symbol}.`
         )
       }
+      const [requiredLow, requiredHigh] = decimalToU256Parts(fixedAmountText, decimals)
+      const requiredAmountUnits =
+        BigInt(requiredLow) + (BigInt(requiredHigh) << BigInt(128))
+      const approvalAmountUnits =
+        (requiredAmountUnits * BigInt(10_100) + BigInt(9_999)) / BigInt(10_000)
+      const [approvalLow, approvalHigh] = toU256HexPartsFromBigInt(approvalAmountUnits)
 
       const approvalCall = {
         contractAddress: tokenAddress,
         entrypoint: "approve",
-        calldata: [executorAddress, U256_MAX_LOW_HEX, U256_MAX_HIGH_HEX],
+        calldata: [executorAddress, approvalLow, approvalHigh],
       }
       const depositCall = {
         contractAddress: executorAddress,
@@ -1365,7 +1404,7 @@ export function LimitOrder() {
       notifications.addNotification({
         type: "info",
         title: "Wallet signature required",
-        message: `Confirm one-time approve + hide note deposit (${fixedAmountText} ${symbol}) in one transaction.`,
+        message: `Confirm approve (+1% buffer) + hide note deposit (${fixedAmountText} ${symbol}) in one transaction.`,
       })
 
       const txHash = await invokeStarknetCallsFromWallet(

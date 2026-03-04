@@ -3734,10 +3734,12 @@ export function TradingInterface() {
         }
       }
 
-      const approvalAmountLow = U256_MAX_LOW_HEX
-      const approvalAmountHigh = U256_MAX_HIGH_HEX
-      const approvalTargetAmount =
-        BigInt(approvalAmountLow) + (BigInt(approvalAmountHigh) << BigInt(128))
+      const approvalBufferBps = BigInt(100) // 1%
+      const approvalAmount =
+        (requiredAmount * (BigInt(10_000) + approvalBufferBps) + BigInt(9_999)) / BigInt(10_000)
+      const approvalAmountLow = toHexFelt(approvalAmount & ((BigInt(1) << BigInt(128)) - BigInt(1)))
+      const approvalAmountHigh = toHexFelt(approvalAmount >> BigInt(128))
+      const approvalTargetAmount = approvalAmount
       const approvalCall = {
         contractAddress: tokenAddress,
         entrypoint: "approve",
@@ -3760,7 +3762,7 @@ export function TradingInterface() {
         title: "Wallet signature required",
         message: hasEnoughAllowance
           ? `Confirm hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`
-          : `Confirm one-time approve + hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`,
+          : `Confirm approve (+1% buffer) + hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`,
       })
       let depositTxHash = ""
       try {
@@ -3779,7 +3781,7 @@ export function TradingInterface() {
           type: "warning",
           title: "Retry deposit with separate approval",
           message:
-            "Wallet multicall hit allowance issue. One-time approve will be sent first, then hide note deposit.",
+            "Wallet multicall hit allowance issue. Approve (+1% buffer) will be sent first, then hide note deposit.",
         })
 
         let allowanceBeforeApprove: bigint | null = null
