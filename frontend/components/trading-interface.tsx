@@ -1514,6 +1514,18 @@ function defaultReceiveAddressForNetwork(
   return addresses.starknet || addresses.fallback || ""
 }
 
+function buildHideAssetRuleMissingMessage(tokenSymbol: string, tierUsdt: number): string {
+  const symbol = (tokenSymbol || "").trim().toUpperCase() || "TOKEN"
+  const tier =
+    Number.isFinite(tierUsdt) && tierUsdt > 0
+      ? Math.trunc(tierUsdt)
+      : 0
+  if (tier > 0) {
+    return `Hide Balance asset rule belum di-set untuk ${symbol} (tier $${tier}). Minta admin menjalankan set_asset_rule pada executor aktif, lalu retry swap.`
+  }
+  return `Hide Balance asset rule belum di-set untuk ${symbol}. Minta admin menjalankan set_asset_rule pada executor aktif, lalu retry swap.`
+}
+
 /**
  * Handles `TradingInterface` logic.
  *
@@ -1727,6 +1739,9 @@ export function TradingInterface() {
   const [isClaimingRefund, setIsClaimingRefund] = React.useState(false)
   const [activePendingHideNoteSwapKey, setActivePendingHideNoteSwapKey] = React.useState<string | null>(null)
   const [tradeResultPopup, setTradeResultPopup] = React.useState<TradeResultPopupState | null>(null)
+  const [hideAssetRuleStatus, setHideAssetRuleStatus] = React.useState<
+    "idle" | "checking" | "ok" | "missing" | "unavailable"
+  >("idle")
   const manualSelectedHideNoteRetryRef = React.useRef(0)
   const lastGardenOrderStatusRef = React.useRef<Record<string, string>>({})
   const gardenOrderPollingRef = React.useRef<Record<string, boolean>>({})
@@ -1783,12 +1798,17 @@ export function TradingInterface() {
           resolvedDenomId,
           "starknet"
         )
-        if (fixedAmount !== null && fixedAmount > BigInt(0)) {
-          const text = sanitizeDecimalInput(
-            scaledBigIntToDecimalString(fixedAmount, decimals),
-            decimals
-          )
-          if (text) return text
+        if (fixedAmount !== null) {
+          if (fixedAmount > BigInt(0)) {
+            const text = sanitizeDecimalInput(
+              scaledBigIntToDecimalString(fixedAmount, decimals),
+              decimals
+            )
+            if (text) return text
+          } else {
+            // Rule exists check returned zero, which means token+tier pair is not configured yet.
+            return ""
+          }
         }
       } catch {
         // fallback to cached/local values below
@@ -2990,6 +3010,60 @@ export function TradingInterface() {
     fromAmountValue > maxSpendableFromLiquidity + 1e-12
   const hideUsdtTierPriceUnavailable =
     hideUsdtTierLockEnabled && !(Number.isFinite(fromToken.price) && fromToken.price > 0)
+  const hideAssetRuleMissingMessage = buildHideAssetRuleMissingMessage(
+    fromToken.symbol,
+    selectedHideUsdtTier.minUsdt
+  )
+  const hideAssetRuleChecking =
+    hideUsdtTierLockEnabled && hideAssetRuleStatus === "checking"
+  const hideAssetRuleMissing =
+    hideUsdtTierLockEnabled && hideAssetRuleStatus === "missing"
+  React.useEffect(() => {
+    if (!hideUsdtTierLockEnabled) {
+      setHideAssetRuleStatus("idle")
+      return
+    }
+    const executorAddress = (PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
+    const tokenAddress = resolveTokenAddress(fromToken.symbol).trim()
+    const denomId = (inferredHideDenomId || "").trim()
+    if (!wallet.isConnected || !executorAddress || !tokenAddress || !denomId) {
+      setHideAssetRuleStatus("unavailable")
+      return
+    }
+    let cancelled = false
+    setHideAssetRuleStatus("checking")
+    void (async () => {
+      try {
+        const fixedAmount = await readStarknetShieldedPoolV3FixedAmountFromWallet(
+          executorAddress,
+          tokenAddress,
+          denomId,
+          "starknet"
+        )
+        if (cancelled) return
+        if (fixedAmount !== null && fixedAmount > BigInt(0)) {
+          setHideAssetRuleStatus("ok")
+          return
+        }
+        if (fixedAmount !== null && fixedAmount === BigInt(0)) {
+          setHideAssetRuleStatus("missing")
+          return
+        }
+        setHideAssetRuleStatus("unavailable")
+      } catch {
+        if (cancelled) return
+        setHideAssetRuleStatus("unavailable")
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    fromToken.symbol,
+    hideUsdtTierLockEnabled,
+    inferredHideDenomId,
+    wallet.isConnected,
+  ])
   React.useEffect(() => {
     if (hideUsdtTierLockEnabled) return
     if (onchainBalanceUnavailable) return
@@ -3104,6 +3178,10 @@ export function TradingInterface() {
       ? "Enter a valid amount."
       : hideUsdtTierPriceUnavailable
       ? `Live price ${fromToken.symbol} belum tersedia untuk lock tier hide. Tunggu price feed update.`
+      : hideAssetRuleChecking
+      ? "Checking Hide Balance asset rule..."
+      : hideAssetRuleMissing
+      ? hideAssetRuleMissingMessage
       : isSameTokenSwapPair
       ? "Select a different destination token."
       : onchainBalanceUnavailable && !hasFallbackPositiveBalance
@@ -3444,6 +3522,11 @@ export function TradingInterface() {
       return await invokeStarknetCallsFromWallet(starknetCalls, starknetProviderHint)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error || "")
+      if (/asset rule not set/i.test(message)) {
+        throw new Error(
+          buildHideAssetRuleMissingMessage(fromToken.symbol, selectedHideUsdtTier.minUsdt)
+        )
+      }
       const isAllowanceFailure = /insufficient allowance/i.test(message)
       if (!isAllowanceFailure) {
         throw error
@@ -3489,6 +3572,7 @@ export function TradingInterface() {
       quote,
       receiveAddress,
       inferredHideDenomId,
+      selectedHideUsdtTier.minUsdt,
       starknetProviderHint,
       toToken.network,
       toToken.symbol,
@@ -5133,6 +5217,9 @@ export function TradingInterface() {
       }
     } catch (error) {
       const rawErrorMessage = error instanceof Error ? error.message : "Failed to execute trade"
+      const displayErrorMessage = /asset rule not set/i.test(rawErrorMessage)
+        ? hideAssetRuleMissingMessage
+        : rawErrorMessage
       if (rawErrorMessage.startsWith("HIDE_NOTE_WAIT::")) {
         manualSelectedHideNoteRetryRef.current = 0
         notifications.addNotification({
@@ -5240,12 +5327,12 @@ export function TradingInterface() {
       notifications.addNotification({
         type: "error",
         title: "Trade failed",
-        message: rawErrorMessage,
+        message: displayErrorMessage,
       })
       openTradeResultPopup({
         status: "error",
         title: "Transaction Failed",
-        message: rawErrorMessage,
+        message: displayErrorMessage,
         txHash: submittedSwapTxHash || undefined,
       })
       setSwapState("error")
