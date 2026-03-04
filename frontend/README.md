@@ -62,14 +62,25 @@ flowchart LR
 ```
 
 ## Execution Flows
-### 1) Normal Mode
+### 1) Normal Mode (Swap/Stake/Limit)
 ```mermaid
 flowchart LR
   U[User] --> FE[Frontend]
   FE --> Q[Request quote/pre-check from backend]
   Q --> FE
   FE --> W[Wallet signature]
-  W --> CHAIN[Direct execute_* call]
+  W --> CHAIN[Direct execute_* call on Starknet target contract]
+```
+
+### 1b) Bridge (Public Route)
+```mermaid
+flowchart LR
+  U[User] --> FE[Frontend]
+  FE --> Q[Request bridge quote/pre-check from backend]
+  Q --> FE
+  FE --> W[User signs source-chain tx]
+  W --> P[Bridge provider settlement]
+  P --> DST[Destination receive]
 ```
 
 ### 2) Hide Mode (V3 Baseline)
@@ -100,7 +111,7 @@ Key behavior:
 | Limit order | `NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS` | Active |
 | Staking CAREL | `NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS` | Active |
 | Staking Stablecoin | `NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS` | Active |
-| Staking BTC | `NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS` | Active |
+| Staking WBTC (contract: `StakingBTC`) | `NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS` | Active |
 | Loyalty NFT | `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` | Active |
 | ZK router | `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` | Active |
 | Privacy intermediary | `NEXT_PUBLIC_PRIVACY_INTERMEDIARY_ADDRESS` | Active |
@@ -142,7 +153,7 @@ Recommended workflow:
 | `NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS` | limit-order execution |
 | `NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS` | staking (CAREL) |
 | `NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS` | staking (stablecoin) |
-| `NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS` | staking (BTC/WBTC) |
+| `NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS` | staking (WBTC via `StakingBTC` contract) |
 | `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` | NFT discount module |
 | `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` | AI on-chain module |
 | `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` | private action routing |
@@ -197,7 +208,7 @@ Expected V3 runtime addresses (must match backend profile for hide mode):
 | AI Executor | `0x00d8ada9eb26d133f9f2656ac1618d8cdf9fcefe6c8e292cf9b7ee580b72a690` |
 | Staking CAREL | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` |
 | Staking Stablecoin | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` |
-| Staking BTC | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
+| Staking WBTC (contract: `StakingBTC`) | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
 | Discount Soulbound | `0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809` |
 | ZK Privacy Router | `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f` |
 | Privacy Intermediary | `0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab` |

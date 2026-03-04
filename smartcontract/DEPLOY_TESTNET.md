@@ -45,7 +45,7 @@ scarb build
 | 11 | `KeeperNetwork` (Limit Order Book) | `owner` |
 | 12 | `StakingCarel` | `carel_token`, `reward_pool` |
 | 13 | `StakingStablecoin` | `pool_admin`, `reward_pool`, `token_list` |
-| 14 | `StakingBTC` | `pool_admin`, `reward_pool`, `btc_token` |
+| 14 | `StakingBTC` | `pool_admin`, `reward_pool`, `wbtc_token` |
 | 15 | `ZkPrivacyRouter` | `admin`, `garaga_adapter` |
 | 16 | `PrivateBTCSwap` | `admin`, `garaga_adapter` |
 | 17 | `DarkPool` | `admin`, `garaga_adapter` |
@@ -202,7 +202,7 @@ bash smartcontract/scripts/09_register_staking_tokens.sh
 
 Notes:
 - Script registers USDC/USDT/STRK on `StakingStablecoin`, registers WBTC on `StakingBTC`, and verifies allowlist status on-chain.
-- For new deployments, `BTCStaking` constructor also receives default WBTC token (`TOKEN_WBTC_ADDRESS` fallback `TOKEN_BTC_ADDRESS`) from `scripts/06_deploy_remaining.sh`.
+- For new deployments, `StakingBTC` constructor also receives default WBTC token (`TOKEN_WBTC_ADDRESS` fallback `TOKEN_BTC_ADDRESS`) from `scripts/06_deploy_remaining.sh`.
 
 ## Notes
 | Topic | Detail |

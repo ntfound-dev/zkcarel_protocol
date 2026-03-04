@@ -73,7 +73,8 @@ flowchart LR
     SWAP["SwapAggregator"]
     LOB["LimitOrderBook"]
     STAKE["Staking Contracts"]
-    ZK["ZkPrivacyRouter"]
+    ZK["ZkPrivacyRouter (optional path)"]
+    PI["PrivacyIntermediary (optional relay path)"]
     EXEC["ShieldedPoolV3 Executor"]
     NFT["DiscountSoulbound + Points"]
     AI["AIExecutor"]
@@ -94,7 +95,7 @@ flowchart LR
   UI <--> API
   API --> WRK
   API --> REL
-  API --> GARAGA
+  API -->|"Private payload/proof only (no bridge)"| GARAGA
   API --> GARDEN
 
   UI --> SWAP
@@ -103,7 +104,10 @@ flowchart LR
   UI --> NFT
   UI --> AI
 
-  REL --> ZK
+  REL -->|"Default hide path"| EXEC
+  REL -->|"Optional relay_private_execution"| PI
+  PI --> EXEC
+  REL -->|"Optional privacy endpoint path"| ZK
   ZK --> EXEC
   EXEC --> SWAP
   EXEC --> LOB
@@ -118,12 +122,14 @@ flowchart LR
 ## Execution Modes
 ```mermaid
 flowchart TD
-  A["User Action"] --> B{"Mode"}
-  B -->|Normal| C["Frontend -> wallet sign direct tx"]
-  B -->|Hide| D["Frontend -> Backend prepare payload"]
-  C --> E["approve + execute_* on target contract"]
+  A["User Action"] --> B{"Route"}
+  B -->|Normal (swap/stake/limit)| C["Frontend -> wallet sign direct tx"]
+  B -->|Hide (swap/stake/limit only)| D["Frontend -> Backend prepare private payload"]
+  B -->|Bridge (public)| H["Frontend -> Backend quote + pre-check"]
+  C --> E["approve + execute_* on Starknet target contract"]
   D --> F["Relayer submits private action payload"]
   F --> G["ShieldedPoolV3 executes target call"]
+  H --> I["User signs source-chain tx; provider settles cross-chain"]
 ```
 
 Execution notes:
@@ -131,6 +137,7 @@ Execution notes:
 - Hide mode: on-chain sender is the relayer account.
 - Hide mode relayer signing key is backend-managed (`BACKEND_PRIVATE_KEY`), not an AI provider key.
 - Active hide-mode scope: swap, stake, limit order.
+- Garaga scope in current MVP: private/hide execution only (`swap`, `stake`, `limit order`), not bridge settlement.
 - Bridge route remains public cross-chain flow (not the hide executor path in current MVP).
 
 ## Bridge Path
@@ -232,7 +239,7 @@ Runtime addresses below follow `backend-rust/.env` (V3 baseline profile):
 | Limit Order Book | `0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a` |
 | Staking CAREL | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` |
 | Staking Stablecoin | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` |
-| Staking BTC | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
+| Staking WBTC (contract: `StakingBTC`) | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
 | ZK Privacy Router | `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f` |
 | PrivacyIntermediary | `0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab` |
 | Private Action Executor (V3 runtime) | `0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2` |

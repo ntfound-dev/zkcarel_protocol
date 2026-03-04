@@ -70,12 +70,13 @@ flowchart LR
     subgraph STAKING["Staking"]
         SCAREL["StakingCarel"]
         SSTABLE["StakingStablecoin"]
-        SBTC["BTCStaking"]
+        SBTC["StakingBTC (WBTC pool)"]
     end
 
     subgraph PRIVACY["Privacy Layer"]
         ZKV1["ZkPrivacyRouter (V1)"]
         ZKV2["PrivacyRouter (V2)"]
+        PINTERM["PrivacyIntermediary"]
         GADAPT["GaragaVerifierAdapter"]
         VREG["VerifierRegistry"]
         VAULT["ShieldedVault"]
@@ -110,12 +111,16 @@ flowchart LR
     EXECV3 --> SWAP
     EXECV3 --> LOB
     EXECV3 --> SCAREL
+    EXECV3 --> SSTABLE
+    EXECV3 --> SBTC
 
     ZKV1 --> GADAPT
     ZKV2 --> VREG
     VREG --> GADAPT
+    PINTERM --> EXECV3
 
     AIEXEC --> CAREL
+    AIEXEC --> AIVER
     POINTS --> SNAP
     SNAP --> CAREL
     BOARD --> POINTS
@@ -228,7 +233,7 @@ Source: `smartcontract/.env`.
 | --- | --- | --- |
 | StakingCarel | `STAKING_CAREL_ADDRESS` | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` |
 | StakingStablecoin | `STAKING_STABLECOIN_ADDRESS` | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` |
-| BTCStaking | `STAKING_BTC_ADDRESS` | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
+| StakingBTC (WBTC pool) | `STAKING_BTC_ADDRESS` | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
 
 ### Privacy + hide
 | Contract | Env Key | Address |
@@ -252,7 +257,7 @@ Source: `smartcontract/.env`.
 | STRK | `TOKEN_STRK_ADDRESS` | `0x04718f5a0Fc34cC1AF16A1cdee98fFB20C31f5cD61D6Ab07201858f4287c938D` |
 | USDC | `TOKEN_USDC_ADDRESS` | `0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8` |
 | USDT | `TOKEN_USDT_ADDRESS` | `0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5` |
-| WBTC/BTC | `TOKEN_WBTC_ADDRESS` | `0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5` |
+| WBTC (`TOKEN_BTC_ADDRESS` legacy alias) | `TOKEN_WBTC_ADDRESS` | `0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5` |
 
 ## Runtime Address Overrides (FE/BE Profile)
 Active app runtime profile currently uses (from `backend-rust/.env`):
