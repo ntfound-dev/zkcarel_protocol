@@ -3758,10 +3758,59 @@ export function TradingInterface() {
           ? `Confirm hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`
           : `Confirm approve + hide note deposit (${denomAmountText} ${tokenSymbol}) in one transaction.`,
       })
-      const depositTxHash = await invokeStarknetCallsFromWallet(
-        callsToExecute,
-        starknetProviderHint
-      )
+      let depositTxHash = ""
+      try {
+        depositTxHash = await invokeStarknetCallsFromWallet(
+          callsToExecute,
+          starknetProviderHint
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || "")
+        const allowanceFailure = /insufficient allowance/i.test(message)
+        if (!allowanceFailure || hasEnoughAllowance) {
+          throw error
+        }
+
+        notifications.addNotification({
+          type: "warning",
+          title: "Retry deposit with separate approval",
+          message:
+            "Wallet multicall hit allowance issue. Approve will be sent first, then hide note deposit.",
+        })
+
+        await invokeStarknetCallsFromWallet([approvalCall], starknetProviderHint)
+
+        // Wait until approve is visible on-chain before sending deposit.
+        const waitUntil = Date.now() + 30_000
+        let allowanceReady = false
+        while (Date.now() < waitUntil) {
+          try {
+            const currentAllowance = await readStarknetErc20AllowanceFromWallet(
+              tokenAddress,
+              ownerAddress,
+              executorAddress,
+              starknetProviderHint
+            )
+            if (currentAllowance !== null && currentAllowance >= requiredAmount) {
+              allowanceReady = true
+              break
+            }
+          } catch {
+            // Ignore transient read errors while waiting for state propagation.
+          }
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 1500))
+        }
+        if (!allowanceReady) {
+          throw new Error(
+            "Approval transaction sudah dikirim, tapi allowance belum terbaca di node. Tunggu 10-30 detik lalu retry private swap."
+          )
+        }
+
+        depositTxHash = await invokeStarknetCallsFromWallet(
+          [depositCall],
+          starknetProviderHint
+        )
+      }
 
       const depositedAtUnix = Math.floor(Date.now() / 1000)
       const spendableAtUnix = depositedAtUnix
