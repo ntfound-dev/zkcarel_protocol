@@ -2404,6 +2404,25 @@ function clampDecimals(value: number): number {
 }
 
 /**
+ * Runs an async wallet call with timeout to avoid hanging popup-less requests.
+ */
+async function withWalletTimeout<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string
+): Promise<T> {
+  return await Promise.race([
+    operation(),
+    new Promise<T>((_, reject) => {
+      const timer = setTimeout(() => {
+        clearTimeout(timer)
+        reject(new Error(timeoutMessage))
+      }, timeoutMs)
+    }),
+  ])
+}
+
+/**
  * Handles `parseBigIntLike` in the wallet client flow.
  *
  * @param value - Input used to compute or dispatch the `parseBigIntLike` operation.
@@ -2471,7 +2490,11 @@ async function requestBtcAccounts(injected: InjectedBtc): Promise<string[] | nul
 
   for (const attempt of attempts) {
     try {
-      const result = await attempt()
+      const result = await withWalletTimeout(
+        async () => await attempt(),
+        10_000,
+        "BTC wallet account request timed out."
+      )
       const parsed = normalizeBtcAccounts(result)
       if (parsed.length > 0) {
         return parsed
@@ -2833,7 +2856,11 @@ async function sendBtcTransferWithInjectedWallet(
   let lastError: unknown = null
   for (const attempt of attempts) {
     try {
-      const result = await attempt()
+      const result = await withWalletTimeout(
+        async () => await attempt(),
+        15_000,
+        "BTC wallet transfer request timed out."
+      )
       const txHash = normalizeBtcTxHash(result)
       if (txHash) return txHash
     } catch (error) {
