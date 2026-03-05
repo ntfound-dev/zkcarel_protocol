@@ -979,40 +979,58 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     let xverseConnectError: unknown = null
 
     if (provider === "xverse") {
+      injected = getInjectedBtc("xverse")
       try {
-        // Trigger official Xverse popup flow first for better UX visibility.
-        const result = await withWalletTimeout(
-          async () => await connectBtcWalletViaXverse(),
-          15_000,
-          "Xverse connect request timed out."
-        )
-        btcAddress = result.address
-        btcBalance = result.balance
-        injected = getInjectedBtc("xverse")
-      } catch (error) {
-        xverseConnectError = error
-        console.warn("Xverse popup connect failed, trying injected fallback:", error)
-        try {
-          injected = getInjectedBtc("xverse")
-          if (injected) {
-            const accounts = await requestBtcAccounts(injected, { requireTestnet4: true, timeoutMs: 6_000 })
-            btcAddress = accounts?.[0] || ""
-            if (btcAddress) {
-              const btcNetwork = detectBtcAddressNetwork(btcAddress)
-              if (btcNetwork !== "testnet") {
-                throw new Error("BTC wallet must be on Bitcoin testnet (native).")
-              }
-              btcBalance = await fetchBtcBalance(injected, btcAddress)
-              if (btcBalance === null) {
-                btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
-              }
-              if (btcBalance === null) {
-                btcBalance = 0
-              }
+        // Prefer injected Xverse API to avoid popup decodeToken crashes in extension v2.x.
+        if (injected) {
+          const accounts = await requestBtcAccounts(injected, { requireTestnet4: true, timeoutMs: 10_000 })
+          btcAddress = accounts?.[0] || ""
+          if (!btcAddress) {
+            const relaxedAccounts = await requestBtcAccounts(injected, {
+              requireTestnet4: false,
+              timeoutMs: 8_000,
+            })
+            btcAddress = relaxedAccounts?.[0] || ""
+          }
+          if (btcAddress) {
+            const btcNetwork = detectBtcAddressNetwork(btcAddress)
+            if (btcNetwork !== "testnet") {
+              throw new Error("BTC wallet must be on Bitcoin testnet (native).")
+            }
+            btcBalance = await fetchBtcBalance(injected, btcAddress)
+            if (btcBalance === null) {
+              btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
+            }
+            if (btcBalance === null) {
+              btcBalance = 0
             }
           }
-        } catch (fallbackError) {
-          xverseConnectError = fallbackError
+        }
+        // Fallback to sats-connect only if injected provider is truly unavailable.
+        if (!btcAddress && !injected) {
+          const result = await withWalletTimeout(
+            async () => await connectBtcWalletViaXverse(),
+            15_000,
+            "Xverse connect request timed out."
+          )
+          btcAddress = result.address
+          btcBalance = result.balance
+          injected = getInjectedBtc("xverse")
+        }
+      } catch (error) {
+        xverseConnectError = error
+        console.warn("Xverse connect flow failed:", error)
+      }
+
+      if (!btcAddress && injected && !xverseConnectError) {
+        xverseConnectError = new Error("BTC wallet not connected. Open Xverse and approve account access.")
+      }
+      if (!btcAddress && injected && xverseConnectError) {
+        const normalized = normalizeXverseConnectError(xverseConnectError)
+        if (/failed to connect xverse wallet/i.test(normalized.message)) {
+          xverseConnectError = new Error("BTC wallet not connected. Open Xverse and approve account access.")
+        } else {
+          xverseConnectError = normalized
         }
       }
     }
@@ -2861,13 +2879,6 @@ async function sendBtcTransferWithInjectedWallet(
 ): Promise<string> {
   const recipients = [{ address: toAddress, amount: amountSats }]
   const attempts = [
-    () => injected.sendBitcoin?.(toAddress, amountSats),
-    () => injected.request?.({ method: "sendBitcoin", params: [toAddress, amountSats] }),
-    () =>
-      injected.request?.({
-        method: "sendBitcoin",
-        params: [{ address: toAddress, amount: amountSats }],
-      }),
     () =>
       injected.request?.({
         method: "sendTransfer",
@@ -2878,6 +2889,13 @@ async function sendBtcTransferWithInjectedWallet(
         method: "sendTransfer",
         params: [recipients],
       }),
+    () => injected.sendBitcoin?.(toAddress, amountSats),
+    () => injected.request?.({ method: "sendBitcoin", params: [toAddress, amountSats] }),
+    () =>
+      injected.request?.({
+        method: "sendBitcoin",
+        params: [{ address: toAddress, amount: amountSats }],
+      }),
   ]
 
   let lastError: unknown = null
@@ -2885,7 +2903,7 @@ async function sendBtcTransferWithInjectedWallet(
     try {
       const result = await withWalletTimeout(
         async () => await attempt(),
-        15_000,
+        7_000,
         "BTC wallet transfer request timed out."
       )
       const txHash = normalizeBtcTxHash(result)
