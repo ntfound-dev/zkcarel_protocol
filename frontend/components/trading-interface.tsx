@@ -2920,7 +2920,12 @@ export function TradingInterface() {
     .toLowerCase()
   const pendingIsFinalized =
     pendingOrderStatus === "completed" || pendingOrderStatus === "refunded"
-  const pendingBtcOrderBlocking = showPendingBtcDeposit && !pendingIsFinalized
+  const pendingAwaitingDepositOnly =
+    showPendingBtcDeposit &&
+    !pendingIsFinalized &&
+    !pendingBtcDeposit?.txHash &&
+    (pendingOrderStatus === "pending_deposit" || pendingOrderStatus === "pending" || !pendingOrderStatus)
+  const pendingBtcOrderBlocking = showPendingBtcDeposit && !pendingIsFinalized && !pendingAwaitingDepositOnly
   const pendingCanClaimRefund =
     Boolean(
       pendingBtcDeposit &&
@@ -3173,7 +3178,7 @@ export function TradingInterface() {
       : isCancellingHideNote
       ? "Cancelling hide note..."
       : pendingBtcOrderBlocking
-      ? "Masih ada BTC bridge order yang belum selesai. Selesaikan dulu order di panel Pending BTC Deposit."
+      ? "There is an active BTC bridge order still processing. Complete it in Bridge Status before creating another one."
       : !hasPositiveAmount
       ? "Enter a valid amount."
       : hideUsdtTierPriceUnavailable
@@ -6275,6 +6280,12 @@ export function TradingInterface() {
             <p className="text-[11px] text-muted-foreground">
               Bridge details moved to popup so layout stays compact.
             </p>
+            {pendingAwaitingDepositOnly && (
+              <p className="text-[11px] text-warning">
+                This order is waiting for BTC deposit only. You can continue it in the popup, or dismiss local
+                tracking and create a new bridge order.
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
@@ -6315,6 +6326,16 @@ export function TradingInterface() {
                   onClick={() => setPendingBtcDeposit(null)}
                 >
                   Dismiss
+                </Button>
+              )}
+              {pendingAwaitingDepositOnly && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 px-3 text-xs"
+                  onClick={() => setPendingBtcDeposit(null)}
+                >
+                  Dismiss Local Order
                 </Button>
               )}
             </div>

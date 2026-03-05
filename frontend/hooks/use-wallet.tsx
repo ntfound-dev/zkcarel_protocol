@@ -1215,15 +1215,52 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         throw new Error("BTC amount must be at least 1 sat.")
       }
 
-      const activeProvider = wallet.btcProvider || "unisat"
+      const inferredProvider: BtcWalletProviderType =
+        wallet.btcProvider ||
+        (getInjectedBtc("xverse")
+          ? "xverse"
+          : getInjectedBtc("unisat")
+          ? "unisat"
+          : getInjectedBtc("braavos_btc")
+          ? "braavos_btc"
+          : "unisat")
+      const activeProvider = inferredProvider
+      const warmupBtcWalletPrompt = async (
+        injectedWallet: InjectedBtc,
+        options?: { requireTestnet4?: boolean }
+      ) => {
+        try {
+          await requestBtcAccounts(injectedWallet, {
+            requireTestnet4: Boolean(options?.requireTestnet4),
+            timeoutMs: 4_000,
+          })
+        } catch {
+          // Best-effort wake-up for wallet popup/sign request.
+        }
+      }
+      const persistActiveBtcProvider = () => {
+        if (!wallet.btcProvider) {
+          setWallet((prev) => ({
+            ...prev,
+            btcProvider: prev.btcProvider || activeProvider,
+          }))
+        }
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(STORAGE_KEYS.btcProvider, activeProvider)
+        }
+      }
       let xverseError: unknown = null
       if (activeProvider === "xverse") {
         try {
           // Prefer injected path first to avoid unstable sats-connect popup decoding on some Xverse builds.
           const injectedXverse = getInjectedBtc("xverse")
-          const txHash = injectedXverse
-            ? await sendBtcTransferWithInjectedWallet(injectedXverse, destination, roundedSats)
-            : await sendBtcTransferViaXverse(destination, roundedSats)
+          let txHash = ""
+          if (injectedXverse) {
+            await warmupBtcWalletPrompt(injectedXverse, { requireTestnet4: true })
+            txHash = await sendBtcTransferWithInjectedWallet(injectedXverse, destination, roundedSats)
+          } else {
+            txHash = await sendBtcTransferViaXverse(destination, roundedSats)
+          }
           const sentAmount = roundedSats / 100_000_000
           setWallet((prev) => {
             const baseBalance =
@@ -1248,6 +1285,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
               void refreshOnchainBalances()
             }, 1200)
           }
+          persistActiveBtcProvider()
           return txHash
         } catch (error) {
           xverseError = error
@@ -1278,6 +1316,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                 void refreshOnchainBalances()
               }, 1200)
             }
+            persistActiveBtcProvider()
             return txHash
           } catch (fallbackError) {
             xverseError = fallbackError
@@ -1304,6 +1343,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         }
       }
       try {
+        await warmupBtcWalletPrompt(injected, { requireTestnet4: activeProvider === "xverse" })
         const txHash = await sendBtcTransferWithInjectedWallet(injected, destination, roundedSats)
         const sentAmount = roundedSats / 100_000_000
         setWallet((prev) => {
@@ -1329,6 +1369,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             void refreshOnchainBalances()
           }, 1200)
         }
+        persistActiveBtcProvider()
         return txHash
       } catch (error) {
         if (activeProvider === "unisat") {
