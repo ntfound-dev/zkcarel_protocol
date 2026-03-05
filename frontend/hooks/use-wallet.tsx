@@ -2821,11 +2821,17 @@ async function connectBtcWalletViaXverse(): Promise<{ address: string; balance: 
       providerId?: string
     ) => Promise<SatsConnectResultLike<unknown>>
 
+    // Prefer Testnet4 to match app backend/explorer/faucet stack.
+    // Keep fallback for older wallet builds that only expose generic Testnet enum.
+    const preferredBtcNetwork =
+      (sats.BitcoinNetworkType as unknown as { Testnet4?: unknown }).Testnet4 ??
+      sats.BitcoinNetworkType.Testnet
+
     const connectResponse = await request(
       "wallet_connect",
       {
         addresses: [sats.AddressPurpose.Payment, sats.AddressPurpose.Ordinals],
-        network: sats.BitcoinNetworkType.Testnet,
+        network: preferredBtcNetwork,
         message: XVERSE_CONNECT_MESSAGE,
       },
       providerId
