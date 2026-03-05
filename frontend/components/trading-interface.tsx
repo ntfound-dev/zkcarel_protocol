@@ -92,6 +92,7 @@ type PendingBtcDepositState = {
   amountSats: number
   destinationChain: string
   requestSource?: "manual" | "ai"
+  burnTxHash?: string | null
   status?: string
   txHash?: string | null
   sourceInitiateTxHash?: string | null
@@ -729,6 +730,7 @@ const normalizePendingBtcDepositState = (
       parsed.requestSource === "ai" || parsed.requestSource === "manual"
         ? parsed.requestSource
         : "manual",
+    burnTxHash: typeof parsed.burnTxHash === "string" ? parsed.burnTxHash : null,
     status: typeof parsed.status === "string" ? parsed.status : undefined,
     txHash: typeof parsed.txHash === "string" ? parsed.txHash : null,
     sourceInitiateTxHash:
@@ -4329,6 +4331,10 @@ export function TradingInterface() {
                     ? pendingBtcDeposit.requestSource
                     : prev.find((item) => item.bridgeId === normalizedBridgeId)?.requestSource ||
                       "manual",
+                burnTxHash:
+                  pendingBtcDeposit?.bridgeId === normalizedBridgeId
+                    ? pendingBtcDeposit.burnTxHash
+                    : prev.find((item) => item.bridgeId === normalizedBridgeId)?.burnTxHash || null,
                 status: progress.status,
                 txHash:
                   pendingBtcDeposit?.bridgeId === normalizedBridgeId
@@ -5008,6 +5014,7 @@ export function TradingInterface() {
             amountSats,
             destinationChain: toChain,
             requestSource: "manual",
+            burnTxHash: null,
             status: "pending_deposit",
             txHash: null,
             sourceInitiateTxHash: null,
@@ -6822,6 +6829,7 @@ export function TradingInterface() {
               )}
 
               {(pendingBtcDeposit.txHash ||
+                pendingBtcDeposit.burnTxHash ||
                 pendingBtcDeposit.sourceInitiateTxHash ||
                 pendingBtcDeposit.destinationInitiateTxHash ||
                 pendingBtcDeposit.destinationRedeemTxHash ||
@@ -6829,6 +6837,27 @@ export function TradingInterface() {
                 pendingBtcDeposit.instantRefundHash) && (
                 <div className="space-y-1.5 rounded-lg border border-border/60 bg-background/30 p-2.5">
                   <p className="text-[11px] font-medium text-foreground">Transaction refs</p>
+                  {pendingBtcDeposit.burnTxHash && (
+                    <div className="space-y-1">
+                      <p className="text-[11px] text-secondary break-all">
+                        Burn tx: {pendingBtcDeposit.burnTxHash}
+                      </p>
+                      <div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-6 px-2 text-[10px]"
+                          onClick={() =>
+                            openExternalUrl(
+                              buildTxExplorerUrl(pendingBtcDeposit.burnTxHash as string, "starknet")
+                            )
+                          }
+                        >
+                          Open Burn Tx
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   {pendingBtcDeposit.txHash && (
                     <p className="text-[11px] text-success break-all">
                       Deposit tx: {pendingBtcDeposit.txHash}

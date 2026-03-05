@@ -937,6 +937,7 @@ function normalizeAiPendingBtcDepositRecord(
     amountSats,
     destinationChain,
     requestSource: raw.requestSource === "manual" || raw.requestSource === "ai" ? raw.requestSource : "ai",
+    burnTxHash: typeof raw.burnTxHash === "string" ? raw.burnTxHash : null,
     status: typeof raw.status === "string" ? raw.status : "pending_deposit",
     txHash: typeof raw.txHash === "string" ? raw.txHash : null,
     sourceInitiateTxHash:
@@ -1462,6 +1463,7 @@ interface AiPendingBtcDepositRecord {
   amountSats: number
   destinationChain: string
   requestSource?: "manual" | "ai"
+  burnTxHash?: string | null
   status?: string
   txHash?: string | null
   sourceInitiateTxHash?: string | null
@@ -1848,6 +1850,7 @@ export function FloatingAIAssistant() {
   const setupSubmitCooldownUntilRef = React.useRef(0)
   const lastSetupFailureRef = React.useRef("")
   const lastSetupSubmitAtRef = React.useRef(0)
+  const lastAiBurnTxHashRef = React.useRef("")
   const bubbleDragRef = React.useRef({
     active: false,
     startX: 0,
@@ -4250,6 +4253,7 @@ export function FloatingAIAssistant() {
                   amountSats,
                   destinationChain: toChain,
                   requestSource: "ai",
+                  burnTxHash: lastAiBurnTxHashRef.current || null,
                   status: "pending_deposit",
                   txHash: null,
                   sourceInitiateTxHash: null,
@@ -4296,6 +4300,7 @@ export function FloatingAIAssistant() {
                     amountSats,
                     destinationChain: toChain,
                     requestSource: "ai",
+                    burnTxHash: lastAiBurnTxHashRef.current || null,
                     status: "processing",
                     txHash: btcDepositTxHash,
                     sourceInitiateTxHash: `${btcDepositTxHash}:0`,
@@ -5618,6 +5623,7 @@ export function FloatingAIAssistant() {
         }
       }
       setPreparedActionCache(null)
+      lastAiBurnTxHashRef.current = onchainTxHash || ""
 
       notifications.addNotification({
         type: "info",
