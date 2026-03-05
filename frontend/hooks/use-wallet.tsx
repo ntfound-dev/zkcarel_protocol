@@ -980,34 +980,40 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (provider === "xverse") {
       try {
-        // Prefer injected provider first to bypass Xverse popup decodeToken instability.
+        // Trigger official Xverse popup flow first for better UX visibility.
+        const result = await withWalletTimeout(
+          async () => await connectBtcWalletViaXverse(),
+          15_000,
+          "Xverse connect request timed out."
+        )
+        btcAddress = result.address
+        btcBalance = result.balance
         injected = getInjectedBtc("xverse")
-        if (injected) {
-          const accounts = await requestBtcAccounts(injected, { requireTestnet4: true })
-          btcAddress = accounts?.[0] || ""
-          if (btcAddress) {
-            const btcNetwork = detectBtcAddressNetwork(btcAddress)
-            if (btcNetwork !== "testnet") {
-              throw new Error("BTC wallet must be on Bitcoin testnet (native).")
-            }
-            btcBalance = await fetchBtcBalance(injected, btcAddress)
-            if (btcBalance === null) {
-              btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
-            }
-            if (btcBalance === null) {
-              btcBalance = 0
-            }
-          }
-        }
-        if (!btcAddress) {
-          const result = await connectBtcWalletViaXverse()
-          btcAddress = result.address
-          btcBalance = result.balance
-          injected = getInjectedBtc("xverse")
-        }
       } catch (error) {
         xverseConnectError = error
-        console.warn("Xverse connect flow failed:", error)
+        console.warn("Xverse popup connect failed, trying injected fallback:", error)
+        try {
+          injected = getInjectedBtc("xverse")
+          if (injected) {
+            const accounts = await requestBtcAccounts(injected, { requireTestnet4: true, timeoutMs: 6_000 })
+            btcAddress = accounts?.[0] || ""
+            if (btcAddress) {
+              const btcNetwork = detectBtcAddressNetwork(btcAddress)
+              if (btcNetwork !== "testnet") {
+                throw new Error("BTC wallet must be on Bitcoin testnet (native).")
+              }
+              btcBalance = await fetchBtcBalance(injected, btcAddress)
+              if (btcBalance === null) {
+                btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
+              }
+              if (btcBalance === null) {
+                btcBalance = 0
+              }
+            }
+          }
+        } catch (fallbackError) {
+          xverseConnectError = fallbackError
+        }
       }
     }
 
@@ -1021,7 +1027,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           "BTC wallet extension not detected. Install UniSat or Xverse (optional jika hanya pakai ETH/STRK)."
         )
       }
-      const accounts = await requestBtcAccounts(injected, { requireTestnet4: provider === "xverse" })
+      const accounts = await requestBtcAccounts(injected, {
+        requireTestnet4: provider === "xverse",
+        timeoutMs: provider === "xverse" ? 6_000 : 10_000,
+      })
       btcAddress = accounts?.[0] || ""
       if (!btcAddress) {
         throw new Error("BTC wallet not connected")
@@ -2473,9 +2482,13 @@ function scaleBigIntBalance(value: bigint, decimals: number): number | null {
  */
 async function requestBtcAccounts(
   injected: InjectedBtc,
-  options?: { requireTestnet4?: boolean }
+  options?: { requireTestnet4?: boolean; timeoutMs?: number }
 ): Promise<string[] | null> {
   const requireTestnet4 = Boolean(options?.requireTestnet4)
+  const timeoutMs =
+    typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+      ? Math.max(2_000, Math.floor(options.timeoutMs))
+      : 10_000
   const attempts = requireTestnet4
     ? [
         () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet4" }] }),
@@ -2506,7 +2519,7 @@ async function requestBtcAccounts(
     try {
       const result = await withWalletTimeout(
         async () => await attempt(),
-        25_000,
+        timeoutMs,
         "BTC wallet account request timed out."
       )
       const parsed = normalizeBtcAccounts(result)
