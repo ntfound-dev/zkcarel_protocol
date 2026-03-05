@@ -309,6 +309,8 @@ const AI_PANEL_MINIMIZED_HEIGHT_PX = 64
 const AI_PANEL_EXPANDED_HEIGHT_PX = 700
 const AI_PRIVACY_PENDING_NOTES_KEY = "ai_privacy_pending_notes_v3"
 const AI_PRIVACY_PENDING_NOTES_UPDATED_EVENT = "ai-privacy-pending-notes-updated"
+const TRADE_PENDING_BTC_DEPOSIT_KEY = "trade_pending_btc_deposit_v1"
+const TRADE_PENDING_BTC_DEPOSITS_KEY = "trade_pending_btc_deposits_v1"
 
 type BubblePosition = { x: number; y: number }
 
@@ -918,6 +920,83 @@ function upsertAiPendingHideNote(note: AiPendingHideNoteRecord) {
   persistAiPendingHideNotes(next)
 }
 
+function normalizeAiPendingBtcDepositRecord(
+  raw: Partial<AiPendingBtcDepositRecord> | null | undefined
+): AiPendingBtcDepositRecord | null {
+  if (!raw) return null
+  const bridgeId = typeof raw.bridgeId === "string" ? raw.bridgeId.trim() : ""
+  const depositAddress = typeof raw.depositAddress === "string" ? raw.depositAddress.trim() : ""
+  const amountSats = Number.parseInt(String(raw.amountSats || "0"), 10)
+  const destinationChain = typeof raw.destinationChain === "string" ? raw.destinationChain.trim() : ""
+  if (!bridgeId || !depositAddress || !destinationChain || !Number.isFinite(amountSats) || amountSats < 0) {
+    return null
+  }
+  return {
+    bridgeId,
+    depositAddress,
+    amountSats,
+    destinationChain,
+    requestSource: raw.requestSource === "manual" || raw.requestSource === "ai" ? raw.requestSource : "ai",
+    status: typeof raw.status === "string" ? raw.status : "pending_deposit",
+    txHash: typeof raw.txHash === "string" ? raw.txHash : null,
+    sourceInitiateTxHash:
+      typeof raw.sourceInitiateTxHash === "string" ? raw.sourceInitiateTxHash : null,
+    destinationInitiateTxHash:
+      typeof raw.destinationInitiateTxHash === "string" ? raw.destinationInitiateTxHash : null,
+    destinationRedeemTxHash:
+      typeof raw.destinationRedeemTxHash === "string" ? raw.destinationRedeemTxHash : null,
+    refundTxHash: typeof raw.refundTxHash === "string" ? raw.refundTxHash : null,
+    instantRefundTx: typeof raw.instantRefundTx === "string" ? raw.instantRefundTx : null,
+    instantRefundHash: typeof raw.instantRefundHash === "string" ? raw.instantRefundHash : null,
+    lastUpdatedAt:
+      typeof raw.lastUpdatedAt === "number" && Number.isFinite(raw.lastUpdatedAt)
+        ? raw.lastUpdatedAt
+        : Date.now(),
+  }
+}
+
+function loadTradePendingBtcDepositRecords(): AiPendingBtcDepositRecord[] {
+  if (typeof window === "undefined") return []
+  const raw = window.localStorage.getItem(TRADE_PENDING_BTC_DEPOSITS_KEY)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    const seen = new Set<string>()
+    const items: AiPendingBtcDepositRecord[] = []
+    for (const entry of parsed) {
+      const normalized = normalizeAiPendingBtcDepositRecord(entry as Partial<AiPendingBtcDepositRecord>)
+      if (!normalized) continue
+      const id = normalized.bridgeId.toLowerCase()
+      if (seen.has(id)) continue
+      seen.add(id)
+      items.push(normalized)
+    }
+    return items
+  } catch {
+    return []
+  }
+}
+
+function persistTradePendingBtcDepositRecords(items: AiPendingBtcDepositRecord[]) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(TRADE_PENDING_BTC_DEPOSITS_KEY, JSON.stringify(items.slice(0, 20)))
+}
+
+function upsertTradePendingBtcDepositRecord(record: AiPendingBtcDepositRecord) {
+  if (typeof window === "undefined") return
+  const normalized = normalizeAiPendingBtcDepositRecord(record)
+  if (!normalized) return
+  const current = loadTradePendingBtcDepositRecords()
+  const id = normalized.bridgeId.toLowerCase()
+  const next = [
+    normalized,
+    ...current.filter((item) => item.bridgeId.toLowerCase() !== id),
+  ].slice(0, 20)
+  window.localStorage.setItem(TRADE_PENDING_BTC_DEPOSIT_KEY, JSON.stringify(normalized))
+  persistTradePendingBtcDepositRecords(next)
+}
+
 function removeAiPendingHideNote(noteCommitment?: string, nullifier?: string) {
   if (typeof window === "undefined") return
   const normalizedCommitment = (noteCommitment || "").trim().toLowerCase()
@@ -1375,6 +1454,23 @@ interface AiPendingHideNoteRecord {
   amount?: string
   deposited_at_unix: number
   spendable_at_unix?: number
+}
+
+interface AiPendingBtcDepositRecord {
+  bridgeId: string
+  depositAddress: string
+  amountSats: number
+  destinationChain: string
+  requestSource?: "manual" | "ai"
+  status?: string
+  txHash?: string | null
+  sourceInitiateTxHash?: string | null
+  destinationInitiateTxHash?: string | null
+  destinationRedeemTxHash?: string | null
+  refundTxHash?: string | null
+  instantRefundTx?: string | null
+  instantRefundHash?: string | null
+  lastUpdatedAt?: number
 }
 
 type AIData = Record<string, unknown> | null | undefined
@@ -4147,6 +4243,24 @@ export function FloatingAIAssistant() {
               const parsedAmountSats = Number.parseInt(String(bridgeResult.deposit_amount || "0"), 10)
               const amountSats =
                 Number.isFinite(parsedAmountSats) && parsedAmountSats > 0 ? parsedAmountSats : 0
+              if (amountSats > 0) {
+                upsertTradePendingBtcDepositRecord({
+                  bridgeId: bridgeResult.bridge_id,
+                  depositAddress: bridgeResult.deposit_address,
+                  amountSats,
+                  destinationChain: toChain,
+                  requestSource: "ai",
+                  status: "pending_deposit",
+                  txHash: null,
+                  sourceInitiateTxHash: null,
+                  destinationInitiateTxHash: null,
+                  destinationRedeemTxHash: null,
+                  refundTxHash: null,
+                  instantRefundTx: null,
+                  instantRefundHash: null,
+                  lastUpdatedAt: Date.now(),
+                })
+              }
               const btcAmountDisplay =
                 amountSats > 0 ? formatBtcFromSats(amountSats) : "required BTC amount"
               btcDepositAmountDisplay = btcAmountDisplay
@@ -4175,6 +4289,22 @@ export function FloatingAIAssistant() {
                     txHash: btcDepositTxHash,
                     txNetwork: "btc",
                     txExplorerUrls: bridgeExplorerLinks,
+                  })
+                  upsertTradePendingBtcDepositRecord({
+                    bridgeId: bridgeResult.bridge_id,
+                    depositAddress: bridgeResult.deposit_address,
+                    amountSats,
+                    destinationChain: toChain,
+                    requestSource: "ai",
+                    status: "processing",
+                    txHash: btcDepositTxHash,
+                    sourceInitiateTxHash: `${btcDepositTxHash}:0`,
+                    destinationInitiateTxHash: null,
+                    destinationRedeemTxHash: null,
+                    refundTxHash: null,
+                    instantRefundTx: null,
+                    instantRefundHash: null,
+                    lastUpdatedAt: Date.now(),
                   })
                   bridgeSourceTxHash = btcDepositTxHash
                   bridgeSourceTxNetwork = "btc"

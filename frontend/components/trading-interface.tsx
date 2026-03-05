@@ -91,6 +91,7 @@ type PendingBtcDepositState = {
   depositAddress: string
   amountSats: number
   destinationChain: string
+  requestSource?: "manual" | "ai"
   status?: string
   txHash?: string | null
   sourceInitiateTxHash?: string | null
@@ -724,6 +725,10 @@ const normalizePendingBtcDepositState = (
     depositAddress,
     amountSats,
     destinationChain,
+    requestSource:
+      parsed.requestSource === "ai" || parsed.requestSource === "manual"
+        ? parsed.requestSource
+        : "manual",
     status: typeof parsed.status === "string" ? parsed.status : undefined,
     txHash: typeof parsed.txHash === "string" ? parsed.txHash : null,
     sourceInitiateTxHash:
@@ -3063,6 +3068,8 @@ export function TradingInterface() {
       : pendingOrderStatus === "expired" || pendingOrderStatus === "failed"
       ? "text-warning"
       : "text-muted-foreground"
+  const pendingSourceLabel =
+    pendingBtcDeposit?.requestSource === "ai" ? "AI Bridge" : "Manual Bridge"
   const isSwapContractEventOnly = React.useMemo(() => {
     const forcedEventOnly = (process.env.NEXT_PUBLIC_SWAP_CONTRACT_EVENT_ONLY || "").toLowerCase()
     if (forcedEventOnly === "1" || forcedEventOnly === "true") {
@@ -4317,6 +4324,11 @@ export function TradingInterface() {
                     ? pendingBtcDeposit.destinationChain
                     : prev.find((item) => item.bridgeId === normalizedBridgeId)?.destinationChain ||
                       destinationChain,
+                requestSource:
+                  pendingBtcDeposit?.bridgeId === normalizedBridgeId
+                    ? pendingBtcDeposit.requestSource
+                    : prev.find((item) => item.bridgeId === normalizedBridgeId)?.requestSource ||
+                      "manual",
                 status: progress.status,
                 txHash:
                   pendingBtcDeposit?.bridgeId === normalizedBridgeId
@@ -4995,6 +5007,7 @@ export function TradingInterface() {
             depositAddress: response.deposit_address,
             amountSats,
             destinationChain: toChain,
+            requestSource: "manual",
             status: "pending_deposit",
             txHash: null,
             sourceInitiateTxHash: null,
@@ -6429,6 +6442,10 @@ export function TradingInterface() {
                 {pendingStatusLabel}
               </span>
             </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-muted-foreground">Source</span>
+              <span className="text-[11px] text-foreground">{pendingSourceLabel}</span>
+            </div>
             <p className="text-[11px] text-muted-foreground">
               Bridge details moved to popup so layout stays compact.
             </p>
@@ -6673,12 +6690,16 @@ export function TradingInterface() {
                     {pendingBtcDeposit.bridgeId.slice(0, 10)}...
                   </span>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div className="rounded-md border border-border/60 bg-background/40 p-2">
                     <p className="text-[10px] text-muted-foreground">Status</p>
                     <p className={cn("text-xs font-medium", pendingStatusClassName)}>
                       {pendingStatusLabel}
                     </p>
+                  </div>
+                  <div className="rounded-md border border-border/60 bg-background/40 p-2">
+                    <p className="text-[10px] text-muted-foreground">Source</p>
+                    <p className="text-xs font-medium text-foreground">{pendingSourceLabel}</p>
                   </div>
                   <div className="rounded-md border border-border/60 bg-background/40 p-2">
                     <p className="text-[10px] text-muted-foreground">Deposit amount</p>
@@ -6858,6 +6879,7 @@ export function TradingInterface() {
                       const rawStatus = (order.status || (order.txHash ? "processing" : "pending_deposit"))
                         .trim()
                         .toLowerCase()
+                      const sourceLabel = order.requestSource === "ai" ? "AI" : "Manual"
                       const statusLabel =
                         rawStatus === "pending_deposit"
                           ? "Pending deposit"
@@ -6900,6 +6922,7 @@ export function TradingInterface() {
                                 )}
                               </div>
                               <p className={cn("text-[10px]", statusClass)}>{statusLabel}</p>
+                              <p className="text-[10px] text-muted-foreground">Source: {sourceLabel}</p>
                             </div>
                             <div className="flex items-center gap-1">
                               {!isActive && (
