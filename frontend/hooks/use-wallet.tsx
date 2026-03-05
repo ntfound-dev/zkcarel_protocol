@@ -980,37 +980,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (provider === "xverse") {
       try {
-        // Prefer official sats-connect flow first so Xverse shows the expected connect popup/network switch UX.
-        const result = await connectBtcWalletViaXverse()
-        btcAddress = result.address
-        btcBalance = result.balance
+        // Prefer injected provider first to bypass Xverse popup decodeToken instability.
         injected = getInjectedBtc("xverse")
-      } catch (error) {
-        // Some Xverse builds fail in sats-connect popup decode path; fall back to injected API path.
-        xverseConnectError = error
-        console.warn("Xverse sats-connect failed, trying injected API fallback:", error)
-        try {
-          injected = getInjectedBtc("xverse")
-          if (injected) {
-            const accounts = await requestBtcAccounts(injected, { requireTestnet4: true })
-            btcAddress = accounts?.[0] || ""
-            if (btcAddress) {
-              const btcNetwork = detectBtcAddressNetwork(btcAddress)
-              if (btcNetwork !== "testnet") {
-                throw new Error("BTC wallet must be on Bitcoin testnet (native).")
-              }
-              btcBalance = await fetchBtcBalance(injected, btcAddress)
-              if (btcBalance === null) {
-                btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
-              }
-              if (btcBalance === null) {
-                btcBalance = 0
-              }
+        if (injected) {
+          const accounts = await requestBtcAccounts(injected, { requireTestnet4: true })
+          btcAddress = accounts?.[0] || ""
+          if (btcAddress) {
+            const btcNetwork = detectBtcAddressNetwork(btcAddress)
+            if (btcNetwork !== "testnet") {
+              throw new Error("BTC wallet must be on Bitcoin testnet (native).")
+            }
+            btcBalance = await fetchBtcBalance(injected, btcAddress)
+            if (btcBalance === null) {
+              btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
+            }
+            if (btcBalance === null) {
+              btcBalance = 0
             }
           }
-        } catch (fallbackError) {
-          xverseConnectError = fallbackError
         }
+        if (!btcAddress) {
+          const result = await connectBtcWalletViaXverse()
+          btcAddress = result.address
+          btcBalance = result.balance
+          injected = getInjectedBtc("xverse")
+        }
+      } catch (error) {
+        xverseConnectError = error
+        console.warn("Xverse connect flow failed:", error)
       }
     }
 
@@ -1195,8 +1192,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       let xverseError: unknown = null
       if (activeProvider === "xverse") {
         try {
-          // Prefer official sats-connect sendTransfer for Xverse compatibility.
-          const txHash = await sendBtcTransferViaXverse(destination, roundedSats)
+          // Prefer injected path first to avoid unstable sats-connect popup decoding on some Xverse builds.
+          const injectedXverse = getInjectedBtc("xverse")
+          const txHash = injectedXverse
+            ? await sendBtcTransferWithInjectedWallet(injectedXverse, destination, roundedSats)
+            : await sendBtcTransferViaXverse(destination, roundedSats)
           const sentAmount = roundedSats / 100_000_000
           setWallet((prev) => {
             const baseBalance =
@@ -1224,13 +1224,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           return txHash
         } catch (error) {
           xverseError = error
-          // Fallback to injected API path when sats-connect is unstable.
+          // Fallback to sats-connect path when injected API path fails.
           try {
-            const injectedXverse = getInjectedBtc("xverse")
-            if (!injectedXverse) {
-              throw error
-            }
-            const txHash = await sendBtcTransferWithInjectedWallet(injectedXverse, destination, roundedSats)
+            const txHash = await sendBtcTransferViaXverse(destination, roundedSats)
             const sentAmount = roundedSats / 100_000_000
             setWallet((prev) => {
               const baseBalance =
