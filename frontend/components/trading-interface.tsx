@@ -6665,22 +6665,37 @@ export function TradingInterface() {
             </DialogTitle>
           </DialogHeader>
           {pendingBtcDeposit ? (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-muted-foreground">Status</span>
-                <span className={cn("text-xs font-medium", pendingStatusClassName)}>
-                  {pendingStatusLabel}
-                </span>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-border/60 bg-background/30 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-muted-foreground">Current order</span>
+                  <span className="text-[11px] font-mono text-foreground">
+                    {pendingBtcDeposit.bridgeId.slice(0, 10)}...
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-md border border-border/60 bg-background/40 p-2">
+                    <p className="text-[10px] text-muted-foreground">Status</p>
+                    <p className={cn("text-xs font-medium", pendingStatusClassName)}>
+                      {pendingStatusLabel}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-border/60 bg-background/40 p-2">
+                    <p className="text-[10px] text-muted-foreground">Deposit amount</p>
+                    <p className="text-xs font-medium text-foreground">
+                      {formatBtcFromSats(pendingBtcDeposit.amountSats)} BTC
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-md border border-border/60 bg-background/40 p-2">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Deposit address</p>
+                  <p className="mt-1 text-[11px] font-mono text-foreground break-all">
+                    {pendingBtcDeposit.depositAddress}
+                  </p>
+                </div>
               </div>
-              <p className="text-xs text-foreground break-all">
-                Send{" "}
-                <span className="font-semibold">
-                  {formatBtcFromSats(pendingBtcDeposit.amountSats)}
-                </span>{" "}
-                to{" "}
-                <span className="font-mono">{pendingBtcDeposit.depositAddress}</span>
-              </p>
-              <div className="flex flex-wrap gap-2">
+
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                 <Button
                   type="button"
                   onClick={handleSendBtcDepositFromWallet}
@@ -6696,7 +6711,7 @@ export function TradingInterface() {
                   {isSendingBtcDeposit ? (
                     <span className="inline-flex items-center gap-1">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      Waiting signature...
+                      Waiting...
                     </span>
                   ) : pendingBtcDeposit.txHash ? (
                     "Deposit Sent"
@@ -6744,6 +6759,16 @@ export function TradingInterface() {
                     Open Garden Order
                   </Button>
                 )}
+                {btcDepositExplorerUrl && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 px-3 text-xs"
+                    onClick={() => openExternalUrl(btcDepositExplorerUrl)}
+                  >
+                    View Deposit Address
+                  </Button>
+                )}
                 {pendingCanClaimRefund && (
                   <Button
                     type="button"
@@ -6762,17 +6787,8 @@ export function TradingInterface() {
                     )}
                   </Button>
                 )}
-                {btcDepositExplorerUrl && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-8 px-3 text-xs"
-                    onClick={() => openExternalUrl(btcDepositExplorerUrl)}
-                  >
-                    View Deposit Address
-                  </Button>
-                )}
               </div>
+
               {!wallet.btcAddress && (
                 <p className="text-[11px] text-warning">
                   Connect BTC wallet first so the send button can be used.
@@ -6780,50 +6796,64 @@ export function TradingInterface() {
               )}
               {wallet.btcAddress && !isSendingBtcDeposit && !pendingBtcDeposit.txHash && (
                 <p className="text-[11px] text-muted-foreground">
-                  Click Send button to show signature popup in {btcProviderLabel}.
+                  Click Send BTC to open signature popup in {btcProviderLabel}.
                 </p>
               )}
-              {pendingBtcDeposit.txHash && (
-                <p className="text-[11px] text-success break-all">
-                  Last deposit tx: {pendingBtcDeposit.txHash}
-                </p>
+
+              {(pendingBtcDeposit.txHash ||
+                pendingBtcDeposit.sourceInitiateTxHash ||
+                pendingBtcDeposit.destinationInitiateTxHash ||
+                pendingBtcDeposit.destinationRedeemTxHash ||
+                pendingBtcDeposit.refundTxHash ||
+                pendingBtcDeposit.instantRefundHash) && (
+                <div className="space-y-1.5 rounded-lg border border-border/60 bg-background/30 p-2.5">
+                  <p className="text-[11px] font-medium text-foreground">Transaction refs</p>
+                  {pendingBtcDeposit.txHash && (
+                    <p className="text-[11px] text-success break-all">
+                      Deposit tx: {pendingBtcDeposit.txHash}
+                    </p>
+                  )}
+                  {pendingBtcDeposit.sourceInitiateTxHash && (
+                    <p className="text-[11px] text-muted-foreground break-all">
+                      Source tx: {pendingBtcDeposit.sourceInitiateTxHash}
+                    </p>
+                  )}
+                  {pendingBtcDeposit.destinationInitiateTxHash && (
+                    <p className="text-[11px] text-muted-foreground break-all">
+                      Destination initiate tx: {pendingBtcDeposit.destinationInitiateTxHash}
+                    </p>
+                  )}
+                  {pendingBtcDeposit.destinationRedeemTxHash && (
+                    <p className="text-[11px] text-success break-all">
+                      Destination redeem tx: {pendingBtcDeposit.destinationRedeemTxHash}
+                    </p>
+                  )}
+                  {pendingBtcDeposit.refundTxHash && (
+                    <p className="text-[11px] text-success break-all">
+                      Refund tx: {pendingBtcDeposit.refundTxHash}
+                    </p>
+                  )}
+                  {pendingBtcDeposit.instantRefundHash && (
+                    <p className="text-[11px] text-muted-foreground break-all">
+                      Instant refund hash: {pendingBtcDeposit.instantRefundHash}
+                    </p>
+                  )}
+                </div>
               )}
-              {pendingBtcDeposit.sourceInitiateTxHash && (
-                <p className="text-[11px] text-muted-foreground break-all">
-                  Source initiate tx: {pendingBtcDeposit.sourceInitiateTxHash}
-                </p>
-              )}
-              {pendingBtcDeposit.destinationInitiateTxHash && (
-                <p className="text-[11px] text-muted-foreground break-all">
-                  Destination initiate tx: {pendingBtcDeposit.destinationInitiateTxHash}
-                </p>
-              )}
-              {pendingBtcDeposit.destinationRedeemTxHash && (
-                <p className="text-[11px] text-success break-all">
-                  Destination redeem tx: {pendingBtcDeposit.destinationRedeemTxHash}
-                </p>
-              )}
-              {pendingBtcDeposit.refundTxHash && (
-                <p className="text-[11px] text-success break-all">
-                  Refund tx: {pendingBtcDeposit.refundTxHash}
-                </p>
-              )}
-              {pendingBtcDeposit.instantRefundHash && (
-                <p className="text-[11px] text-muted-foreground break-all">
-                  Instant refund hash: {pendingBtcDeposit.instantRefundHash}
-                </p>
-              )}
+
               {(pendingOrderStatus === "expired" || pendingOrderStatus === "failed") && (
                 <p className="text-[11px] text-warning">
-                  Order is already {pendingOrderStatus}. Use Claim Refund button to process BTC return.
+                  Order is already {pendingOrderStatus}. Use Claim Refund to process BTC return.
                 </p>
               )}
+
               {trackedPendingBtcOrders.length > 0 && (
-                <div className="space-y-2 rounded-lg border border-border/60 bg-background/30 p-2">
-                  <p className="text-[11px] font-medium text-foreground">
-                    Tracked Orders ({trackedPendingBtcOrders.length})
-                  </p>
-                  <div className="space-y-2 max-h-44 overflow-auto pr-1">
+                <div className="space-y-2 rounded-lg border border-border/60 bg-background/30 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-medium text-foreground">Tracked Orders</p>
+                    <span className="text-[10px] text-muted-foreground">{trackedPendingBtcOrders.length} total</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-44 overflow-auto pr-1">
                     {trackedPendingBtcOrders.map((order) => {
                       const rawStatus = (order.status || (order.txHash ? "processing" : "pending_deposit"))
                         .trim()
@@ -6854,42 +6884,51 @@ export function TradingInterface() {
                           key={order.bridgeId}
                           className={cn(
                             "rounded-md border px-2 py-1.5",
-                            isActive ? "border-primary/50 bg-primary/10" : "border-border/60"
+                            isActive ? "border-primary/50 bg-primary/10" : "border-border/60 bg-background/40"
                           )}
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-[11px] text-foreground font-medium">
-                              {order.bridgeId.slice(0, 10)}...
-                            </p>
-                            <span className={cn("text-[11px]", statusClass)}>{statusLabel}</span>
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-1.5">
-                            {!isActive && (
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-[11px] font-mono text-foreground truncate">
+                                  {order.bridgeId.slice(0, 10)}...
+                                </p>
+                                {isActive && (
+                                  <span className="rounded px-1.5 py-0.5 text-[9px] font-medium bg-primary/20 text-primary">
+                                    Active
+                                  </span>
+                                )}
+                              </div>
+                              <p className={cn("text-[10px]", statusClass)}>{statusLabel}</p>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {!isActive && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-6 px-2 text-[10px]"
+                                  onClick={() => setPendingBtcDeposit(order)}
+                                >
+                                  Track
+                                </Button>
+                              )}
                               <Button
                                 type="button"
                                 variant="outline"
                                 className="h-6 px-2 text-[10px]"
-                                onClick={() => setPendingBtcDeposit(order)}
+                                onClick={() => openExternalUrl(buildGardenOrderExplorerUrl(order.bridgeId))}
                               >
-                                Track
+                                Open
                               </Button>
-                            )}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="h-6 px-2 text-[10px]"
-                              onClick={() => openExternalUrl(buildGardenOrderExplorerUrl(order.bridgeId))}
-                            >
-                              Open
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="h-6 px-2 text-[10px]"
-                              onClick={() => removeTrackedPendingBtcOrder(order.bridgeId)}
-                            >
-                              Remove
-                            </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="h-6 px-2 text-[10px]"
+                                onClick={() => removeTrackedPendingBtcOrder(order.bridgeId)}
+                              >
+                                Remove
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       )
