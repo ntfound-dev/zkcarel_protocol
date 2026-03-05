@@ -3534,6 +3534,7 @@ export function FloatingAIAssistant() {
             let privacyPayload: PrivacyVerificationPayload | undefined
             let swapResult: Awaited<ReturnType<typeof executeSwap>>
             let finalTxHash = ""
+            let hideDepositTxHash = ""
 
             if (tierUsesGaraga) {
               if (HIDE_BALANCE_SHIELDED_POOL && !HIDE_BALANCE_RELAYER_POOL_ENABLED) {
@@ -3645,6 +3646,7 @@ export function FloatingAIAssistant() {
                     amountText: swapAmountText,
                     providerHint,
                   })
+                  hideDepositTxHash = depositResult.txHash || hideDepositTxHash
                   swapAmountText = depositResult.amountText
                   const remainingWaitMs = Math.max(0, depositResult.spendableAtMs - Date.now())
                   if (remainingWaitMs > 0) {
@@ -3652,13 +3654,18 @@ export function FloatingAIAssistant() {
                       type: "info",
                       title: "Mixing window active",
                       message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Swap Privat now.`,
+                      txHash: hideDepositTxHash || undefined,
+                      txNetwork: hideDepositTxHash ? "starknet" : undefined,
                     })
                   }
                   if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
+                    const depositTxUrl = hideDepositTxHash
+                      ? buildTxExplorerUrl(hideDepositTxHash, "starknet")
+                      : ""
                     throw new Error(
                       `Hide note deposited. Wait ${formatDurationHhMmSs(
                         remainingWaitMs
-                      )} then retry private swap.`
+                      )} then retry private swap.${hideDepositTxHash ? ` Deposit note tx: ${hideDepositTxHash.slice(0, 14)}...` : ""}${depositTxUrl ? `\nTrack deposit tx: ${depositTxUrl}` : ""}`
                     )
                   }
                   if (remainingWaitMs > 0) {
@@ -3854,8 +3861,17 @@ export function FloatingAIAssistant() {
               : ""
             const swapTxPreview = finalTxHash ? `${finalTxHash.slice(0, 14)}...` : "-"
             const swapTxUrl = finalTxHash ? buildTxExplorerUrl(finalTxHash, "starknet") : ""
+            const hideDepositTxPreview = hideDepositTxHash
+              ? `${hideDepositTxHash.slice(0, 14)}...`
+              : ""
+            const hideDepositTxUrl = hideDepositTxHash
+              ? buildTxExplorerUrl(hideDepositTxHash, "starknet")
+              : ""
+            const hideDepositLine = hideDepositTxHash
+              ? `Hide note deposit tx: ${hideDepositTxPreview}${hideDepositTxUrl ? `\nTrack deposit tx: ${hideDepositTxUrl}` : ""}`
+              : ""
             directExecutionMessage = normalizeMessageText(
-              `✅ Swap executed: ${swapAmountText} ${fromToken} -> ${swapResult.to_amount} ${toToken}. Tx: ${swapTxPreview}${swapTxUrl ? `\nTrack tx: ${swapTxUrl}` : ""}\n${pointsLine}\n${discountLine}${aiBonusLine ? `\n${aiBonusLine}` : ""}${pendingLine ? `\n${pendingLine}` : ""}`
+              `✅ Swap executed: ${swapAmountText} ${fromToken} -> ${swapResult.to_amount} ${toToken}. Tx: ${swapTxPreview}${swapTxUrl ? `\nTrack tx: ${swapTxUrl}` : ""}${hideDepositLine ? `\n${hideDepositLine}` : ""}\n${pointsLine}\n${discountLine}${aiBonusLine ? `\n${aiBonusLine}` : ""}${pendingLine ? `\n${pendingLine}` : ""}`
             )
           }
         }
@@ -4281,6 +4297,7 @@ export function FloatingAIAssistant() {
           let txHash = ""
           let stakeAmountText = amountText
           let stakePrivacyPayload: PrivacyVerificationPayload | undefined
+          let hideDepositTxHash = ""
           if (tierUsesGaraga) {
             if (!HIDE_BALANCE_RELAYER_POOL_ENABLED) {
               throw new Error(
@@ -4335,6 +4352,7 @@ export function FloatingAIAssistant() {
                   amountText: stakeAmountText,
                   providerHint,
                 })
+                hideDepositTxHash = depositResult.txHash || hideDepositTxHash
                 stakeAmountText = depositResult.amountText
                 const remainingWaitMs = Math.max(0, depositResult.spendableAtMs - Date.now())
                 if (remainingWaitMs > 0) {
@@ -4342,13 +4360,18 @@ export function FloatingAIAssistant() {
                     type: "info",
                     title: "Mixing window active",
                     message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Stake Privat now.`,
+                    txHash: hideDepositTxHash || undefined,
+                    txNetwork: hideDepositTxHash ? "starknet" : undefined,
                   })
                 }
                 if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
+                  const depositTxUrl = hideDepositTxHash
+                    ? buildTxExplorerUrl(hideDepositTxHash, "starknet")
+                    : ""
                   throw new Error(
                     `Hide note deposited. Wait ${formatDurationHhMmSs(
                       remainingWaitMs
-                    )} then retry private stake.`
+                    )} then retry private stake.${hideDepositTxHash ? ` Deposit note tx: ${hideDepositTxHash.slice(0, 14)}...` : ""}${depositTxUrl ? `\nTrack deposit tx: ${depositTxUrl}` : ""}`
                   )
                 }
                 if (remainingWaitMs > 0) {
@@ -4487,6 +4510,15 @@ export function FloatingAIAssistant() {
           }
           const stakeTxPreview = finalStakeTx ? `${finalStakeTx.slice(0, 14)}...` : "-"
           const stakeTxUrl = finalStakeTx ? buildTxExplorerUrl(finalStakeTx, "starknet") : ""
+          const hideDepositTxPreview = hideDepositTxHash
+            ? `${hideDepositTxHash.slice(0, 14)}...`
+            : ""
+          const hideDepositTxUrl = hideDepositTxHash
+            ? buildTxExplorerUrl(hideDepositTxHash, "starknet")
+            : ""
+          const hideDepositLine = hideDepositTxHash
+            ? `Hide note deposit tx: ${hideDepositTxPreview}${hideDepositTxUrl ? `\nTrack deposit tx: ${hideDepositTxUrl}` : ""}`
+            : ""
           const stakeEstimatedPoints = parseNumberish(stakeResult.estimated_points_earned)
           const stakeDiscountPercent = parseNumberish(stakeResult.nft_discount_percent)
           const stakePointsLine =
@@ -4498,7 +4530,7 @@ export function FloatingAIAssistant() {
               ? `Discount NFT applied ${stakeDiscountPercent.toFixed(2)}% on this stake.`
               : "Discount: not active on this stake."
           directExecutionMessage = normalizeMessageText(
-            `✅ Stake executed: ${stakeAmountText} ${token}. Tx: ${stakeTxPreview}${stakeTxUrl ? `\nTrack tx: ${stakeTxUrl}` : ""}\n${stakePointsLine}\n${stakeDiscountLine}`
+            `✅ Stake executed: ${stakeAmountText} ${token}. Tx: ${stakeTxPreview}${stakeTxUrl ? `\nTrack tx: ${stakeTxUrl}` : ""}${hideDepositLine ? `\n${hideDepositLine}` : ""}\n${stakePointsLine}\n${stakeDiscountLine}`
           )
           }
         }
@@ -4635,6 +4667,7 @@ export function FloatingAIAssistant() {
           let txHash = ""
           let orderAmountText = amountText
           let limitPrivacyPayload: PrivacyVerificationPayload | undefined
+          let hideDepositTxHash = ""
           if (tierUsesGaraga) {
             if (!HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED) {
               throw new Error(
@@ -4694,6 +4727,7 @@ export function FloatingAIAssistant() {
                   amountText: orderAmountText,
                   providerHint,
                 })
+                hideDepositTxHash = depositResult.txHash || hideDepositTxHash
                 orderAmountText = depositResult.amountText
                 const remainingWaitMs = Math.max(0, depositResult.spendableAtMs - Date.now())
                 if (remainingWaitMs > 0) {
@@ -4701,13 +4735,18 @@ export function FloatingAIAssistant() {
                     type: "info",
                     title: "Mixing window active",
                     message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Limit Privat now.`,
+                    txHash: hideDepositTxHash || undefined,
+                    txNetwork: hideDepositTxHash ? "starknet" : undefined,
                   })
                 }
                 if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
+                  const depositTxUrl = hideDepositTxHash
+                    ? buildTxExplorerUrl(hideDepositTxHash, "starknet")
+                    : ""
                   throw new Error(
                     `Hide note deposited. Wait ${formatDurationHhMmSs(
                       remainingWaitMs
-                    )} then retry private limit order.`
+                    )} then retry private limit order.${hideDepositTxHash ? ` Deposit note tx: ${hideDepositTxHash.slice(0, 14)}...` : ""}${depositTxUrl ? `\nTrack deposit tx: ${depositTxUrl}` : ""}`
                   )
                 }
                 if (remainingWaitMs > 0) {
@@ -4838,6 +4877,15 @@ export function FloatingAIAssistant() {
           const limitTxHash = (limitResult.privacy_tx_hash || txHash || "").trim()
           const limitTxPreview = limitTxHash ? `${limitTxHash.slice(0, 14)}...` : "-"
           const limitTxUrl = limitTxHash ? buildTxExplorerUrl(limitTxHash, "starknet") : ""
+          const hideDepositTxPreview = hideDepositTxHash
+            ? `${hideDepositTxHash.slice(0, 14)}...`
+            : ""
+          const hideDepositTxUrl = hideDepositTxHash
+            ? buildTxExplorerUrl(hideDepositTxHash, "starknet")
+            : ""
+          const hideDepositLine = hideDepositTxHash
+            ? `Hide note deposit tx: ${hideDepositTxPreview}${hideDepositTxUrl ? `\nTrack deposit tx: ${hideDepositTxUrl}` : ""}`
+            : ""
           const limitEstimatedPoints = parseNumberish(limitResult.estimated_points_earned)
           const limitDiscountPercent = parseNumberish(limitResult.nft_discount_percent)
           const limitPointsLine =
@@ -4849,7 +4897,7 @@ export function FloatingAIAssistant() {
               ? `Discount NFT active ${limitDiscountPercent.toFixed(2)}% (used when fee-discountable execution is applied).`
               : "Discount: not active on this limit order."
           directExecutionMessage = normalizeMessageText(
-            `✅ Limit order created: ${orderAmountText} ${fromToken} -> ${toToken} at ${priceText} (${expiry}). Order: ${limitResult.order_id}. Tx: ${limitTxPreview}${limitTxUrl ? `\nTrack tx: ${limitTxUrl}` : ""}\n${limitPointsLine}\n${limitDiscountLine}`
+            `✅ Limit order created: ${orderAmountText} ${fromToken} -> ${toToken} at ${priceText} (${expiry}). Order: ${limitResult.order_id}. Tx: ${limitTxPreview}${limitTxUrl ? `\nTrack tx: ${limitTxUrl}` : ""}${hideDepositLine ? `\n${hideDepositLine}` : ""}\n${limitPointsLine}\n${limitDiscountLine}`
           )
           }
         }
