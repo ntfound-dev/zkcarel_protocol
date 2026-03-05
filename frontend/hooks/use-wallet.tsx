@@ -980,10 +980,31 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (provider === "xverse") {
       try {
-        const result = await connectBtcWalletViaXverse()
-        btcAddress = result.address
-        btcBalance = result.balance
+        // Prefer injected provider flow first; this avoids some sats-connect decodeToken crashes.
         injected = getInjectedBtc("xverse")
+        if (injected) {
+          const accounts = await requestBtcAccounts(injected)
+          btcAddress = accounts?.[0] || ""
+          if (btcAddress) {
+            const btcNetwork = detectBtcAddressNetwork(btcAddress)
+            if (btcNetwork !== "testnet") {
+              throw new Error("BTC wallet must be on Bitcoin testnet (native).")
+            }
+            btcBalance = await fetchBtcBalance(injected, btcAddress)
+            if (btcBalance === null) {
+              btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
+            }
+            if (btcBalance === null) {
+              btcBalance = 0
+            }
+          }
+        }
+        if (!btcAddress) {
+          const result = await connectBtcWalletViaXverse()
+          btcAddress = result.address
+          btcBalance = result.balance
+          injected = getInjectedBtc("xverse")
+        }
       } catch (error) {
         // Some Xverse builds fail in sats-connect popup decode path; fall back to injected API path.
         xverseConnectError = error
@@ -1172,7 +1193,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       let xverseError: unknown = null
       if (activeProvider === "xverse") {
         try {
-          const txHash = await sendBtcTransferViaXverse(destination, roundedSats)
+          // Prefer injected provider path first for Xverse stability.
+          const injectedXverse = getInjectedBtc("xverse")
+          const txHash = injectedXverse
+            ? await sendBtcTransferWithInjectedWallet(injectedXverse, destination, roundedSats)
+            : await sendBtcTransferViaXverse(destination, roundedSats)
           const sentAmount = roundedSats / 100_000_000
           setWallet((prev) => {
             const baseBalance =
@@ -1200,6 +1225,37 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           return txHash
         } catch (error) {
           xverseError = error
+          // Fallback to sats-connect if injected API path fails.
+          try {
+            const txHash = await sendBtcTransferViaXverse(destination, roundedSats)
+            const sentAmount = roundedSats / 100_000_000
+            setWallet((prev) => {
+              const baseBalance =
+                typeof prev.onchainBalance.BTC === "number" && Number.isFinite(prev.onchainBalance.BTC)
+                  ? prev.onchainBalance.BTC
+                  : prev.balance.BTC
+              const nextBalance = Math.max(0, (baseBalance || 0) - sentAmount)
+              return {
+                ...prev,
+                balance: {
+                  ...prev.balance,
+                  BTC: nextBalance,
+                },
+                onchainBalance: {
+                  ...prev.onchainBalance,
+                  BTC: nextBalance,
+                },
+              }
+            })
+            if (typeof window !== "undefined") {
+              window.setTimeout(() => {
+                void refreshOnchainBalances()
+              }, 1200)
+            }
+            return txHash
+          } catch (fallbackError) {
+            xverseError = fallbackError
+          }
         }
       }
 
@@ -2401,10 +2457,14 @@ async function requestBtcAccounts(injected: InjectedBtc): Promise<string[] | nul
   const attempts = [
     () => injected.requestAccounts?.(),
     () => injected.request?.({ method: "requestAccounts" }),
+    () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet4" }] }),
+    () => injected.request?.({ method: "requestAccounts", params: ["testnet4"] }),
     () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet" }] }),
     () => injected.request?.({ method: "requestAccounts", params: ["testnet"] }),
     () => injected.getAccounts?.(),
     () => injected.request?.({ method: "getAccounts" }),
+    () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet4" }] }),
+    () => injected.request?.({ method: "getAccounts", params: ["testnet4"] }),
     () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet" }] }),
     () => injected.request?.({ method: "getAccounts", params: ["testnet"] }),
   ]
