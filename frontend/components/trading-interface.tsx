@@ -172,6 +172,7 @@ const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v2"
 const TRADE_PRIVACY_PENDING_NOTES_KEY = "trade_privacy_pending_notes_v3"
 const TRADE_PRIVACY_PENDING_NOTES_UPDATED_EVENT = "trade-privacy-pending-notes-updated"
 const TRADE_PENDING_BTC_DEPOSIT_KEY = "trade_pending_btc_deposit_v1"
+const TRADE_PENDING_BTC_DEPOSITS_KEY = "trade_pending_btc_deposits_v1"
 const TRADE_BRIDGE_REWARDS_KEY = "trade_bridge_rewards_v1"
 const DEV_AUTO_GARAGA_PAYLOAD_ENABLED =
   process.env.NODE_ENV !== "production" &&
@@ -706,48 +707,55 @@ const FINALIZED_GARDEN_ORDER_STATUSES = new Set([
   "expired",
 ])
 
+const normalizePendingBtcDepositState = (
+  parsed: Partial<PendingBtcDepositState> | null | undefined
+): PendingBtcDepositState | null => {
+  if (!parsed) return null
+  const bridgeId = typeof parsed.bridgeId === "string" ? parsed.bridgeId.trim() : ""
+  const depositAddress = typeof parsed.depositAddress === "string" ? parsed.depositAddress.trim() : ""
+  const amountSats = Number.parseInt(String(parsed.amountSats || "0"), 10)
+  const destinationChain =
+    typeof parsed.destinationChain === "string" ? parsed.destinationChain.trim() : ""
+  if (!bridgeId || !depositAddress || !destinationChain || !Number.isFinite(amountSats) || amountSats < 0) {
+    return null
+  }
+  return {
+    bridgeId,
+    depositAddress,
+    amountSats,
+    destinationChain,
+    status: typeof parsed.status === "string" ? parsed.status : undefined,
+    txHash: typeof parsed.txHash === "string" ? parsed.txHash : null,
+    sourceInitiateTxHash:
+      typeof parsed.sourceInitiateTxHash === "string" ? parsed.sourceInitiateTxHash : null,
+    destinationInitiateTxHash:
+      typeof parsed.destinationInitiateTxHash === "string" ? parsed.destinationInitiateTxHash : null,
+    destinationRedeemTxHash:
+      typeof parsed.destinationRedeemTxHash === "string" ? parsed.destinationRedeemTxHash : null,
+    refundTxHash: typeof parsed.refundTxHash === "string" ? parsed.refundTxHash : null,
+    instantRefundTx: typeof parsed.instantRefundTx === "string" ? parsed.instantRefundTx : null,
+    instantRefundHash: typeof parsed.instantRefundHash === "string" ? parsed.instantRefundHash : null,
+    lastUpdatedAt:
+      typeof parsed.lastUpdatedAt === "number" && Number.isFinite(parsed.lastUpdatedAt)
+        ? parsed.lastUpdatedAt
+        : undefined,
+  }
+}
+
 const loadPendingBtcDeposit = (): PendingBtcDepositState | null => {
   if (typeof window === "undefined") return null
   const raw = window.localStorage.getItem(TRADE_PENDING_BTC_DEPOSIT_KEY)
   if (!raw) return null
   try {
-    const parsed = JSON.parse(raw) as Partial<PendingBtcDepositState>
-    const bridgeId = typeof parsed.bridgeId === "string" ? parsed.bridgeId.trim() : ""
-    const depositAddress =
-      typeof parsed.depositAddress === "string" ? parsed.depositAddress.trim() : ""
-    const amountSats = Number.parseInt(String(parsed.amountSats || "0"), 10)
-    const destinationChain =
-      typeof parsed.destinationChain === "string" ? parsed.destinationChain.trim() : ""
-    if (!bridgeId || !depositAddress || !destinationChain || !Number.isFinite(amountSats) || amountSats < 0) {
-      return null
-    }
+    const parsed = normalizePendingBtcDepositState(JSON.parse(raw) as Partial<PendingBtcDepositState>)
+    if (!parsed) return null
     const normalizedStatus =
       typeof parsed.status === "string" ? parsed.status.trim().toLowerCase() : ""
     if (FINALIZED_GARDEN_ORDER_STATUSES.has(normalizedStatus)) {
       // Completed/failed historical orders should not block current bridge UI on reload.
       return null
     }
-    return {
-      bridgeId,
-      depositAddress,
-      amountSats,
-      destinationChain,
-      status: typeof parsed.status === "string" ? parsed.status : undefined,
-      txHash: typeof parsed.txHash === "string" ? parsed.txHash : null,
-      sourceInitiateTxHash:
-        typeof parsed.sourceInitiateTxHash === "string" ? parsed.sourceInitiateTxHash : null,
-      destinationInitiateTxHash:
-        typeof parsed.destinationInitiateTxHash === "string" ? parsed.destinationInitiateTxHash : null,
-      destinationRedeemTxHash:
-        typeof parsed.destinationRedeemTxHash === "string" ? parsed.destinationRedeemTxHash : null,
-      refundTxHash: typeof parsed.refundTxHash === "string" ? parsed.refundTxHash : null,
-      instantRefundTx: typeof parsed.instantRefundTx === "string" ? parsed.instantRefundTx : null,
-      instantRefundHash: typeof parsed.instantRefundHash === "string" ? parsed.instantRefundHash : null,
-      lastUpdatedAt:
-        typeof parsed.lastUpdatedAt === "number" && Number.isFinite(parsed.lastUpdatedAt)
-          ? parsed.lastUpdatedAt
-          : undefined,
-    }
+    return parsed
   } catch {
     return null
   }
@@ -760,6 +768,62 @@ const persistPendingBtcDeposit = (payload: PendingBtcDepositState | null) => {
     return
   }
   window.localStorage.setItem(TRADE_PENDING_BTC_DEPOSIT_KEY, JSON.stringify(payload))
+}
+
+const loadPendingBtcDeposits = (): PendingBtcDepositState[] => {
+  if (typeof window === "undefined") return []
+  const raw = window.localStorage.getItem(TRADE_PENDING_BTC_DEPOSITS_KEY)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    const seen = new Set<string>()
+    const items: PendingBtcDepositState[] = []
+    for (const record of parsed) {
+      const normalized = normalizePendingBtcDepositState(record as Partial<PendingBtcDepositState>)
+      if (!normalized) continue
+      const id = normalized.bridgeId.trim().toLowerCase()
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      items.push(normalized)
+    }
+    return items.sort((a, b) => {
+      const aTs = typeof a.lastUpdatedAt === "number" ? a.lastUpdatedAt : 0
+      const bTs = typeof b.lastUpdatedAt === "number" ? b.lastUpdatedAt : 0
+      return bTs - aTs
+    })
+  } catch {
+    return []
+  }
+}
+
+const persistPendingBtcDeposits = (items: PendingBtcDepositState[]) => {
+  if (typeof window === "undefined") return
+  if (!Array.isArray(items) || items.length === 0) {
+    window.localStorage.removeItem(TRADE_PENDING_BTC_DEPOSITS_KEY)
+    return
+  }
+  const normalized = items
+    .map((item) => normalizePendingBtcDepositState(item))
+    .filter((item): item is PendingBtcDepositState => !!item)
+    .slice(0, 20)
+  if (normalized.length === 0) {
+    window.localStorage.removeItem(TRADE_PENDING_BTC_DEPOSITS_KEY)
+    return
+  }
+  window.localStorage.setItem(TRADE_PENDING_BTC_DEPOSITS_KEY, JSON.stringify(normalized))
+}
+
+const upsertPendingBtcDepositList = (
+  items: PendingBtcDepositState[],
+  next: PendingBtcDepositState
+): PendingBtcDepositState[] => {
+  const normalizedNext = normalizePendingBtcDepositState(next)
+  if (!normalizedNext) return items
+  const id = normalizedNext.bridgeId.trim().toLowerCase()
+  const withoutCurrent = items.filter((item) => item.bridgeId.trim().toLowerCase() !== id)
+  const merged = [{ ...normalizedNext, lastUpdatedAt: Date.now() }, ...withoutCurrent]
+  return merged.slice(0, 20)
 }
 
 const loadBridgeRewardsSnapshot = (): BridgeRewardsSnapshot | null => {
@@ -1733,6 +1797,7 @@ export function TradingInterface() {
   const [xverseUserId, setXverseUserId] = React.useState("")
   const [btcVaultCopied, setBtcVaultCopied] = React.useState(false)
   const [pendingBtcDeposit, setPendingBtcDeposit] = React.useState<PendingBtcDepositState | null>(null)
+  const [pendingBtcDeposits, setPendingBtcDeposits] = React.useState<PendingBtcDepositState[]>([])
   const [bridgeStatusPopupOpen, setBridgeStatusPopupOpen] = React.useState(false)
   const [lastBridgeRewards, setLastBridgeRewards] = React.useState<BridgeRewardsSnapshot | null>(null)
   const [isSendingBtcDeposit, setIsSendingBtcDeposit] = React.useState(false)
@@ -2259,6 +2324,28 @@ export function TradingInterface() {
     if (!pendingBtcDeposit?.bridgeId) return ""
     return buildGardenOrderExplorerUrl(pendingBtcDeposit.bridgeId)
   }, [pendingBtcDeposit?.bridgeId])
+  const trackedPendingBtcOrders = React.useMemo(() => {
+    const base = [...pendingBtcDeposits]
+    if (pendingBtcDeposit) {
+      return upsertPendingBtcDepositList(base, pendingBtcDeposit)
+    }
+    return base.slice(0, 20)
+  }, [pendingBtcDeposit, pendingBtcDeposits])
+  const removeTrackedPendingBtcOrder = React.useCallback((bridgeId: string) => {
+    const normalized = (bridgeId || "").trim().toLowerCase()
+    if (!normalized) return
+    setPendingBtcDeposits((prev) => {
+      const next = prev.filter((item) => item.bridgeId.trim().toLowerCase() !== normalized)
+      persistPendingBtcDeposits(next)
+      setPendingBtcDeposit((current) => {
+        if (current && current.bridgeId.trim().toLowerCase() === normalized) {
+          return next[0] || null
+        }
+        return current
+      })
+      return next
+    })
+  }, [])
 
   const preferredReceiveAddress = React.useMemo(
     () =>
@@ -2305,19 +2392,36 @@ export function TradingInterface() {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    setPendingBtcDeposit(loadPendingBtcDeposit())
+    const single = loadPendingBtcDeposit()
+    const list = loadPendingBtcDeposits()
+    const nextList = single ? upsertPendingBtcDepositList(list, single) : list
+    setPendingBtcDeposits(nextList)
+    setPendingBtcDeposit(single || nextList[0] || null)
     setLastBridgeRewards(loadBridgeRewardsSnapshot())
   }, [])
 
   React.useEffect(() => {
     persistPendingBtcDeposit(pendingBtcDeposit)
+    if (!pendingBtcDeposit) return
+    setPendingBtcDeposits((prev) => {
+      const next = upsertPendingBtcDepositList(prev, pendingBtcDeposit)
+      persistPendingBtcDeposits(next)
+      return next
+    })
   }, [pendingBtcDeposit])
 
   React.useEffect(() => {
-    if (!pendingBtcDeposit) {
-      setBridgeStatusPopupOpen(false)
+    persistPendingBtcDeposits(pendingBtcDeposits)
+  }, [pendingBtcDeposits])
+
+  React.useEffect(() => {
+    if (pendingBtcDeposit) return
+    if (pendingBtcDeposits.length > 0) {
+      setPendingBtcDeposit(pendingBtcDeposits[0])
+      return
     }
-  }, [pendingBtcDeposit])
+    setBridgeStatusPopupOpen(false)
+  }, [pendingBtcDeposit, pendingBtcDeposits])
 
   React.useEffect(() => {
     persistBridgeRewardsSnapshot(lastBridgeRewards)
@@ -2925,7 +3029,8 @@ export function TradingInterface() {
     !pendingIsFinalized &&
     !pendingBtcDeposit?.txHash &&
     (pendingOrderStatus === "pending_deposit" || pendingOrderStatus === "pending" || !pendingOrderStatus)
-  const pendingBtcOrderBlocking = showPendingBtcDeposit && !pendingIsFinalized && !pendingAwaitingDepositOnly
+  // Allow creating new bridge/swap transactions while previous BTC bridge order is settling.
+  const pendingBtcOrderBlocking = false
   const pendingCanClaimRefund =
     Boolean(
       pendingBtcDeposit &&
@@ -4198,6 +4303,35 @@ export function TradingInterface() {
                   }
                 : prev
             )
+            setPendingBtcDeposits((prev) =>
+              upsertPendingBtcDepositList(prev, {
+                bridgeId: normalizedBridgeId,
+                depositAddress: pendingBtcDeposit?.bridgeId === normalizedBridgeId
+                  ? pendingBtcDeposit.depositAddress
+                  : prev.find((item) => item.bridgeId === normalizedBridgeId)?.depositAddress || "",
+                amountSats: pendingBtcDeposit?.bridgeId === normalizedBridgeId
+                  ? pendingBtcDeposit.amountSats
+                  : prev.find((item) => item.bridgeId === normalizedBridgeId)?.amountSats || 0,
+                destinationChain:
+                  pendingBtcDeposit?.bridgeId === normalizedBridgeId
+                    ? pendingBtcDeposit.destinationChain
+                    : prev.find((item) => item.bridgeId === normalizedBridgeId)?.destinationChain ||
+                      destinationChain,
+                status: progress.status,
+                txHash:
+                  pendingBtcDeposit?.bridgeId === normalizedBridgeId
+                    ? pendingBtcDeposit.txHash
+                    : prev.find((item) => item.bridgeId === normalizedBridgeId)?.txHash || null,
+                sourceInitiateTxHash: progress.sourceInitiateTxHash || null,
+                destinationInitiateTxHash: progress.destinationInitiateTxHash || null,
+                destinationRedeemTxHash: progress.destinationRedeemTxHash || null,
+                refundTxHash: progress.sourceRefundTxHash || progress.destinationRefundTxHash || null,
+                instantRefundTx: progress.instantRefundTx || null,
+                instantRefundHash:
+                  prev.find((item) => item.bridgeId === normalizedBridgeId)?.instantRefundHash || null,
+                lastUpdatedAt: Date.now(),
+              })
+            )
 
             if (progress.isCompleted) {
               const txHash =
@@ -4331,7 +4465,7 @@ export function TradingInterface() {
         delete gardenOrderPollingRef.current[normalizedBridgeId]
       }
     },
-    [notifications, openTradeResultPopup, wallet]
+    [notifications, openTradeResultPopup, pendingBtcDeposit, wallet]
   )
 
   React.useEffect(() => {
@@ -4358,6 +4492,24 @@ export function TradingInterface() {
     pendingBtcDeposit?.status,
     pollGardenBridgeOrder,
   ])
+
+  React.useEffect(() => {
+    const activeOrders = trackedPendingBtcOrders.filter((order) => {
+      const status = (order.status || "").trim().toLowerCase()
+      return !FINALIZED_GARDEN_ORDER_STATUSES.has(status)
+    })
+    if (activeOrders.length === 0) return
+
+    for (const order of activeOrders) {
+      void pollGardenBridgeOrder(order.bridgeId, order.destinationChain)
+    }
+    const timer = window.setInterval(() => {
+      for (const order of activeOrders) {
+        void pollGardenBridgeOrder(order.bridgeId, order.destinationChain)
+      }
+    }, 45_000)
+    return () => window.clearInterval(timer)
+  }, [pollGardenBridgeOrder, trackedPendingBtcOrders])
 
   const handleSendBtcDepositFromWallet = React.useCallback(async () => {
     if (!pendingBtcDeposit) return
@@ -6280,6 +6432,11 @@ export function TradingInterface() {
             <p className="text-[11px] text-muted-foreground">
               Bridge details moved to popup so layout stays compact.
             </p>
+            {!pendingIsFinalized && (
+              <p className="text-[11px] text-secondary">
+                This order can keep processing in background. New bridge transactions are still allowed.
+              </p>
+            )}
             {pendingAwaitingDepositOnly && (
               <p className="text-[11px] text-warning">
                 This order is waiting for BTC deposit only. You can continue it in the popup, or dismiss local
@@ -6323,7 +6480,7 @@ export function TradingInterface() {
                   type="button"
                   variant="outline"
                   className="h-8 px-3 text-xs"
-                  onClick={() => setPendingBtcDeposit(null)}
+                  onClick={() => removeTrackedPendingBtcOrder(pendingBtcDeposit.bridgeId)}
                 >
                   Dismiss
                 </Button>
@@ -6333,7 +6490,7 @@ export function TradingInterface() {
                   type="button"
                   variant="outline"
                   className="h-8 px-3 text-xs"
-                  onClick={() => setPendingBtcDeposit(null)}
+                  onClick={() => removeTrackedPendingBtcOrder(pendingBtcDeposit.bridgeId)}
                 >
                   Dismiss Local Order
                 </Button>
@@ -6561,6 +6718,22 @@ export function TradingInterface() {
                 >
                   Refresh Status
                 </Button>
+                {trackedPendingBtcOrders.length > 1 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 px-3 text-xs"
+                    onClick={() => {
+                      for (const order of trackedPendingBtcOrders) {
+                        const normalized = (order.status || "").trim().toLowerCase()
+                        if (FINALIZED_GARDEN_ORDER_STATUSES.has(normalized)) continue
+                        void pollGardenBridgeOrder(order.bridgeId, order.destinationChain)
+                      }
+                    }}
+                  >
+                    Refresh All
+                  </Button>
+                )}
                 {pendingGardenOrderExplorerUrl && (
                   <Button
                     type="button"
@@ -6644,6 +6817,85 @@ export function TradingInterface() {
                 <p className="text-[11px] text-warning">
                   Order is already {pendingOrderStatus}. Use Claim Refund button to process BTC return.
                 </p>
+              )}
+              {trackedPendingBtcOrders.length > 0 && (
+                <div className="space-y-2 rounded-lg border border-border/60 bg-background/30 p-2">
+                  <p className="text-[11px] font-medium text-foreground">
+                    Tracked Orders ({trackedPendingBtcOrders.length})
+                  </p>
+                  <div className="space-y-2 max-h-44 overflow-auto pr-1">
+                    {trackedPendingBtcOrders.map((order) => {
+                      const rawStatus = (order.status || (order.txHash ? "processing" : "pending_deposit"))
+                        .trim()
+                        .toLowerCase()
+                      const statusLabel =
+                        rawStatus === "pending_deposit"
+                          ? "Pending deposit"
+                          : rawStatus === "initiated" || rawStatus === "processing"
+                          ? "Processing"
+                          : rawStatus === "expired"
+                          ? "Expired"
+                          : rawStatus === "refunded"
+                          ? "Refunded"
+                          : rawStatus === "completed"
+                          ? "Completed"
+                          : rawStatus === "failed"
+                          ? "Failed"
+                          : rawStatus || "Pending"
+                      const statusClass =
+                        rawStatus === "completed" || rawStatus === "refunded"
+                          ? "text-success"
+                          : rawStatus === "expired" || rawStatus === "failed"
+                          ? "text-warning"
+                          : "text-muted-foreground"
+                      const isActive = order.bridgeId === pendingBtcDeposit.bridgeId
+                      return (
+                        <div
+                          key={order.bridgeId}
+                          className={cn(
+                            "rounded-md border px-2 py-1.5",
+                            isActive ? "border-primary/50 bg-primary/10" : "border-border/60"
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-[11px] text-foreground font-medium">
+                              {order.bridgeId.slice(0, 10)}...
+                            </p>
+                            <span className={cn("text-[11px]", statusClass)}>{statusLabel}</span>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {!isActive && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="h-6 px-2 text-[10px]"
+                                onClick={() => setPendingBtcDeposit(order)}
+                              >
+                                Track
+                              </Button>
+                            )}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={() => openExternalUrl(buildGardenOrderExplorerUrl(order.bridgeId))}
+                            >
+                              Open
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={() => removeTrackedPendingBtcOrder(order.bridgeId)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               )}
             </div>
           ) : null}
