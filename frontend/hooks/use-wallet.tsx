@@ -1229,13 +1229,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         injectedWallet: InjectedBtc,
         options?: { requireTestnet4?: boolean }
       ) => {
-        try {
-          await requestBtcAccounts(injectedWallet, {
-            requireTestnet4: Boolean(options?.requireTestnet4),
-            timeoutMs: 4_000,
-          })
-        } catch {
-          // Best-effort wake-up for wallet popup/sign request.
+        const requireTestnet4 = Boolean(options?.requireTestnet4)
+        const attempts = requireTestnet4
+          ? [
+              () => injectedWallet.request?.({ method: "requestAccounts", params: [{ network: "testnet4" }] }),
+              () => injectedWallet.request?.({ method: "requestAccounts", params: ["testnet4"] }),
+              () => injectedWallet.requestAccounts?.(),
+            ]
+          : [
+              () => injectedWallet.requestAccounts?.(),
+              () => injectedWallet.request?.({ method: "requestAccounts" }),
+            ]
+        const startedAt = Date.now()
+        for (const attempt of attempts) {
+          if (Date.now() - startedAt > 1_500) break
+          try {
+            await withWalletTimeout(
+              async () => await attempt(),
+              1_200,
+              "BTC wallet wake-up request timed out."
+            )
+            return
+          } catch (error) {
+            const normalized = normalizeWalletError(error, "BTC wallet wake-up failed.")
+            if (/already pending/i.test(normalized.message)) {
+              // Popup is already open; no further warm-up needed.
+              return
+            }
+          }
         }
       }
       const persistActiveBtcProvider = () => {
@@ -2944,13 +2965,20 @@ async function sendBtcTransferWithInjectedWallet(
     try {
       const result = await withWalletTimeout(
         async () => await attempt(),
-        7_000,
+        4_500,
         "BTC wallet transfer request timed out."
       )
       const txHash = normalizeBtcTxHash(result)
       if (txHash) return txHash
     } catch (error) {
       lastError = error
+      const normalized = normalizeWalletError(error, "Failed to send BTC transaction from wallet.")
+      if (
+        /already pending/i.test(normalized.message) ||
+        /request rejected/i.test(normalized.message)
+      ) {
+        throw normalized
+      }
     }
   }
 
@@ -2988,7 +3016,7 @@ async function sendBtcTransferViaXverse(toAddress: string, amountSats: number): 
         },
         providerId
       ),
-    45_000,
+    20_000,
     "Xverse transfer request timed out. Open wallet popup and retry."
   )
   const result = unwrapSatsConnectResult<Record<string, unknown>>(
