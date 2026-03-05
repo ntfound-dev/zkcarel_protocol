@@ -109,6 +109,7 @@ const STORAGE_KEYS = {
   starknetAddress: "wallet_address_starknet",
   evmAddress: "wallet_address_evm",
   btcAddress: "wallet_address_btc",
+  btcProvider: "wallet_provider_btc",
   sumoToken: "sumo_login_token",
   sumoAddress: "sumo_login_address",
   referralCode: "referral_code",
@@ -189,6 +190,15 @@ function createInitialWalletState(): WalletState {
   }
 }
 
+function normalizeStoredBtcProvider(raw: string | null): BtcWalletProviderType | null {
+  if (!raw) return null
+  const value = raw.trim().toLowerCase()
+  if (value === "unisat" || value === "xverse" || value === "braavos_btc") {
+    return value as BtcWalletProviderType
+  }
+  return null
+}
+
 /**
  * Handles `clearWalletStorage` in the wallet client flow.
  *
@@ -204,6 +214,7 @@ function clearWalletStorage() {
   window.localStorage.removeItem(STORAGE_KEYS.starknetAddress)
   window.localStorage.removeItem(STORAGE_KEYS.evmAddress)
   window.localStorage.removeItem(STORAGE_KEYS.btcAddress)
+  window.localStorage.removeItem(STORAGE_KEYS.btcProvider)
   window.sessionStorage.removeItem(STORAGE_KEYS.sumoToken)
   window.sessionStorage.removeItem(STORAGE_KEYS.sumoAddress)
 }
@@ -540,6 +551,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const starknetAddress = window.localStorage.getItem(STORAGE_KEYS.starknetAddress)
     const evmAddress = window.localStorage.getItem(STORAGE_KEYS.evmAddress)
     const btcAddress = window.localStorage.getItem(STORAGE_KEYS.btcAddress)
+    const btcProvider = normalizeStoredBtcProvider(
+      window.localStorage.getItem(STORAGE_KEYS.btcProvider)
+    )
 
     if (!token || !address) return
 
@@ -552,6 +566,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       starknetAddress: starknetAddress || null,
       evmAddress: evmAddress || null,
       btcAddress: btcAddress || null,
+      btcProvider,
       token,
     }))
 
@@ -1037,6 +1052,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (typeof window !== "undefined") {
       window.localStorage.setItem(STORAGE_KEYS.btcAddress, btcAddress)
+      window.localStorage.setItem(STORAGE_KEYS.btcProvider, provider)
       if (activeToken) {
         window.localStorage.setItem(STORAGE_KEYS.token, activeToken)
         window.localStorage.setItem(STORAGE_KEYS.address, activeAddress)
@@ -1114,6 +1130,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (typeof window !== "undefined") {
       window.localStorage.setItem(STORAGE_KEYS.btcAddress, btcAddress)
+      if (wallet.btcProvider) {
+        window.localStorage.setItem(STORAGE_KEYS.btcProvider, wallet.btcProvider)
+      }
       if (activeToken) {
         window.localStorage.setItem(STORAGE_KEYS.token, activeToken)
         window.localStorage.setItem(STORAGE_KEYS.address, activeAddress)

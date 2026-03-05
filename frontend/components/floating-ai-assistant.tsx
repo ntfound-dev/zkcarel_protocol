@@ -4150,13 +4150,19 @@ export function FloatingAIAssistant() {
               const btcAmountDisplay =
                 amountSats > 0 ? formatBtcFromSats(amountSats) : "required BTC amount"
               btcDepositAmountDisplay = btcAmountDisplay
+              const btcProviderLabel =
+                wallet.btcProvider === "xverse"
+                  ? "Xverse"
+                  : wallet.btcProvider === "unisat"
+                  ? "UniSat"
+                  : "UniSat/Xverse"
 
-              if (wallet.btcAddress && amountSats > 0) {
+              if (wallet.btcAddress && wallet.btcProvider && amountSats > 0) {
                 try {
                   notifications.addNotification({
                     type: "info",
                     title: "Wallet signature required",
-                    message: "Approve BTC transfer in UniSat/Xverse popup.",
+                    message: `Approve BTC transfer in ${btcProviderLabel} popup.`,
                   })
                   const btcDepositTxHash = await wallet.sendBtcTransaction(
                     bridgeResult.deposit_address,
@@ -4199,6 +4205,15 @@ export function FloatingAIAssistant() {
                     btcDepositStateMessage = "\nBTC deposit was not sent automatically."
                   }
                 }
+              } else if (wallet.btcAddress && !wallet.btcProvider) {
+                notifications.addNotification({
+                  type: "warning",
+                  title: "BTC signer not selected",
+                  message:
+                    "BTC address is linked, but signer wallet is unknown. Reconnect Xverse or UniSat first, then retry bridge to show wallet popup.",
+                })
+                btcDepositStateMessage =
+                  "\nBTC signer wallet is not selected. Reconnect Xverse/UniSat to auto-send deposit."
               } else if (!wallet.btcAddress) {
                 notifications.addNotification({
                   type: "warning",
