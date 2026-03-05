@@ -980,35 +980,37 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (provider === "xverse") {
       try {
-        // Prefer injected provider flow first; this avoids some sats-connect decodeToken crashes.
+        // Prefer official sats-connect flow first so Xverse shows the expected connect popup/network switch UX.
+        const result = await connectBtcWalletViaXverse()
+        btcAddress = result.address
+        btcBalance = result.balance
         injected = getInjectedBtc("xverse")
-        if (injected) {
-          const accounts = await requestBtcAccounts(injected)
-          btcAddress = accounts?.[0] || ""
-          if (btcAddress) {
-            const btcNetwork = detectBtcAddressNetwork(btcAddress)
-            if (btcNetwork !== "testnet") {
-              throw new Error("BTC wallet must be on Bitcoin testnet (native).")
-            }
-            btcBalance = await fetchBtcBalance(injected, btcAddress)
-            if (btcBalance === null) {
-              btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
-            }
-            if (btcBalance === null) {
-              btcBalance = 0
-            }
-          }
-        }
-        if (!btcAddress) {
-          const result = await connectBtcWalletViaXverse()
-          btcAddress = result.address
-          btcBalance = result.balance
-          injected = getInjectedBtc("xverse")
-        }
       } catch (error) {
         // Some Xverse builds fail in sats-connect popup decode path; fall back to injected API path.
         xverseConnectError = error
         console.warn("Xverse sats-connect failed, trying injected API fallback:", error)
+        try {
+          injected = getInjectedBtc("xverse")
+          if (injected) {
+            const accounts = await requestBtcAccounts(injected, { requireTestnet4: true })
+            btcAddress = accounts?.[0] || ""
+            if (btcAddress) {
+              const btcNetwork = detectBtcAddressNetwork(btcAddress)
+              if (btcNetwork !== "testnet") {
+                throw new Error("BTC wallet must be on Bitcoin testnet (native).")
+              }
+              btcBalance = await fetchBtcBalance(injected, btcAddress)
+              if (btcBalance === null) {
+                btcBalance = await fetchBtcBalanceFromPublicApis(btcAddress)
+              }
+              if (btcBalance === null) {
+                btcBalance = 0
+              }
+            }
+          }
+        } catch (fallbackError) {
+          xverseConnectError = fallbackError
+        }
       }
     }
 
@@ -1022,7 +1024,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           "BTC wallet extension not detected. Install UniSat or Xverse (optional jika hanya pakai ETH/STRK)."
         )
       }
-      const accounts = await requestBtcAccounts(injected)
+      const accounts = await requestBtcAccounts(injected, { requireTestnet4: provider === "xverse" })
       btcAddress = accounts?.[0] || ""
       if (!btcAddress) {
         throw new Error("BTC wallet not connected")
@@ -1193,11 +1195,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       let xverseError: unknown = null
       if (activeProvider === "xverse") {
         try {
-          // Prefer injected provider path first for Xverse stability.
-          const injectedXverse = getInjectedBtc("xverse")
-          const txHash = injectedXverse
-            ? await sendBtcTransferWithInjectedWallet(injectedXverse, destination, roundedSats)
-            : await sendBtcTransferViaXverse(destination, roundedSats)
+          // Prefer official sats-connect sendTransfer for Xverse compatibility.
+          const txHash = await sendBtcTransferViaXverse(destination, roundedSats)
           const sentAmount = roundedSats / 100_000_000
           setWallet((prev) => {
             const baseBalance =
@@ -1225,9 +1224,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           return txHash
         } catch (error) {
           xverseError = error
-          // Fallback to sats-connect if injected API path fails.
+          // Fallback to injected API path when sats-connect is unstable.
           try {
-            const txHash = await sendBtcTransferViaXverse(destination, roundedSats)
+            const injectedXverse = getInjectedBtc("xverse")
+            if (!injectedXverse) {
+              throw error
+            }
+            const txHash = await sendBtcTransferWithInjectedWallet(injectedXverse, destination, roundedSats)
             const sentAmount = roundedSats / 100_000_000
             setWallet((prev) => {
               const baseBalance =
@@ -2472,27 +2475,42 @@ function scaleBigIntBalance(value: bigint, decimals: number): number | null {
  * @returns Result used by UI state, request lifecycle, or callback chaining.
  * @remarks May trigger Hide Mode payload handling, network calls, or local state updates.
  */
-async function requestBtcAccounts(injected: InjectedBtc): Promise<string[] | null> {
-  const attempts = [
-    () => injected.requestAccounts?.(),
-    () => injected.request?.({ method: "requestAccounts" }),
-    () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet4" }] }),
-    () => injected.request?.({ method: "requestAccounts", params: ["testnet4"] }),
-    () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet" }] }),
-    () => injected.request?.({ method: "requestAccounts", params: ["testnet"] }),
-    () => injected.getAccounts?.(),
-    () => injected.request?.({ method: "getAccounts" }),
-    () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet4" }] }),
-    () => injected.request?.({ method: "getAccounts", params: ["testnet4"] }),
-    () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet" }] }),
-    () => injected.request?.({ method: "getAccounts", params: ["testnet"] }),
-  ]
+async function requestBtcAccounts(
+  injected: InjectedBtc,
+  options?: { requireTestnet4?: boolean }
+): Promise<string[] | null> {
+  const requireTestnet4 = Boolean(options?.requireTestnet4)
+  const attempts = requireTestnet4
+    ? [
+        () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet4" }] }),
+        () => injected.request?.({ method: "requestAccounts", params: ["testnet4"] }),
+        () => injected.requestAccounts?.(),
+        () => injected.request?.({ method: "requestAccounts" }),
+        () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet4" }] }),
+        () => injected.request?.({ method: "getAccounts", params: ["testnet4"] }),
+        () => injected.getAccounts?.(),
+        () => injected.request?.({ method: "getAccounts" }),
+      ]
+    : [
+        () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet4" }] }),
+        () => injected.request?.({ method: "requestAccounts", params: ["testnet4"] }),
+        () => injected.requestAccounts?.(),
+        () => injected.request?.({ method: "requestAccounts" }),
+        () => injected.request?.({ method: "requestAccounts", params: [{ network: "testnet" }] }),
+        () => injected.request?.({ method: "requestAccounts", params: ["testnet"] }),
+        () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet4" }] }),
+        () => injected.request?.({ method: "getAccounts", params: ["testnet4"] }),
+        () => injected.getAccounts?.(),
+        () => injected.request?.({ method: "getAccounts" }),
+        () => injected.request?.({ method: "getAccounts", params: [{ network: "testnet" }] }),
+        () => injected.request?.({ method: "getAccounts", params: ["testnet"] }),
+      ]
 
   for (const attempt of attempts) {
     try {
       const result = await withWalletTimeout(
         async () => await attempt(),
-        10_000,
+        25_000,
         "BTC wallet account request timed out."
       )
       const parsed = normalizeBtcAccounts(result)
@@ -2893,12 +2911,17 @@ async function sendBtcTransferViaXverse(toAddress: string, amountSats: number): 
     params: unknown,
     providerId?: string
   ) => Promise<SatsConnectResultLike<unknown>>
-  const response = await request(
-    "sendTransfer",
-    {
-      recipients: [{ address: toAddress, amount: amountSats }],
-    },
-    providerId
+  const response = await withWalletTimeout(
+    async () =>
+      await request(
+        "sendTransfer",
+        {
+          recipients: [{ address: toAddress, amount: amountSats }],
+        },
+        providerId
+      ),
+    45_000,
+    "Xverse transfer request timed out. Open wallet popup and retry."
   )
   const result = unwrapSatsConnectResult<Record<string, unknown>>(
     response,
@@ -2938,14 +2961,19 @@ async function connectBtcWalletViaXverse(): Promise<{ address: string; balance: 
       (sats.BitcoinNetworkType as unknown as { Testnet4?: unknown }).Testnet4 ??
       sats.BitcoinNetworkType.Testnet
 
-    const connectResponse = await request(
-      "wallet_connect",
-      {
-        addresses: [sats.AddressPurpose.Payment, sats.AddressPurpose.Ordinals],
-        network: preferredBtcNetwork,
-        message: XVERSE_CONNECT_MESSAGE,
-      },
-      providerId
+    const connectResponse = await withWalletTimeout(
+      async () =>
+        await request(
+          "wallet_connect",
+          {
+            addresses: [sats.AddressPurpose.Payment, sats.AddressPurpose.Ordinals],
+            network: preferredBtcNetwork,
+            message: XVERSE_CONNECT_MESSAGE,
+          },
+          providerId
+        ),
+      45_000,
+      "Xverse connect request timed out. Open wallet popup and retry."
     )
     const connectResult = unwrapSatsConnectResult<{
       addresses?: unknown
