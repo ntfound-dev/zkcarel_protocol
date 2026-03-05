@@ -2159,7 +2159,31 @@ function isReadableStarknetChainId(chainId?: string): boolean {
  */
 function normalizeWalletError(error: unknown, fallbackMessage: string): Error {
   if (error instanceof Error) {
-    return error
+    const message = (error.message || "").trim()
+    if (message) {
+      if (
+        /unexpected token|not valid json|decodetoken|decode token/i.test(message)
+      ) {
+        return new Error(
+          "Xverse session data appears corrupted. Close all Xverse popups, lock/unlock extension, then retry. If it persists, clear Xverse extension data or reinstall extension."
+        )
+      }
+      if (
+        /user rejected|user denied|rejected request|transaction rejected|user canceled|user cancelled|request cancelled|request canceled|declined|dismissed|aborted/i.test(
+          message
+        )
+      ) {
+        return new Error("Request rejected in wallet.")
+      }
+      if (/already pending|request of type .* already pending/i.test(message)) {
+        return new Error("Wallet request already pending. Open wallet extension.")
+      }
+      if (/unknown chain|unsupported chain|chain .* not added|unrecognized chain/i.test(message)) {
+        return new Error("Target network is not available in wallet.")
+      }
+      return new Error(message)
+    }
+    return new Error(fallbackMessage)
   }
   if (typeof error === "string" && error.trim()) {
     return new Error(error.trim())
