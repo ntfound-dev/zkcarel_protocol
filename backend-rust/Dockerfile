@@ -5,7 +5,6 @@ WORKDIR /app
 
 # Cache dependencies first to speed up rebuilds.
 COPY Cargo.toml Cargo.lock ./
-COPY .sqlx ./.sqlx
 RUN mkdir src && printf "fn main() {}\n" > src/main.rs
 RUN cargo build --release
 RUN rm -rf src
