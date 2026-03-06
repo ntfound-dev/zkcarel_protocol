@@ -257,16 +257,26 @@ async fn run() -> anyhow::Result<()> {
     );
     spawn_auto_garaga_warmup(&config);
 
-    // Initialize database
-    let db = Database::new(&config).await?;
+    eprintln!("Startup stage: connecting to PostgreSQL");
+    tracing::info!("Startup stage: connecting to PostgreSQL");
+    let db = tokio::time::timeout(Duration::from_secs(30), Database::new(&config))
+        .await
+        .context("timed out connecting to PostgreSQL")??;
 
     // Run migrations
+    eprintln!("Startup stage: running database migrations");
     tracing::info!("Running database migrations...");
-    db.run_migrations().await?;
+    tokio::time::timeout(Duration::from_secs(30), db.run_migrations())
+        .await
+        .context("timed out running database migrations")??;
 
     // Initialize Redis
+    eprintln!("Startup stage: initializing Redis connection manager");
     tracing::info!("Initializing Redis connection manager...");
-    let redis_manager = init_redis_connection_manager(&config.redis_url).await?;
+    let redis_manager =
+        tokio::time::timeout(Duration::from_secs(30), init_redis_connection_manager(&config.redis_url))
+            .await
+            .context("timed out initializing Redis connection manager")??;
 
     // Masukkan manager ke AppState
     let app_state = api::AppState {
@@ -303,6 +313,7 @@ async fn run() -> anyhow::Result<()> {
         .parse()
         .expect("Invalid address");
 
+    eprintln!("Startup stage: binding HTTP server on {}", addr);
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
