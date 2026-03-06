@@ -833,6 +833,18 @@ const upsertPendingBtcDepositList = (
   return merged.slice(0, 20)
 }
 
+const pickActivePendingBtcDeposit = (
+  items: PendingBtcDepositState[]
+): PendingBtcDepositState | null => {
+  for (const item of items) {
+    const status = (item.status || "").trim().toLowerCase()
+    if (!FINALIZED_GARDEN_ORDER_STATUSES.has(status)) {
+      return item
+    }
+  }
+  return null
+}
+
 const loadBridgeRewardsSnapshot = (): BridgeRewardsSnapshot | null => {
   if (typeof window === "undefined") return null
   const raw = window.localStorage.getItem(TRADE_BRIDGE_REWARDS_KEY)
@@ -2346,7 +2358,7 @@ export function TradingInterface() {
       persistPendingBtcDeposits(next)
       setPendingBtcDeposit((current) => {
         if (current && current.bridgeId.trim().toLowerCase() === normalized) {
-          return next[0] || null
+          return pickActivePendingBtcDeposit(next)
         }
         return current
       })
@@ -2403,7 +2415,7 @@ export function TradingInterface() {
     const list = loadPendingBtcDeposits()
     const nextList = single ? upsertPendingBtcDepositList(list, single) : list
     setPendingBtcDeposits(nextList)
-    setPendingBtcDeposit(single || nextList[0] || null)
+    setPendingBtcDeposit(single || pickActivePendingBtcDeposit(nextList))
     setLastBridgeRewards(loadBridgeRewardsSnapshot())
   }, [])
 
@@ -2423,8 +2435,9 @@ export function TradingInterface() {
 
   React.useEffect(() => {
     if (pendingBtcDeposit) return
-    if (pendingBtcDeposits.length > 0) {
-      setPendingBtcDeposit(pendingBtcDeposits[0])
+    const activeOrder = pickActivePendingBtcDeposit(pendingBtcDeposits)
+    if (activeOrder) {
+      setPendingBtcDeposit(activeOrder)
       return
     }
     setBridgeStatusPopupOpen(false)
