@@ -11,8 +11,7 @@ RUN cargo build --release
 RUN rm -rf src
 
 # Build the real backend binary.
-COPY src ./src
-COPY migrations ./migrations
+COPY . .
 RUN cargo build --release
 
 FROM debian:bookworm-slim
