@@ -21,7 +21,7 @@ RUN cargo build --manifest-path garaga-real-prover/Cargo.toml --release
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libssl3 python3 python3-pip bash redis-tools \
-    && pip3 install --no-cache-dir uv \
+    && pip3 install --break-system-packages --no-cache-dir uv \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
