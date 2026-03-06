@@ -23,7 +23,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=builder /app/target/release/carel-backend /usr/local/bin/carel-backend
 COPY scripts ./scripts
-COPY garaga_payload.json ./garaga_payload.json
 
 ENV RUST_LOG=info
 EXPOSE 8080
