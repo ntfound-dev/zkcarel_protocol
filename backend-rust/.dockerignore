@@ -1,0 +1,8 @@
+.env
+deploy.env
+Secrets.toml
+target
+.git
+.gitignore
+tmp_proof_check.json
+tmp_public_check.json
