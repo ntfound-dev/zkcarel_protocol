@@ -103,24 +103,31 @@ fn normalize_redis_url(raw_url: &str) -> anyhow::Result<String> {
     let (scheme, rest) = trimmed
         .split_once("://")
         .context("invalid REDIS_URL format: missing scheme")?;
-    let suffix_idx = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, suffix) = rest.split_at(suffix_idx);
-    let Some((userinfo, host_port)) = authority.rsplit_once('@') else {
-        anyhow::bail!("invalid REDIS_URL format");
+    let (userinfo, host_and_suffix) = match rest.rsplit_once('@') {
+        Some((userinfo, host_and_suffix)) => (Some(userinfo), host_and_suffix),
+        None => (None, rest),
     };
-    let (username, password) = userinfo
-        .split_once(':')
-        .map(|(user, pass)| (user, Some(pass)))
-        .unwrap_or((userinfo, None));
+    let suffix_idx = host_and_suffix
+        .find(['/', '?', '#'])
+        .unwrap_or(host_and_suffix.len());
+    let (host_port, suffix) = host_and_suffix.split_at(suffix_idx);
 
     let mut parsed =
         Url::parse(&format!("{scheme}://{host_port}{suffix}")).context("invalid REDIS_URL host")?;
-    parsed
-        .set_username(username)
-        .map_err(|_| anyhow::anyhow!("invalid REDIS_URL username"))?;
-    parsed
-        .set_password(password)
-        .map_err(|_| anyhow::anyhow!("invalid REDIS_URL password"))?;
+
+    if let Some(userinfo) = userinfo {
+        let (username, password) = userinfo
+            .split_once(':')
+            .map(|(user, pass)| (user, Some(pass)))
+            .unwrap_or((userinfo, None));
+        parsed
+            .set_username(username)
+            .map_err(|_| anyhow::anyhow!("invalid REDIS_URL username"))?;
+        parsed
+            .set_password(password)
+            .map_err(|_| anyhow::anyhow!("invalid REDIS_URL password"))?;
+    }
+
     Ok(parsed.to_string())
 }
 
