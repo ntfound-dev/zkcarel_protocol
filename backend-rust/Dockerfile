@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1 AS builder
+FROM rust:1-bookworm AS builder
 WORKDIR /app
 
 # Cache dependencies first to speed up rebuilds.
