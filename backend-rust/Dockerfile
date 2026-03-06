@@ -27,5 +27,6 @@ COPY backend-rust/garaga_proof.json ./garaga_proof.json
 COPY backend-rust/garaga_public_inputs.json ./garaga_public_inputs.json
 
 ENV RUST_LOG=info
+ENV PORT=8080
 EXPOSE 8080
 CMD ["carel-backend"]
