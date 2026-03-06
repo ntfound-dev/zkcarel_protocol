@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use url::Url;
 
 mod api;
 mod bridge_worker;
@@ -90,9 +91,109 @@ fn spawn_auto_garaga_warmup(config: &Config) {
     });
 }
 
-#[tokio::main]
-// Internal helper that supports `main` operations.
-async fn main() -> anyhow::Result<()> {
+fn normalize_redis_url(raw_url: &str) -> anyhow::Result<String> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("REDIS_URL is empty");
+    }
+    if Url::parse(trimmed).is_ok() {
+        return Ok(trimmed.to_string());
+    }
+
+    let (scheme, rest) = trimmed
+        .split_once("://")
+        .context("invalid REDIS_URL format: missing scheme")?;
+    let suffix_idx = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, suffix) = rest.split_at(suffix_idx);
+    let Some((userinfo, host_port)) = authority.rsplit_once('@') else {
+        anyhow::bail!("invalid REDIS_URL format");
+    };
+    let (username, password) = userinfo
+        .split_once(':')
+        .map(|(user, pass)| (user, Some(pass)))
+        .unwrap_or((userinfo, None));
+
+    let mut parsed =
+        Url::parse(&format!("{scheme}://{host_port}{suffix}")).context("invalid REDIS_URL host")?;
+    parsed
+        .set_username(username)
+        .map_err(|_| anyhow::anyhow!("invalid REDIS_URL username"))?;
+    parsed
+        .set_password(password)
+        .map_err(|_| anyhow::anyhow!("invalid REDIS_URL password"))?;
+    Ok(parsed.to_string())
+}
+
+fn redact_redis_url(raw_url: &str) -> String {
+    let Ok(parsed) = Url::parse(raw_url) else {
+        return "redis://<redacted>".to_string();
+    };
+    let host = parsed.host_str().unwrap_or("<unknown>");
+    let port = parsed
+        .port()
+        .map(|value| format!(":{value}"))
+        .unwrap_or_default();
+    format!("{}://<redacted>@{host}{port}", parsed.scheme())
+}
+
+fn redis_url_candidates(raw_url: &str) -> anyhow::Result<Vec<String>> {
+    let normalized = normalize_redis_url(raw_url)?;
+    let mut candidates = vec![normalized.clone()];
+    let parsed = Url::parse(&normalized).context("invalid REDIS_URL format after normalization")?;
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let is_local_host = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
+
+    if parsed.scheme() == "redis" && !is_local_host {
+        let mut tls_candidate = parsed;
+        let _ = tls_candidate.set_scheme("rediss");
+        candidates.insert(0, tls_candidate.to_string());
+    }
+
+    candidates.dedup();
+    Ok(candidates)
+}
+
+async fn init_redis_connection_manager(
+    raw_url: &str,
+) -> anyhow::Result<redis::aio::ConnectionManager> {
+    let mut errors = Vec::new();
+
+    for candidate in redis_url_candidates(raw_url)? {
+        let redacted = redact_redis_url(&candidate);
+        let redis = match redis::Client::open(candidate.clone()) {
+            Ok(client) => client,
+            Err(err) => {
+                errors.push(format!("{redacted}: invalid URL ({err})"));
+                continue;
+            }
+        };
+
+        let redis_manager_config = redis::aio::ConnectionManagerConfig::new()
+            .set_connection_timeout(Some(Duration::from_secs(10)))
+            .set_response_timeout(Some(Duration::from_secs(5)))
+            .set_number_of_retries(10)
+            .set_min_delay(Duration::from_millis(200))
+            .set_max_delay(Duration::from_secs(3));
+
+        match redis::aio::ConnectionManager::new_with_config(redis, redis_manager_config).await {
+            Ok(manager) => {
+                tracing::info!("Redis connection manager initialized via {}", redacted);
+                return Ok(manager);
+            }
+            Err(err) => {
+                tracing::warn!("Redis connection attempt failed for {}: {}", redacted, err);
+                errors.push(format!("{redacted}: {err}"));
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "failed to initialize Redis connection manager (check REDIS_URL, TLS, and network latency): {}",
+        errors.join(" | ")
+    );
+}
+
+async fn run() -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
         .with(
@@ -165,18 +266,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize Redis
     tracing::info!("Initializing Redis connection manager...");
-    let redis =
-        redis::Client::open(config.redis_url.clone()).context("invalid REDIS_URL format")?;
-    let redis_manager_config = redis::aio::ConnectionManagerConfig::new()
-        .set_connection_timeout(Some(Duration::from_secs(10)))
-        .set_response_timeout(Some(Duration::from_secs(5)))
-        .set_number_of_retries(10)
-        .set_min_delay(Duration::from_millis(200))
-        .set_max_delay(Duration::from_secs(3));
-    let redis_manager = redis::aio::ConnectionManager::new_with_config(redis, redis_manager_config)
-        .await
-        .context("failed to initialize Redis connection manager (check REDIS_URL, TLS, and network latency)")?;
-    tracing::info!("Redis connection manager initialized");
+    let redis_manager = init_redis_connection_manager(&config.redis_url).await?;
 
     // Masukkan manager ke AppState
     let app_state = api::AppState {
@@ -219,6 +309,19 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[tokio::main]
+// Internal helper that supports `main` operations.
+async fn main() -> anyhow::Result<()> {
+    match run().await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            eprintln!("Fatal startup error: {err:#}");
+            tracing::error!("Fatal startup error: {:#}", err);
+            Err(err)
+        }
+    }
 }
 
 // Internal helper that builds inputs for `build_router`.
