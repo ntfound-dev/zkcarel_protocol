@@ -224,6 +224,37 @@ flowchart TD
   H5 --> S3
 ```
 
+### AI
+```mermaid
+flowchart TD
+  A[AI command] --> B{Path}
+
+  B --> C[L1]
+  C --> C1[Backend response]
+
+  B --> D[L2/L3 normal]
+  D --> D1[Auto Setup On-Chain]
+  D1 --> D2[AIExecutor submit_action]
+  D2 --> D3[Backend execute]
+  D3 --> D4[Normal route]
+
+  B --> E[L3 hide]
+  E --> E1[Auto Setup On-Chain]
+  E1 --> E2[AIExecutor submit_action]
+  E2 --> E3[User deposit note]
+  E3 --> E4[Mixing window]
+  E4 --> E5[Backend execute]
+  E5 --> E6[Relayer submit]
+  E6 --> E7[ShieldedPoolV3]
+  E7 --> E8[Swap/Limit/Stake]
+```
+
+AI notes:
+- `L1` is backend-only and does not use an on-chain execution path.
+- `L2` and `L3` use `AIExecutor` setup/action flow before executable commands run.
+- `L3 hide` follows the same note + cooldown + relayer path as hide swap/stake/limit.
+- AI bridge stays on `Level 2` in the current runtime profile.
+
 ## Bridge Path
 ```mermaid
 flowchart LR

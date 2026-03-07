@@ -180,7 +180,27 @@ flowchart LR
   SBTC --> RTOKEN
 ```
 
-`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution.
+### AI
+```mermaid
+flowchart LR
+  A[AI action] --> B{Path}
+
+  B --> C[L1]
+  C --> C1[No on-chain path]
+
+  B --> D[L2/L3 setup]
+  D --> U[User wallet]
+  U --> AIEXEC[AIExecutor]
+  AIEXEC --> AIVER[AISignatureVerifier]
+  AIEXEC --> CAREL[CAREL token]
+
+  B --> E[L3 hide execute]
+  E --> R[Relayer]
+  R --> EXEC[ShieldedPoolV3]
+  EXEC --> TARGET[Swap/Limit/Stake]
+```
+
+`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2/L3` use `AIExecutor`, and `L3 hide` continues through `ShieldedPoolV3`.
 
 ## OpenZeppelin Usage
 This repo uses OpenZeppelin Cairo components where standard token, ownership, and access-control behavior are needed. The swap, limit-order, and staking business logic are custom Cairo contracts.
