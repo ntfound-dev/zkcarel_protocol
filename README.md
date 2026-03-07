@@ -166,6 +166,7 @@ Execution notes:
 
 ## Core Action Paths
 These show the normal-path targets. Hide mode reaches the same target contracts through `ShieldedPoolV3`.
+Swap uses backend quote data in the current frontend. Limit order and staking are direct wallet calls.
 
 ### Swap
 ```mermaid
@@ -181,10 +182,8 @@ flowchart LR
 ```mermaid
 flowchart LR
   U[User] --> FE[Frontend]
-  FE --> API[Backend sync]
-  API --> FE
   FE --> W[Wallet sign]
-  W --> LOB[LimitOrderBook]
+  W --> LOB[KeeperNetwork / LimitOrderBook]
 ```
 
 ### Staking
@@ -192,7 +191,7 @@ flowchart LR
 flowchart LR
   U[User] --> FE[Frontend]
   FE --> W[Wallet sign]
-  W --> STAKE[Staking contract]
+  W --> STAKE[StakingCarel / Stablecoin / BTC]
 ```
 
 ## Bridge Path

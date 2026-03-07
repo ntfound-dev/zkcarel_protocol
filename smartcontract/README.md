@@ -156,10 +156,10 @@ flowchart LR
   SBTC --> RTOKEN
 ```
 
-All three staking pools also expose private staking hooks through the privacy router.
+`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router.
 
 ## OpenZeppelin Usage
-This repo uses OpenZeppelin Cairo components in the contracts that need standard token, ownership, and access-control behavior.
+This repo uses OpenZeppelin Cairo components where standard token, ownership, and access-control behavior are needed. The swap, limit-order, and staking business logic are custom Cairo contracts.
 
 - `src/core/token.cairo`: `ERC20Component`, `AccessControlComponent`, `SRC5Component`
 - `src/point_token.cairo`: `ERC20Component`, `SRC5Component`
