@@ -61,20 +61,20 @@ flowchart LR
 ```mermaid
 flowchart LR
   U[User] --> FE[Frontend]
-  FE --> Q[Request quote/pre-check from backend]
+  FE --> Q[Backend quote]
   Q --> FE
-  FE --> W[Wallet signature]
-  W --> CHAIN[Direct execute_* call on Starknet target contract]
+  FE --> W[Wallet sign]
+  W --> CHAIN[Direct execute]
 ```
 
 ### 1b) Bridge (Public Route)
 ```mermaid
 flowchart LR
   U[User] --> FE[Frontend]
-  FE --> Q[Request bridge quote/pre-check from backend]
+  FE --> Q[Bridge quote]
   Q --> FE
-  FE --> W[User signs source-chain tx]
-  W --> P[Bridge provider settlement]
+  FE --> W[Source tx sign]
+  W --> P[Provider settle]
   P --> DST[Destination receive]
 ```
 
