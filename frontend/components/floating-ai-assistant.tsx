@@ -1962,6 +1962,13 @@ export function FloatingAIAssistant() {
       AI_HIDE_USDT_TIER_OPTIONS[0],
     [aiHideUsdtTierMin]
   )
+  React.useEffect(() => {
+    if (selectedTier !== 3) return
+    const inferredHideTier = inferHideTierFromPrivateCommand(normalizedInput)
+    if (inferredHideTier && inferredHideTier !== aiHideUsdtTierMin) {
+      setAiHideUsdtTierMin(inferredHideTier)
+    }
+  }, [aiHideUsdtTierMin, normalizedInput, selectedTier])
   const staticCarelTokenAddress = React.useMemo(
     () => STATIC_CAREL_TOKEN_ADDRESS.trim(),
     []
