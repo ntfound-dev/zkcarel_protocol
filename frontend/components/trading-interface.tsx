@@ -2851,7 +2851,7 @@ export function TradingInterface() {
               backendToAmountRaw <= 0 ||
               backendToAmountRaw > (liveReferenceToAmount as number) * 1.35 ||
               backendToAmountRaw < (liveReferenceToAmount as number) * 0.65)
-          const normalizedByLivePrice = !hasPreparedOnchainCalls && Boolean(backendDeviatesTooMuch)
+          const normalizedByLivePrice = Boolean(backendDeviatesTooMuch)
           const normalizedToAmount = normalizedByLivePrice
             ? normalizeTokenAmountDisplay(liveReferenceToAmount as number, toSymbol)
             : normalizeTokenAmountDisplay(response.to_amount, toSymbol)

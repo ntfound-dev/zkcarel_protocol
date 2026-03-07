@@ -76,14 +76,14 @@ const aiTiers = [
     name: "Level 3",
     cost: 10,
     costLabel: "10 CAREL",
-    description: "All L2 actions in Garaga mode + unstake/portfolio/alerts",
+    description: "Private Garaga execution for swap/stake/limit",
   },
 ]
 
 const tierGreetingMessage: Record<number, string> = {
   1: "Welcome to CAREL Agent (Level 1). I can help with read-only data: balance, points, token prices, and market info.",
   2: "Welcome to CAREL Agent (Level 2). I can execute live DeFi actions after wallet confirmation. Each execution burns 1 CAREL.",
-  3: "Welcome to CAREL Agent (Level 3). I can run private Garaga-mode execution and advanced analysis. Each execution burns 2 CAREL. Bridge is currently available on Level 2.",
+  3: "Welcome to CAREL Agent (Level 3). I can run private Garaga-mode execution for swap, stake, and limit order. Each execution burns 2 CAREL. Bridge stays on Level 2. Private hide flow uses a 60s cooldown after note deposit.",
 }
 
 const quickPromptsByTier: Record<number, string[]> = {
@@ -106,12 +106,10 @@ const quickPromptsByTier: Record<number, string[]> = {
     "please limit order USDT/USDC amount 10 at 1.25 expiry 3d",
   ],
   3: [
-    "please set price alert for WBTC",
     "please private swap CAREL to USDT with tier $10",
     "please private swap USDC to STRK with tier $50",
     "please private swap STRK to WBTC with tier $100",
     "please private swap WBTC to CAREL with tier $250",
-    "please private stake 15 USDT",
     "please private stake 10 USDT",
     "please private stake 100 CAREL",
     "please private stake 0.0005 WBTC",
@@ -119,8 +117,6 @@ const quickPromptsByTier: Record<number, string[]> = {
     "please private limit order STRK/USDC amount 10 at 1.25 expiry 3d",
     "please private limit order CAREL/USDC amount 10 at 1.25 expiry 1d",
     "please private limit order USDT/USDC amount 10 at 1.25 expiry 3d",
-    "switch to L2 for bridge",
-    "rebalance portfolio",
   ],
 }
 const l2BridgeShortcutPrompts = quickPromptsByTier[2].filter((prompt) => /\bbridge\b/i.test(prompt))
@@ -128,7 +124,7 @@ const l2BridgeShortcutPrompts = quickPromptsByTier[2].filter((prompt) => /\bbrid
 const featureListByTier: Record<number, string> = {
   1: "Available now: chat, balance check, points check, token price, and market summary.",
   2: "Available now: swap, bridge, stake, claim rewards, create limit order, and cancel order. Tap one example below to start.",
-  3: "Available now: private swap/stake/claim/limit order, plus portfolio rebalance, price alerts, and deeper analysis. Hide tier ($5/$10/$50/$100/$250) controls private swap amount. Bridge stays on Level 2 for now.",
+  3: "Available now: private swap, private stake, and private limit order. Hide tier ($5/$10/$50/$100/$250) controls private swap amount. Private note deposit uses a 60s cooldown before execution. Bridge stays on Level 2.",
 }
 
 const levelBadgeClasses: Record<number, string> = {
