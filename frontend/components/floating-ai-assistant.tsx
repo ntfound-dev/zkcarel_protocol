@@ -1118,6 +1118,40 @@ function parseHideTierFromCommand(command: string): number | null {
   return AI_HIDE_USDT_TIER_OPTIONS.some((option) => option.minUsdt === tier) ? tier : null
 }
 
+function parseHideTierFromAmountText(amountText: string): number | null {
+  const parsed = Number.parseFloat((amountText || "").trim())
+  if (!Number.isFinite(parsed)) return null
+  return AI_HIDE_USDT_TIER_OPTIONS.some((option) => option.minUsdt === parsed) ? parsed : null
+}
+
+function inferHideTierFromPrivateCommand(command: string): number | null {
+  const explicitTier = parseHideTierFromCommand(command)
+  if (explicitTier) return explicitTier
+
+  const normalized = normalizeMessageText(command)
+  if (!/\b(private|hide)\b/i.test(normalized)) return null
+
+  const swapIntent = parseSwapTokensFromCommand(command)
+  if (swapIntent?.amountText) {
+    const swapTier = parseHideTierFromAmountText(swapIntent.amountText)
+    if (swapTier) return swapTier
+  }
+
+  const stakeIntent = parseStakeTokenAmountFromCommand(command)
+  if (stakeIntent?.amountText) {
+    const stakeTier = parseHideTierFromAmountText(stakeIntent.amountText)
+    if (stakeTier) return stakeTier
+  }
+
+  const limitIntent = parseLimitOrderIntentFromCommand(command)
+  if (limitIntent?.amountText) {
+    const limitTier = parseHideTierFromAmountText(limitIntent.amountText)
+    if (limitTier) return limitTier
+  }
+
+  return null
+}
+
 function buildPrivateHideTierHint(command: string, selectedTierUsdt: number): string {
   const normalized = normalizeMessageText(command)
   const isPrivateHideCommand = /\b(private|hide)\b/i.test(normalized)
@@ -3060,9 +3094,9 @@ export function FloatingAIAssistant() {
       confirmedPendingExecution = true
     }
 
-    const requestedHideTier = activeTier >= 3 ? parseHideTierFromCommand(command) : null
-    const isSwapCommand = /\bswap\b/i.test(normalizeMessageText(command))
-    if (requestedHideTier && isSwapCommand && requestedHideTier !== selectedAiHideTier.minUsdt) {
+    const requestedHideTier = activeTier >= 3 ? inferHideTierFromPrivateCommand(command) : null
+    const effectiveHideTierUsdt = requestedHideTier || selectedAiHideTier.minUsdt
+    if (requestedHideTier && requestedHideTier !== selectedAiHideTier.minUsdt) {
       setAiHideUsdtTierMin(requestedHideTier)
       notifications.addNotification({
         type: "info",
@@ -3172,7 +3206,7 @@ export function FloatingAIAssistant() {
         ? "\nBridge execution usually has 2 steps:\n1. Sign Starknet setup in Argent/Braavos (burn CAREL).\n2. If source is BTC, sign BTC deposit in UniSat/Xverse.\nOrder is only completed after BTC deposit is sent."
         : ""
       const privateHideTierHint =
-        activeTier >= 3 ? buildPrivateHideTierHint(command, selectedAiHideTier.minUsdt) : ""
+        activeTier >= 3 ? buildPrivateHideTierHint(command, effectiveHideTierUsdt) : ""
       appendMessagesForTier(activeTier, [
         {
           role: "assistant",
@@ -6321,7 +6355,7 @@ export function FloatingAIAssistant() {
                   <p className={cn(spaceMono.className, "text-[10px] text-[#64748b]")}>
                     Cooldown: {Math.floor(AI_HIDE_MIN_NOTE_AGE_MS / 1000)}s
                     {AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN
-                      ? " (auto Swap Privat now after cooldown)"
+                      ? " (auto private execution after cooldown)"
                       : " (manual retry after cooldown)"}
                   </p>
                 </div>
