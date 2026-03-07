@@ -58,6 +58,24 @@ Scope note:
 - AI Executor config 6: https://sepolia.voyager.online/tx/0x0105bcf4255238c6aac5e02d66e6ee39f65ba41f060530f54b6cae3553bb4423
 - CAREL burner grant: https://sepolia.voyager.online/tx/0x0745212c6e5a3cab6f62f8111aa946ef4bafd5b540b7d68dbbc70c9eee8e3158
 
+### Latest V3 AI Runtime Flow Links
+- Level 2 bridge setup burn (`BTC -> WBTC`): https://sepolia.voyager.online/tx/0x105b72bf12c597b7d50fafb28a6693a86ff345c7fccc317c7f3e8ae719eccca
+- Level 2 bridge source BTC tx: https://mempool.space/testnet/tx/4ef9527c246a419339c6872e2fa1b2816fdff3b5bf827d07425e57239d80e341
+- Level 2 bridge Garden order: https://testnet-explorer.garden.finance/order/64d4d675c52c19485a2191136373a0b8a2d0034fe5e391093703e7791c5fc58d
+- Level 3 private swap execution (`CAREL -> USDT`): https://sepolia.voyager.online/tx/0x499f455ff3d6eb3be051b266b5c9d92e3203b215d8e13e8e720fd1c50c441b3
+- Level 3 private swap note deposit: https://sepolia.voyager.online/tx/0x153fac7e9cfeeb7e677a6463196f677ba6f7e7d087a3d544ce28418b2e09aac
+- Level 3 private limit order setup burn: https://sepolia.voyager.online/tx/0x3c286b804550f59570bb3ab67397db1cea717ad273cc4dfd8add705254e486
+- Level 3 private limit order execution: https://sepolia.voyager.online/tx/0x36c5b80895a18e3f41c659d1765efc68e8adf2b0ebf6a2f0451de8247dec8c4
+- Level 3 private limit order note deposit: https://sepolia.voyager.online/tx/0x5d7b610eca7b06e04b96e7e9439cd669fa6b977c48398e4c50e71e8e9755fa
+- Level 3 private stake setup burn: https://sepolia.voyager.online/tx/0x213eb0260f40cffd242e2341ee1264e57aeed5868e21448a122f1a7d83a5e8d
+- Level 3 private stake execution: https://sepolia.voyager.online/tx/0x38117118a2c377de14fa9e2e23a4da5d2089e4f61477805b6c721210a38ab93
+- Level 3 private stake note deposit: https://sepolia.voyager.online/tx/0x780eb5e8062ffc6c350be1020e8f35622a14e13c3e62e048354345df9949124
+
+Runtime note:
+- This snapshot follows the active V3 profile with `PRIVATE_ACTION_EXECUTOR_ADDRESS=0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2`.
+- AI bridge uses the public Level 2 bridge path.
+- AI private `swap`, `limit order`, and `stake` use the Level 3 hide path.
+
 ### Historical MVP Demo-Flow Links (Feb 23-25, 2026)
 - Normal Swap: https://sepolia.voyager.online/tx/0x22a53b1af0f7d62e19569a99b38d67e9165faad2804ca50a1b0a53f289bab98
 - Hide Swap: https://sepolia.voyager.online/tx/0x71b6c99287c78b082d105dc7169faa56b419a3e2568b3ea9a70ef1ff653a2d2

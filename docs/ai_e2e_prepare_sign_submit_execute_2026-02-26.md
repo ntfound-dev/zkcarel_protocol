@@ -5,6 +5,8 @@ Network: Starknet Sepolia
 AI Executor: `0x01b46617037091d04d978d2cbda42887ab4ace055b63c8b7881d34a7ec5b076b`
 Signer account: `0x0289f797b9c2dc6c661fd058968d9ba39d01c7547f8259f01b7bce55696d0ff0`
 
+This document is the historical February 26, 2026 AI E2E snapshot. Later V3 runtime proof links live in `docs/hackathon_submission_evidence.md`.
+
 ## 1. Prepare
 - level: `2`
 - params/context: `tier:2`
