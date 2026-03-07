@@ -1130,6 +1130,31 @@ function parseHideTierFromCommand(command: string): number | null {
   return AI_HIDE_USDT_TIER_OPTIONS.some((option) => option.minUsdt === tier) ? tier : null
 }
 
+function buildPrivateHideTierHint(command: string, selectedTierUsdt: number): string {
+  const normalized = normalizeMessageText(command)
+  const isPrivateHideCommand = /\b(private|hide)\b/i.test(normalized)
+  if (!isPrivateHideCommand) return ""
+
+  const swapIntent = parseSwapTokensFromCommand(command)
+  const stakeIntent = parseStakeTokenAmountFromCommand(command)
+  const limitIntent = parseLimitOrderIntentFromCommand(command)
+  const sourceToken = (
+    stakeIntent?.token ||
+    limitIntent?.fromToken ||
+    swapIntent?.fromToken ||
+    ""
+  )
+    .trim()
+    .toUpperCase()
+
+  const baseLine = `\nSelected hide tier: $${selectedTierUsdt}. In L3 private mode, the selected hide tier controls the deposited note size.`
+  if (!sourceToken) return baseLine
+  if (sourceToken === "USDT" || sourceToken === "USDC" || sourceToken === "CAREL") {
+    return `${baseLine} For ${sourceToken}, the deposited amount follows that tier directly.`
+  }
+  return `${baseLine} For ${sourceToken}, the final token amount is approximate and is resolved at execution time from the on-chain rule or live quote.`
+}
+
 // Internal helper that parses token pair/amount from limit-order commands.
 function parseLimitOrderIntentFromCommand(
   command: string
@@ -3144,11 +3169,13 @@ export function FloatingAIAssistant() {
       const bridgeConfirmHint = isBridgeCommand
         ? "\nBridge execution usually has 2 steps:\n1. Sign Starknet setup in Argent/Braavos (burn CAREL).\n2. If source is BTC, sign BTC deposit in UniSat/Xverse.\nOrder is only completed after BTC deposit is sent."
         : ""
+      const privateHideTierHint =
+        activeTier >= 3 ? buildPrivateHideTierHint(command, selectedAiHideTier.minUsdt) : ""
       appendMessagesForTier(activeTier, [
         {
           role: "assistant",
           content:
-            `You're about to execute this REAL on-chain command:\n${command}\n\nReply \`yes\` to continue or \`no\` to cancel.\nThis will request wallet signature and burn ${executionBurnAmountCarel(activeTier)} CAREL on-chain for this execution.${burnTxHint}${hideDepositExecutorHint}${bridgeConfirmHint}\nIf you have an active discount NFT, fee discount will be applied automatically.`,
+            `You're about to execute this REAL on-chain command:\n${command}\n\nReply \`yes\` to continue or \`no\` to cancel.\nThis will request wallet signature and burn ${executionBurnAmountCarel(activeTier)} CAREL on-chain for this execution.${burnTxHint}${hideDepositExecutorHint}${bridgeConfirmHint}${privateHideTierHint}\nIf you have an active discount NFT, fee discount will be applied automatically.`,
           timestamp: nowTimestampLabel(),
         },
       ])
@@ -6285,6 +6312,9 @@ export function FloatingAIAssistant() {
                   </div>
                   <p className={cn(spaceMono.className, "mt-1 text-[10px] text-[#94a3b8]")}>
                     Bonus tier: +{selectedAiHideTier.bonusPercent}% points
+                  </p>
+                  <p className={cn(spaceMono.className, "text-[10px] text-[#64748b]")}>
+                    USDT/USDC/CAREL follow the tier directly. STRK/WBTC use an approximate token amount.
                   </p>
                   <p className={cn(spaceMono.className, "text-[10px] text-[#64748b]")}>
                     Cooldown: {Math.floor(AI_HIDE_MIN_NOTE_AGE_MS / 1000)}s
