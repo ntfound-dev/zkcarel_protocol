@@ -190,7 +190,7 @@ Latest recorded local checks (2026-03-05):
 Detailed report: `../docs/test_reports.md`.
 
 ## Deployment Docs
-- `frontend/DEPLOY_TESTNET.md`
+- `../docs/deploy_testnet.md`
 
 ## Runtime Addresses (Frontend Profile)
 Expected V3 runtime addresses (must match backend profile for hide mode):

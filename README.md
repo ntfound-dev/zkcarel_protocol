@@ -310,7 +310,7 @@ Open: `http://localhost:3000`
 | Frontend technical README | `frontend/README.md` |
 | Backend technical README | `backend-rust/README.md` |
 | Smartcontract technical README | `smartcontract/README.md` |
-| Frontend deployment | `frontend/DEPLOY_TESTNET.md` |
+| Frontend deployment | `docs/deploy_testnet.md` |
 | Cross-layer deploy guide | `docs/deploy_testnet.md` |
 | Test reports | `docs/test_reports.md` |
 | Runtime env audit | `docs/env_runtime_audit_mvp.md` |
