@@ -6,7 +6,7 @@ This folder now keeps the cross-cutting project docs only. Module-specific techn
 - `architecture_mvp_modes.md`: runtime-accurate architecture, mode behavior, and active execution paths.
 - `deploy_testnet.md`: Starknet Sepolia deploy order, wiring, and runtime alignment notes.
 - `env_runtime_audit_mvp.md`: active FE/BE env split and runtime bindings.
-- `security_audit_checklist.md`: audit checklist and security assumptions.
+- `security_audit_checklist.md`: internal security review checklist and security assumptions.
 - `test_reports.md`: consolidated backend, frontend, and smart contract test results.
 
 ## Architecture and Design

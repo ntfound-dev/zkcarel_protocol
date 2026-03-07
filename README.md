@@ -351,7 +351,7 @@ Open: `http://localhost:3000`
 | AI prepare/sign/submit/execute run snapshot | `docs/ai_e2e_prepare_sign_submit_execute_2026-02-26.md` |
 | MVP UAT checklist | `docs/mvp_uat_testnet.md` |
 | V3 go-live checklist | `docs/production_go_live_checklist_v3_2026-02-27.md` |
-| Security audit checklist | `docs/security_audit_checklist.md` |
+| Internal security review checklist | `docs/security_audit_checklist.md` |
 | Hackathon submission evidence and proof links | `docs/hackathon_submission_evidence.md` |
 | Tokenomics guide | `docs/tokenomics.md` |
 

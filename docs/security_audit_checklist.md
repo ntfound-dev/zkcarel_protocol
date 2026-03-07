@@ -1,5 +1,5 @@
-# CAREL Protocol Security Audit Checklist
-This checklist tracks the current contract security posture, open hardening items, and explicit assumptions for testnet operations.
+# CAREL Protocol Internal Security Review Checklist
+This is the internal repo security checklist. It tracks the current contract security posture, open hardening items, and explicit assumptions for testnet operations. It is not a third-party audit report.
 
 ## Table of Contents
 - [Project Status](#project-status)
