@@ -214,7 +214,7 @@ Evidence mapping:
 | Progress | deployment updates, runtime env audits, and test reports dated during hackathon cycle |
 
 ## Submission Checklist (Hackathon)
-Required submission assets:
+Required assets:
 - Project description
 - Demo video (max 3 minutes)
 - Functional demo URL (`https://carel-protocol.vercel.app`)
@@ -223,14 +223,14 @@ Required submission assets:
 - Starknet wallet address
 - Optional: pitch deck
 
-Language requirement:
+Language:
 - English content, or content with English translation.
 
 ## Proof Transactions
-Transaction links are listed here for auditability.
+Use these links as audit evidence.
 
-Note:
-- Scope clarification: demo-flow proof links are historical MVP evidence and are not the full deployment footprint.
+Scope note:
+- Demo-flow links are historical MVP proof and not the full deployment footprint.
 
 ### Latest Deployment/Upgrade Transactions (Feb 26-27, 2026)
 - Garaga verifier declare: https://sepolia.voyager.online/tx/0x3077ad4d20d1b9acc70fc18af1be0356b3e2c5a803f3ac4b83766523616b51f
@@ -255,15 +255,15 @@ Note:
 - Garden order: https://testnet-explorer.garden.finance/order/237be68816b9144b9d3533ca3ec8c4eb1e7c00b1649e9ec216d89469fd014e70
 - ETH bridge tx: https://sepolia.etherscan.io/tx/0xab25b9261dc9f703e44cb89a34831ff03024b8fe89e32cce4a7e58b5d6dcdef3
 
-### Deployment/Wiring Transaction Scope (Beyond 9 Demo Links)
-- Contract deployment order itself is 22 contracts (`smartcontract/DEPLOY_TESTNET.md`), so at least 22 deploy transactions.
-- Additional documented upgrades/wiring include:
+### Deployment and Wiring Scope (Beyond 9 Demo Links)
+- Base deployment order is 22 contracts (`smartcontract/DEPLOY_TESTNET.md`), so at least 22 deploy transactions.
+- Additional documented upgrade/wiring activity includes:
   - Real Garaga verifier redeploy (February 27, 2026): declare `0x3077ad4d20d1b9acc70fc18af1be0356b3e2c5a803f3ac4b83766523616b51f`, deploy `0x0261ba1337d96733010f049591f5c65a3f33a080006d76f7dca4de958e8b0b66`.
   - AI Executor upgrade (February 26, 2026): deploy `0x057ee4fb05d584d4d5dc1fd54ceed57a6e5638b3fe8f2e8de6f222b66b6c2b9a`, plus 6 config tx and 1 CAREL burner grant tx (listed in `smartcontract/DEPLOY_TESTNET.md`).
   - V2 privacy wiring script maps 32 verifier actions and wires up to 36 contracts/modules (30 default + 6 optional external modules).
   - Staking token registration script adds 4 invoke tx (USDC, USDT, STRK, WBTC).
-- Documented deploy+wiring activity commonly exceeds 100 tx across full setup/redeploy cycles (not counting RPC retry attempts).
-- Quick explorer check by deployer wallet: `https://sepolia.voyager.online/contract/[DEPLOYER_ADDRESS]`.
+- Documented deploy+wiring activity commonly exceeds 100 tx across full setup/redeploy cycles (excluding RPC retry attempts).
+- Quick deployer check: `https://sepolia.voyager.online/contract/[DEPLOYER_ADDRESS]`.
 
 ## Test Status
 Latest local report snapshot (2026-03-05):
