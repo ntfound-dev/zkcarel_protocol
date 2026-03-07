@@ -456,6 +456,8 @@ function isErc20InsufficientBalanceError(message: string): boolean {
 function isWalletCancellationMessage(message: string): boolean {
   const lower = (message || "").toLowerCase()
   return (
+    lower.includes("user_refused_op") ||
+    lower.includes("user refused op") ||
     lower.includes("user rejected") ||
     lower.includes("rejected by user") ||
     lower.includes("request rejected") ||
@@ -538,6 +540,9 @@ function formatSetupFailureMessage(
 // Internal helper that formats execution-time errors for clearer user guidance.
 function formatExecutionFailureMessage(rawMessage: string, command: string): string {
   const lowerRaw = rawMessage.toLowerCase()
+  if (isWalletCancellationMessage(rawMessage)) {
+    return "The wallet request was rejected by the user."
+  }
   if (
     /\b(stake|unstake|claim)\b/i.test(command) &&
     /token\s+btc\s+tidak\s+didukung|token\s+.*\s+tidak\s+didukung/i.test(lowerRaw)
