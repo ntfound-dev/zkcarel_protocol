@@ -142,13 +142,13 @@ flowchart LR
 ```mermaid
 flowchart TD
   A["User Action"] --> B{"Route"}
-  B -->|Normal (swap/stake/limit)| C["Frontend -> wallet sign direct tx"]
-  B -->|Hide (swap/stake/limit only)| D["Frontend -> Backend prepare private payload"]
-  B -->|Bridge (public)| H["Frontend -> Backend quote + pre-check"]
-  C --> E["approve + execute_* on Starknet target contract"]
+  B -->|Normal swap stake limit| C["Frontend to wallet for direct tx signing"]
+  B -->|Hide swap stake limit| D["Frontend to backend private payload prep"]
+  B -->|Bridge public| H["Frontend to backend quote and pre-check"]
+  C --> E["Approve then execute on Starknet target contract"]
   D --> F["Relayer submits private action payload"]
   F --> G["ShieldedPoolV3 executes target call"]
-  H --> I["User signs source-chain tx; provider settles cross-chain"]
+  H --> I["User signs source-chain tx then provider settles cross-chain"]
 ```
 
 Execution notes:
