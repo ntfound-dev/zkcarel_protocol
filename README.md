@@ -167,47 +167,53 @@ Execution notes:
 ## Core Action Paths
 These show the normal-path targets. Hide mode reaches the same target contracts through `ShieldedPoolV3`.
 
+- `SwapAggregator` here is CAREL's routing contract, not an external DEX.
+- `Limit Order Book` is the runtime/UI name used in app flows.
+- Staking routes target `StakingCarel`, `StakingStablecoin`, or `StakingBTC`.
+
 ### Swap
 ```mermaid
 flowchart TD
-  A[Swap action] --> N1[Normal]
-  N1 --> N2[BE quote]
-  N2 --> N3[Wallet sign]
-  N3 --> SWAP[SwapAggregator]
+  A[Swap action] --> B{Mode}
+  B -->|Normal| N1[BE quote]
+  N1 --> N2[Wallet sign]
+  N2 --> SWAP[CAREL SwapAggregator]
 
-  A --> H1[Hide]
-  H1 --> H2[BE prep payload]
-  H2 --> H3[Relayer submit]
-  H3 --> H4[ShieldedPoolV3]
-  H4 --> SWAP
+  B -->|Hide| H1[BE prep payload]
+  H1 --> H2[Relayer submit]
+  H2 --> H3[ShieldedPoolV3]
+  H3 --> SWAP
 ```
 
 ### Limit Order
 ```mermaid
 flowchart TD
-  A[Limit action] --> N1[Normal]
-  N1 --> N2[Wallet sign]
-  N2 --> LOB[KeeperNetwork / LimitOrderBook]
+  A[Limit action] --> B{Mode}
+  B -->|Normal| N1[Wallet sign]
+  N1 --> LOB[Limit Order Book]
 
-  A --> H1[Hide]
-  H1 --> H2[BE prep payload]
-  H2 --> H3[Relayer submit]
-  H3 --> H4[ShieldedPoolV3]
-  H4 --> LOB
+  B -->|Hide| H1[BE prep payload]
+  H1 --> H2[Relayer submit]
+  H2 --> H3[ShieldedPoolV3]
+  H3 --> LOB
 ```
 
 ### Staking
 ```mermaid
 flowchart TD
-  A[Stake action] --> N1[Normal]
-  N1 --> N2[Wallet sign]
-  N2 --> STAKE[StakingCarel / Stablecoin / BTC]
+  A[Stake action] --> B{Mode}
+  B -->|Normal| N1[Wallet sign]
+  N1 --> P1{Pool}
+  P1 --> S1[StakingCarel]
+  P1 --> S2[StakingStablecoin]
+  P1 --> S3[StakingBTC]
 
-  A --> H1[Hide]
-  H1 --> H2[BE prep payload]
-  H2 --> H3[Relayer submit]
-  H3 --> H4[ShieldedPoolV3]
-  H4 --> STAKE
+  B -->|Hide| H1[BE prep payload]
+  H1 --> H2[Relayer submit]
+  H2 --> H3[ShieldedPoolV3]
+  H3 --> S1
+  H3 --> S2
+  H3 --> S3
 ```
 
 ## Bridge Path

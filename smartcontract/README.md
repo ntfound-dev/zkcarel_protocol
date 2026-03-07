@@ -126,17 +126,19 @@ flowchart LR
 ```
 
 ## Core Contract Flows
+- `SwapAggregator` below is the CAREL routing contract. It can call registered DEX routers and use oracle-based quoting/fallback logic.
+- `KeeperNetwork` is the contract name in `src/trading/dca_orders.cairo`. The app/runtime layer refers to this flow as `Limit Order Book`.
+
 ### Swap
 ```mermaid
 flowchart LR
-  A[Swap action] --> N[Normal]
-  N --> U[User wallet]
-  U --> SWAP[SwapAggregator]
-  A --> H[Hide]
-  H --> R[Relayer]
+  A[Swap action] --> B{Mode}
+  B -->|Normal| U[User wallet]
+  U --> SWAP[CAREL SwapAggregator]
+  B -->|Hide| R[Relayer]
   R --> EXEC[ShieldedPoolV3]
   EXEC --> SWAP
-  SWAP --> DEX[DEX router]
+  SWAP --> DEX[Registered DEX routers]
   SWAP --> ORACLE[PriceOracle]
   SWAP --> DEV[Dev fund]
   SWAP --> FEE[Fee recipient]
@@ -145,11 +147,10 @@ flowchart LR
 ### Limit Order
 ```mermaid
 flowchart LR
-  A[Limit action] --> N[Normal]
-  N --> U[User wallet]
+  A[Limit action] --> B{Mode}
+  B -->|Normal| U[User wallet]
   U --> LOB[KeeperNetwork]
-  A --> H[Hide]
-  H --> R[Relayer]
+  B -->|Hide| R[Relayer]
   R --> EXEC[ShieldedPoolV3]
   EXEC --> LOB
   K[Keeper] --> LOB
@@ -159,13 +160,12 @@ flowchart LR
 ### Staking
 ```mermaid
 flowchart LR
-  A[Stake action] --> N[Normal]
-  N --> U[User wallet]
+  A[Stake action] --> B{Mode}
+  B -->|Normal| U[User wallet]
   U --> SCAREL[StakingCarel]
   U --> SSTABLE[StakingStablecoin]
   U --> SBTC[StakingBTC]
-  A --> H[Hide]
-  H --> R[Relayer]
+  B -->|Hide| R[Relayer]
   R --> EXEC[ShieldedPoolV3]
   EXEC --> SCAREL
   EXEC --> SSTABLE
