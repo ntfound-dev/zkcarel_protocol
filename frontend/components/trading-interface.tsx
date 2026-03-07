@@ -473,6 +473,39 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
       window.localStorage.removeItem(TRADE_PRIVACY_PAYLOAD_KEY)
       return undefined
     }
+    const noteCommitment =
+      typeof parsed.note_commitment === "string" && parsed.note_commitment.trim().length > 0
+        ? parsed.note_commitment.trim()
+        : inferredV3 && commitment
+        ? commitment
+        : undefined
+    const normalizedNoteCommitment = (noteCommitment || "").trim().toLowerCase()
+    const normalizedNullifier = (nullifier || "").trim().toLowerCase()
+    let hasTrackedPendingNote = false
+    const pendingNotesRaw = window.localStorage.getItem(TRADE_PRIVACY_PENDING_NOTES_KEY)
+    if (pendingNotesRaw && (normalizedNoteCommitment || normalizedNullifier)) {
+      try {
+        const pendingNotes = JSON.parse(pendingNotesRaw) as unknown
+        if (Array.isArray(pendingNotes)) {
+          hasTrackedPendingNote = pendingNotes.some((entry) => {
+            if (!entry || typeof entry !== "object") return false
+            const item = entry as Record<string, unknown>
+            const entryCommitment =
+              typeof item.note_commitment === "string"
+                ? item.note_commitment.trim().toLowerCase()
+                : ""
+            const entryNullifier =
+              typeof item.nullifier === "string" ? item.nullifier.trim().toLowerCase() : ""
+            return (
+              (!!normalizedNoteCommitment && entryCommitment === normalizedNoteCommitment) ||
+              (!!normalizedNullifier && entryNullifier === normalizedNullifier)
+            )
+          })
+        }
+      } catch {
+        hasTrackedPendingNote = false
+      }
+    }
     return {
       verifier: (parsed.verifier || "garaga").trim() || "garaga",
       note_version: inferredNoteVersion || (inferredV3 ? "v3" : undefined),
@@ -490,12 +523,7 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
         typeof parsed.recipient === "string" && parsed.recipient.trim().length > 0
           ? parsed.recipient.trim()
           : undefined,
-      note_commitment:
-        typeof parsed.note_commitment === "string" && parsed.note_commitment.trim().length > 0
-          ? parsed.note_commitment.trim()
-          : inferredV3 && commitment
-          ? commitment
-          : undefined,
+      note_commitment: noteCommitment,
       denom_id:
         typeof parsed.denom_id === "string" && parsed.denom_id.trim().length > 0
           ? parsed.denom_id.trim()
@@ -503,7 +531,8 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
       spendable_at_unix:
         typeof parsed.spendable_at_unix === "number" &&
         Number.isFinite(parsed.spendable_at_unix) &&
-        parsed.spendable_at_unix > 0
+        parsed.spendable_at_unix > 0 &&
+        hasTrackedPendingNote
           ? Math.floor(parsed.spendable_at_unix)
           : undefined,
       proof,
@@ -548,16 +577,24 @@ const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
       currentNoteCommitment === existingNoteCommitment &&
       !!currentNullifier &&
       currentNullifier === existingNullifier
+    const sameTrackedNote = loadPendingHideNotes().some((note) => {
+      const noteCommitment = (note.note_commitment || "").trim().toLowerCase()
+      const noteNullifier = (note.nullifier || "").trim().toLowerCase()
+      return (
+        (!!currentNoteCommitment && noteCommitment === currentNoteCommitment) ||
+        (!!currentNullifier && noteNullifier === currentNullifier)
+      )
+    })
     if (
       sameNote &&
+      sameTrackedNote &&
       typeof existing?.spendable_at_unix === "number" &&
       Number.isFinite(existing.spendable_at_unix) &&
       existing.spendable_at_unix > 0
     ) {
       normalizedPayload.spendable_at_unix = Math.floor(existing.spendable_at_unix)
-    } else {
-      normalizedPayload.spendable_at_unix =
-        Math.floor(Date.now() / 1000) + Math.floor(HIDE_BALANCE_MIN_NOTE_AGE_MS / 1000)
+    } else if ("spendable_at_unix" in normalizedPayload) {
+      delete normalizedPayload.spendable_at_unix
     }
   }
   window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(normalizedPayload))
@@ -3342,6 +3379,8 @@ export function TradingInterface() {
       ? "Quote on-chain calldata is not ready yet. Refresh the quote."
       : isCrossChain && !resolvedReceiveAddress
       ? "Receive address is required."
+      : hideMixingWindowBlocked
+      ? `Hide note is still mixing. Ready in ${formatRemainingDuration(hideMixingWindowRemainingMs)}.`
       : activeHideExecutorMismatch
       ? "Active hide note uses an old executor. Pick a note on current executor or withdraw old note."
       : null
@@ -4726,8 +4765,10 @@ export function TradingInterface() {
             title: "Mixing window aktif",
             message: `Frontend estimate: tunggu ${formatRemainingDuration(
               remainingMs
-            )}. Kamu tetap bisa retry; backend akan enforce window aktual.`,
+            )}, lalu klik Execute Trade lagi.`,
           })
+          setSwapState("idle")
+          return
         }
       }
       if (requestedHideBalance && !tradePrivacyPayload) {
