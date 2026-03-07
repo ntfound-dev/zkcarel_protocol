@@ -52,6 +52,10 @@ import {
   readStarknetShieldedPoolV3FixedAmountFromWallet,
   toHexFelt,
 } from "@/lib/onchain-trade"
+import {
+  AI_LIMIT_ORDER_SOURCES_UPDATED_EVENT,
+  loadAiLimitOrderSourceIds,
+} from "@/lib/ai-execution-source"
 import { useLivePrices } from "@/hooks/use-live-prices"
 import { useOrderUpdates, type OrderUpdate } from "@/hooks/use-order-updates"
 
@@ -95,6 +99,7 @@ type UiOrder = {
   expiry: string
   status: "active" | "filled" | "cancelled"
   createdAt: string
+  requestSource: "manual" | "ai"
 }
 
 type ConfirmOrderOptions = {
@@ -134,6 +139,14 @@ type PendingHideNoteRecord = {
 }
 
 const stableSymbols = new Set(["USDT", "USDC"])
+
+const withOrderSourceLabel = (orders: UiOrder[]): UiOrder[] => {
+  const aiOrderIds = loadAiLimitOrderSourceIds()
+  return orders.map((order) => ({
+    ...order,
+    requestSource: aiOrderIds.has(order.id.trim().toLowerCase()) ? "ai" : "manual",
+  }))
+}
 
 type UsdtTierOption = { minUsdt: number; bonusPercent: number }
 
@@ -1013,6 +1026,35 @@ export function LimitOrder() {
     onUpdate: applyOrderUpdate,
   })
 
+  const refreshOrders = React.useCallback(async () => {
+    try {
+      const response = await listLimitOrders(1, 10, "active")
+      const mapped = response.items.map((order) => {
+        const isBuy = stableSymbols.has(order.from_token.toUpperCase())
+        return {
+          id: order.order_id,
+          type: isBuy ? "buy" : "sell",
+          token: isBuy ? order.to_token : order.from_token,
+          fromToken: order.from_token,
+          amount: order.amount,
+          price: order.price,
+          expiry: order.expiry,
+          status:
+            order.status === 2
+              ? "filled"
+              : order.status === 3 || order.status === 4
+              ? "cancelled"
+              : "active",
+          createdAt: formatDateTime(order.created_at),
+          requestSource: "manual" as const,
+        }
+      })
+      setOrders(withOrderSourceLabel(mapped))
+    } catch {
+      setOrders([])
+    }
+  }, [])
+
   React.useEffect(() => {
     let active = true
     ;(async () => {
@@ -1036,9 +1078,10 @@ export function LimitOrder() {
                 ? "cancelled"
                 : "active",
             createdAt: formatDateTime(order.created_at),
-          } as UiOrder
+            requestSource: "manual" as const,
+          }
         })
-        setOrders(mapped)
+        setOrders(withOrderSourceLabel(mapped))
       } catch {
         if (!active) return
         setOrders([])
@@ -1049,6 +1092,16 @@ export function LimitOrder() {
       active = false
     }
   }, [])
+
+  React.useEffect(() => {
+    const handleAiOrderSourceUpdated = () => {
+      void refreshOrders()
+    }
+    window.addEventListener(AI_LIMIT_ORDER_SOURCES_UPDATED_EVENT, handleAiOrderSourceUpdated)
+    return () => {
+      window.removeEventListener(AI_LIMIT_ORDER_SOURCES_UPDATED_EVENT, handleAiOrderSourceUpdated)
+    }
+  }, [refreshOrders])
 
   /**
    * Handles `handlePricePreset` logic.
@@ -1846,6 +1899,7 @@ export function LimitOrder() {
         expiry: effectiveExpiry,
         status: "active",
         createdAt: "Just now",
+        requestSource: "manual",
       }
 
       setOrders((prev) => [newOrder, ...prev])
@@ -2277,9 +2331,16 @@ export function LimitOrder() {
                         key={`mini-${order.id}`}
                         className="flex items-center justify-between text-xs gap-2"
                       >
-                        <span className="text-foreground">
-                          {order.type === "buy" ? "BUY" : "SELL"} {order.amount} {order.token}
-                        </span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-foreground">
+                            {order.type === "buy" ? "BUY" : "SELL"} {order.amount} {order.token}
+                          </span>
+                          {order.requestSource === "ai" ? (
+                            <span className="rounded px-1.5 py-0.5 text-[9px] font-medium bg-primary/20 text-primary">
+                              AI
+                            </span>
+                          ) : null}
+                        </div>
                         <div className="flex items-center gap-2">
                           <span className="text-muted-foreground">
                             ${Number(order.price).toLocaleString()}

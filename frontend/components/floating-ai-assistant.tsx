@@ -46,6 +46,7 @@ import {
   type StarknetInvokeCall,
   type StarknetInvokeReadableMetadata,
 } from "@/lib/onchain-trade"
+import { markAiLimitOrder, markAiStakePosition } from "@/lib/ai-execution-source"
 import { executeHideViaRelayer } from "@/lib/privacy-relayer"
 import {
   BTC_TESTNET_EXPLORER_BASE_URL,
@@ -4648,6 +4649,9 @@ export function FloatingAIAssistant() {
             txHash: finalStakeTx || undefined,
             txNetwork: finalStakeTx ? "starknet" : undefined,
           })
+          if (stakeResult.position_id) {
+            markAiStakePosition(stakeResult.position_id)
+          }
           if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
             const consumedNoteCommitment = (
               stakePrivacyPayload?.note_commitment ||
@@ -5005,6 +5009,9 @@ export function FloatingAIAssistant() {
             title: "Limit order created",
             message: `Order ${limitResult.order_id} submitted.`,
           })
+          if (limitResult.order_id) {
+            markAiLimitOrder(limitResult.order_id)
+          }
           if (limitResult.privacy_tx_hash) {
             notifications.addNotification({
               type: "info",

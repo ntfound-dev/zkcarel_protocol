@@ -32,6 +32,10 @@ import {
   readStarknetShieldedPoolV3FixedAmountFromWallet,
   toHexFelt,
 } from "@/lib/onchain-trade"
+import {
+  AI_STAKE_POSITION_SOURCES_UPDATED_EVENT,
+  loadAiStakePositionSourceIds,
+} from "@/lib/ai-execution-source"
 
 const poolMeta: Record<string, { name: string; icon: string; type: string; gradient: string }> = {
   USDT: { name: "Tether", icon: "₮", type: "Stablecoin", gradient: "from-green-400 to-emerald-600" },
@@ -123,6 +127,14 @@ const HIDE_BALANCE_MIN_NOTE_AGE_MS =
 const U256_MAX_LOW_HEX = "0xffffffffffffffffffffffffffffffff"
 const U256_MAX_HIGH_HEX = "0xffffffffffffffffffffffffffffffff"
 const U256_MASK_128 = (BigInt(1) << BigInt(128)) - BigInt(1)
+
+const withStakeSourceLabel = (positions: StakingPosition[]): StakingPosition[] => {
+  const aiStakePositionIds = loadAiStakePositionSourceIds()
+  return positions.map((position) => ({
+    ...position,
+    requestSource: aiStakePositionIds.has(position.id.trim().toLowerCase()) ? "ai" : "manual",
+  }))
+}
 
 const scaledBigIntToDecimalString = (value: bigint, decimals: number): string => {
   if (decimals <= 0) return value.toString()
@@ -482,6 +494,7 @@ interface StakingPosition {
   stakedAt: string
   rewards: number
   status: "active" | "pending" | "unlocking"
+  requestSource: "manual" | "ai"
 }
 
 type PendingHideNoteRecord = {
@@ -935,11 +948,13 @@ export function StakeEarn() {
             stakedAt: new Date(position.started_at * 1000).toLocaleDateString("id-ID"),
             rewards: position.rewards_earned,
             status: "active",
+            requestSource: "manual" as const,
           } as StakingPosition
         })
         .filter((item): item is StakingPosition => item !== null)
-      setPositions(mapped)
-      setActivePositions(mapped.length)
+      const labeledPositions = withStakeSourceLabel(mapped)
+      setPositions(labeledPositions)
+      setActivePositions(labeledPositions.length)
     } catch {
       setPositions([])
       setActivePositions(0)
@@ -957,6 +972,19 @@ export function StakeEarn() {
       active = false
     }
   }, [pools, refreshPositions])
+
+  React.useEffect(() => {
+    const handleAiStakeSourceUpdated = () => {
+      void refreshPositions()
+    }
+    window.addEventListener(AI_STAKE_POSITION_SOURCES_UPDATED_EVENT, handleAiStakeSourceUpdated)
+    return () => {
+      window.removeEventListener(
+        AI_STAKE_POSITION_SOURCES_UPDATED_EVENT,
+        handleAiStakeSourceUpdated
+      )
+    }
+  }, [refreshPositions])
 
   /**
    * Handles `handleStake` logic.
@@ -2462,6 +2490,11 @@ export function StakeEarn() {
                             {position.status === "active" ? "Active" : 
                              position.status === "unlocking" ? "Unlocking..." : "Pending"}
                           </span>
+                          {position.requestSource === "ai" ? (
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-primary/20 text-primary">
+                              AI
+                            </span>
+                          ) : null}
                         </div>
                         <p className="text-sm text-muted-foreground">
                           {balanceHidden ? `•••••• ${position.pool.symbol} staked` : `${position.amount} ${position.pool.symbol} staked`}
