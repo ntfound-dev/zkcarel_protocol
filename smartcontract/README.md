@@ -289,5 +289,5 @@ Use this override set for FE/BE runtime demos. Keep catalog inventory unchanged 
 - `smartcontract/SC_TEST_REPORT.md`
 - `smartcontract/security_audit_checklist.md`
 - `smartcontract/scripts/README.md`
-- `docs/ENV_RUNTIME_AUDIT_MVP.md`
-- `docs/PRODUCTION_GO_LIVE_CHECKLIST_V3_2026-02-27.md`
+- `docs/env_runtime_audit_mvp.md`
+- `docs/production_go_live_checklist_v3_2026-02-27.md`

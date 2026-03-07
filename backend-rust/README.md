@@ -237,7 +237,7 @@ Audit of `backend-rust/.env` (runtime usage):
 - `FAUCET_WALLET_PRIVATE_KEY`
 - `INDEXER_DIAGNOSTICS`
 
-Cross-layer env audit reference: `docs/ENV_RUNTIME_AUDIT_MVP.md`.
+Cross-layer env audit reference: `docs/env_runtime_audit_mvp.md`.
 
 ## Signer Semantics
 Signer keys:

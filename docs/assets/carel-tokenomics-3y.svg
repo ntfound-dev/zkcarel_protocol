@@ -74,5 +74,5 @@
   <text x="1310" y="752" fill="#93C5FD" font-family="Inter, Arial, sans-serif" font-size="22">Listing 10%, Ecosystem 40%, Treasury 10%</text>
 
   <text x="1310" y="818" fill="#64748B" font-family="Inter, Arial, sans-serif" font-size="18">Sources: vesting_manager.cairo + token.cairo</text>
-  <text x="1310" y="844" fill="#64748B" font-family="Inter, Arial, sans-serif" font-size="18">(Root guide: TOKENOMICS.md)</text>
+  <text x="1310" y="844" fill="#64748B" font-family="Inter, Arial, sans-serif" font-size="18">(Root guide: tokenomics.md)</text>
 </svg>

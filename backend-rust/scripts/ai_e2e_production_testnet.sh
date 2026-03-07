@@ -241,7 +241,7 @@ echo "== DONE =="
 echo "Result file: $RESULT_JSON"
 cat "$RESULT_JSON" | jq .
 
-DOC_FILE="$REPO_ROOT/docs/AI_E2E_PREPARE_SIGN_SUBMIT_EXECUTE_2026-02-26.md"
+DOC_FILE="$REPO_ROOT/docs/ai_e2e_prepare_sign_submit_execute_2026-02-26.md"
 if [ -f "$DOC_FILE" ]; then
   echo
   echo "Tip: append result manually into $DOC_FILE"

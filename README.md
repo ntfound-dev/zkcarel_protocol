@@ -244,13 +244,13 @@ Open: `http://localhost:3000`
 | Backend technical README | `backend-rust/README.md` |
 | Smartcontract technical README | `smartcontract/README.md` |
 | Frontend deployment | `frontend/DEPLOY_TESTNET.md` |
-| Cross-layer deploy guide | `docs/DEPLOY_TESTNET.md` |
+| Cross-layer deploy guide | `docs/deploy_testnet.md` |
 | Backend tests | `backend-rust/BE_TEST_REPORT.md` |
 | Smartcontract tests | `smartcontract/SC_TEST_REPORT.md` |
-| Consolidated docs test summary | `docs/TEST_REPORTS.md` |
-| Runtime env audit | `docs/ENV_RUNTIME_AUDIT_MVP.md` |
-| V3 go-live checklist | `docs/PRODUCTION_GO_LIVE_CHECKLIST_V3_2026-02-27.md` |
-| Hackathon submission and proof links | `docs/HACKATHON_SUBMISSION_EVIDENCE.md` |
+| Consolidated docs test summary | `docs/test_reports.md` |
+| Runtime env audit | `docs/env_runtime_audit_mvp.md` |
+| V3 go-live checklist | `docs/production_go_live_checklist_v3_2026-02-27.md` |
+| Hackathon submission and proof links | `docs/hackathon_submission_evidence.md` |
 
 ## Current Constraints
 - Testnet-first deployment posture.
