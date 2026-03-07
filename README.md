@@ -304,18 +304,23 @@ npm run dev
 Open: `http://localhost:3000`
 
 ## Documentation Map
-| Area | Document |
+| Need | Document |
 | --- | --- |
-| Docs index | `docs/README.md` |
-| Frontend technical README | `frontend/README.md` |
-| Backend technical README | `backend-rust/README.md` |
-| Smartcontract technical README | `smartcontract/README.md` |
-| Frontend deployment | `docs/deploy_testnet.md` |
-| Cross-layer deploy guide | `docs/deploy_testnet.md` |
-| Test reports | `docs/test_reports.md` |
-| Runtime env audit | `docs/env_runtime_audit_mvp.md` |
+| Full docs index | `docs/README.md` |
+| Frontend module README | `frontend/README.md` |
+| Backend module README | `backend-rust/README.md` |
+| Smartcontract module README | `smartcontract/README.md` |
+| Runtime architecture and mode behavior | `docs/architecture_mvp_modes.md` |
+| Testnet deploy and wiring guide | `docs/deploy_testnet.md` |
+| Runtime env and active binding audit | `docs/env_runtime_audit_mvp.md` |
+| Consolidated backend/frontend/smartcontract test results | `docs/test_reports.md` |
+| AI architecture and Garaga notes | `docs/ai_architecture.md` |
+| AI prepare/sign/submit/execute run snapshot | `docs/ai_e2e_prepare_sign_submit_execute_2026-02-26.md` |
+| MVP UAT checklist | `docs/mvp_uat_testnet.md` |
 | V3 go-live checklist | `docs/production_go_live_checklist_v3_2026-02-27.md` |
-| Hackathon submission and proof links | `docs/hackathon_submission_evidence.md` |
+| Security audit checklist | `docs/security_audit_checklist.md` |
+| Hackathon submission evidence and proof links | `docs/hackathon_submission_evidence.md` |
+| Tokenomics guide | `docs/tokenomics.md` |
 
 ## Current Constraints
 - Testnet-first deployment posture.
