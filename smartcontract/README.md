@@ -128,6 +128,7 @@ flowchart LR
 ## Core Contract Flows
 - `SwapAggregator` below is the CAREL routing contract. It can call registered DEX routers and use oracle-based quoting/fallback logic.
 - `KeeperNetwork` is the contract name in `src/trading/dca_orders.cairo`. The app/runtime layer refers to this flow as `Limit Order Book`.
+- Hide V3 uses pre-funded notes on `ShieldedPoolV3` via `deposit_fixed_v3` before relayer execution.
 
 ### Swap
 ```mermaid
@@ -135,8 +136,9 @@ flowchart LR
   A[Swap action] --> B{Mode}
   B -->|Normal| U[User wallet]
   U --> SWAP[CAREL SwapAggregator]
-  B -->|Hide| R[Relayer]
-  R --> EXEC[ShieldedPoolV3]
+  B -->|Hide| NOTE[User deposit_fixed_v3]
+  NOTE --> EXEC[ShieldedPoolV3]
+  R[Relayer] --> EXEC
   EXEC --> SWAP
   SWAP --> DEX[Registered DEX routers]
   SWAP --> ORACLE[PriceOracle]
@@ -150,8 +152,9 @@ flowchart LR
   A[Limit action] --> B{Mode}
   B -->|Normal| U[User wallet]
   U --> LOB[KeeperNetwork]
-  B -->|Hide| R[Relayer]
-  R --> EXEC[ShieldedPoolV3]
+  B -->|Hide| NOTE[User deposit_fixed_v3]
+  NOTE --> EXEC[ShieldedPoolV3]
+  R[Relayer] --> EXEC
   EXEC --> LOB
   K[Keeper] --> LOB
   PRIV[PrivacyRouter] -.-> LOB
@@ -165,8 +168,9 @@ flowchart LR
   U --> SCAREL[StakingCarel]
   U --> SSTABLE[StakingStablecoin]
   U --> SBTC[StakingBTC]
-  B -->|Hide| R[Relayer]
-  R --> EXEC[ShieldedPoolV3]
+  B -->|Hide| NOTE[User deposit_fixed_v3]
+  NOTE --> EXEC[ShieldedPoolV3]
+  R[Relayer] --> EXEC
   EXEC --> SCAREL
   EXEC --> SSTABLE
   EXEC --> SBTC
@@ -176,7 +180,7 @@ flowchart LR
   SBTC --> RTOKEN
 ```
 
-`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router.
+`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution.
 
 ## OpenZeppelin Usage
 This repo uses OpenZeppelin Cairo components where standard token, ownership, and access-control behavior are needed. The swap, limit-order, and staking business logic are custom Cairo contracts.

@@ -170,6 +170,8 @@ These show the normal-path targets. Hide mode reaches the same target contracts 
 - `SwapAggregator` here is CAREL's routing contract, not an external DEX.
 - `Limit Order Book` is the runtime/UI name used in app flows.
 - Staking routes target `StakingCarel`, `StakingStablecoin`, or `StakingBTC`.
+- Normal mode still earns points and can use an active NFT discount.
+- Hide mode uses `deposit_fixed_v3` first, waits the note mixing window/cooldown, then the relayer executes through `ShieldedPoolV3`. Hide mode still earns points, can use NFT discount, and adds hide-tier bonus points.
 
 ### Swap
 ```mermaid
@@ -179,10 +181,12 @@ flowchart TD
   N1 --> N2[Wallet sign]
   N2 --> SWAP[CAREL SwapAggregator]
 
-  B -->|Hide| H1[BE prep payload]
-  H1 --> H2[Relayer submit]
-  H2 --> H3[ShieldedPoolV3]
-  H3 --> SWAP
+  B -->|Hide| H1[User deposit note]
+  H1 --> H2[Mixing window]
+  H2 --> H3[BE prep payload]
+  H3 --> H4[Relayer submit]
+  H4 --> H5[ShieldedPoolV3]
+  H5 --> SWAP
 ```
 
 ### Limit Order
@@ -192,10 +196,12 @@ flowchart TD
   B -->|Normal| N1[Wallet sign]
   N1 --> LOB[Limit Order Book]
 
-  B -->|Hide| H1[BE prep payload]
-  H1 --> H2[Relayer submit]
-  H2 --> H3[ShieldedPoolV3]
-  H3 --> LOB
+  B -->|Hide| H1[User deposit note]
+  H1 --> H2[Mixing window]
+  H2 --> H3[BE prep payload]
+  H3 --> H4[Relayer submit]
+  H4 --> H5[ShieldedPoolV3]
+  H5 --> LOB
 ```
 
 ### Staking
@@ -208,12 +214,14 @@ flowchart TD
   P1 --> S2[StakingStablecoin]
   P1 --> S3[StakingBTC]
 
-  B -->|Hide| H1[BE prep payload]
-  H1 --> H2[Relayer submit]
-  H2 --> H3[ShieldedPoolV3]
-  H3 --> S1
-  H3 --> S2
-  H3 --> S3
+  B -->|Hide| H1[User deposit note]
+  H1 --> H2[Mixing window]
+  H2 --> H3[BE prep payload]
+  H3 --> H4[Relayer submit]
+  H4 --> H5[ShieldedPoolV3]
+  H5 --> S1
+  H5 --> S2
+  H5 --> S3
 ```
 
 ## Bridge Path
