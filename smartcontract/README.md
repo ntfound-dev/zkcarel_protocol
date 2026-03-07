@@ -128,7 +128,7 @@ flowchart LR
 ## Core Contract Flows
 - `SwapAggregator` below is the CAREL routing contract. It can call registered DEX routers and use oracle-based quoting/fallback logic.
 - `KeeperNetwork` is the contract name in `src/trading/dca_orders.cairo`. The app/runtime layer refers to this flow as `Limit Order Book`.
-- Hide V3 uses pre-funded notes on `ShieldedPoolV3` via `deposit_fixed_v3` before relayer execution.
+- Hide V3 uses pre-funded notes on `ShieldedPoolV3` via `deposit_fixed_v3` before relayer execution. After deposit, the owner can still call `withdraw_note_v3` while no pending private action exists.
 
 ### Swap
 ```mermaid
@@ -137,6 +137,7 @@ flowchart LR
   B -->|Normal| U[User wallet]
   U --> SWAP[CAREL SwapAggregator]
   B -->|Hide| NOTE[User deposit_fixed_v3]
+  NOTE --> WD[withdraw_note_v3]
   NOTE --> EXEC[ShieldedPoolV3]
   R[Relayer] --> EXEC
   EXEC --> SWAP
@@ -153,6 +154,7 @@ flowchart LR
   B -->|Normal| U[User wallet]
   U --> LOB[KeeperNetwork]
   B -->|Hide| NOTE[User deposit_fixed_v3]
+  NOTE --> WD[withdraw_note_v3]
   NOTE --> EXEC[ShieldedPoolV3]
   R[Relayer] --> EXEC
   EXEC --> LOB
@@ -169,6 +171,7 @@ flowchart LR
   U --> SSTABLE[StakingStablecoin]
   U --> SBTC[StakingBTC]
   B -->|Hide| NOTE[User deposit_fixed_v3]
+  NOTE --> WD[withdraw_note_v3]
   NOTE --> EXEC[ShieldedPoolV3]
   R[Relayer] --> EXEC
   EXEC --> SCAREL
@@ -195,12 +198,14 @@ flowchart LR
   AIEXEC --> CAREL[CAREL token]
 
   B --> E[L3 hide execute]
-  E --> R[Relayer]
-  R --> EXEC[ShieldedPoolV3]
+  E --> NOTE[User deposit_fixed_v3]
+  NOTE --> WD[withdraw_note_v3]
+  NOTE --> EXEC[ShieldedPoolV3]
+  R[Relayer] --> EXEC
   EXEC --> TARGET[Swap/Limit/Stake]
 ```
 
-`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2/L3` use `AIExecutor`, and `L3 hide` continues through `ShieldedPoolV3`.
+`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2/L3` use `AIExecutor`, and `L3 hide` continues through `ShieldedPoolV3`. In hide V3, note withdrawal is still available after deposit and before relayer execution.
 
 ## OpenZeppelin Usage
 This repo uses OpenZeppelin Cairo components where standard token, ownership, and access-control behavior are needed. The swap, limit-order, and staking business logic are custom Cairo contracts.

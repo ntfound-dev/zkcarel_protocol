@@ -171,7 +171,7 @@ These show the normal-path targets. Hide mode reaches the same target contracts 
 - `Limit Order Book` is the runtime/UI name used in app flows.
 - Staking routes target `StakingCarel`, `StakingStablecoin`, or `StakingBTC`.
 - Normal mode still earns points and can use an active NFT discount.
-- Hide mode uses `deposit_fixed_v3` first, waits the note mixing window/cooldown, then the relayer executes through `ShieldedPoolV3`. Hide mode still earns points, can use NFT discount, and adds hide-tier bonus points.
+- Hide mode uses `deposit_fixed_v3` first. After deposit, user can still withdraw the note if not proceeding. If continuing, the note waits the mixing window/cooldown, then the relayer executes through `ShieldedPoolV3`. Hide mode still earns points, can use NFT discount, and adds hide-tier bonus points.
 
 ### Swap
 ```mermaid
@@ -182,6 +182,7 @@ flowchart TD
   N2 --> SWAP[CAREL SwapAggregator]
 
   B -->|Hide| H1[User deposit note]
+  H1 --> HW[Withdraw note]
   H1 --> H2[Mixing window]
   H2 --> H3[BE prep payload]
   H3 --> H4[Relayer submit]
@@ -197,6 +198,7 @@ flowchart TD
   N1 --> LOB[Limit Order Book]
 
   B -->|Hide| H1[User deposit note]
+  H1 --> HW[Withdraw note]
   H1 --> H2[Mixing window]
   H2 --> H3[BE prep payload]
   H3 --> H4[Relayer submit]
@@ -215,6 +217,7 @@ flowchart TD
   P1 --> S3[StakingBTC]
 
   B -->|Hide| H1[User deposit note]
+  H1 --> HW[Withdraw note]
   H1 --> H2[Mixing window]
   H2 --> H3[BE prep payload]
   H3 --> H4[Relayer submit]
@@ -242,6 +245,7 @@ flowchart TD
   E --> E1[Auto Setup On-Chain]
   E1 --> E2[AIExecutor submit_action]
   E2 --> E3[User deposit note]
+  E3 --> EW[Withdraw note]
   E3 --> E4[Mixing window]
   E4 --> E5[Backend execute]
   E5 --> E6[Relayer submit]
@@ -253,6 +257,7 @@ AI notes:
 - `L1` is backend-only and does not use an on-chain execution path.
 - `L2` and `L3` use `AIExecutor` setup/action flow before executable commands run.
 - `L3 hide` follows the same note + cooldown + relayer path as hide swap/stake/limit.
+- A deposited hide note can still be withdrawn before the relayer execution path is used.
 - AI bridge stays on `Level 2` in the current runtime profile.
 
 ## Bridge Path
