@@ -12,7 +12,6 @@ This README explains how `frontend/`, `backend-rust/`, and `smartcontract/` work
 - [Runtime Profile Policy](#runtime-profile-policy)
 - [Public Testnet Deployment](#public-testnet-deployment)
 - [Unified Architecture (FE + BE + SC)](#unified-architecture-fe--be--sc)
-- [Execution Modes](#execution-modes)
 - [Core Action Paths](#core-action-paths)
 - [Bridge Path](#bridge-path)
 - [Test Status](#test-status)
@@ -135,34 +134,6 @@ flowchart LR
   GARDEN --> ETH
   GARDEN --> BTC
 ```
-
-## Execution Modes
-```mermaid
-flowchart TD
-  A["Action"] --> B{"Mode"}
-
-  B --> C["Normal"]
-  C --> C1["Wallet sign"]
-  C1 --> C2["approve + execute_*"]
-
-  B --> D["Hide"]
-  D --> D1["BE prep payload"]
-  D1 --> D2["Relayer submit"]
-  D2 --> D3["ShieldedPoolV3 execute"]
-
-  B --> H["Bridge"]
-  H --> H1["BE quote/pre-check"]
-  H1 --> H2["User sign source tx"]
-  H2 --> H3["Provider settle"]
-```
-
-Execution notes:
-- Normal mode: on-chain sender is the user wallet.
-- Hide mode: on-chain sender is the relayer account.
-- Hide mode relayer signing key is backend-managed (`BACKEND_PRIVATE_KEY`), not an AI provider key.
-- Active hide-mode scope: swap, stake, limit order.
-- Garaga scope in current MVP: private/hide execution only (`swap`, `stake`, `limit order`), not bridge settlement.
-- Bridge route remains public cross-chain flow (not the hide executor path in current MVP).
 
 ## Core Action Paths
 These show the normal-path targets. Hide mode reaches the same target contracts through `ShieldedPoolV3`.
