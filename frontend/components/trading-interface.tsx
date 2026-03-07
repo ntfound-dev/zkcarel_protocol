@@ -3424,7 +3424,7 @@ export function TradingInterface() {
       )
     }
     if (isCrossChain) return "Execute Bridge"
-    if (hideBalanceOnchain && !hasActiveHideV3Note) return "Execute Swap"
+    if (hideBalanceOnchain && !hasActiveHideV3Note) return "Execute Note"
     return "Execute Trade"
   })()
 
@@ -6654,7 +6654,7 @@ export function TradingInterface() {
                   swapState === "error" && "bg-destructive"
                 )}
               >
-                Execute Swap
+                Execute Note
               </Button>
             </div>
             {swapState === "idle" && executeDisabledReason && (
