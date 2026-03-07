@@ -96,7 +96,7 @@ const quickPromptsByTier: Record<number, string[]> = {
     "please bridge 0.05 ETH to WBTC",
     "please bridge 0.005 BTC to WBTC",
     "please bridge 0.05 ETH to BTC",
-    "please stake 15 USDT",
+    "please stake 15 USDC",
     "please stake 10 USDT",
     "please stake 100 CAREL",
     "please stake 0.0005 WBTC",
