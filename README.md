@@ -342,9 +342,13 @@ Open: `http://localhost:3000`
   - Complete V3 operational hardening and observability.
   - Keep V2 as redeem-only during migration window.
 - Mid term:
+  - Complete external security audit for `ShieldedPoolV3`, relayer-facing execution, and related runtime surfaces.
   - Expand privacy telemetry and failure analytics.
   - Increase bridge provider redundancy.
+  - Add stronger liquidity-aware routing and fallback handling for bridge providers.
 - Post-hackathon plan:
+  - CAREL DEX as a dedicated native liquidity and trading roadmap stream.
   - Shadow Bridge (hide-mode BTC native to wBTC) as a dedicated roadmap stream.
   - Sumo Login integration as a dedicated auth/privacy roadmap stream.
   - Battleship as a dedicated gameplay/privacy roadmap stream.
+  - Persist gameplay/runtime state more cleanly across recovery and restart paths.
