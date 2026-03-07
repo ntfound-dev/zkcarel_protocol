@@ -183,11 +183,11 @@ npm run build
 npm run start
 ```
 
-Latest recorded local checks (2026-02-25):
-- `npm run lint`: failed due ESLint setup gap at that time.
-- `npm run build`: failed on Node `v18.19.1` (Next.js 16 requires newer Node).
+Latest recorded local checks (2026-03-05):
+- `npm run lint`: pass (`0` warnings, `0` errors).
+- `npm run build`: pass on Node `20.11.1`.
 
-Detailed report: `frontend/FE_TEST_REPORT.md`.
+Detailed report: `../docs/test_reports.md`.
 
 ## Deployment Docs
 - `frontend/DEPLOY_TESTNET.md`

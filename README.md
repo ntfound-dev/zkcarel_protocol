@@ -244,10 +244,10 @@ Latest local report snapshot (2026-03-05):
 
 | Module | Result | Source |
 | --- | --- | --- |
-| Backend (`backend-rust`) | `208/208` pass | `backend-rust/BE_TEST_REPORT.md` |
-| Smartcontract core (`smartcontract`) | `172/172` pass | `smartcontract/SC_TEST_REPORT.md` |
-| Private executor suite (`private_executor_lite`) | `22/22` pass | `smartcontract/SC_TEST_REPORT.md` |
-| Frontend (`frontend`) | `lint: pass (0 warnings), build: pass on Node 20.11.1` | `frontend/FE_TEST_REPORT.md` |
+| Backend (`backend-rust`) | `208/208` pass | `docs/test_reports.md` |
+| Smartcontract core (`smartcontract`) | `172/172` pass | `docs/test_reports.md` |
+| Private executor suite (`private_executor_lite`) | `22/22` pass | `docs/test_reports.md` |
+| Frontend (`frontend`) | `lint: pass (0 warnings), build: pass on Node 20.11.1` | `docs/test_reports.md` |
 
 Total reported automated tests (BE + SC): `402/402`.
 
@@ -298,9 +298,7 @@ Open: `http://localhost:3000`
 | Smartcontract technical README | `smartcontract/README.md` |
 | Frontend deployment | `frontend/DEPLOY_TESTNET.md` |
 | Cross-layer deploy guide | `docs/deploy_testnet.md` |
-| Backend tests | `backend-rust/BE_TEST_REPORT.md` |
-| Smartcontract tests | `smartcontract/SC_TEST_REPORT.md` |
-| Consolidated docs test summary | `docs/test_reports.md` |
+| Test reports | `docs/test_reports.md` |
 | Runtime env audit | `docs/env_runtime_audit_mvp.md` |
 | V3 go-live checklist | `docs/production_go_live_checklist_v3_2026-02-27.md` |
 | Hackathon submission and proof links | `docs/hackathon_submission_evidence.md` |

@@ -48,7 +48,7 @@ backend-rust/
   scripts/                  # Prover and smoke-test utilities
   Cargo.toml                # Rust crate manifest
   .env.testnet.example      # Example env profile
-  BE_TEST_REPORT.md         # Backend test report
+  ../docs/test_reports.md   # Consolidated test report
 ```
 
 ## Runtime Architecture
@@ -109,10 +109,10 @@ cd backend-rust
 cargo test
 ```
 
-Latest recorded local snapshot (2026-02-25):
-- `188 passed, 0 failed`
+Latest recorded local snapshot (2026-03-05):
+- `208 passed, 0 failed`
 
-Detailed report: `backend-rust/BE_TEST_REPORT.md`.
+Detailed report: `../docs/test_reports.md`.
 
 ## Run Local
 ```bash

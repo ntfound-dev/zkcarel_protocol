@@ -249,11 +249,11 @@ bash scripts/test_private_executor_lite.sh
 bash scripts/test_garaga_fast.sh
 ```
 
-Latest recorded local snapshot (2026-02-26):
+Latest recorded local snapshot (2026-03-05):
 - `smartcontract`: `172/172` passed
-- `private_executor_lite`: `12/12` passed
+- `private_executor_lite`: `22/22` passed
 
-Full report: `smartcontract/SC_TEST_REPORT.md`.
+Full report: `../docs/test_reports.md`.
 
 ## Deployment Docs
 - `smartcontract/DEPLOY_TESTNET.md`
@@ -349,7 +349,7 @@ Use this override set for FE/BE runtime demos. Keep catalog inventory unchanged 
 ## Related Docs
 - `smartcontract/private_executor_lite/README.md`
 - `smartcontract/DEPLOY_TESTNET.md`
-- `smartcontract/SC_TEST_REPORT.md`
+- `../docs/test_reports.md`
 - `smartcontract/security_audit_checklist.md`
 - `smartcontract/scripts/README.md`
 - `docs/env_runtime_audit_mvp.md`
