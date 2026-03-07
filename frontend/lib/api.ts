@@ -877,6 +877,26 @@ function tokenFromAuthorizationHeader(headerValue: string | null) {
   return matched?.[1]?.trim() || null
 }
 
+function normalizeApiErrorMessage(rawMessage: string) {
+  const message = (rawMessage || "").trim()
+  const lower = message.toLowerCase()
+  if (!message) return message
+
+  if (
+    lower.includes("user_refused_op") ||
+    lower.includes("user refused op") ||
+    lower.includes("user rejected") ||
+    lower.includes("rejected by user") ||
+    lower.includes("request rejected") ||
+    lower.includes("user denied") ||
+    lower.includes("denied by user")
+  ) {
+    return "The wallet request was rejected by the user."
+  }
+
+  return message
+}
+
 /**
  * Runs `isInvalidOrExpiredAuth` as part of the frontend API client workflow.
  *
@@ -994,7 +1014,7 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
       API_BASE_URL.startsWith("https://127.0.0.1:")
     if (isRemotePage && isLocalBackendFallback) {
       throw new ApiError(
-        "Frontend production masih pakai localhost backend. Set NEXT_PUBLIC_BACKEND_URL/NEXT_PUBLIC_BACKEND_WS_URL ke URL backend publik (mis. ngrok), lalu redeploy Vercel.",
+        "Frontend production is still pointing to a localhost backend. Set NEXT_PUBLIC_BACKEND_URL/NEXT_PUBLIC_BACKEND_WS_URL to a public backend URL, then redeploy Vercel.",
         {
           code: "BACKEND_URL_MISCONFIG",
           path,
@@ -1058,11 +1078,12 @@ async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T>
         if (!firstLine) return null
         return firstLine.length > 260 ? `${firstLine.slice(0, 257)}...` : firstLine
       })()
-      const message =
+      const message = normalizeApiErrorMessage(
         json?.error?.message ||
-        json?.message ||
-        plainTextMessage ||
-        `Request failed (HTTP ${response.status})`
+          json?.message ||
+          plainTextMessage ||
+          `Request failed (HTTP ${response.status})`
+      )
       const isMissingAuthHeader =
         response.status === 401 &&
         (!hasAuthorizationHeader || /missing authorization header/i.test(message))

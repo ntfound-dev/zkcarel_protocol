@@ -1018,7 +1018,7 @@ async fn shielded_current_root(state: &AppState, executor: Felt) -> Result<Felt>
     let root = out.first().copied().unwrap_or(Felt::ZERO);
     if root == Felt::ZERO {
         return Err(AppError::BadRequest(
-            "ShieldedPoolV3 root belum diinisialisasi (get_root=0).".to_string(),
+            "ShieldedPoolV3 root is not initialized yet (get_root=0).".to_string(),
         ));
     }
     Ok(root)
@@ -2190,7 +2190,7 @@ async fn ensure_hide_executor_has_input_balance(
         )
         .unwrap_or(0.0);
         return Err(AppError::BadRequest(format!(
-            "Hide note/pool balance tidak cukup untuk swap ini. Requested {}, available {:.8} {} di executor. Pilih note lebih kecil atau deposit note baru.",
+            "Executor hide note balance is too low for this swap. Requested {}, available {:.8} {} in the executor. Select a smaller note or deposit a new note.",
             requested_amount_text,
             available,
             from_token_symbol.to_ascii_uppercase()
@@ -2279,7 +2279,7 @@ async fn ensure_oracle_route_liquidity(
     };
 
     Err(AppError::BadRequest(format!(
-        "Likuiditas on-chain {} tidak cukup untuk {} -> {} via oracle route. Butuh sekitar {:.6} {}, tersedia sekitar {:.6} {} di swap aggregator. Kurangi amount (maks sekitar {:.6} {}) atau top-up liquidity.",
+        "On-chain liquidity for {} is too low for {} -> {} via the oracle route. Needed about {:.6} {}, but only about {:.6} {} is available in the swap aggregator. Reduce the amount (max about {:.6} {}) or top up liquidity.",
         to_token.to_ascii_uppercase(),
         from_token.to_ascii_uppercase(),
         to_token.to_ascii_uppercase(),
@@ -2882,7 +2882,7 @@ pub async fn get_quote(
     ensure_supported_starknet_swap_pair(&req.from_token, &req.to_token)?;
     if is_event_only_swap_contract_configured(&state)? {
         return Err(AppError::BadRequest(
-            "Swap real token belum aktif: kontrak swap terkonfigurasi masih event-only. Deploy/aktifkan router swap on-chain yang memindahkan token real terlebih dulu.".to_string(),
+            "Real-token swap is not active yet. The configured swap contract is still event-only. Activate an on-chain swap router that moves real tokens first.".to_string(),
         ));
     }
 
@@ -3049,7 +3049,7 @@ pub async fn execute_swap(
     ensure_supported_starknet_swap_pair(&req.from_token, &req.to_token)?;
     if is_event_only_swap_contract_configured(&state)? {
         return Err(AppError::BadRequest(
-            "Swap real token belum aktif: kontrak swap terkonfigurasi masih event-only. Deploy/aktifkan router swap on-chain yang memindahkan token real terlebih dulu.".to_string(),
+            "Real-token swap is not active yet. The configured swap contract is still event-only. Activate an on-chain swap router that moves real tokens first.".to_string(),
         ));
     }
 
@@ -3258,7 +3258,8 @@ pub async fn execute_swap(
                     shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
                 if deposit_ts == 0 {
                     return Err(AppError::BadRequest(
-                        "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
+                        "Hide Balance V3 note is not registered yet. Deposit the note first."
+                            .to_string(),
                     ));
                 }
                 payload.spendable_at_unix =
@@ -3279,7 +3280,7 @@ pub async fn execute_swap(
                 if !note_registered {
                     if hide_balance_v2_redeem_only_enabled() {
                         return Err(AppError::BadRequest(
-                            "Hide Balance V2 is redeem-only. Deposit note baru ke V2 diblok; gunakan V3 untuk note baru."
+                            "Hide Balance V2 is redeem-only. New note deposits to V2 are blocked; use V3 for new notes."
                                 .to_string(),
                         ));
                     }

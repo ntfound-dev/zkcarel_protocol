@@ -13,6 +13,10 @@ import {
   setDisplayName,
   type Transaction,
 } from "@/lib/api"
+import {
+  AI_TRANSACTION_SOURCES_UPDATED_EVENT,
+  loadAiTransactionSourceIds,
+} from "@/lib/ai-execution-source"
 import { invokeStarknetCallFromWallet } from "@/lib/onchain-trade"
 import {
   BTC_TESTNET_FAUCET_URL,
@@ -123,6 +127,7 @@ type UiTx = {
   time?: string
   txHash?: string
   txNetwork?: "starknet" | "evm" | "btc"
+  requestSource: "manual" | "ai"
 }
 
 type DeFiFeatureTarget = "swap-bridge" | "limit-order" | "stake-earn"
@@ -155,12 +160,23 @@ export function EnhancedNavigation() {
   const [txFilter, setTxFilter] = React.useState("all")
   const [txHistory, setTxHistory] = React.useState<UiTx[]>([])
   const [txHistoryLoading, setTxHistoryLoading] = React.useState(false)
+  const [aiTxSourceVersion, setAiTxSourceVersion] = React.useState(0)
   const [walletConnectPending, setWalletConnectPending] = React.useState(false)
   const [btcConnectPending, setBtcConnectPending] = React.useState(false)
   const [displayName, setDisplayNameState] = React.useState<string | null>(null)
   const [manualBtcAddress, setManualBtcAddress] = React.useState("")
   const [btcManualLinkPending, setBtcManualLinkPending] = React.useState(false)
   const seenBtcOptionalNoticeRef = React.useRef<Set<string>>(new Set())
+
+  React.useEffect(() => {
+    const handleAiTxSourceUpdated = () => {
+      setAiTxSourceVersion((current) => current + 1)
+    }
+    window.addEventListener(AI_TRANSACTION_SOURCES_UPDATED_EVENT, handleAiTxSourceUpdated)
+    return () => {
+      window.removeEventListener(AI_TRANSACTION_SOURCES_UPDATED_EVENT, handleAiTxSourceUpdated)
+    }
+  }, [])
 
   // --- Safe helpers ---
   const formatCurrency = (value: unknown) => {
@@ -473,9 +489,11 @@ export function EnhancedNavigation() {
       try {
         const response = await getTransactionsHistory({ page: 1, limit: 20 })
         if (!active) return
+        const aiTxSourceIds = loadAiTransactionSourceIds()
         const mapped: UiTx[] = response.items.map((tx: Transaction) => {
           const amountValue = parseNumber(tx.amount_in || tx.amount_out || 0)
           const usdValue = parseNumber(tx.usd_value)
+          const normalizedTxHash = String(tx.tx_hash || "").trim().toLowerCase()
           return {
             id: tx.tx_hash,
             type: tx.tx_type,
@@ -493,6 +511,7 @@ export function EnhancedNavigation() {
                 ? "btc"
                 : "starknet"
               : "starknet",
+            requestSource: aiTxSourceIds.has(normalizedTxHash) ? "ai" : "manual",
           }
         })
         setTxHistory(mapped)
@@ -516,6 +535,7 @@ export function EnhancedNavigation() {
     wallet.balance?.USDC,
     wallet.balance?.USDT,
     wallet.balance?.WBTC,
+    aiTxSourceVersion,
   ])
 
   React.useEffect(() => {
@@ -1629,9 +1649,16 @@ export function EnhancedNavigation() {
                         {tx.status === 'failed' && <XCircle className="h-5 w-5 text-destructive" />}
                       </div>
                       <div>
-                        <p className="text-sm font-medium capitalize">
-                          {tx.type} {tx.from || "—"} {tx.to ? `→ ${tx.to}` : ""}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium capitalize">
+                            {tx.type} {tx.from || "—"} {tx.to ? `→ ${tx.to}` : ""}
+                          </p>
+                          {tx.requestSource === "ai" ? (
+                            <span className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                              AI
+                            </span>
+                          ) : null}
+                        </div>
                         <p className="text-xs text-muted-foreground">{tx.time || "—"}</p>
                         {tx.txHash && (
                           <div className="mt-1 flex flex-wrap items-center gap-2">

@@ -2,9 +2,11 @@
 
 export const AI_LIMIT_ORDER_SOURCES_UPDATED_EVENT = "carel-ai-limit-order-sources-updated"
 export const AI_STAKE_POSITION_SOURCES_UPDATED_EVENT = "carel-ai-stake-position-sources-updated"
+export const AI_TRANSACTION_SOURCES_UPDATED_EVENT = "carel-ai-transaction-sources-updated"
 
 const AI_LIMIT_ORDER_SOURCES_KEY = "carel_ai_limit_order_sources_v1"
 const AI_STAKE_POSITION_SOURCES_KEY = "carel_ai_stake_position_sources_v1"
+const AI_TRANSACTION_SOURCES_KEY = "carel_ai_transaction_sources_v1"
 const MAX_PERSISTED_AI_SOURCE_IDS = 250
 
 function normalizeSourceId(rawId: string): string {
@@ -61,4 +63,12 @@ export function markAiStakePosition(positionId: string) {
     AI_STAKE_POSITION_SOURCES_UPDATED_EVENT,
     positionId
   )
+}
+
+export function loadAiTransactionSourceIds(): Set<string> {
+  return new Set(loadPersistedIds(AI_TRANSACTION_SOURCES_KEY))
+}
+
+export function markAiTransaction(txHash: string) {
+  upsertPersistedId(AI_TRANSACTION_SOURCES_KEY, AI_TRANSACTION_SOURCES_UPDATED_EVENT, txHash)
 }

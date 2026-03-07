@@ -14,6 +14,10 @@ import {
   type PortfolioOHLCVPoint,
   type Transaction,
 } from "@/lib/api"
+import {
+  AI_TRANSACTION_SOURCES_UPDATED_EVENT,
+  loadAiTransactionSourceIds,
+} from "@/lib/ai-execution-source"
 import { useWallet } from "@/hooks/use-wallet"
 import {
   Dialog,
@@ -446,6 +450,7 @@ type UiTransaction = {
   time: string
   status: string
   visibility: "Hide" | "Public"
+  requestSource: "manual" | "ai"
   amountIn: number
   amountOut: number
   tokenIn: string
@@ -467,6 +472,17 @@ export function PortfolioDashboard() {
   const [portfolioBalance, setPortfolioBalance] = React.useState<BalanceResponse | null>(null)
   const [chartData, setChartData] = React.useState<ChartPoint[]>([])
   const [transactions, setTransactions] = React.useState<UiTransaction[]>([])
+  const [aiTxSourceVersion, setAiTxSourceVersion] = React.useState(0)
+
+  React.useEffect(() => {
+    const handleAiTxSourceUpdated = () => {
+      setAiTxSourceVersion((current) => current + 1)
+    }
+    window.addEventListener(AI_TRANSACTION_SOURCES_UPDATED_EVENT, handleAiTxSourceUpdated)
+    return () => {
+      window.removeEventListener(AI_TRANSACTION_SOURCES_UPDATED_EVENT, handleAiTxSourceUpdated)
+    }
+  }, [])
 
   React.useEffect(() => {
     let active = true
@@ -596,6 +612,7 @@ export function PortfolioDashboard() {
       try {
         const response = await getTransactionsHistory({ page: 1, limit: 20 })
         if (!active) return
+        const aiTxSourceIds = loadAiTransactionSourceIds()
         const mapped = response.items.map((tx: Transaction) => {
 	          const txType = (tx.tx_type || "").trim()
 	          const txTypeLower = txType.toLowerCase()
@@ -614,6 +631,7 @@ export function PortfolioDashboard() {
           const visibility: UiTransaction["visibility"] = txTypeLower.includes("private")
             ? "Hide"
             : "Public"
+          const normalizedTxHash = String(tx.tx_hash || "").trim().toLowerCase()
           return {
             id: tx.tx_hash,
             type: txType.toUpperCase(),
@@ -623,6 +641,7 @@ export function PortfolioDashboard() {
             time: formatRelativeTime(tx.timestamp),
 	            status: isCompleted ? "Completed" : "Pending",
             visibility,
+            requestSource: aiTxSourceIds.has(normalizedTxHash) ? "ai" : "manual",
             amountIn,
             amountOut,
             tokenIn,
@@ -646,7 +665,7 @@ export function PortfolioDashboard() {
       active = false
       if (pollingTimer) window.clearInterval(pollingTimer)
     }
-  }, [detailsOpen])
+  }, [detailsOpen, aiTxSourceVersion])
 
   /**
    * Handles `safeNumber` logic.
@@ -992,9 +1011,16 @@ export function PortfolioDashboard() {
 	                            {tx.type[0]}
 	                          </div>
 	                          <div className="min-w-0">
-	                            <p className="font-medium text-foreground truncate" title={`${tx.type} ${tx.asset}`}>
-	                              {tx.type} {tx.asset}
-	                            </p>
+                              <div className="flex items-center gap-2 min-w-0">
+	                              <p className="font-medium text-foreground truncate" title={`${tx.type} ${tx.asset}`}>
+	                                {tx.type} {tx.asset}
+	                              </p>
+                                {tx.requestSource === "ai" ? (
+                                  <span className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary shrink-0">
+                                    AI
+                                  </span>
+                                ) : null}
+                              </div>
 	                            <div className="flex flex-wrap items-center gap-2 text-[11px]">
 	                              {tx.amountIn > 0 && (
 	                                <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-destructive">

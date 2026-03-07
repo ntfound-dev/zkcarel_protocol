@@ -1471,7 +1471,7 @@ async fn shielded_current_root(state: &AppState, executor: Felt) -> Result<Felt>
     let root = out.first().copied().unwrap_or(Felt::ZERO);
     if root == Felt::ZERO {
         return Err(crate::error::AppError::BadRequest(
-            "ShieldedPoolV3 root belum diinisialisasi (get_root=0).".to_string(),
+            "ShieldedPoolV3 root is not initialized yet (get_root=0).".to_string(),
         ));
     }
     Ok(root)
@@ -1584,7 +1584,7 @@ async fn ensure_hide_executor_has_stake_input_balance(
         "executor token balance",
     )? {
         return Err(crate::error::AppError::BadRequest(format!(
-            "Hide note/pool balance tidak cukup untuk stake ini. Requested {} {}, tetapi saldo note/pool executor belum mencukupi. Pilih note lebih kecil atau deposit note baru.",
+            "Executor hide note balance is too low for this stake. Requested {} {}. Select a smaller note or deposit a new note.",
             requested_amount_text,
             token_symbol.to_ascii_uppercase()
         )));
@@ -1649,7 +1649,7 @@ async fn append_shielded_note_registration_calls(
     }
     if hide_balance_v2_redeem_only_enabled() {
         return Err(crate::error::AppError::BadRequest(
-            "Hide Balance V2 is redeem-only. Deposit note baru ke V2 diblok; gunakan V3 untuk note baru."
+            "Hide Balance V2 is redeem-only. New note deposits to V2 are blocked; use V3 for new notes."
                 .to_string(),
         ));
     }
@@ -2029,7 +2029,7 @@ pub async fn deposit(
     }
     if !is_starknet_onchain_pool(pool_token) {
         return Err(crate::error::AppError::BadRequest(
-            "Pool belum didukung untuk on-chain staking".to_string(),
+            "This pool is not supported for on-chain staking.".to_string(),
         ));
     }
     let min_stake =
@@ -2239,7 +2239,8 @@ pub async fn deposit(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
+                    "Hide Balance V3 note is not registered yet. Deposit the note first."
+                        .to_string(),
                 ));
             }
             payload.spendable_at_unix =
@@ -2629,7 +2630,8 @@ pub async fn withdraw(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
+                    "Hide Balance V3 note is not registered yet. Deposit the note first."
+                        .to_string(),
                 ));
             }
             payload.spendable_at_unix =
@@ -2767,7 +2769,7 @@ pub async fn claim(
     }
     if !is_starknet_onchain_pool(&pool_token) {
         return Err(crate::error::AppError::BadRequest(
-            "Pool belum didukung untuk on-chain staking".to_string(),
+            "This pool is not supported for on-chain staking.".to_string(),
         ));
     }
 
@@ -2963,7 +2965,8 @@ pub async fn claim(
                 shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
             if deposit_ts == 0 {
                 return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
+                    "Hide Balance V3 note is not registered yet. Deposit the note first."
+                        .to_string(),
                 ));
             }
             payload.spendable_at_unix =

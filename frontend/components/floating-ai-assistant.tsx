@@ -46,7 +46,11 @@ import {
   type StarknetInvokeCall,
   type StarknetInvokeReadableMetadata,
 } from "@/lib/onchain-trade"
-import { markAiLimitOrder, markAiStakePosition } from "@/lib/ai-execution-source"
+import {
+  markAiLimitOrder,
+  markAiStakePosition,
+  markAiTransaction,
+} from "@/lib/ai-execution-source"
 import { executeHideViaRelayer } from "@/lib/privacy-relayer"
 import {
   BTC_TESTNET_EXPLORER_BASE_URL,
@@ -531,6 +535,40 @@ function formatExecutionFailureMessage(rawMessage: string, command: string): str
   const lowerRaw = rawMessage.toLowerCase()
   if (isWalletCancellationMessage(rawMessage)) {
     return "The wallet request was rejected by the user."
+  }
+  if (/hide note\/pool balance tidak cukup untuk swap ini/i.test(lowerRaw)) {
+    const match = rawMessage.match(
+      /Requested\s+(.+?),\s+available\s+([0-9.]+)\s+([A-Za-z0-9_]+)\s+di executor/i
+    )
+    if (match) {
+      return `Executor hide note balance is too low for this swap. Requested ${match[1]}, available ${match[2]} ${match[3]} in the executor. Select a smaller note or deposit a new note.`
+    }
+    return "Executor hide note balance is too low for this swap. Select a smaller note or deposit a new note."
+  }
+  if (/hide note\/pool balance tidak cukup untuk stake ini/i.test(lowerRaw)) {
+    const match = rawMessage.match(/Requested\s+(.+?)\s+([A-Za-z0-9_]+),/i)
+    if (match) {
+      return `Executor hide note balance is too low for this stake. Requested ${match[1]} ${match[2]}. Select a smaller note or deposit a new note.`
+    }
+    return "Executor hide note balance is too low for this stake. Select a smaller note or deposit a new note."
+  }
+  if (/likuiditas on-chain/i.test(lowerRaw)) {
+    return "On-chain liquidity is too low for this swap route right now. Reduce the amount or top up swap liquidity, then retry."
+  }
+  if (/pool belum didukung untuk on-chain staking/i.test(lowerRaw)) {
+    return "This staking pool is not supported for on-chain staking."
+  }
+  if (/hide balance v3 note belum terdaftar/i.test(lowerRaw)) {
+    return "Hide Balance V3 note is not registered yet. Deposit the note first."
+  }
+  if (/shieldedpoolv3 root belum diinisialisasi/i.test(lowerRaw)) {
+    return "ShieldedPoolV3 root is not initialized yet (get_root=0)."
+  }
+  if (/swap real token belum aktif/i.test(lowerRaw)) {
+    return "Real-token swap is not active yet. The configured swap contract is still event-only. Activate an on-chain swap router that moves real tokens, then retry."
+  }
+  if (/deposit note baru ke v2 diblok|gunakan v3 untuk note baru/i.test(lowerRaw)) {
+    return "Hide Balance V2 is redeem-only. New note deposits to V2 are blocked; use V3 for new notes."
   }
   if (
     /\b(stake|unstake|claim)\b/i.test(command) &&
@@ -2772,16 +2810,21 @@ export function FloatingAIAssistant() {
       fallbackAmountText,
       providerHint,
       requireOnchainRule = false,
+      tierUsdtOverride,
     }: {
       fromToken: string
       fallbackAmountText: string
       providerHint: "starknet" | "argentx" | "braavos"
       requireOnchainRule?: boolean
+      tierUsdtOverride?: number
     }): Promise<string> => {
       const tokenSymbol = fromToken.trim().toUpperCase()
       const decimals = AI_TOKEN_DECIMALS[tokenSymbol] ?? 18
       const fallback = sanitizeDecimalInput(fallbackAmountText || "", decimals)
-      const tierUsdt = selectedAiHideTier.minUsdt
+      const tierUsdt =
+        typeof tierUsdtOverride === "number" && Number.isFinite(tierUsdtOverride) && tierUsdtOverride > 0
+          ? tierUsdtOverride
+          : selectedAiHideTier.minUsdt
       const denomId = String(tierUsdt)
       const tokenAddress = (AI_TOKEN_ADDRESS_MAP[tokenSymbol] || "").trim()
       const executorAddress = PRIVATE_ACTION_EXECUTOR_ADDRESS
@@ -3384,24 +3427,140 @@ export function FloatingAIAssistant() {
     }
 
     if (commandNeedsOnchainAction) {
-      const parsedStake = parseStakeTokenHintFromCommand(command)
-      if (parsedStake?.token === "WBTC") {
-        const amountLabel =
-          typeof parsedStake.amountText === "string" && parsedStake.amountText.trim().length > 0
-            ? `${parsedStake.amountText.trim()} WBTC`
-            : "WBTC action"
+      const providerHint = resolveStarknetProviderHint(wallet.provider)
+      const tierUsesGaraga = activeTier >= 3
+      const requestedHideTier = activeTier >= 3 ? inferHideTierFromPrivateCommand(command) : null
+      const effectiveHideTierUsdt = requestedHideTier || selectedAiHideTier.minUsdt
+
+      const parsedSwap = parseSwapTokensFromCommand(command)
+      if (parsedSwap) {
+        const { fromToken, toToken, amountText } = parsedSwap
+        const parsedAmount = Number.parseFloat(amountText)
+        if (!amountText || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+          const invalidAmountMessage =
+            "Swap pre-check failed: amount must be a positive number before on-chain execution."
+          notifications.addNotification({
+            type: "warning",
+            title: "Swap pre-check failed",
+            message: invalidAmountMessage,
+          })
+          appendMessagesForTier(activeTier, [
+            {
+              role: "assistant",
+              content: `${invalidAmountMessage} No CAREL was burned.`,
+              timestamp: nowTimestampLabel(),
+            },
+          ])
+          return
+        }
+
+        if (!SUPPORTED_SWAP_TOKENS.has(fromToken) || !SUPPORTED_SWAP_TOKENS.has(toToken)) {
+          const unsupportedPairMessage =
+            `Swap pair ${fromToken}/${toToken} is not listed in CAREL swap. ` +
+            "Supported tokens: USDT, USDC, STRK, WBTC, CAREL."
+          notifications.addNotification({
+            type: "warning",
+            title: "Swap pre-check failed",
+            message: unsupportedPairMessage,
+          })
+          appendMessagesForTier(activeTier, [
+            {
+              role: "assistant",
+              content: `${unsupportedPairMessage} No CAREL was burned.`,
+              timestamp: nowTimestampLabel(),
+            },
+          ])
+          return
+        }
+
+        let swapAmountForPrecheck = amountText
+        if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+          try {
+            swapAmountForPrecheck = await resolveAiHideTierAmountText({
+              fromToken,
+              fallbackAmountText: amountText,
+              providerHint,
+              requireOnchainRule: true,
+              tierUsdtOverride: effectiveHideTierUsdt,
+            })
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : "Failed to resolve hide-tier amount."
+            notifications.addNotification({
+              type: "warning",
+              title: "Swap pre-check failed",
+              message,
+            })
+            appendMessagesForTier(activeTier, [
+              {
+                role: "assistant",
+                content: `Swap pre-check failed before on-chain setup: ${message}\nNo CAREL was burned.`,
+                timestamp: nowTimestampLabel(),
+              },
+            ])
+            return
+          }
+        }
+
         notifications.addNotification({
           type: "info",
-          title: "Pre-checking WBTC staking",
-          message: `Checking WBTC (Starknet) pool availability for ${amountLabel} before CAREL burn.`,
+          title: "Pre-checking swap route",
+          message: `Checking route/liquidity for ${swapAmountForPrecheck} ${fromToken} -> ${toToken} before CAREL burn.`,
+        })
+        try {
+          const quote = await getSwapQuote({
+            from_token: fromToken,
+            to_token: toToken,
+            amount: swapAmountForPrecheck,
+            slippage: 1,
+            mode: tierUsesGaraga ? "private" : "transparent",
+          })
+          const quotedOut = Number.parseFloat(String(quote.to_amount || "0"))
+          const hasOnchainCalls = Array.isArray(quote.onchain_calls) && quote.onchain_calls.length > 0
+          if (!Number.isFinite(quotedOut) || quotedOut <= 0 || !hasOnchainCalls) {
+            throw new Error(
+              `Swap route ${fromToken} -> ${toToken} is not ready right now. Adjust the pair or amount and retry.`
+            )
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Swap route/liquidity pre-check failed."
+          notifications.addNotification({
+            type: "warning",
+            title: "Swap pre-check failed",
+            message,
+          })
+          appendMessagesForTier(activeTier, [
+            {
+              role: "assistant",
+              content:
+                `Swap pre-check failed before on-chain setup: ${message}\n` +
+                "No CAREL was burned. Adjust the pair or amount and retry.",
+              timestamp: nowTimestampLabel(),
+            },
+          ])
+          return
+        }
+      }
+
+      const parsedStake = parseStakeTokenHintFromCommand(command)
+      if (parsedStake?.token) {
+        const stakeToken = parsedStake.token
+        const rawStakeAmountText =
+          typeof parsedStake.amountText === "string" ? parsedStake.amountText.trim() : ""
+        const amountLabel = rawStakeAmountText ? `${rawStakeAmountText} ${stakeToken}` : `${stakeToken} action`
+        notifications.addNotification({
+          type: "info",
+          title: "Pre-checking staking",
+          message: `Checking ${stakeToken} pool availability for ${amountLabel} before CAREL burn.`,
         })
         try {
           const pools = await getStakePools()
-          const wbtcPool = pools.find(
-            (pool) => resolveStakeTokenSymbol(pool.pool_id || pool.token || "") === "WBTC"
+          const targetPool = pools.find(
+            (pool) => resolveStakeTokenSymbol(pool.pool_id || pool.token || "") === stakeToken
           )
-          if (!wbtcPool) {
-            const reason = "WBTC (Starknet) staking pool metadata is unavailable from backend."
+          if (!targetPool) {
+            const reason = `${stakeToken} staking pool metadata is unavailable from backend.`
             notifications.addNotification({
               type: "warning",
               title: "Stake pre-check failed",
@@ -3418,10 +3577,10 @@ export function FloatingAIAssistant() {
             ])
             return
           }
-          if (wbtcPool.available === false) {
+          if (targetPool.available === false) {
             const reason =
-              (typeof wbtcPool.status_message === "string" && wbtcPool.status_message.trim()) ||
-              "WBTC (Starknet) token is not registered on StakingBTC yet. Admin must call add_btc_token first."
+              (typeof targetPool.status_message === "string" && targetPool.status_message.trim()) ||
+              `${stakeToken} staking is not available right now.`
             notifications.addNotification({
               type: "warning",
               title: "Stake pre-check failed",
@@ -3432,7 +3591,46 @@ export function FloatingAIAssistant() {
                 role: "assistant",
                 content:
                   `Stake pre-check failed before on-chain setup: ${reason}\n` +
-                  "No CAREL was burned. Ask admin to register WBTC (Starknet) token on StakingBTC, then retry.",
+                  "No CAREL was burned. Fix the pool availability issue, then retry.",
+                timestamp: nowTimestampLabel(),
+              },
+            ])
+            return
+          }
+
+          let resolvedStakeAmountText = rawStakeAmountText
+          if (rawStakeAmountText && tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+            resolvedStakeAmountText = await resolveAiHideTierAmountText({
+              fromToken: stakeToken,
+              fallbackAmountText: rawStakeAmountText,
+              providerHint,
+              requireOnchainRule: true,
+              tierUsdtOverride: effectiveHideTierUsdt,
+            })
+          }
+          const resolvedStakeAmount = Number.parseFloat(resolvedStakeAmountText)
+          if (
+            rawStakeAmountText &&
+            Number.isFinite(targetPool.min_stake) &&
+            targetPool.min_stake > 0 &&
+            Number.isFinite(resolvedStakeAmount) &&
+            resolvedStakeAmount > 0 &&
+            resolvedStakeAmount + 1e-12 < targetPool.min_stake
+          ) {
+            const reason =
+              `Minimum stake for ${stakeToken} is ${targetPool.min_stake}. ` +
+              `Current private execution resolves to ${resolvedStakeAmountText} ${stakeToken}.`
+            notifications.addNotification({
+              type: "warning",
+              title: "Stake pre-check failed",
+              message: reason,
+            })
+            appendMessagesForTier(activeTier, [
+              {
+                role: "assistant",
+                content:
+                  `Stake pre-check failed before on-chain setup: ${reason}\n` +
+                  "No CAREL was burned. Increase the amount or select a larger hide tier, then retry.",
                 timestamp: nowTimestampLabel(),
               },
             ])
@@ -3440,17 +3638,17 @@ export function FloatingAIAssistant() {
           }
         } catch (error) {
           const message =
-            error instanceof Error ? error.message : "WBTC staking pre-check failed unexpectedly."
+            error instanceof Error ? error.message : `${stakeToken} staking pre-check failed unexpectedly.`
           notifications.addNotification({
             type: "warning",
             title: "Stake pre-check failed",
-            message: `Could not verify WBTC (Starknet) pool availability (${message}).`,
+            message: `Could not verify ${stakeToken} pool availability (${message}).`,
           })
           appendMessagesForTier(activeTier, [
             {
               role: "assistant",
               content:
-                `Stake pre-check failed before on-chain setup: Could not verify WBTC (Starknet) pool availability (${message}).\n` +
+                `Stake pre-check failed before on-chain setup: Could not verify ${stakeToken} pool availability (${message}).\n` +
                 "No CAREL was burned. Retry after backend/RPC is healthy.",
               timestamp: nowTimestampLabel(),
             },
@@ -3563,12 +3761,11 @@ export function FloatingAIAssistant() {
       const tierUsesGaraga = activeTier >= 3
       const requestedPrivateMode = /private|hide/i.test(command)
       if (requestedPrivateMode && !tierUsesGaraga) {
-        notifications.addNotification({
-          type: "info",
-          title: "L2 executes normal mode",
-          message:
-            "Level 2 tetap eksekusi mode biasa (transparent). Hide/private execution hanya aktif di Level 3.",
-        })
+      notifications.addNotification({
+        type: "info",
+        title: "L2 runs public mode",
+        message: "Level 2 always runs transparent execution. Hide/private mode is only available on Level 3.",
+      })
       }
       const requestGaragaPayload = async (
         flow: string,
@@ -3823,12 +4020,21 @@ export function FloatingAIAssistant() {
                   if (remainingWaitMs > 0) {
                     notifications.addNotification({
                       type: "info",
-                      title: "Mixing window active",
-                      message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Swap Privat now.`,
-                      txHash: hideDepositTxHash || undefined,
-                      txNetwork: hideDepositTxHash ? "starknet" : undefined,
-                    })
-                  }
+                    title: "Mixing window active",
+                    message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before private swap execution.`,
+                    txHash: hideDepositTxHash || undefined,
+                    txNetwork: hideDepositTxHash ? "starknet" : undefined,
+                  })
+                  appendMessagesForTier(activeTier, [
+                    {
+                      role: "assistant",
+                      content: `Hide note deposited. Cooldown: ${formatDurationHhMmSs(
+                        remainingWaitMs
+                      )}. Waiting before private swap execution starts.`,
+                      timestamp: nowTimestampLabel(),
+                    },
+                  ])
+                }
                   if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
                     const depositTxUrl = hideDepositTxHash
                       ? buildTxExplorerUrl(hideDepositTxHash, "starknet")
@@ -3842,11 +4048,18 @@ export function FloatingAIAssistant() {
                   if (remainingWaitMs > 0) {
                     await waitMs(remainingWaitMs)
                   }
-                  notifications.addNotification({
-                    type: "info",
-                    title: "Swap Privat now",
-                    message: "Cooldown selesai. Menjalankan private swap otomatis.",
-                  })
+                notifications.addNotification({
+                  type: "info",
+                  title: "Starting private swap",
+                  message: "Cooldown finished. Starting private swap automatically.",
+                })
+                appendMessagesForTier(activeTier, [
+                  {
+                    role: "assistant",
+                    content: "Cooldown finished. Executing private swap now.",
+                    timestamp: nowTimestampLabel(),
+                  },
+                ])
                   const pinnedNoteCommitment = (
                     privacyPayload.note_commitment ||
                     privacyPayload.commitment ||
@@ -3910,8 +4123,8 @@ export function FloatingAIAssistant() {
                       if (!stillNotRegistered || retryIndex >= noteRetryBackoffMs.length) {
                         if (stillNotRegistered && retryIndex >= noteRetryBackoffMs.length) {
                           throw new Error(
-                            "Hide note is already deposited, but indexer is still syncing. Note is saved in Pending Hide Notes; use Swap Privat now again once status is Ready."
-                          )
+                            "Hide note is already deposited, but the indexer is still syncing. The note is saved in Pending Hide Notes; use Execute Note again once status is Ready."
+                        )
                         }
                         throw retryError
                       }
@@ -3921,7 +4134,7 @@ export function FloatingAIAssistant() {
                       notifications.addNotification({
                         type: "info",
                         title: "Indexer syncing",
-                        message: `Hide note belum terbaca penuh di indexer. Retry ${
+                        message: `Hide note is not fully indexed yet. Retry ${
                           retryIndex + 2
                         }/${noteRetryBackoffMs.length + 1} in ${formatDurationHhMmSs(waitRetryMs)}.`,
                       })
@@ -3982,6 +4195,9 @@ export function FloatingAIAssistant() {
               txHash: finalTxHash || undefined,
               txNetwork: "starknet",
             })
+            if (finalTxHash) {
+              markAiTransaction(finalTxHash)
+            }
             if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
               const consumedNoteCommitment = (
                 privacyPayload?.note_commitment ||
@@ -4498,6 +4714,9 @@ export function FloatingAIAssistant() {
                 `${pointsLine}\n${discountLine}`
               )
             }
+            if (bridgeSourceTxHash) {
+              markAiTransaction(bridgeSourceTxHash)
+            }
           }
         }
       }
@@ -4581,10 +4800,19 @@ export function FloatingAIAssistant() {
                   notifications.addNotification({
                     type: "info",
                     title: "Mixing window active",
-                    message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Stake Privat now.`,
+                    message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before private stake execution.`,
                     txHash: hideDepositTxHash || undefined,
                     txNetwork: hideDepositTxHash ? "starknet" : undefined,
                   })
+                  appendMessagesForTier(activeTier, [
+                    {
+                      role: "assistant",
+                      content: `Hide note deposited. Cooldown: ${formatDurationHhMmSs(
+                        remainingWaitMs
+                      )}. Waiting before private stake execution starts.`,
+                      timestamp: nowTimestampLabel(),
+                    },
+                  ])
                 }
                 if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
                   const depositTxUrl = hideDepositTxHash
@@ -4601,9 +4829,16 @@ export function FloatingAIAssistant() {
                 }
                 notifications.addNotification({
                   type: "info",
-                  title: "Stake Privat now",
-                  message: "Cooldown selesai. Menjalankan private stake otomatis.",
+                  title: "Starting private stake",
+                  message: "Cooldown finished. Starting private stake automatically.",
                 })
+                appendMessagesForTier(activeTier, [
+                  {
+                    role: "assistant",
+                    content: "Cooldown finished. Executing private stake now.",
+                    timestamp: nowTimestampLabel(),
+                  },
+                ])
                 const pinnedNoteCommitment = (
                   stakePrivacyPayload.note_commitment ||
                   stakePrivacyPayload.commitment ||
@@ -4649,7 +4884,7 @@ export function FloatingAIAssistant() {
                     notifications.addNotification({
                       type: "info",
                       title: "Indexer syncing",
-                      message: `Hide note belum terbaca penuh di indexer. Retry ${
+                      message: `Hide note is not fully indexed yet. Retry ${
                         retryIndex + 2
                       }/${noteRetryBackoffMs.length + 1} in ${formatDurationHhMmSs(waitRetryMs)}.`,
                     })
@@ -4719,6 +4954,9 @@ export function FloatingAIAssistant() {
             txHash: finalStakeTx || undefined,
             txNetwork: finalStakeTx ? "starknet" : undefined,
           })
+          if (finalStakeTx) {
+            markAiTransaction(finalStakeTx)
+          }
           if (stakeResult.position_id) {
             markAiStakePosition(stakeResult.position_id)
           }
@@ -4959,10 +5197,19 @@ export function FloatingAIAssistant() {
                   notifications.addNotification({
                     type: "info",
                     title: "Mixing window active",
-                    message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before Limit Privat now.`,
+                    message: `Waiting ${formatDurationHhMmSs(remainingWaitMs)} before private limit order execution.`,
                     txHash: hideDepositTxHash || undefined,
                     txNetwork: hideDepositTxHash ? "starknet" : undefined,
                   })
+                  appendMessagesForTier(activeTier, [
+                    {
+                      role: "assistant",
+                      content: `Hide note deposited. Cooldown: ${formatDurationHhMmSs(
+                        remainingWaitMs
+                      )}. Waiting before private limit order execution starts.`,
+                      timestamp: nowTimestampLabel(),
+                    },
+                  ])
                 }
                 if (!AI_HIDE_AUTO_EXECUTE_AFTER_COOLDOWN) {
                   const depositTxUrl = hideDepositTxHash
@@ -4979,9 +5226,16 @@ export function FloatingAIAssistant() {
                 }
                 notifications.addNotification({
                   type: "info",
-                  title: "Limit Privat now",
-                  message: "Cooldown selesai. Menjalankan private limit order otomatis.",
+                  title: "Starting private limit order",
+                  message: "Cooldown finished. Starting private limit order automatically.",
                 })
+                appendMessagesForTier(activeTier, [
+                  {
+                    role: "assistant",
+                    content: "Cooldown finished. Executing private limit order now.",
+                    timestamp: nowTimestampLabel(),
+                  },
+                ])
                 const pinnedNoteCommitment = (
                   limitPrivacyPayload.note_commitment ||
                   limitPrivacyPayload.commitment ||
@@ -5027,7 +5281,7 @@ export function FloatingAIAssistant() {
                     notifications.addNotification({
                       type: "info",
                       title: "Indexer syncing",
-                      message: `Hide note belum terbaca penuh di indexer. Retry ${
+                      message: `Hide note is not fully indexed yet. Retry ${
                         retryIndex + 2
                       }/${noteRetryBackoffMs.length + 1} in ${formatDurationHhMmSs(waitRetryMs)}.`,
                     })
@@ -5079,6 +5333,9 @@ export function FloatingAIAssistant() {
             title: "Limit order created",
             message: `Order ${limitResult.order_id} submitted.`,
           })
+          if (limitTxHash) {
+            markAiTransaction(limitTxHash)
+          }
           if (limitResult.order_id) {
             markAiLimitOrder(limitResult.order_id)
           }

@@ -76,6 +76,37 @@ Runtime note:
 - AI bridge uses the public Level 2 bridge path.
 - AI private `swap`, `limit order`, and `stake` use the Level 3 hide path.
 
+### Latest Runtime Validation Snapshot (Mar 8, 2026)
+- Level 2 bridge setup burn (`BTC -> WBTC`, awaiting BTC deposit): https://sepolia.voyager.online/tx/0x4c7097b619f520f6e95839cf35395855eb3f382b185e3faedaccd8a7b53d85d
+- Level 2 bridge Garden order (`BTC -> WBTC`, awaiting BTC deposit): https://testnet-explorer.garden.finance/order/c400185ba5c1b12b6119f708dbfab07581d767abd31f8b64b05bac38e058f9d1
+- Level 2 bridge setup burn (`ETH -> WBTC`): https://sepolia.voyager.online/tx/0x227281610079b37ab58ded5ebf18e075cc4073f742f835585f4e033cf799c45
+- Level 2 bridge source tx (`ETH -> WBTC`): https://sepolia.etherscan.io/tx/0xa7aba511aee3b5e042b4e963a4bc966ea401b7ff9a78c646c6622d977a5f0552
+- Level 2 bridge Garden order (`ETH -> WBTC`): https://testnet-explorer.garden.finance/order/0e359ff05c7fd359e399575a8c14c24859284a4b83d141400f1d6eb31551c826
+- Level 3 private limit order setup burn (`USDT -> USDC`): https://sepolia.voyager.online/tx/0x4de127e1e153e33382cd73ff049d8ec1317660072613c332450b975a6abc66e
+- Level 3 private limit order execution (`USDT -> USDC`): https://sepolia.voyager.online/tx/0x40ff375aa42c4eff9e6e2c550af7826a8a97c34a0616c731116a676b4076a49
+- Level 3 private limit order note deposit (`USDT -> USDC`): https://sepolia.voyager.online/tx/0x3e3758f30aac26754eb6ab9632aea9cf6f447b2bce183195b175bf3aa4ba32c
+- Level 3 private limit order setup burn (`CAREL -> USDC`): https://sepolia.voyager.online/tx/0xc14e9f3c3b4803685702612461bb9af561ae4efea13536d6864c057d7bd97a
+- Level 3 private limit order execution (`CAREL -> USDC`): https://sepolia.voyager.online/tx/0x3b9b44271c2f1595fe3ee54daa275e9a9cea4bafcf70dc498207111290a6bb9
+- Level 3 private limit order note deposit (`CAREL -> USDC`): https://sepolia.voyager.online/tx/0x1086754390f234f81db32a9203b9a264981112257887d7c1565eef676c3be0b
+- Level 3 private limit order setup burn (`STRK -> USDT`): https://sepolia.voyager.online/tx/0x38fdc1a02937bf87636c902750601af26871f5876a19b7091e4fb374bd19bf7
+- Level 3 private limit order execution (`STRK -> USDT`): https://sepolia.voyager.online/tx/0x66474d91f6ed8837ebade380053e63c1177e8a771b61c295a6c21ae90f8162e
+- Level 3 private limit order note deposit (`STRK -> USDT`): https://sepolia.voyager.online/tx/0x29357253f3462ddd072a7aedbb9a7e74721c872faf42554e096de7238f819e7
+- Level 3 private stake setup burn (`CAREL`): https://sepolia.voyager.online/tx/0x25a161119f1827f809dc683648648927b36659f167c15ff9dd85bc34b816fba
+- Level 3 private stake execution (`CAREL`): https://sepolia.voyager.online/tx/0x36a9d5f3ad3e36d8b7dd53cde98e77248ee882290cba66d53569da600c588d5
+- Level 3 private stake note deposit (`CAREL`): https://sepolia.voyager.online/tx/0x14de451288449488cc9a1e6d41aa040de05bf39bb54e464eeee58b8e199c61d
+- Level 3 private swap setup burn (`WBTC -> CAREL`, tier `$250`): https://sepolia.voyager.online/tx/0x1f061ee517de778ec569ae92a1744510f3cc93e21ff0905c521fd6cab09eae4
+- Level 3 private swap execution (`WBTC -> CAREL`, tier `$250`): https://sepolia.voyager.online/tx/0x1a8694311fceb50977c853177cf9f1f47c96ba3e93476af5910c510dc42413b
+- Level 3 private swap note deposit (`WBTC -> CAREL`, tier `$250`): https://sepolia.voyager.online/tx/0x289371f5f3ba89598d2f5d72560dbd83fa69a31e6b52272d6be7fa8390a52c
+- Level 3 private swap setup burn (`USDC -> STRK`, tier `$50`): https://sepolia.voyager.online/tx/0x39d00939c50ac742429bab4c4b3773e03fea2ee8893729e69b8aa7ae2450f47
+- Level 3 private swap execution (`USDC -> STRK`, tier `$50`): https://sepolia.voyager.online/tx/0x709e47743b7521eeec9d581505398a92feb3cf331249cada898111e89302af7
+- Level 3 private swap note deposit (`USDC -> STRK`, tier `$50`): https://sepolia.voyager.online/tx/0x6cf3e5f7791cac62ccc2ec0d13f7bb436dca12a5e3d6144f33889b92d4e2426
+
+Snapshot notes:
+- Level 3 private note size follows the selected hide tier for `swap`, `stake`, and `limit order`.
+- For volatile assets such as `STRK` and `WBTC`, the final token amount is approximate to the selected USD tier.
+- Current frontend behavior now shows cooldown status in chat after hide note deposit and marks AI-created transactions/orders/staking positions in the UI.
+- Route and pool pre-checks are expected to stop unsupported or illiquid AI actions before CAREL burn.
+
 ### Historical MVP Demo-Flow Links (Feb 23-25, 2026)
 - Normal Swap: https://sepolia.voyager.online/tx/0x22a53b1af0f7d62e19569a99b38d67e9165faad2804ca50a1b0a53f289bab98
 - Hide Swap: https://sepolia.voyager.online/tx/0x71b6c99287c78b082d105dc7169faa56b419a3e2568b3ea9a70ef1ff653a2d2
