@@ -213,3 +213,60 @@ Notes:
 | Bridge pairs | Active testnet bridge pairs: `ETH<->BTC`, `BTC<->WBTC`, `ETH<->WBTC`. |
 | Gas status | AI and TWAP gas are still above target and require further optimization. |
 | Upgrade model | No proxy/upgrade contracts are active; upgrades require redeploy plus migration. |
+
+## Frontend Deploy (Vercel)
+This section covers CAREL frontend deployment for testnet/demo usage.
+
+### Scope
+- Deploy the Next.js frontend locally or on Vercel.
+- Use a Rust backend that already exposes stable/public endpoints.
+
+### Runtime Profile (MVP Proof)
+To stay consistent with proof transactions in the root README:
+- Frontend profile: `frontend/.env.local`
+- Paired backend profile: `backend-rust/.env`
+- Backend URL can be local (`http://localhost:<PORT>`) or an active public tunnel.
+- Check actual values in `frontend/.env.local` and ensure the target backend is running with `backend-rust/.env`.
+- If backend uses a different port (for example `3000` from template), update `NEXT_PUBLIC_BACKEND_URL` and `NEXT_PUBLIC_BACKEND_WS_URL`.
+
+### Prerequisites
+- Node `>=20.9.0` (recommended `20.11.1` matching `.nvmrc`)
+- npm
+- Frontend env already filled (`.env.local` or Vercel Environment Variables)
+
+### Local Run (Development/Test)
+```bash
+cd frontend
+nvm use
+npm install
+npm run dev
+```
+
+Open: `http://localhost:3000`
+
+### Production Build (Local Validation)
+```bash
+cd frontend
+nvm use
+npm run build
+npm run start
+```
+
+### Vercel Deploy (Recommended for Demo)
+1. Import project `frontend/` to Vercel.
+2. Set all required `NEXT_PUBLIC_*` variables from `.env.example`.
+3. Ensure backend URL uses a stable public endpoint (not a temporary tunnel unless needed).
+4. Ensure target backend profile uses the same contract addresses as frontend profile.
+5. Deploy.
+6. After any `NEXT_PUBLIC_*` change, redeploy (recommended `without cache`).
+
+### Post-Deploy Checklist
+- Starknet/EVM/BTC wallet connection works.
+- Normal swap works.
+- Hide swap works (relayer as sender).
+- Normal + hide stake works.
+- Normal + hide limit order works.
+- Bridge quote + execute works.
+- AI bridge (`bridge btc ...` / `bridge eth ...`) runs from Level 2.
+- AI Level 3 bridge is disabled by default (`AI_LEVEL3_BRIDGE_ENABLED=false`).
+- Explorer links and tx hashes are displayed correctly.
