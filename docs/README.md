@@ -11,6 +11,7 @@ This folder now keeps the cross-cutting project docs only. Module-specific techn
 ## Architecture and Design
 - `architecture_mvp_modes.md`: current MVP runtime architecture and execution modes.
 - `ai_architecture.md`: AI and Garaga architecture notes, fixes, and relayer/intermediary design.
+- `shadow_bitcoin_plan.md`: rough draft for Shadow Bitcoin architecture and verification options.
 - `tokenomics.md`: tokenomics overview and Mermaid diagrams.
 
 ## Deployment and Operations
