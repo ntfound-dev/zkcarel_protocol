@@ -18,7 +18,6 @@ This folder now keeps the cross-cutting project docs only. Module-specific techn
 ## Deployment and Operations
 - `deploy_testnet.md`: Starknet Sepolia deploy, wiring, and runtime deployment notes.
 - `production_go_live_checklist_v3_2026-02-27.md`: V3 go-live gates and production checklist.
-- `security_audit_checklist.md`: audit checklist and security assumptions.
 - `mvp_uat_testnet.md`: MVP UAT checklist for testnet flows.
 
 ## AI and Evidence
