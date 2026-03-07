@@ -1,8 +1,10 @@
 # CAREL Tokenomics Visuals
 
-Tokenomics diagrams are now Mermaid-first.
+Tokenomics diagrams are maintained in Mermaid format.
+
+## 1. Reference
 
 Use the root guide:
 - `TOKENOMICS.md`
 
-This file is kept for backward compatibility with older links.
+This file stays in place for backward compatibility with older links.

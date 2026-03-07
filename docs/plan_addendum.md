@@ -1,13 +1,13 @@
 # CAREL Protocol Plan Addendum
 
-## Scope Additions (Not in README)
+## 1. Scope Additions (Outside README)
 1. ZK social login dApp using Sumo Login.
 2. BTC wallet + bridge integration using Xverse API.
 3. Global leaderboard metrics (points, volume, referrals) aggregated by backend.
 4. Nullifier status endpoints for privacy modules (anon credentials, dark pool, private payments).
 5. Additional tests for private BTC swap, dark pool, private payments.
 
-## Delivery Steps
+## 2. Delivery Steps
 1. Backend integration plan
    - Add Sumo Login auth provider module.
    - Add Xverse BTC address/session handling for bridge flows.
@@ -19,7 +19,7 @@
    - Run Cairo tests for privacy modules.
    - Add API integration tests for nullifier endpoints.
 
-## Owners
+## 3. Owners
 - Smart Contract: CAREL Team
 - Backend: CAREL Team
 - Frontend: CAREL Team

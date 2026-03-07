@@ -1,32 +1,32 @@
 # ZKCare Production Go-Live Checklist (ShieldedPoolV3)
 
 Snapshot date: 27 February 2026  
-Scope: Swap, Limit Order, Stake hide-mode with dual-pool (V2 legacy redeem + V3 new notes)
+Scope: hide-mode Swap, Limit Order, and Stake with dual-pool setup (V2 legacy redeem + V3 new notes)
 
-## Status Legend
+## 1. Status Legend
 
 - `DONE`: implemented and verified in repo/tests.
 - `PARTIAL`: implemented but still has security/operational gap.
 - `PENDING`: not implemented yet.
 
-## 1) Decision Gates
+## 2. Decision Gates
 
-### Gate A: Testnet Beta (allowlist users, capped funds)
+### 2.1 Gate A: Testnet Beta (allowlist users, capped funds)
 
-Required outcome: **all P0 items = `DONE`**, no open critical bug.
+Required outcome: **all P0 items = `DONE`**, with no open critical bug.
 
-### Gate B: Public Production (mainnet, open users)
+### 2.2 Gate B: Public Production (mainnet, open users)
 
-Required outcome: **all P0 + P1 items = `DONE`**, external audit complete, SRE/incident controls ready.
+Required outcome: **all P0 + P1 items = `DONE`**, external audit complete, and SRE/incident controls ready.
 
-Current recommendation:
+Current recommendation at this snapshot:
 
 - Gate A (Testnet Beta): **GO with restrictions**
 - Gate B (Public Production): **NO-GO**
 
-## 2) P0 Checklist (Must-Have Before Beta)
+## 3. P0 Checklist (Must-Have Before Beta)
 
-### P0.1 Unlinkability Controls
+### 3.1 P0.1 Unlinkability Controls
 
 - `DONE` V3 execute path does not accept free `recipient` parameter; recipient sourced from proof output.
   - Evidence: `smartcontract/private_executor_lite/src/shielded_pool_v3.cairo`
@@ -40,14 +40,14 @@ Current recommendation:
   - reject `recipient == depositor`
   - reject inline deposit+submit+execute in strict mode
 
-### P0.2 Dual Pool Safety
+### 3.2 P0.2 Dual Pool Safety
 
 - `DONE` V3 default + V2 redeem-only migration flags available.
   - Evidence: `backend-rust/README.md` env section.
-- `DONE` V2 legacy path still exists for old notes.
-- `DONE` New note flow routed to V3.
+- `DONE` V2 legacy path is still available for old notes.
+- `DONE` New note flow is routed to V3.
 
-### P0.3 Frontend Safety Controls
+### 3.3 P0.3 Frontend Safety Controls
 
 - `DONE` Hide execute blocked during mix window with countdown.
   - Evidence: `frontend/components/trading-interface.tsx`.
@@ -56,28 +56,28 @@ Current recommendation:
   - recipient persisted in note payload
   - warning shown if current receive address differs from locked note recipient
 
-### P0.4 Contract/Backend Test Health
+### 3.4 P0.4 Contract/Backend Test Health
 
 - `DONE` Cairo tests pass: `19 passed, 0 failed`.
   - Evidence: `smartcontract/private_executor_lite/tests/test_shielded_pool_v3.cairo`
   - and updated legacy tests in `test_contract.cairo`.
 - `DONE` Backend compiles and targeted tests for V3 pool-version and mixing defaults pass.
 
-## 3) P1 Checklist (Must-Have Before Public Production)
+## 4. P1 Checklist (Must-Have Before Public Production)
 
-### P1.1 Circuit Security Completeness
+### 4.1 P1.1 Circuit Security Completeness
 
 - `PARTIAL` Current prover binds V3 outputs (`root/nullifier/action_hash/recipient`) but circuit is not yet a full production note-membership circuit (Merkle membership + full witness constraints end-to-end).
 - `PENDING` Independent cryptography review for final circuit design.
 - `PENDING` Formal domain-separation spec for all hashes (`note`, `nullifier`, `action`) published in docs.
 
-### P1.2 Smart Contract Assurance
+### 4.2 P1.2 Smart Contract Assurance
 
 - `PENDING` External security audit for `ShieldedPoolV3` and relayer-facing execution surfaces.
 - `PENDING` Mainnet-grade invariant/fuzz/property tests (beyond current integration unit tests).
 - `PENDING` Upgrade/rollback policy + emergency pause playbook.
 
-### P1.3 Relayer/Backend Production Hardening
+### 4.3 P1.3 Relayer/Backend Production Hardening
 
 - `PARTIAL` Auto prover queue, timeout, and fallback are implemented.
 - `PENDING` Full SLO/SLA observability:
@@ -88,25 +88,25 @@ Current recommendation:
 - `PENDING` HSM/KMS signing policy (or equivalent key isolation) for relayer keys.
 - `PENDING` Rate-limit + abuse prevention policy documented per endpoint.
 
-### P1.4 Infra/Network Integrity
+### 4.4 P1.4 Infra/Network Integrity
 
 - `PENDING` Resolve upstream TLS/certificate reliability issues seen in runtime logs (expired cert / wrong hostname chain) before public rollout.
 - `PENDING` Multi-RPC failover and health checks with automatic circuit-breaker policy.
 
-### P1.5 Product/Legal Clarity
+### 4.5 P1.5 Product/Legal Clarity
 
 - `PENDING` Public threat-model doc that explicitly states what is visible vs hidden.
 - `PENDING` User-facing privacy disclaimer aligned with actual guarantees.
 
-## 4) P2 Checklist (Strongly Recommended for Scale)
+## 5. P2 Checklist (Strongly Recommended for Scale)
 
 - `PENDING` Red-team simulation for de-anonymization via timing/metadata correlation.
 - `PENDING` Canary deployment + progressive traffic shift (1% -> 10% -> 50% -> 100%).
 - `PENDING` Automated incident drills (relayer stuck, prover timeout storm, RPC outage).
 
-## 5) Release Checklist (Execution Order)
+## 6. Release Checklist (Execution Order)
 
-### Phase 1: Beta (Testnet)
+### 6.1 Phase 1: Beta (Testnet)
 
 - [ ] Confirm env:
   - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
@@ -124,17 +124,16 @@ Current recommendation:
   - stake
 - [ ] Verify mix-window rejection and post-window success.
 
-### Phase 2: Mainnet Public
+### 6.2 Phase 2: Mainnet Public
 
 - [ ] Complete all P1 items.
 - [ ] External audit sign-off.
 - [ ] Security + SRE go/no-go review signed.
 - [ ] Legal/privacy copy approved.
 
-## 6) Current Go/No-Go Summary
+## 7. Current Go/No-Go Summary
 
 - For controlled Sepolia beta: **GO**
   - Conditions: allowlist users, cap value per tx/day, explicit privacy disclaimer.
 - For public production: **NO-GO**
   - Primary blockers: full circuit completeness + external audit + SRE hardening.
-

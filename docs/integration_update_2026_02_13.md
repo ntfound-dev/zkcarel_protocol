@@ -1,17 +1,17 @@
 # Integration Update - 2026-02-13
 
-This document summarizes implementation updates for on-chain bridge flow, provider routing, and dynamic privacy verifier selection.
+This update logs implementation changes for bridge verification, provider routing, and dynamic privacy verifier selection.
 
-## Change Scope
+## 1. Change Scope
 
 1. Bridge verification was hardened to enforce true on-chain checks.
 2. Bridge provider selection no longer silently falls back to simulation when config is empty.
 3. Privacy verifier selector `garaga|tongo|semaphore` is now dynamic per request, with backward-compatible default `garaga`.
 4. Env/config and endpoint documentation was updated.
 
-## 1) Bridge On-Chain Verification (Backend)
+## 2. Bridge On-Chain Verification (Backend)
 
-Changes:
+What changed:
 1. Bridge `onchain_tx_hash` is now validated against chain based on `from_chain`.
 2. `starknet`: check receipt, finality, and revert status.
 3. `ethereum`: call `eth_getTransactionReceipt`, validate `status` and `blockNumber`.
@@ -21,9 +21,9 @@ Changes:
 Related file:
 1. `backend-rust/src/api/bridge.rs`
 
-## 2) Provider Routing Without Silent Fallback
+## 3. Provider Routing Without Silent Fallback
 
-Changes:
+What changed:
 1. `RouteOptimizer` now chooses only providers that are actually active/configured.
 2. Config is treated as inactive if empty or using sentinel values (`DISABLED`, `CHANGE_ME`, `REPLACE_ME`).
 3. Atomiq can now be disabled explicitly via env without removing code.
@@ -31,7 +31,7 @@ Changes:
 Related file:
 1. `backend-rust/src/services/route_optimizer.rs`
 
-## 3) Real Provider API Adapters
+## 4. Real Provider API Adapters
 
 `LayerSwap` updates:
 1. Uses `X-LS-APIKEY` header.
@@ -48,9 +48,9 @@ Related files:
 1. `backend-rust/src/integrations/bridge/layerswap.rs`
 2. `backend-rust/src/integrations/bridge/garden.rs`
 
-## 4) Dynamic Privacy Verifier Selector (Backward-Compatible)
+## 5. Dynamic Privacy Verifier Selector (Backward-Compatible)
 
-Changes:
+What changed:
 1. Private-flow requests can choose verifier through optional field:
 2. `garaga`, `tongo`, or `semaphore`.
 3. If field is missing, default is `garaga`.
@@ -70,7 +70,7 @@ Related files:
 6. `backend-rust/.env`
 7. `backend-rust/.env.testnet.example`
 
-## 5) New Environment Configuration
+## 6. New Environment Configuration
 
 Added config:
 1. `PRIVACY_VERIFIER_ROUTERS`
@@ -84,7 +84,7 @@ Notes:
 1. If only `garaga` is configured, `tongo`/`semaphore` requests are rejected with configuration error.
 2. This is intentional to prevent silent wrong-verifier fallback.
 
-## 6) Example Payloads
+## 7. Example Payloads
 
 Swap execute (private + default `garaga`):
 ```json
@@ -133,7 +133,7 @@ Privacy submit (`semaphore` verifier):
 }
 ```
 
-## References & Official Links
+## 8. References & Official Links
 
 Tongo:
 1. https://github.com/fatlabsxyz/tongo
@@ -167,9 +167,9 @@ Garden Finance:
 3. https://docs.garden.finance/contracts/bitcoin
 4. https://docs.garden.finance/api-reference/quickstart
 
-## 7) Swap On-Chain Real Transfer Update (2026-02-13)
+## 9. Swap On-Chain Real Transfer Update (2026-02-13)
 
-Changes:
+What changed:
 1. `SwapAggregator.execute_swap` now performs real on-chain token movement:
 2. `transfer_from(user -> swap_aggregator)` for input token.
 3. Fees (`dev_fee`, `lp_fee`, `mev_fee`) are truly transferred to fee recipient.
@@ -207,7 +207,7 @@ Operational notes:
 2. Initial liquidity was seeded for `STRK<->CAREL` to enable real transfer execution.
 3. `USDC/USDT/WBTC` pairs still require valid Starknet token addresses + liquidity before user rollout.
 
-## 8) Activation of Starknet USDC/USDT/WBTC (On-Chain)
+## 10. Activation of Starknet USDC/USDT/WBTC (On-Chain)
 
 Status:
 1. Valid Starknet tokens for `USDC/USDT/WBTC` were created (custom decimals `6/6/8`).
@@ -244,7 +244,7 @@ Example quote API after activation:
 3. `WBTC -> USDT` success.
 4. `USDT -> CAREL` success.
 
-## 9) Full Pair + Real Transfer Verification (2026-02-14)
+## 11. Full Pair + Real Transfer Verification (2026-02-14)
 
 Backend quote matrix (`POST /api/v1/swap/quote`) for all pair directions:
 1. `STRK/WBTC/USDT/USDC/CAREL` cross-pair matrix (20 directions, excluding self-pair) all `OK`.
@@ -261,7 +261,7 @@ Balance validation after execute:
 2. `USDT -> WBTC`: user USDT balance decreases, user WBTC balance increases.
 3. This confirms real token transfer behavior (not event-only).
 
-## 10) Automated Liquidity Rebalance + Health Check
+## 12. Automated Liquidity Rebalance + Health Check
 
 New script:
 1. `smartcontract/scripts/08_rebalance_liquidity_healthcheck.sh`
@@ -308,7 +308,7 @@ Example periodic schedule (every 5 minutes):
 */5 * * * * cd /mnt/c/Users/frend/zkcare_protocol/smartcontract && ./scripts/08_rebalance_liquidity_healthcheck.sh >> /tmp/zkcare_rebalance.log 2>&1
 ```
 
-## 11) Live Balance UI Fix + CAREL Faucet Activation (2026-02-14)
+## 13. Live Balance UI Fix + CAREL Faucet Activation (2026-02-14)
 
 Issue:
 1. Swap succeeded on-chain, but `CAREL/USDC/USDT/WBTC` balances in UI did not update immediately.
@@ -334,14 +334,14 @@ CAREL faucet:
 4. Mint tx: https://sepolia.starkscan.co/tx/0x05e3c540952f4bd6949d4e5a5c0fd74a7c1cd18a1261ff0442a6adf4e8ab8617
 5. Backend signer CAREL balance after top-up: `1000.04243 CAREL` (base unit: `1000042430000000000000`).
 
-## 12) Temporary Notes Before Limit-Order Focus
+## 14. Temporary Notes Before Limit-Order Focus
 
 1. Swap aggregator and token transfer flow are running as real on-chain execution.
 2. CAREL uses the project's main token contract.
 3. In this phase, `USDC/USDT/WBTC` are still Starknet testnet mock tokens for internal QA.
 4. Backend CAREL faucet is currently set to unlimited (testnet/dev only) to prevent balance bottlenecks during limit-order testing.
 
-## 13) Discount Soulbound NFT Update (2026-02-15)
+## 15. Discount Soulbound NFT Update (2026-02-15)
 
 Implemented business-model changes:
 1. Tier is determined by active on-chain discount NFT, not directly by total points.
@@ -363,7 +363,7 @@ Related files:
 2. `frontend/components/rewards-hub.tsx`
 3. `backend-rust/src/api/nft.rs`
 
-## 14) DiscountSoulbound Redeploy + Authorization Fix (2026-02-15)
+## 16. DiscountSoulbound Redeploy + Authorization Fix (2026-02-15)
 
 Issue:
 1. NFT mint failed with error `Caller is not authorized`.

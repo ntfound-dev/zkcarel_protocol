@@ -1,13 +1,7 @@
 # CAREL Backend (Rust + Axum)
 
 Backend service for CAREL Protocol.
-
-This document is backend-only and covers:
-- API domains
-- relayer and hide-mode execution path
-- worker architecture
-- runtime environment profile
-- deployment and constraints
+This README is backend-only and covers API modules, relayer flow, workers, runtime profile, deployment notes, and current limits.
 
 ## Table of Contents
 - [Scope](#scope)
@@ -32,10 +26,10 @@ This document is backend-only and covers:
 - Runtime: Rust (`axum`, `tokio`).
 - Storage: PostgreSQL (`sqlx`) and Redis.
 - Networks: Starknet Sepolia, Ethereum Sepolia, Bitcoin testnet (provider dependent).
-- Core backend responsibilities:
+- Core responsibilities:
   - API layer for auth, trading, bridge, privacy, rewards, AI.
   - Relayer path for hide mode (`swap`, `limit order`, `stake`).
-  - Background workers for indexing, pricing, points, execution support.
+  - Background workers for indexing, pricing, points, and execution support.
 
 ## Repository Structure
 ```text
@@ -87,7 +81,7 @@ flowchart LR
 ```
 
 ## API Domains
-Primary modules under `src/api/`:
+Main modules under `src/api/`:
 - `auth`, `wallet`, `profile`, `admin`
 - `swap`, `stake`, `limit_order`, `bridge`, `market`
 - `privacy`, `onchain_privacy`, `private_btc_swap`, `private_payments`, `anonymous_credentials`, `dark_pool`
@@ -95,7 +89,7 @@ Primary modules under `src/api/`:
 - `ai`, `battleship`, `social`, `notifications`, `charts`, `webhooks`, `health`
 
 ## Background Workers
-Core background components:
+Main background components:
 - Indexing: `src/services/event_indexer.rs`, `src/indexer/`
 - Route/price logic: `src/services/route_optimizer.rs`, `src/services/price_guard.rs`, `src/services/price_chart_service.rs`
 - Rewards/points: `src/services/point_calculator.rs`, `src/services/snapshot_manager.rs`, `src/services/nft_discount.rs`
@@ -138,7 +132,7 @@ Binary notes:
 - `src/bin/ai_e2e_tools.rs` is an internal CLI utility, not the API server.
 
 ## Runtime Profile
-For active FE/BE execution proof flow:
+For active FE/BE execution flow:
 - Backend runtime profile: `backend-rust/.env`
 - Frontend runtime profile: `frontend/.env.local` (plus fallback to `frontend/.env`)
 
@@ -183,7 +177,7 @@ Minimum required groups:
   - `HIDE_BALANCE_MAX_USES_PER_DAY=3`
   - `ZK_PRIVACY_ROUTER_ADDRESS`
 
-Recommended optional:
+Recommended optional keys:
 - `STARKNET_API_RPC_POOL`, `STARKNET_INDEXER_RPC_POOL`, `STARKNET_WALLET_RPC_POOL`
 - `PRIVACY_AUTO_GARAGA_PROVER_CMD`
 - `GARAGA_DYNAMIC_BINDING=true`
@@ -196,7 +190,7 @@ Active hide-mode baseline in backend runtime:
 - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
 - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
 
-Operational meaning:
+Operational notes:
 - New notes should be routed to V3.
 - V2 stays deployed for legacy note redemption during migration window.
 - FE payloads should include V3-compatible fields (`note_version=v3`, `root`, `nullifier`, `proof`, `public_inputs`).
@@ -246,14 +240,14 @@ Audit of `backend-rust/.env` (runtime usage):
 Cross-layer env audit reference: `docs/ENV_RUNTIME_AUDIT_MVP.md`.
 
 ## Signer Semantics
-To avoid signer ambiguity:
+Signer keys:
 - `BACKEND_PRIVATE_KEY`: Starknet relayer private key.
 - `BACKEND_ACCOUNT_ADDRESS`: Starknet account contract for that signer.
 - `BACKEND_PUBLIC_KEY`: corresponding public key.
 - These are unrelated to LLM provider API keys.
 
 ## AI Production Guardrails
-When `ENVIRONMENT=production|prod|mainnet`, backend applies fail-fast checks:
+When `ENVIRONMENT=production|prod|mainnet`, backend enforces fail-fast checks:
 - Must be set and valid: `AI_EXECUTOR_ADDRESS`, `AI_SIGNATURE_VERIFIER_ADDRESS`, `BACKEND_ACCOUNT_ADDRESS`, `TREASURY_ADDRESS`.
 - At least one provider key required: `LLM_API_KEY` or `OPENAI_API_KEY` or `CAIRO_CODER_API_KEY` or `GEMINI_API_KEY`.
 - `AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION` must be `false`.
@@ -261,14 +255,14 @@ When `ENVIRONMENT=production|prod|mainnet`, backend applies fail-fast checks:
 - If using legacy allowlist mode in production, explicit risk flags are required.
 
 ## Planned Shadow Bridge V4 (Not Yet Delivered)
-Planned backend stream (roadmap only, not marked as shipped):
+Planned backend stream (roadmap only, not shipped yet):
 - Private BTC-native to wBTC route in hide mode.
 - Denomination-tier quote path to reduce amount-correlation.
 - Multi-stage order state machine (`created` -> `source_seen` -> `source_finalized` -> `zk_verifying` -> destination states).
 - Referral and loyalty hooks at post-redeem stage.
 - Retry queue + DLQ + auto-refund operational controls.
 
-Suggested endpoint surface for this roadmap stream:
+Planned endpoint surface for this stream:
 - `GET /api/v1/bridge/quote`
 - `POST /api/v1/bridge/execute`
 - `GET /api/v1/bridge/status/:order_id`

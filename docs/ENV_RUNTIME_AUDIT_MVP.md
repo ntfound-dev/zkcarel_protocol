@@ -1,14 +1,14 @@
 # ENV Runtime Audit (MVP)
 
-Snapshot audit of active env profiles:
+Snapshot of active runtime env profiles:
 - `backend-rust/.env`
 - `frontend/.env.local`
 
 Audit date: 2026-03-05 (local, V3 baseline update).
 
-## Backend Split
+## 1. Backend Profile Split
 
-### Active MVP (used by main frontend/backend runtime flow)
+### 1.1 Active MVP (used by main frontend/backend runtime flow)
 - `STARKNET_SWAP_CONTRACT_ADDRESS`
 - `BRIDGE_AGGREGATOR_ADDRESS`
 - `LIMIT_ORDER_BOOK_ADDRESS`
@@ -27,14 +27,14 @@ Audit date: 2026-03-05 (local, V3 baseline update).
 - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
 - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
 
-### Backend-only optional (deployed, not used by frontend runtime right now)
+### 1.2 Backend-only optional (deployed, not used by frontend runtime now)
 - `PRIVATE_BTC_SWAP_ADDRESS`
 - `DARK_POOL_ADDRESS`
 - `PRIVATE_PAYMENTS_ADDRESS`
 - `ANONYMOUS_CREDENTIALS_ADDRESS`
 - `BATTLESHIP_GARAGA_ADDRESS`
 
-### Script-only / prover tooling
+### 1.3 Script-only / prover tooling keys
 - `GARAGA_PRECOMPUTED_PAYLOAD_PATH`
 - `GARAGA_ALLOW_PRECOMPUTED_PAYLOAD`
 - `GARAGA_DYNAMIC_BINDING`
@@ -45,16 +45,16 @@ Audit date: 2026-03-05 (local, V3 baseline update).
 - `GARAGA_TIMEOUT_SECS`
 - `GARAGA_UVX_CMD`
 
-### Currently unused by backend runtime
+### 1.4 Currently unused in backend runtime
 - `FAUCET_WALLET_PRIVATE_KEY`
 - `INDEXER_DIAGNOSTICS`
 
 Note:
 - `RUST_LOG` is still used implicitly by tracing (`EnvFilter::try_from_default_env`).
 
-## Frontend Split
+## 2. Frontend Profile Split
 
-### Active MVP (used directly in code)
+### 2.1 Active MVP keys (used directly in code)
 - `NEXT_PUBLIC_BACKEND_URL`
 - `NEXT_PUBLIC_BACKEND_WS_URL`
 - `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS`
@@ -76,23 +76,23 @@ Note:
 - `NEXT_PUBLIC_TOKEN_WBTC_ADDRESS`
 - `NEXT_PUBLIC_BTC_VAULT_ADDRESS`
 
-### Fallback from `frontend/.env`
+### 2.2 Fallback from `frontend/.env`
 - `NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS`
 - `NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS`
 
 The two keys above are used at runtime, but in this snapshot their values are read from `frontend/.env` because they were not set in `.env.local`.
 
-### Legacy alias optional
+### 2.3 Legacy alias optional
 - `NEXT_PUBLIC_LIMIT_ORDER_BOOK_ADDRESS`
 - `NEXT_PUBLIC_STAKING_BTC_ADDRESS`
 - `NEXT_PUBLIC_AI_EXECUTOR_ADDRESS`
 - `NEXT_PUBLIC_DISCOUNT_SOULBOUND_ADDRESS`
 
-These aliases are for compatibility only. If `NEXT_PUBLIC_STARKNET_*` keys are present, aliases are not required.
+These aliases are compatibility-only. If `NEXT_PUBLIC_STARKNET_*` keys exist, aliases are not required.
 
-## Address Alignment Check (FE/BE)
+## 3. Address Alignment Check (FE/BE)
 
-Primary alignment result:
+Primary alignment results:
 - `STARKNET_SWAP_CONTRACT_ADDRESS` == `NEXT_PUBLIC_STARKNET_SWAP_CONTRACT_ADDRESS` (MATCH)
 - `BRIDGE_AGGREGATOR_ADDRESS` == `NEXT_PUBLIC_STARKNET_BRIDGE_AGGREGATOR_ADDRESS` (MATCH)
 - `LIMIT_ORDER_BOOK_ADDRESS` == `NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS` (MATCH)
@@ -100,8 +100,8 @@ Primary alignment result:
 - `ZK_PRIVACY_ROUTER_ADDRESS` == `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` (MATCH)
 - `PRIVATE_ACTION_EXECUTOR_ADDRESS` == `NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS` (MATCH)
 
-## Architecture Impact
+## 4. Architecture Impact
 
-Because this is the active MVP scope:
+For the current MVP runtime scope:
 - `DarkPool` and `PrivateBTCSwap` are not included in the active MVP architecture diagram.
 - Both are still documented as deployed optional modules (backend-only) to avoid scope confusion.

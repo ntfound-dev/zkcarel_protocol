@@ -1,7 +1,7 @@
 # private_executor_lite (Hide Mode)
 
 This package is the default hide-mode execution path for the CAREL MVP.
-It is optimized for fast iteration without requiring heavy real-verifier compilation.
+It is optimized for fast iteration without heavy real-verifier compilation.
 
 ## Table of Contents
 - [Scope](#scope)

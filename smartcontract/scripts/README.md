@@ -1,6 +1,6 @@
 # smartcontract/scripts
 
-This document explains each script and the recommended execution order for deploy, wiring, and tests.
+This README lists the scripts in this folder and the recommended execution order for setup, deploy, wiring, and tests.
 
 ## Table of Contents
 - [Scope](#scope)

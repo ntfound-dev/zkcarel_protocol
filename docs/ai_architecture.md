@@ -1,6 +1,6 @@
 # AI Architecture — Garaga Critical Fixes (2026-02-26)
 
-## Context
+## 1. Context
 
 All privacy transactions in this system use the same Garaga contract surface across two flow families:
 
@@ -13,11 +13,11 @@ All privacy transactions in this system use the same Garaga contract surface acr
   - L2
   - L3 (`swap/stake/limit order` only, no bridge)
 
-Because these flows hit the same contract surface, the two bugs below must be fixed together.
+Because both families use the same contract surface, the two bugs below must be fixed together.
 
-## Bug #1 — Static Proof (Identical Proof Across Transactions)
+## 2. Bug #1 — Static Proof (Identical Proof Across Transactions)
 
-### Root Cause
+### 2.1 Root Cause
 
 ```env
 GARAGA_ALLOW_PRECOMPUTED_PAYLOAD=true
@@ -26,7 +26,7 @@ GARAGA_PROVE_CMD=
 
 Runtime reads one precomputed JSON payload, so proof can become identical across users/actions/amounts.
 
-### Required Fix
+### 2.2 Required Fix
 
 1. Update backend `.env`:
 
@@ -54,7 +54,7 @@ intent_hash = hash(user_address, token, amount, pool, nonce)
 3. Add Redis-based proof generation queue:
    - Max concurrency: `2`
    - Timeout per job: `30s`
-   - On timeout/failure: return deterministic error to caller (do not fallback to static payload)
+   - On timeout/failure: return deterministic error to caller (do not fall back to static payload)
 
 4. Verify:
 
@@ -64,9 +64,9 @@ python3 scripts/garaga_auto_prover.py --test
 
 Run twice with different inputs. Proof must be different.
 
-## Bug #2 — User Address Leakage On-Chain
+## 3. Bug #2 — User Address Leakage On-Chain
 
-### Root Cause (2 Layers)
+### 3.1 Root Cause (2 Layers)
 
 1. Tx sender layer:
    - `tx.from = user wallet` is visible in explorer.
@@ -79,7 +79,7 @@ Already correct and not changed:
 - Nullifier
 - Commitment
 
-## Architecture Fix — Relayer + PrivacyIntermediary (Combined)
+## 4. Architecture Fix — Relayer + PrivacyIntermediary (Combined)
 
 Use relayer for on-chain tx submission and intermediary contract for atomic fund movement before private execution.
 
@@ -100,14 +100,14 @@ sequenceDiagram
     I->>E: execute(params)
 ```
 
-### Critical Invariant (User Balance Must Decrease)
+### 4.1 Critical Invariant (User Balance Must Decrease)
 
 - `transferFrom(user, intermediary, amount)` must execute before action.
 - User must call `approve(intermediary, amount)` first.
 - Atomicity: if `transferFrom` fails, whole tx reverts.
 - There must be no path where action succeeds but user token is not moved.
 
-## Implementation Detail by Layer
+## 5. Implementation Detail by Layer
 
 1. New Cairo contract `PrivacyIntermediary`:
    - Verify user signature.
@@ -136,7 +136,7 @@ sequenceDiagram
    - Build params from AI intent.
    - Delegate submission to relayer service.
 
-## Scope Coverage (Required 6 Modes)
+## 6. Scope Coverage (Required 6 Modes)
 
 | Mode | Flow | Bug #1 Static Proof | Bug #2 Address Leak |
 |------|------|---------------------|---------------------|
@@ -147,19 +147,19 @@ sequenceDiagram
 | L2 | AI | Fix | Fix |
 | L3 (swap/stake/limit) | AI | Fix | Fix |
 
-## Execution Priority
+## 7. Execution Priority
 
 1. Bug #1: make proof dynamic first.
 2. Bug #2: continue with relayer + intermediary after dynamic proof is stable.
 
-## Must Not Change
+## 8. Must Not Change
 
 - Garaga on-chain verification semantics.
 - CAREL burn logic already enforced by level.
 - Verifier contract flow for AI setup signature.
 - Typed-data setup sign flow that is already correct.
 
-## Definition of Done
+## 9. Definition of Done
 
 - [ ] Two different transactions produce different proofs.
 - [ ] On-chain `tx.from` is relayer address, not user wallet.

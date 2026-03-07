@@ -1,6 +1,6 @@
 # CAREL MVP - Transaction Evidence Analysis (Normal vs Hide + Bridge)
 
-This document analyzes 9 transaction proof links using on-chain data and local runtime environment context.
+This document analyzes 9 MVP proof links using on-chain data and local runtime context.
 
 Verification snapshot date: **February 25, 2026**.
 
@@ -10,21 +10,21 @@ Current runtime update (March 5, 2026):
   - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
   - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
   - `PRIVATE_ACTION_EXECUTOR_ADDRESS=0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2`
-- This file is kept as historical MVP proof analysis for the earlier V2-era links.
+- This file is kept as historical analysis for the earlier V2-era links.
 
-## 1) Problem and Approach (Contract Scope)
+## 1. Problem and Approach (Contract Scope)
 
-### Problem
+### 1.1 Problem
 - It is easy to mix up contracts that are actively used in MVP runtime versus contracts deployed for roadmap scope.
 - `normal` and `hide` flows are often described together, while their on-chain traces are different.
 - Reviewers need auditable evidence from chain data, not assumptions.
 
-### Approach
+### 1.2 Approach
 - Use runtime `env` as source of truth.
 - Validate receipts/calldata/events directly, not only UI behavior.
 - In this snapshot, active hide path was in `smartcontract/private_executor_lite` (`ShieldedPoolV2`), not `garaga_real_bls`.
 
-## 2) Source-of-Truth Environments Used
+## 2. Source-of-Truth Environments Used
 - `backend-rust/.env`
 - `smartcontract/.env`
 - `frontend/.env.local`
@@ -40,14 +40,14 @@ Important note:
 - `ZK_PRIVACY_ROUTER_ADDRESS` in `smartcontract/.env` may differ from runtime profile (`backend-rust/.env` + `frontend/.env.local`).
 - MVP tx proof verification should follow the active runtime profile.
 
-## 3) Local Smart Contract Test Result
+## 3. Local Smart Contract Test Result
 Executed from `smartcontract`:
 - `bash scripts/test_core_fast.sh` -> **166 passed, 0 failed**
 - `bash scripts/test_private_executor_lite.sh` -> **12 passed, 0 failed**
 
-Result: core contract path and active hide path for the snapshot were locally verified.
+Result: core path and active hide path for this snapshot were locally verified.
 
-## 4) Analysis of 6 Starknet Transactions (Normal vs Hide)
+## 4. Analysis of 6 Starknet Transactions (Normal vs Hide)
 Detected sender addresses:
 - User wallet (normal): `0x469de079832d5da0591fc5f8fd2957f70b908d62c5d0dcb057d030cfc827705`
 - Relayer (hide): `0x289f797b9c2dc6c661fd058968d9ba39d01c7547f8259f01b7bce55696d0ff0`
@@ -63,7 +63,7 @@ All tx below were `ACCEPTED_ON_L1` + `SUCCEEDED`.
 | Normal Limit | https://sepolia.voyager.online/tx/0x737c40659dc5c7872ab1a89222d879bca68163b890a61f09b1875d52e4747a6 | User wallet | `LimitOrderBook` (`0x06b1...`) | No |
 | Hide Limit | https://sepolia.voyager.online/tx/0x523c9721e57f69fddff4ed3be3935cce3b5782ca2c3b454df565c0be6b22ba3 | Relayer | `LimitOrderBook` + executor | Yes |
 
-## 5) Hide-Mode Proof Path Evidence (From Calldata)
+## 5. Hide-Mode Proof Path Evidence (From Calldata)
 All three hide transactions (`swap`, `stake`, `limit`) follow the same call pattern:
 1. `set_asset_rule`
 2. `deposit_fixed_for`
@@ -75,8 +75,8 @@ Key findings:
 - User wallet can still appear in calldata binding data but is not the final sender.
 - This is consistent with `ShieldedPoolV2` path in `private_executor_lite` for that snapshot.
 
-## 6) Analysis of 3 Bridge Evidence Links
-### A) BTC Bridge Tx
+## 6. Analysis of 3 Bridge Evidence Links
+### 6.1 BTC Bridge Tx
 - Link: https://mempool.space/testnet4/tx/d26a8f5d0213b4448722cde81e1f47e68b8efbd00c56ce4802e39c9b0898db4c
 - Result:
   - Confirmed: `true`
@@ -84,7 +84,7 @@ Key findings:
   - Fee: `153 sats`
   - Main output: `50000 sats` (0.0005 BTC)
 
-### B) Garden Order
+### 6.2 Garden Order
 - Link: https://testnet-explorer.garden.finance/order/237be68816b9144b9d3533ca3ec8c4eb1e7c00b1649e9ec216d89469fd014e70
 - Garden API verification (`/v2/orders/<id>`) shows:
   - `integrator`: `DocsTesting`
@@ -93,7 +93,7 @@ Key findings:
   - Source initiate tx: `d26a8f5d...:123447` (matches BTC tx above)
   - Destination: `starknet_sepolia:wbtc`, amount `49850`
 
-### C) ETH Bridge Tx
+### 6.3 ETH Bridge Tx
 - Link: https://sepolia.etherscan.io/tx/0xab25b9261dc9f703e44cb89a34831ff03024b8fe89e32cce4a7e58b5d6dcdef3
 - Result:
   - Status: `0x1` (success)
@@ -105,7 +105,7 @@ Note:
 - Based on Garden order payload, the directly linked route is BTC -> WBTC.
 - The ETH tx is valid but not directly tied to that specific `order_id` in this analyzed payload.
 
-## 7) Practical Reviewer Summary
+## 7. Practical Reviewer Summary
 1. `normal` vs `hide` difference is provable on-chain: normal sent by user wallet, hide sent by relayer.
 2. In this historical snapshot, active hide path was `private_executor_lite/ShieldedPoolV2`, not `garaga_real_bls`.
 3. Hide path explicitly executes `submit_private_action` + `execute_private_*` in the same tx flow.

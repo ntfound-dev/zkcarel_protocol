@@ -15,7 +15,7 @@ Use it when real on-chain proof verification is required.
 ## Scope
 - Target: Starknet Sepolia (testnet), and future mainnet migration readiness.
 - Focus: real Groth16 BLS12-381 verifier path.
-- Not intended as daily MVP path due heavy compilation cost.
+- Not intended for daily MVP iteration because compile cost is high.
 
 ## When to Use
 Use this package when:

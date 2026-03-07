@@ -1,10 +1,7 @@
 # CAREL Smart Contracts (MVP)
 
 Technical README for the `smartcontract/` module.
-
-This document is contract-focused and separates:
-- catalog deployment inventory (`smartcontract/.env`)
-- runtime profile used by frontend/backend execution flow
+This file separates contract catalog inventory (`smartcontract/.env`) from FE/BE runtime profile values.
 
 ## Table of Contents
 - [Scope](#scope)
@@ -40,7 +37,7 @@ smartcontract/
 ```
 
 ## Address Profiles
-To avoid data conflicts:
+Use these profiles to avoid address conflicts:
 - Catalog profile:
   - Source: `smartcontract/.env`
   - Usage: deployment inventory, script wiring, contract references
@@ -48,7 +45,7 @@ To avoid data conflicts:
   - Source: `backend-rust/.env` + `frontend/.env*`
   - Usage: active application execution path and live demos
 
-If a value differs between these profiles, treat it as environment/profile separation, not an automatic deployment error.
+If values differ, treat that as profile separation, not an automatic deployment error.
 
 ## On-Chain Architecture
 ```mermaid
@@ -260,14 +257,14 @@ Source: `smartcontract/.env`.
 | WBTC (`TOKEN_BTC_ADDRESS` legacy alias) | `TOKEN_WBTC_ADDRESS` | `0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5` |
 
 ## Runtime Address Overrides (FE/BE Profile)
-Active app runtime profile currently uses (from `backend-rust/.env`):
+Active app runtime profile currently uses these overrides (from `backend-rust/.env`):
 - `ZK_PRIVACY_ROUTER_ADDRESS`: `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f`
 - `PRIVATE_ACTION_EXECUTOR_ADDRESS`: `0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2`
 - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
 - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
 - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
 
-Use this override set for FE/BE runtime demos; keep catalog inventory unchanged unless redeploy/wiring is confirmed.
+Use this override set for FE/BE runtime demos. Keep catalog inventory unchanged unless redeploy/wiring is confirmed.
 
 ## Current Constraints
 - Hide mode reduces linkability, but chain-level metadata remains public.
