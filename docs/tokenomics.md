@@ -26,19 +26,19 @@ flowchart LR
     PROTOCOL["Protocol actions\nSwap / Bridge / MEV"] --> FEE
     FEE --> TREASURY
     TREASURY --> REWARDS
-    TREASURY -->|burn path| TOKEN
-    VEST -->|release() mint| TOKEN
+    TREASURY -->|burn| TOKEN
+    VEST -->|release mint| TOKEN
     GOVERNANCE --> TIMELOCK
     TIMELOCK --> TOKEN
     TIMELOCK --> VEST
     TIMELOCK --> FEE
     TIMELOCK --> TREASURY
-    ROUTER -. private actions .-> TOKEN
-    ROUTER -. private actions .-> VEST
-    ROUTER -. private actions .-> FEE
-    ROUTER -. private actions .-> TREASURY
-    ROUTER -. private actions .-> GOVERNANCE
-    ROUTER -. private actions .-> TIMELOCK
+    ROUTER -.-> TOKEN
+    ROUTER -.-> VEST
+    ROUTER -.-> FEE
+    ROUTER -.-> TREASURY
+    ROUTER -.-> GOVERNANCE
+    ROUTER -.-> TIMELOCK
 ```
 
 ## 2. Token Allocation (Mermaid)
