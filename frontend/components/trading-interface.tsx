@@ -202,6 +202,15 @@ const HIDE_BALANCE_SHIELDED_POOL_V3 =
   HIDE_BALANCE_EXECUTOR_KIND === "shielded-v3" ||
   HIDE_BALANCE_EXECUTOR_KIND === "v3"
 const HIDE_BALANCE_SHIELDED_POOL = HIDE_BALANCE_SHIELDED_POOL_V2 || HIDE_BALANCE_SHIELDED_POOL_V3
+const HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW =
+  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS ||
+  process.env.NEXT_PUBLIC_AI_HIDE_MIN_NOTE_AGE_SECS ||
+  "60"
+const HIDE_BALANCE_MIN_NOTE_AGE_SECS = Number.parseInt(HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW, 10)
+const HIDE_BALANCE_MIN_NOTE_AGE_MS =
+  (Number.isFinite(HIDE_BALANCE_MIN_NOTE_AGE_SECS) && HIDE_BALANCE_MIN_NOTE_AGE_SECS > 0
+    ? HIDE_BALANCE_MIN_NOTE_AGE_SECS
+    : 60) * 1000
 const USDT_POINTS_TIER_OPTIONS = [
   { minUsdt: 5, bonusPercent: 5 },
   { minUsdt: 10, bonusPercent: 10 },
@@ -547,7 +556,8 @@ const persistTradePrivacyPayload = (payload: PrivacyVerificationPayload) => {
     ) {
       normalizedPayload.spendable_at_unix = Math.floor(existing.spendable_at_unix)
     } else {
-      normalizedPayload.spendable_at_unix = Math.floor(Date.now() / 1000)
+      normalizedPayload.spendable_at_unix =
+        Math.floor(Date.now() / 1000) + Math.floor(HIDE_BALANCE_MIN_NOTE_AGE_MS / 1000)
     }
   }
   window.localStorage.setItem(TRADE_PRIVACY_PAYLOAD_KEY, JSON.stringify(normalizedPayload))
@@ -586,7 +596,7 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
         const spendableAt =
           typeof item.spendable_at_unix === "number" && Number.isFinite(item.spendable_at_unix)
             ? Math.floor(item.spendable_at_unix)
-            : undefined
+            : depositedAt + Math.floor(HIDE_BALANCE_MIN_NOTE_AGE_MS / 1000)
         const proof = normalizeHexArray((item as { proof?: unknown }).proof)
         const publicInputs = normalizeHexArray((item as { public_inputs?: unknown }).public_inputs)
         return {
@@ -3970,7 +3980,7 @@ export function TradingInterface() {
       }
 
       const depositedAtUnix = Math.floor(Date.now() / 1000)
-      const spendableAtUnix = depositedAtUnix
+      const spendableAtUnix = depositedAtUnix + Math.floor(HIDE_BALANCE_MIN_NOTE_AGE_MS / 1000)
       persistTradePrivacyPayload({
         ...payload,
         note_version: "v3",
@@ -4002,7 +4012,7 @@ export function TradingInterface() {
       notifications.addNotification({
         type: "success",
         title: "Hide note deposited",
-        message: `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Note is ready for private swap.`,
+        message: `Note deposit submitted (${depositTxHash.slice(0, 10)}...). Private swap unlocks in ${formatRemainingDuration(HIDE_BALANCE_MIN_NOTE_AGE_MS)}.`,
         txHash: depositTxHash,
         txNetwork: "starknet",
       })
@@ -6152,6 +6162,10 @@ export function TradingInterface() {
                     {pendingHideNotesActive.map((note) => {
                       const noteCommitment = (note.note_commitment || "").trim()
                       const noteNullifier = (note.nullifier || "").trim()
+                      const spendableAt = Number(note.spendable_at_unix || 0)
+                      const remainingMs =
+                        spendableAt > 0 ? Math.max(0, spendableAt * 1000 - nowMs) : 0
+                      const isReady = remainingMs <= 0
                       const noteActionKey = `${noteCommitment}:${noteNullifier}`
                       const noteSourceTokenSymbol = (note.token_symbol || "STRK").trim().toUpperCase()
                       const noteExecutorNormalized = normalizeExecutorAddress(note.executor_address)
@@ -6182,7 +6196,7 @@ export function TradingInterface() {
                           </p>
                           <p className="text-[11px] text-muted-foreground">
                             {note.amount || "?"} {noteSourceTokenSymbol} → {displayTargetToken} •{" "}
-                            Ready now
+                            {isReady ? "Ready now" : `Ready in ${formatRemainingDuration(remainingMs)}`}
                           </p>
                           {noteMissingSwapMetadata && (
                             <p className="text-[11px] text-warning">
@@ -6203,7 +6217,8 @@ export function TradingInterface() {
                               disabled={
                                 swapState !== "idle" ||
                                 !!activePendingHideNoteSwapKey ||
-                                noteUseBlocked
+                                noteUseBlocked ||
+                                !isReady
                               }
                               onClick={() => {
                                 void (async () => {

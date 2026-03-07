@@ -614,6 +614,15 @@ fn hide_balance_v2_redeem_only_enabled() -> bool {
     env_flag("HIDE_BALANCE_V2_REDEEM_ONLY", false)
 }
 
+fn hide_balance_min_note_age_secs() -> u64 {
+    std::env::var("HIDE_BALANCE_MIN_NOTE_AGE_SECS")
+        .or_else(|_| std::env::var("NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(60)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HideExecutorKind {
     PrivateActionExecutorV1,
@@ -2233,7 +2242,8 @@ pub async fn deposit(
                     "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                 ));
             }
-            payload.spendable_at_unix = Some(deposit_ts);
+            payload.spendable_at_unix =
+                Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
         } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
@@ -2622,7 +2632,8 @@ pub async fn withdraw(
                     "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                 ));
             }
-            payload.spendable_at_unix = Some(deposit_ts);
+            payload.spendable_at_unix =
+                Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
         } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;
@@ -2955,7 +2966,8 @@ pub async fn claim(
                     "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                 ));
             }
-            payload.spendable_at_unix = Some(deposit_ts);
+            payload.spendable_at_unix =
+                Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
         } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
             let commitment_felt = parse_felt(payload.commitment.trim())?;
             let user_felt = parse_felt(&user_address)?;

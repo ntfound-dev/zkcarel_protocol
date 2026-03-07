@@ -183,6 +183,15 @@ fn hide_balance_v2_redeem_only_enabled() -> bool {
     env_flag("HIDE_BALANCE_V2_REDEEM_ONLY", false)
 }
 
+fn hide_balance_min_note_age_secs() -> u64 {
+    std::env::var("HIDE_BALANCE_MIN_NOTE_AGE_SECS")
+        .or_else(|_| std::env::var("NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(60)
+}
+
 fn hide_balance_max_uses_per_day() -> u64 {
     std::env::var("HIDE_BALANCE_MAX_USES_PER_DAY")
         .ok()
@@ -3252,7 +3261,8 @@ pub async fn execute_swap(
                         "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
                     ));
                 }
-                payload.spendable_at_unix = Some(deposit_ts);
+                payload.spendable_at_unix =
+                    Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
                 ensure_hide_executor_has_input_balance(
                     &state,
                     executor,

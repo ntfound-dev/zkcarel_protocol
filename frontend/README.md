@@ -1,4 +1,4 @@
-# CAREL Frontend (Starknet Testnet MVP)
+# CAREL Frontend 
 
 Frontend module for CAREL Protocol, built with Next.js 16.
 This README is frontend-only: UI modules, wallet integration, FE/BE API contract, and runtime env profile.

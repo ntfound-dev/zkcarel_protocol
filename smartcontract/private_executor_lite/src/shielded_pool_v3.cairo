@@ -2,6 +2,7 @@ use starknet::ContractAddress;
 
 #[starknet::interface]
 pub trait IGroth16VerifierBlsOutput<TContractState> {
+    /// Verifies a Groth16 proof and returns decoded public outputs when valid.
     fn verify_groth16_proof_bls12_381(
         self: @TContractState, full_proof_with_hints: Span<felt252>,
     ) -> Option<Span<u256>>;
@@ -9,13 +10,18 @@ pub trait IGroth16VerifierBlsOutput<TContractState> {
 
 #[starknet::interface]
 pub trait IShieldedPoolV3<TContractState> {
+    /// Updates the verifier contract used for private-action proof checks.
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
+    /// Updates the relayer account allowed to execute private actions.
     fn set_relayer(ref self: TContractState, relayer: ContractAddress);
+    /// Stores a new accepted Merkle root for later private-action submissions.
     fn set_root(ref self: TContractState, new_root: felt252);
+    /// Defines the fixed deposit amount for a token and denomination pair.
     fn set_asset_rule(
         ref self: TContractState, token: ContractAddress, denom_id: felt252, fixed_amount: u256,
     );
 
+    /// Locks a fixed token amount and binds it to a note commitment and nullifier.
     fn deposit_fixed_v3(
         ref self: TContractState,
         token: ContractAddress,
@@ -23,18 +29,23 @@ pub trait IShieldedPoolV3<TContractState> {
         note_commitment: felt252,
         nullifier: felt252,
     );
+    /// Lets the original depositor cancel an unused note and pull funds back out.
     fn withdraw_note_v3(ref self: TContractState, note_commitment: felt252);
 
+    /// Registers a private swap action after the proof passes verification.
     fn submit_private_swap(
         ref self: TContractState, root: felt252, nullifier: felt252, proof: Span<felt252>,
     );
+    /// Registers a private limit-order action after the proof passes verification.
     fn submit_private_limit(
         ref self: TContractState, root: felt252, nullifier: felt252, proof: Span<felt252>,
     );
+    /// Registers a private staking action after the proof passes verification.
     fn submit_private_stake(
         ref self: TContractState, root: felt252, nullifier: felt252, proof: Span<felt252>,
     );
 
+    /// Executes a queued private swap and forwards any payout to the stored recipient.
     fn execute_private_swap_with_payout(
         ref self: TContractState,
         nullifier: felt252,
@@ -45,6 +56,7 @@ pub trait IShieldedPoolV3<TContractState> {
         payout_token: ContractAddress,
         min_payout: u256,
     );
+    /// Executes a queued private limit-order action and forwards any payout to the stored recipient.
     fn execute_private_limit_with_payout(
         ref self: TContractState,
         nullifier: felt252,
@@ -55,6 +67,7 @@ pub trait IShieldedPoolV3<TContractState> {
         payout_token: ContractAddress,
         min_payout: u256,
     );
+    /// Executes a queued private staking action and forwards any payout to the stored recipient.
     fn execute_private_stake_with_payout(
         ref self: TContractState,
         nullifier: felt252,
@@ -66,11 +79,16 @@ pub trait IShieldedPoolV3<TContractState> {
         min_payout: u256,
     );
 
+    /// Returns the current active Merkle root.
     fn get_root(self: @TContractState) -> felt252;
+    /// Returns how many roots have been stored so far.
     fn get_root_count(self: @TContractState) -> u64;
+    /// Returns the deposit timestamp recorded for a note commitment.
     fn get_note_deposit_timestamp(self: @TContractState, note_commitment: felt252) -> u64;
+    /// Returns the fixed deposit amount configured for a token and denomination pair.
     fn fixed_amount(self: @TContractState, token: ContractAddress, denom_id: felt252) -> u256;
 
+    /// Precomputes the swap action hash that must match the private proof payload.
     fn preview_swap_action_hash(
         self: @TContractState,
         target: ContractAddress,
@@ -80,6 +98,7 @@ pub trait IShieldedPoolV3<TContractState> {
         payout_token: ContractAddress,
         min_payout: u256,
     ) -> felt252;
+    /// Precomputes the limit-order action hash that must match the private proof payload.
     fn preview_limit_action_hash(
         self: @TContractState,
         target: ContractAddress,
@@ -89,6 +108,7 @@ pub trait IShieldedPoolV3<TContractState> {
         payout_token: ContractAddress,
         min_payout: u256,
     ) -> felt252;
+    /// Precomputes the staking action hash that must match the private proof payload.
     fn preview_stake_action_hash(
         self: @TContractState,
         target: ContractAddress,
@@ -99,17 +119,26 @@ pub trait IShieldedPoolV3<TContractState> {
         min_payout: u256,
     ) -> felt252;
 
+    /// Returns whether a nullifier has already been consumed.
     fn is_nullifier_used(self: @TContractState, nullifier: felt252) -> bool;
+    /// Returns whether a swap action is still pending for the nullifier.
     fn is_pending_swap(self: @TContractState, nullifier: felt252) -> bool;
+    /// Returns whether a limit-order action is still pending for the nullifier.
     fn is_pending_limit(self: @TContractState, nullifier: felt252) -> bool;
+    /// Returns whether a staking action is still pending for the nullifier.
     fn is_pending_stake(self: @TContractState, nullifier: felt252) -> bool;
 
+    /// Returns the stored action hash for a pending private action.
     fn get_pending_action_hash(self: @TContractState, nullifier: felt252) -> felt252;
+    /// Returns the payout recipient stored for a pending private action.
     fn get_pending_recipient(self: @TContractState, nullifier: felt252) -> ContractAddress;
+    /// Returns the stored action type for a pending private action.
     fn get_pending_action_type(self: @TContractState, nullifier: felt252) -> felt252;
 
     // Backward-compatible getters kept for existing backend probes.
+    /// Legacy getter kept for older backend swap probes.
     fn get_pending_swap_action_hash(self: @TContractState, nullifier: felt252) -> felt252;
+    /// Legacy getter kept for older backend swap probes.
     fn get_pending_swap_recipient(self: @TContractState, nullifier: felt252) -> ContractAddress;
 }
 
@@ -135,11 +164,15 @@ pub mod ShieldedPoolV3 {
 
     #[starknet::interface]
     pub trait IERC20<TContractState> {
+        /// Grants an allowance to a spender.
         fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
+        /// Transfers tokens from the caller to a recipient.
         fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+        /// Transfers tokens from one account to another using allowance.
         fn transfer_from(
             ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256,
         ) -> bool;
+        /// Returns the token balance for an account.
         fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
     }
 
@@ -254,6 +287,7 @@ pub mod ShieldedPoolV3 {
     }
 
     #[constructor]
+    /// Initializes admin, verifier, relayer, and an empty root state.
     fn constructor(
         ref self: ContractState, admin: ContractAddress, verifier: ContractAddress, relayer: ContractAddress,
     ) {
@@ -267,6 +301,7 @@ pub mod ShieldedPoolV3 {
 
     #[abi(embed_v0)]
     impl ShieldedPoolV3Impl of IShieldedPoolV3<ContractState> {
+        /// Admin-only setter for the active proof verifier.
         fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self._assert_admin();
             assert!(!verifier.is_zero(), "Verifier required");
@@ -274,6 +309,7 @@ pub mod ShieldedPoolV3 {
             self.emit(Event::VerifierUpdated(VerifierUpdated { verifier }));
         }
 
+        /// Admin-only setter for the relayer allowed to execute private actions.
         fn set_relayer(ref self: ContractState, relayer: ContractAddress) {
             self._assert_admin();
             assert!(!relayer.is_zero(), "Relayer required");
@@ -281,6 +317,7 @@ pub mod ShieldedPoolV3 {
             self.emit(Event::RelayerUpdated(RelayerUpdated { relayer }));
         }
 
+        /// Registers a new accepted root and keeps a simple append-only root history.
         fn set_root(ref self: ContractState, new_root: felt252) {
             self._assert_admin();
             assert!(new_root != 0, "Root required");
@@ -292,6 +329,7 @@ pub mod ShieldedPoolV3 {
             self.emit(Event::RootUpdated(RootUpdated { root: new_root, root_count: next }));
         }
 
+        /// Sets the fixed deposit amount for a token and denomination used by note deposits.
         fn set_asset_rule(
             ref self: ContractState, token: ContractAddress, denom_id: felt252, fixed_amount: u256,
         ) {
@@ -304,6 +342,7 @@ pub mod ShieldedPoolV3 {
             self.emit(Event::AssetRuleUpdated(AssetRuleUpdated { token, denom_id, fixed_amount }));
         }
 
+        /// Pulls the configured token amount into the pool and records a fresh note.
         fn deposit_fixed_v3(
             ref self: ContractState,
             token: ContractAddress,
@@ -348,6 +387,7 @@ pub mod ShieldedPoolV3 {
                 );
         }
 
+        /// Cancels an unused note and returns the locked funds to the original depositor.
         fn withdraw_note_v3(ref self: ContractState, note_commitment: felt252) {
             let sender = get_caller_address();
             assert!(!sender.is_zero(), "Sender required");
@@ -389,24 +429,28 @@ pub mod ShieldedPoolV3 {
                 );
         }
 
+        /// Thin wrapper for submitting a private swap action.
         fn submit_private_swap(
             ref self: ContractState, root: felt252, nullifier: felt252, proof: Span<felt252>,
         ) {
             self._submit_private_action(root, nullifier, proof, ACTION_SWAP_PAYOUT_V3);
         }
 
+        /// Thin wrapper for submitting a private limit-order action.
         fn submit_private_limit(
             ref self: ContractState, root: felt252, nullifier: felt252, proof: Span<felt252>,
         ) {
             self._submit_private_action(root, nullifier, proof, ACTION_LIMIT_PAYOUT_V3);
         }
 
+        /// Thin wrapper for submitting a private staking action.
         fn submit_private_stake(
             ref self: ContractState, root: felt252, nullifier: felt252, proof: Span<felt252>,
         ) {
             self._submit_private_action(root, nullifier, proof, ACTION_STAKE_PAYOUT_V3);
         }
 
+        /// Executes a queued private swap and handles optional payout forwarding.
         fn execute_private_swap_with_payout(
             ref self: ContractState,
             nullifier: felt252,
@@ -430,6 +474,7 @@ pub mod ShieldedPoolV3 {
                 );
         }
 
+        /// Executes a queued private limit-order action and handles optional payout forwarding.
         fn execute_private_limit_with_payout(
             ref self: ContractState,
             nullifier: felt252,
@@ -453,6 +498,7 @@ pub mod ShieldedPoolV3 {
                 );
         }
 
+        /// Executes a queued private staking action and handles optional payout forwarding.
         fn execute_private_stake_with_payout(
             ref self: ContractState,
             nullifier: felt252,
@@ -476,23 +522,28 @@ pub mod ShieldedPoolV3 {
                 );
         }
 
+        /// Returns the current active root.
         fn get_root(self: @ContractState) -> felt252 {
             self.current_root.read()
         }
 
+        /// Returns how many roots have been stored.
         fn get_root_count(self: @ContractState) -> u64 {
             self.root_count.read()
         }
 
+        /// Returns when a note was originally deposited.
         fn get_note_deposit_timestamp(self: @ContractState, note_commitment: felt252) -> u64 {
             self.deposit_timestamp_by_commitment.read(note_commitment)
         }
 
+        /// Returns the configured fixed amount for a token and denomination pair.
         fn fixed_amount(self: @ContractState, token: ContractAddress, denom_id: felt252) -> u256 {
             let key = _asset_rule_key(token, denom_id);
             self.fixed_amount_by_rule_key.read(key)
         }
 
+        /// Computes the swap action hash off-chain callers should expect to bind into proofs.
         fn preview_swap_action_hash(
             self: @ContractState,
             target: ContractAddress,
@@ -514,6 +565,7 @@ pub mod ShieldedPoolV3 {
                 )
         }
 
+        /// Computes the limit-order action hash off-chain callers should expect to bind into proofs.
         fn preview_limit_action_hash(
             self: @ContractState,
             target: ContractAddress,
@@ -535,6 +587,7 @@ pub mod ShieldedPoolV3 {
                 )
         }
 
+        /// Computes the staking action hash off-chain callers should expect to bind into proofs.
         fn preview_stake_action_hash(
             self: @ContractState,
             target: ContractAddress,
@@ -556,41 +609,50 @@ pub mod ShieldedPoolV3 {
                 )
         }
 
+        /// Returns whether the nullifier has been permanently consumed.
         fn is_nullifier_used(self: @ContractState, nullifier: felt252) -> bool {
             self.nullifier_used.read(nullifier)
         }
 
+        /// Returns true only when a swap action is still pending for this nullifier.
         fn is_pending_swap(self: @ContractState, nullifier: felt252) -> bool {
             self.pending_action_exists_by_nullifier.read(nullifier)
                 && self.pending_action_type_by_nullifier.read(nullifier) == ACTION_SWAP_PAYOUT_V3
         }
 
+        /// Returns true only when a limit-order action is still pending for this nullifier.
         fn is_pending_limit(self: @ContractState, nullifier: felt252) -> bool {
             self.pending_action_exists_by_nullifier.read(nullifier)
                 && self.pending_action_type_by_nullifier.read(nullifier) == ACTION_LIMIT_PAYOUT_V3
         }
 
+        /// Returns true only when a staking action is still pending for this nullifier.
         fn is_pending_stake(self: @ContractState, nullifier: felt252) -> bool {
             self.pending_action_exists_by_nullifier.read(nullifier)
                 && self.pending_action_type_by_nullifier.read(nullifier) == ACTION_STAKE_PAYOUT_V3
         }
 
+        /// Returns the stored action hash for the pending private action.
         fn get_pending_action_hash(self: @ContractState, nullifier: felt252) -> felt252 {
             self.pending_action_hash_by_nullifier.read(nullifier)
         }
 
+        /// Returns the stored payout recipient for the pending private action.
         fn get_pending_recipient(self: @ContractState, nullifier: felt252) -> ContractAddress {
             self.pending_recipient_by_nullifier.read(nullifier)
         }
 
+        /// Returns the stored action type for the pending private action.
         fn get_pending_action_type(self: @ContractState, nullifier: felt252) -> felt252 {
             self.pending_action_type_by_nullifier.read(nullifier)
         }
 
+        /// Legacy alias kept so older backend code can still read the action hash.
         fn get_pending_swap_action_hash(self: @ContractState, nullifier: felt252) -> felt252 {
             self.pending_action_hash_by_nullifier.read(nullifier)
         }
 
+        /// Legacy alias kept so older backend code can still read the recipient.
         fn get_pending_swap_recipient(self: @ContractState, nullifier: felt252) -> ContractAddress {
             self.pending_recipient_by_nullifier.read(nullifier)
         }
@@ -598,10 +660,12 @@ pub mod ShieldedPoolV3 {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        /// Ensures only the admin can call the current code path.
         fn _assert_admin(self: @ContractState) {
             assert!(get_caller_address() == self.admin.read(), "Only admin");
         }
 
+        /// Ensures the caller is either the relayer or the admin override account.
         fn _assert_relayer_or_admin(self: @ContractState) {
             let caller = get_caller_address();
             assert!(
@@ -610,6 +674,7 @@ pub mod ShieldedPoolV3 {
             );
         }
 
+        /// Verifies a proof, extracts its bound action data, and stores the pending action.
         fn _submit_private_action(
             ref self: ContractState,
             root: felt252,
@@ -690,6 +755,7 @@ pub mod ShieldedPoolV3 {
             };
         }
 
+        /// Executes a previously queued private action, then marks the note and nullifier as spent.
         fn _execute_private_action_with_payout(
             ref self: ContractState,
             nullifier: felt252,
@@ -775,6 +841,7 @@ pub mod ShieldedPoolV3 {
                 );
         }
 
+        /// Clears all pending-action fields for a nullifier after execution or cancellation.
         fn _clear_pending_action(ref self: ContractState, nullifier: felt252) {
             self.pending_action_exists_by_nullifier.write(nullifier, false);
             self.pending_action_type_by_nullifier.write(nullifier, 0);
@@ -783,6 +850,7 @@ pub mod ShieldedPoolV3 {
             self.pending_submitted_at_by_nullifier.write(nullifier, 0);
         }
 
+        /// Gives the target contract a max allowance when an approval token is supplied.
         fn _approve_if_needed(
             self: @ContractState, approval_token: ContractAddress, target: ContractAddress,
         ) {
@@ -797,6 +865,7 @@ pub mod ShieldedPoolV3 {
             }
         }
 
+        /// Hashes the execution payload so the proof and relayer execution bind to the same action.
         fn _compute_action_hash(
             self: @ContractState,
             action_type: felt252,
@@ -827,10 +896,12 @@ pub mod ShieldedPoolV3 {
         }
     }
 
+    /// Returns true when both u256 limbs are zero.
     fn _is_zero_u256(value: u256) -> bool {
         value.low == 0 && value.high == 0
     }
 
+    /// Converts a u256 into a single felt252 when the value fits the field representation used here.
     fn _u256_to_felt(value: u256) -> felt252 {
         const TWO_POW_128: felt252 = 0x100000000000000000000000000000000;
         let low_felt: felt252 = value.low.into();
@@ -838,6 +909,7 @@ pub mod ShieldedPoolV3 {
         high_felt * TWO_POW_128 + low_felt
     }
 
+    /// Builds the storage key for a token and denomination fixed-amount rule.
     fn _asset_rule_key(token: ContractAddress, denom_id: felt252) -> felt252 {
         let token_felt: felt252 = token.into();
         let mut input: Array<felt252> = array![];
@@ -846,6 +918,7 @@ pub mod ShieldedPoolV3 {
         poseidon_hash_span(input.span())
     }
 
+    /// Returns the zero contract address used when clearing recipient fields.
     fn _zero_address() -> ContractAddress {
         0.try_into().unwrap()
     }

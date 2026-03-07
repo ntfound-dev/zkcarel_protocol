@@ -228,6 +228,15 @@ const HIDE_BALANCE_PRIVATE_EXECUTOR_ENABLED =
 const HIDE_BALANCE_RELAYER_POOL_ENABLED =
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED || "false").toLowerCase() === "true" &&
   (process.env.NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED || "false").toLowerCase() === "true"
+const HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW =
+  process.env.NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS ||
+  process.env.NEXT_PUBLIC_AI_HIDE_MIN_NOTE_AGE_SECS ||
+  "60"
+const HIDE_BALANCE_MIN_NOTE_AGE_SECS = Number.parseInt(HIDE_BALANCE_MIN_NOTE_AGE_SECS_RAW, 10)
+const HIDE_BALANCE_MIN_NOTE_AGE_MS =
+  (Number.isFinite(HIDE_BALANCE_MIN_NOTE_AGE_SECS) && HIDE_BALANCE_MIN_NOTE_AGE_SECS > 0
+    ? HIDE_BALANCE_MIN_NOTE_AGE_SECS
+    : 60) * 1000
 
 const normalizeHexArray = (values?: string[] | null): string[] => {
   if (!Array.isArray(values)) return []
@@ -340,7 +349,9 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
           spendable_at_unix:
             typeof item.spendable_at_unix === "number" && Number.isFinite(item.spendable_at_unix)
               ? Math.floor(item.spendable_at_unix)
-              : undefined,
+              : (typeof item.deposited_at_unix === "number" && Number.isFinite(item.deposited_at_unix)
+                  ? Math.floor(item.deposited_at_unix)
+                  : Math.floor(Date.now() / 1000)) + Math.floor(HIDE_BALANCE_MIN_NOTE_AGE_MS / 1000),
         }
       })
       .filter((item): item is PendingHideNoteRecord => item !== null)
@@ -1419,7 +1430,8 @@ export function LimitOrder() {
         starknetProviderHint
       )
 
-      const spendableAtUnix = Math.floor(Date.now() / 1000)
+      const spendableAtUnix =
+        Math.floor(Date.now() / 1000) + Math.floor(HIDE_BALANCE_MIN_NOTE_AGE_MS / 1000)
       persistTradePrivacyPayload({
         ...payload,
         note_version: "v3",
@@ -1452,7 +1464,7 @@ export function LimitOrder() {
       notifications.addNotification({
         type: "success",
         title: "Hide note deposited",
-        message: `Note deposit submitted (${txHash.slice(0, 10)}...). Note is ready for private order.`,
+        message: `Note deposit submitted (${txHash.slice(0, 10)}...). Private order unlocks in ${formatRemainingDuration(HIDE_BALANCE_MIN_NOTE_AGE_MS)}.`,
         txHash,
         txNetwork: "starknet",
       })
