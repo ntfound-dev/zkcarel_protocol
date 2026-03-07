@@ -262,6 +262,27 @@ Current testnet bridge pairs:
 Testnet note:
 - Bridge providers on testnet often run out of liquidity, so route availability can be intermittent.
 
+## Points, Multipliers, and NFT Discount
+Points are tracked per epoch in separate runtime buckets, not as a single raw counter. The backend keeps `swap_points`, `bridge_points`, `stake_points`, `referral_points`, and `social_points`, then syncs the resulting epoch total on-chain to `PointStorage`.
+
+Runtime point rules:
+- Base product rates are `10` points/USD for swap, `12` for limit order, `15` for ETH bridge, `25` for BTC/WBTC bridge, and `3` for stake before pool-specific multipliers.
+- Stake action multipliers are product-specific: `CAREL` uses `2x / 3x / 5x` at `>=100 / >=1,000 / >=10,000`, `WBTC` uses `1.5x`, `USDT` / `USDC` / `STRK` use `1x`, and LP staking uses `5x`.
+- AI level bonus is `+20%` on `L2` and `+40%` on `L3`.
+- Swap, limit order, and stake preview paths add a hide-only USDT-equivalent tier bonus of `+5% / +10% / +20% / +30% / +50%` at `>=5 / >=10 / >=50 / >=100 / >=250`.
+- After bucket updates, the backend recomputes `total_points = (swap + bridge + stake + referral + social) * staking_multiplier * nft_factor`, where the CAREL staking multiplier is `1x / 2x / 3x / 5x` for `<100 / >=100 / >=1,000 / >=10,000` staked CAREL.
+
+Discount NFT behavior:
+- `DiscountSoulbound` is minted with points, not CAREL.
+- Default tiers are Bronze `5,000 points -> 5% / 5 uses`, Silver `15,000 -> 10% / 7 uses`, Gold `50,000 -> 25% / 10 uses`, Platinum `150,000 -> 35% / 15 uses`, and Onyx `500,000 -> 50% / 20 uses`.
+- `use_discount` consumes usage, not the NFT itself. Once usage is exhausted, runtime treats the NFT discount as inactive until recharge or remint. Default on-chain recharge cost is currently `0`.
+
+On-chain rewards boundary:
+- `PointStorage` stores per-user epoch totals, producer/consumer permissions, epoch finalization, and proportional `convert_points_to_carel` conversion.
+- `SnapshotDistributor` handles Merkle-root reward claims and mints CAREL with a `5%` total claim fee split (`2.5%` treasury, `2.5%` dev).
+- `ReferralSystem` records referral relationships and credits referral bonus points into `PointStorage`.
+- AI level bonus, hide preview bonus, and epoch multiplier application are runtime/backend rules; the rewards contracts store or consume the derived values.
+
 ## Test Status
 Latest local report snapshot (2026-03-05):
 
@@ -288,6 +309,9 @@ Runtime addresses below follow `backend-rust/.env` (V3 baseline profile):
 | ZK Privacy Router | `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f` |
 | PrivacyIntermediary | `0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab` |
 | Private Action Executor (V3 runtime) | `0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2` |
+| PointStorage | `0x0501e74ab48e605ef81348a087d21c95ea5d43694ee1a60d6ca1e9186be54029` |
+| SnapshotDistributor | `0x04fcc58ba819766fe19b8f7a96ed5bd7b7558e8ad62f495815e825d8e8f822dd` |
+| ReferralSystem | `0x040bfc6214d3204c53898c730285d79d6e7cd2cd987e3ecde048b330ed3a2d06` |
 | DiscountSoulbound | `0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809` |
 | AIExecutor | `0x00d8ada9eb26d133f9f2656ac1618d8cdf9fcefe6c8e292cf9b7ee580b72a690` |
 

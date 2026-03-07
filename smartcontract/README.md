@@ -210,6 +210,45 @@ flowchart LR
 
 `KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2` covers normal bridge/swap/limit/stake execution through `AIExecutor`, `L3` can also use normal execution paths, and `L3 hide` continues through `ShieldedPoolV3`. Direct hide flows can withdraw a note after deposit, but the current AI hide path does not expose note withdrawal.
 
+## Rewards, Points, and Discount NFT
+`PointStorage`, `SnapshotDistributor`, `ReferralSystem`, and `DiscountSoulbound` are the core rewards stack. The important split is that point formulas mostly live in runtime/backend code, while the Starknet contracts store epoch state, consume points, and settle claims.
+
+### PointStorage
+- `PointStorage` is the on-chain epoch ledger. `submit_points` writes the exact balance for `(epoch, user)`, `add_points` and `consume_points` mutate an existing balance, `finalize_epoch` locks the epoch, and `convert_points_to_carel` converts finalized points into a proportional CAREL allocation.
+- Write permissions are explicit: `backend_signer` can write/finalize directly, `authorized_producers` can add points, and `authorized_consumers` can consume points.
+- The privacy hook `submit_private_points_action` does not compute points; it forwards a proof-bound payload to the privacy router.
+
+### Runtime points vs on-chain points
+- The backend runtime keeps separate buckets for `swap_points`, `bridge_points`, `stake_points`, `referral_points`, and `social_points`.
+- Product base rates in runtime are `10` points/USD for swap, `12` for limit order, `15` for ETH bridge, `25` for BTC/WBTC bridge, and `3` for stake before pool multiplier.
+- Stake action multipliers in runtime are `CAREL 2x / 3x / 5x` at `>=100 / >=1,000 / >=10,000`, `WBTC 1.5x`, `USDT` / `USDC` / `STRK 1x`, and LP `5x`.
+- AI level bonus is runtime-only: `L2 +20%`, `L3 +40%`.
+- Swap, limit order, and stake preview paths also apply a hide-only USDT-equivalent tier bonus of `+5% / +10% / +20% / +30% / +50%` at `>=5 / >=10 / >=50 / >=100 / >=250`.
+- After bucket updates, backend recomputes `total_points = (swap + bridge + stake + referral + social) * staking_multiplier * nft_factor`, then syncs the exact epoch total on-chain through `PointStorage.submit_points`.
+
+### DiscountSoulbound
+- `DiscountSoulbound` is a soulbound NFT paid with points from `PointStorage`, not with CAREL.
+- Default constructor tiers are:
+
+| Tier | Name | Cost | Discount | Max usage |
+| --- | --- | --- | --- | --- |
+| `1` | Bronze | `5,000` | `5%` | `5` |
+| `2` | Silver | `15,000` | `10%` | `7` |
+| `3` | Gold | `50,000` | `25%` | `10` |
+| `4` | Platinum | `150,000` | `35%` | `15` |
+| `5` | Onyx | `500,000` | `50%` | `20` |
+
+- `mint_nft` consumes points from the current epoch, `use_discount` / `use_discount_batch` spend usage quota, and `recharge_nft` resets usage. Current default recharge cost is `0` for all tiers.
+- `user_nft` points to the latest NFT for the user. Runtime treats the discount as active only while `used_in_period < max_usage`.
+- The privacy hook `submit_private_nft_action` forwards proof-bound NFT actions to the privacy router.
+
+### SnapshotDistributor and ReferralSystem
+- `SnapshotDistributor` stores one Merkle root per epoch, requires a minimum stake in the configured staking contract before claim, and mints CAREL on successful claims.
+- Claim flow marks the claim first, then mints net reward after a `5%` tax split (`2.5%` treasury, `2.5%` dev).
+- `ReferralSystem` keeps the referrer/referee graph on-chain, accrues referral bonus by epoch, and credits claimed bonus into `PointStorage`.
+- Contract default referral settings are `100` minimum referee points and `10%` bonus rate (`1000` bps). Backend runtime adds another gate before referral sync: referee cumulative transaction volume must already be at least `$20`.
+- `submit_private_snapshot_action` and `submit_private_referral_action` are privacy-router forwarding hooks, not independent reward calculators.
+
 ## OpenZeppelin Usage
 This repo uses OpenZeppelin Cairo components where standard token, ownership, and access-control behavior are needed. The swap, limit-order, and staking business logic are custom Cairo contracts.
 
