@@ -106,26 +106,14 @@ const quickPromptsByTier: Record<number, string[]> = {
     "please limit order CAREL/USDC amount 10 at 1.25 expiry 1d",
     "please limit order USDT/USDC amount 10 at 1.25 expiry 3d",
   ],
-  3: [
-    "please private swap CAREL to USDT with tier $10",
-    "please private swap USDC to STRK with tier $50",
-    "please private swap STRK to WBTC with tier $100",
-    "please private swap WBTC to CAREL with tier $250",
-    "please private stake 10 USDT",
-    "please private stake 100 CAREL",
-    "please private stake 0.0005 WBTC",
-    "please private limit order STRK/USDT amount 10 at 1.25 expiry 1d",
-    "please private limit order STRK/USDC amount 10 at 1.25 expiry 3d",
-    "please private limit order CAREL/USDC amount 10 at 1.25 expiry 1d",
-    "please private limit order USDT/USDC amount 10 at 1.25 expiry 3d",
-  ],
+  3: [],
 }
 const l2BridgeShortcutPrompts = quickPromptsByTier[2].filter((prompt) => /\bbridge\b/i.test(prompt))
 
 const featureListByTier: Record<number, string> = {
   1: "Available now: chat, balance check, points check, token price, and market summary.",
   2: "Available now: swap, bridge, stake, claim rewards, create limit order, and cancel order. Tap one example below to start.",
-  3: "Available now: private swap, private stake, and private limit order. Hide tier ($5/$10/$50/$100/$250) controls private swap amount. Private note deposit uses a 60s cooldown before execution. Bridge stays on Level 2.",
+  3: "Available now: private swap, private stake, and private limit order. Hide tier ($5/$10/$50/$100/$250) controls private note size for swap, stake, and limit. Private note deposit uses a 60s cooldown before execution. Bridge stays on Level 2.",
 }
 
 const levelBadgeClasses: Record<number, string> = {
@@ -1918,7 +1906,21 @@ export function FloatingAIAssistant() {
   const canTogglePromptExamples = selectedTier >= 2
   const shouldShowPromptExamples = selectedTier === 1 || showPromptExamples
   const messages = messagesByTier[selectedTier] || []
-  const quickPrompts = quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
+  const quickPrompts = React.useMemo(() => {
+    if (selectedTier !== 3) {
+      return quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
+    }
+    const activeTier = selectedAiHideTier.minUsdt
+    return [
+      `please private swap CAREL to USDT with tier $${activeTier}`,
+      `please private swap USDC to STRK with tier $${activeTier}`,
+      `please private swap STRK to WBTC with tier $${activeTier}`,
+      `please private stake ${activeTier} USDT`,
+      `please private stake ${activeTier} CAREL`,
+      `please private limit order USDT/USDC amount ${activeTier} at 1.25 expiry 3d`,
+      `please private limit order CAREL/USDC amount ${activeTier} at 1.25 expiry 1d`,
+    ]
+  }, [selectedAiHideTier.minUsdt, selectedTier])
   const featureList = featureListByTier[selectedTier] ?? featureListByTier[1]
   const selectedAiHideTier = React.useMemo(
     () =>
