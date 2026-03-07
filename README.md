@@ -206,29 +206,37 @@ flowchart TD
   B --> C[L1]
   C --> C1[Backend response]
 
-  B --> D[L2/L3 normal]
+  B --> D[L2 normal]
   D --> D1[Auto Setup On-Chain]
   D1 --> D2[AIExecutor submit_action]
   D2 --> D3[Backend execute]
-  D3 --> D4[Normal route]
+  D3 --> D4[Bridge/Swap/Limit/Stake]
 
-  B --> E[L3 hide]
+  B --> E[L3 normal]
   E --> E1[Auto Setup On-Chain]
   E1 --> E2[AIExecutor submit_action]
-  E2 --> E3[User deposit note]
-  E3 --> E4[Mixing window]
-  E4 --> E5[Backend execute]
-  E5 --> E6[Relayer submit]
-  E6 --> E7[ShieldedPoolV3]
-  E7 --> E8[Swap/Limit/Stake]
+  E2 --> E3[Backend execute]
+  E3 --> E4[Swap/Limit/Stake]
+
+  B --> F[L3 hide]
+  F --> F1[Auto Setup On-Chain]
+  F1 --> F2[AIExecutor submit_action]
+  F2 --> F3[User deposit note]
+  F3 --> F4[Mixing window]
+  F4 --> F5[Backend execute]
+  F5 --> F6[Relayer submit]
+  F6 --> F7[ShieldedPoolV3]
+  F7 --> F8[Swap/Limit/Stake]
 ```
 
 AI notes:
 - `L1` is backend-only and does not use an on-chain execution path.
+- `L2` can run normal `bridge`, `swap`, `limit order`, and `stake` execution.
 - `L2` and `L3` use `AIExecutor` setup/action flow before executable commands run.
+- `L3` can run normal `swap`, `limit order`, and `stake` execution.
+- Public `bridge` stays routed through `L2` in the current runtime unless `AI_LEVEL3_BRIDGE_ENABLED=true`.
 - `L3 hide` follows the note + cooldown + relayer path before private execution.
 - The current AI hide path does not expose note withdrawal in the AI UI.
-- AI bridge stays on `Level 2` in the current runtime profile.
 
 ## Bridge Path
 ```mermaid
@@ -240,9 +248,10 @@ flowchart LR
   G --> DST["Destination receive"]
 ```
 
-AI level routing for bridge commands:
-- Bridge commands in AI are executed through **Level 2** in the current MVP/runtime profile.
-- Level 3 is reserved for Garaga/private execution flows (`hide swap`, `hide stake`, `hide limit`) and does not run public Garden bridge by default.
+Current AI bridge behavior:
+- AI bridge uses the same public bridge flow as manual bridge: backend quote/pre-check, user signature, then provider settlement.
+- In the current runtime profile, AI bridge requests are routed through **Level 2**.
+- `Level 3` is the private/hide path for Garaga-backed `swap`, `stake`, and `limit order`, not the default public bridge path.
 - Backend default is `AI_LEVEL3_BRIDGE_ENABLED=false`.
 
 Current testnet bridge pairs:

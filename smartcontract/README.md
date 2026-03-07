@@ -192,20 +192,23 @@ flowchart LR
   B --> C[L1]
   C --> C1[No on-chain path]
 
-  B --> D[L2/L3 setup]
+  B --> D[L2 normal]
   D --> U[User wallet]
   U --> AIEXEC[AIExecutor]
   AIEXEC --> AIVER[AISignatureVerifier]
   AIEXEC --> CAREL[CAREL token]
 
-  B --> E[L3 hide execute]
-  E --> NOTE[User deposit_fixed_v3]
+  B --> E[L3 normal]
+  E --> U
+
+  B --> F[L3 hide execute]
+  F --> NOTE[User deposit_fixed_v3]
   NOTE --> EXEC[ShieldedPoolV3]
   R[Relayer] --> EXEC
   EXEC --> TARGET[Swap/Limit/Stake]
 ```
 
-`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2/L3` use `AIExecutor`, and `L3 hide` continues through `ShieldedPoolV3`. Direct hide flows can withdraw a note after deposit, but the current AI hide path does not expose note withdrawal.
+`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2` covers normal bridge/swap/limit/stake execution through `AIExecutor`, `L3` can also use normal execution paths, and `L3 hide` continues through `ShieldedPoolV3`. Direct hide flows can withdraw a note after deposit, but the current AI hide path does not expose note withdrawal.
 
 ## OpenZeppelin Usage
 This repo uses OpenZeppelin Cairo components where standard token, ownership, and access-control behavior are needed. The swap, limit-order, and staking business logic are custom Cairo contracts.

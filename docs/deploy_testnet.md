@@ -267,6 +267,6 @@ npm run start
 - Normal + hide stake works.
 - Normal + hide limit order works.
 - Bridge quote + execute works.
-- AI bridge (`bridge btc ...` / `bridge eth ...`) runs from Level 2.
-- AI Level 3 bridge is disabled by default (`AI_LEVEL3_BRIDGE_ENABLED=false`).
+- AI bridge (`bridge btc ...` / `bridge eth ...`) runs through the public Level 2 path.
+- `AI_LEVEL3_BRIDGE_ENABLED=false` by default.
 - Explorer links and tx hashes are displayed correctly.

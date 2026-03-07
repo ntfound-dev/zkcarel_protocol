@@ -23,7 +23,7 @@ Hide-mode baseline currently used by runtime:
 - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
 - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
 - Runtime executor: `PRIVATE_ACTION_EXECUTOR_ADDRESS=0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2`
-- AI bridge routing baseline: bridge commands run on AI Level 2; `AI_LEVEL3_BRIDGE_ENABLED=false` by default.
+- AI bridge baseline: bridge commands use the public Level 2 path; `AI_LEVEL3_BRIDGE_ENABLED=false` by default.
 
 ## 3. System Architecture (Runtime)
 ```mermaid
