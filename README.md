@@ -169,7 +169,7 @@ These show the normal-path targets. Hide mode reaches the same target contracts 
 
 - `SwapAggregator` here is CAREL's routing contract, not an external DEX.
 - `Limit Order Book` is the runtime/UI name used in app flows.
-- Staking routes target `StakingCarel`, `StakingStablecoin`, or `StakingBTC`.
+- Staking routes target `StakingCarel`, `StakingStablecoin`, or `StakingBTC` (WBTC pool).
 - Normal mode still earns points and can use an active NFT discount.
 - Hide mode uses `deposit_fixed_v3` first. After deposit, user can still withdraw the note if not proceeding. If continuing, the note waits the mixing window/cooldown, then the relayer executes through `ShieldedPoolV3`. Hide mode still earns points, can use NFT discount, and adds hide-tier bonus points.
 
@@ -214,7 +214,7 @@ flowchart TD
   N1 --> P1{Pool}
   P1 --> S1[StakingCarel]
   P1 --> S2[StakingStablecoin]
-  P1 --> S3[StakingBTC]
+  P1 --> S3[StakingBTC WBTC pool]
 
   B -->|Hide| H1[User deposit note]
   H1 --> HW[Withdraw note]

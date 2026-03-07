@@ -169,7 +169,7 @@ flowchart LR
   B -->|Normal| U[User wallet]
   U --> SCAREL[StakingCarel]
   U --> SSTABLE[StakingStablecoin]
-  U --> SBTC[StakingBTC]
+  U --> SBTC[StakingBTC WBTC pool]
   B -->|Hide| NOTE[User deposit_fixed_v3]
   NOTE --> WD[withdraw_note_v3]
   NOTE --> EXEC[ShieldedPoolV3]
