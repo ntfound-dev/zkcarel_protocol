@@ -8,6 +8,8 @@ This file separates contract catalog inventory (`smartcontract/.env`) from FE/BE
 - [Repository Structure](#repository-structure)
 - [Address Profiles](#address-profiles)
 - [On-Chain Architecture](#on-chain-architecture)
+- [Core Contract Flows](#core-contract-flows)
+- [OpenZeppelin Usage](#openzeppelin-usage)
 - [Runtime Scope (Code-Verified)](#runtime-scope-code-verified)
 - [Contract Catalog](#contract-catalog)
 - [Build and Test](#build-and-test)
@@ -122,6 +124,47 @@ flowchart LR
     SNAP --> CAREL
     BOARD --> POINTS
 ```
+
+## Core Contract Flows
+### Swap
+```mermaid
+flowchart LR
+  U[User] --> SWAP[SwapAggregator]
+  SWAP --> DEX[DEX router]
+  SWAP --> ORACLE[PriceOracle]
+  SWAP --> DEV[Dev fund]
+  SWAP --> FEE[Fee recipient]
+```
+
+### Limit Order
+```mermaid
+flowchart LR
+  U[User] --> LOB[KeeperNetwork]
+  K[Keeper] --> LOB
+  PRIV[PrivacyRouter] -.-> LOB
+```
+
+### Staking
+```mermaid
+flowchart LR
+  U[User] --> SCAREL[StakingCarel]
+  U --> SSTABLE[StakingStablecoin]
+  U --> SBTC[StakingBTC]
+  SCAREL --> CAREL[CAREL token]
+  SCAREL --> RPOOL[Reward pool]
+  SSTABLE --> RTOKEN[Reward token]
+  SBTC --> RTOKEN
+```
+
+All three staking pools also expose private staking hooks through the privacy router.
+
+## OpenZeppelin Usage
+This repo uses OpenZeppelin Cairo components in the contracts that need standard token, ownership, and access-control behavior.
+
+- `src/core/token.cairo`: `ERC20Component`, `AccessControlComponent`, `SRC5Component`
+- `src/point_token.cairo`: `ERC20Component`, `SRC5Component`
+- `src/utils/access_control.cairo` and `src/utils/emergency_pause.cairo`: `AccessControlComponent`, `SRC5Component`
+- Owner-gated modules across core, bridge, privacy, rewards, and AI paths use `OwnableComponent`
 
 ## Runtime Scope (Code-Verified)
 | Module | Status | Evidence |

@@ -13,6 +13,7 @@ This README explains how `frontend/`, `backend-rust/`, and `smartcontract/` work
 - [Public Testnet Deployment](#public-testnet-deployment)
 - [Unified Architecture (FE + BE + SC)](#unified-architecture-fe--be--sc)
 - [Execution Modes](#execution-modes)
+- [Core Action Paths](#core-action-paths)
 - [Bridge Path](#bridge-path)
 - [Test Status](#test-status)
 - [Runtime Addresses (Starknet Sepolia)](#runtime-addresses-starknet-sepolia)
@@ -162,6 +163,37 @@ Execution notes:
 - Active hide-mode scope: swap, stake, limit order.
 - Garaga scope in current MVP: private/hide execution only (`swap`, `stake`, `limit order`), not bridge settlement.
 - Bridge route remains public cross-chain flow (not the hide executor path in current MVP).
+
+## Core Action Paths
+These show the normal-path targets. Hide mode reaches the same target contracts through `ShieldedPoolV3`.
+
+### Swap
+```mermaid
+flowchart LR
+  U[User] --> FE[Frontend]
+  FE --> API[Backend quote]
+  API --> FE
+  FE --> W[Wallet sign]
+  W --> SWAP[SwapAggregator]
+```
+
+### Limit Order
+```mermaid
+flowchart LR
+  U[User] --> FE[Frontend]
+  FE --> API[Backend sync]
+  API --> FE
+  FE --> W[Wallet sign]
+  W --> LOB[LimitOrderBook]
+```
+
+### Staking
+```mermaid
+flowchart LR
+  U[User] --> FE[Frontend]
+  FE --> W[Wallet sign]
+  W --> STAKE[Staking contract]
+```
 
 ## Bridge Path
 ```mermaid
