@@ -183,6 +183,9 @@ Current testnet bridge pairs:
 - `BTC <-> WBTC`
 - `ETH <-> WBTC`
 
+Testnet note:
+- Bridge providers on testnet often run out of liquidity, so route availability can be intermittent.
+
 ## Test Status
 Latest local report snapshot (2026-03-05):
 
@@ -261,3 +264,5 @@ Open: `http://localhost:3000`
   - Increase bridge provider redundancy.
 - Post-hackathon plan:
   - Shadow Bridge (hide-mode BTC native to wBTC) as a dedicated roadmap stream.
+  - Sumo Login integration as a dedicated auth/privacy roadmap stream.
+  - Battleship as a dedicated gameplay/privacy roadmap stream.
