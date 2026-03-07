@@ -129,7 +129,13 @@ flowchart LR
 ### Swap
 ```mermaid
 flowchart LR
-  U[User] --> SWAP[SwapAggregator]
+  A[Swap action] --> N[Normal]
+  N --> U[User wallet]
+  U --> SWAP[SwapAggregator]
+  A --> H[Hide]
+  H --> R[Relayer]
+  R --> EXEC[ShieldedPoolV3]
+  EXEC --> SWAP
   SWAP --> DEX[DEX router]
   SWAP --> ORACLE[PriceOracle]
   SWAP --> DEV[Dev fund]
@@ -139,7 +145,13 @@ flowchart LR
 ### Limit Order
 ```mermaid
 flowchart LR
-  U[User] --> LOB[KeeperNetwork]
+  A[Limit action] --> N[Normal]
+  N --> U[User wallet]
+  U --> LOB[KeeperNetwork]
+  A --> H[Hide]
+  H --> R[Relayer]
+  R --> EXEC[ShieldedPoolV3]
+  EXEC --> LOB
   K[Keeper] --> LOB
   PRIV[PrivacyRouter] -.-> LOB
 ```
@@ -147,9 +159,17 @@ flowchart LR
 ### Staking
 ```mermaid
 flowchart LR
-  U[User] --> SCAREL[StakingCarel]
+  A[Stake action] --> N[Normal]
+  N --> U[User wallet]
+  U --> SCAREL[StakingCarel]
   U --> SSTABLE[StakingStablecoin]
   U --> SBTC[StakingBTC]
+  A --> H[Hide]
+  H --> R[Relayer]
+  R --> EXEC[ShieldedPoolV3]
+  EXEC --> SCAREL
+  EXEC --> SSTABLE
+  EXEC --> SBTC
   SCAREL --> CAREL[CAREL token]
   SCAREL --> RPOOL[Reward pool]
   SSTABLE --> RTOKEN[Reward token]

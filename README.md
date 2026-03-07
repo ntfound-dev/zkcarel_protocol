@@ -166,32 +166,48 @@ Execution notes:
 
 ## Core Action Paths
 These show the normal-path targets. Hide mode reaches the same target contracts through `ShieldedPoolV3`.
-Swap uses backend quote data in the current frontend. Limit order and staking are direct wallet calls.
 
 ### Swap
 ```mermaid
-flowchart LR
-  U[User] --> FE[Frontend]
-  FE --> API[Backend quote]
-  API --> FE
-  FE --> W[Wallet sign]
-  W --> SWAP[SwapAggregator]
+flowchart TD
+  A[Swap action] --> N1[Normal]
+  N1 --> N2[BE quote]
+  N2 --> N3[Wallet sign]
+  N3 --> SWAP[SwapAggregator]
+
+  A --> H1[Hide]
+  H1 --> H2[BE prep payload]
+  H2 --> H3[Relayer submit]
+  H3 --> H4[ShieldedPoolV3]
+  H4 --> SWAP
 ```
 
 ### Limit Order
 ```mermaid
-flowchart LR
-  U[User] --> FE[Frontend]
-  FE --> W[Wallet sign]
-  W --> LOB[KeeperNetwork / LimitOrderBook]
+flowchart TD
+  A[Limit action] --> N1[Normal]
+  N1 --> N2[Wallet sign]
+  N2 --> LOB[KeeperNetwork / LimitOrderBook]
+
+  A --> H1[Hide]
+  H1 --> H2[BE prep payload]
+  H2 --> H3[Relayer submit]
+  H3 --> H4[ShieldedPoolV3]
+  H4 --> LOB
 ```
 
 ### Staking
 ```mermaid
-flowchart LR
-  U[User] --> FE[Frontend]
-  FE --> W[Wallet sign]
-  W --> STAKE[StakingCarel / Stablecoin / BTC]
+flowchart TD
+  A[Stake action] --> N1[Normal]
+  N1 --> N2[Wallet sign]
+  N2 --> STAKE[StakingCarel / Stablecoin / BTC]
+
+  A --> H1[Hide]
+  H1 --> H2[BE prep payload]
+  H2 --> H3[Relayer submit]
+  H3 --> H4[ShieldedPoolV3]
+  H4 --> STAKE
 ```
 
 ## Bridge Path
