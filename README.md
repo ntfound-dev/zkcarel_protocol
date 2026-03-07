@@ -86,6 +86,7 @@ flowchart LR
     API["REST + WS API"]
     REL["Hide Relayer"]
     WRK["Workers: Indexer/Points/Orders/Price"]
+    PROVER["Garaga Prover Tooling (off-chain)"]
   end
 
   subgraph SC["Smart Contract Layer (Starknet)"]
@@ -99,11 +100,10 @@ flowchart LR
     AI["AIExecutor"]
   end
 
-  subgraph EXT["External Providers"]
+  subgraph EXT["External Networks and Providers"]
     ETH["Ethereum Sepolia"]
     BTC["Bitcoin Testnet4"]
     GARDEN["Garden Finance"]
-    GARAGA["Garaga Prover"]
   end
 
   U --> UI
@@ -114,7 +114,7 @@ flowchart LR
   UI <--> API
   API --> WRK
   API --> REL
-  API -->|"Private payload/proof only (no bridge)"| GARAGA
+  API -->|"Private payload/proof only (no bridge)"| PROVER
   API --> GARDEN
 
   UI --> SWAP
