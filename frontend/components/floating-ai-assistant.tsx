@@ -1978,11 +1978,17 @@ export function FloatingAIAssistant() {
   const canTogglePromptExamples = selectedTier >= 2
   const shouldShowPromptExamples = selectedTier === 1 || showPromptExamples
   const messages = messagesByTier[selectedTier] || []
+  const selectedAiHideTier = React.useMemo(
+    () =>
+      AI_HIDE_USDT_TIER_OPTIONS.find((option) => option.minUsdt === aiHideUsdtTierMin) ||
+      AI_HIDE_USDT_TIER_OPTIONS[0],
+    [aiHideUsdtTierMin]
+  )
   const quickPrompts = React.useMemo(() => {
     if (selectedTier !== 3) {
       return quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
     }
-    const activeTier = selectedAiHideTier.minUsdt
+    const activeTier = aiHideUsdtTierMin
     return [
       `please private swap CAREL to USDT with tier $${activeTier}`,
       `please private swap USDC to STRK with tier $${activeTier}`,
@@ -1992,14 +1998,8 @@ export function FloatingAIAssistant() {
       `please private limit order USDT/USDC amount ${activeTier} at 1.25 expiry 3d`,
       `please private limit order CAREL/USDC amount ${activeTier} at 1.25 expiry 1d`,
     ]
-  }, [selectedAiHideTier.minUsdt, selectedTier])
+  }, [aiHideUsdtTierMin, selectedTier])
   const featureList = featureListByTier[selectedTier] ?? featureListByTier[1]
-  const selectedAiHideTier = React.useMemo(
-    () =>
-      AI_HIDE_USDT_TIER_OPTIONS.find((option) => option.minUsdt === aiHideUsdtTierMin) ||
-      AI_HIDE_USDT_TIER_OPTIONS[0],
-    [aiHideUsdtTierMin]
-  )
   React.useEffect(() => {
     if (selectedTier !== 3) return
     const inferredHideTier = inferHideTierFromPrivateCommand(normalizedInput)
@@ -3034,7 +3034,7 @@ export function FloatingAIAssistant() {
 
   const isHideNoteRegistrationMissingMessage = React.useCallback((message: string): boolean => {
     const lower = (message || "").toLowerCase()
-    return /note belum terdaftar|note not registered|nullifier note missing|unknown root|note missing/.test(
+    return /note belum terdaftar|note not registered|note is not registered yet|nullifier note missing|unknown root|note missing/.test(
       lower
     )
   }, [])
@@ -3855,14 +3855,15 @@ export function FloatingAIAssistant() {
             const mode = tierUsesGaraga ? "private" : "transparent"
             const slippage = 1
               let swapAmountText = baseAmountText
-              if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
-                swapAmountText = await resolveAiHideTierAmountText({
-                  fromToken,
-                  fallbackAmountText: baseAmountText,
-                  providerHint,
-                  requireOnchainRule: true,
-                })
-              }
+	              if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+	                swapAmountText = await resolveAiHideTierAmountText({
+	                  fromToken,
+	                  fallbackAmountText: baseAmountText,
+	                  providerHint,
+	                  requireOnchainRule: true,
+	                  tierUsdtOverride: effectiveHideTierUsdt,
+	                })
+	              }
             notifications.addNotification({
               type: "info",
               title: "Preparing swap",
@@ -3917,11 +3918,11 @@ export function FloatingAIAssistant() {
                 toToken,
                 swapAmountText,
                 HIDE_BALANCE_SHIELDED_POOL_V3
-                  ? { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                  ? { denomId: String(effectiveHideTierUsdt), noteVersion: "v3" }
                   : undefined
               )
               if (HIDE_BALANCE_SHIELDED_POOL_V3 && !(privacyPayload.denom_id || "").trim()) {
-                privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                privacyPayload.denom_id = String(effectiveHideTierUsdt)
               }
               const deadline = Math.floor(Date.now() / 1000) + 60 * 20
               const submitV3HideSwap = async (payloadToSubmit: PrivacyVerificationPayload) => {
@@ -4073,14 +4074,14 @@ export function FloatingAIAssistant() {
                     toToken,
                     swapAmountText,
                     {
-                      denomId: String(selectedAiHideTier.minUsdt),
+                      denomId: String(effectiveHideTierUsdt),
                       noteVersion: "v3",
                       noteCommitment: pinnedNoteCommitment || undefined,
                       nullifier: pinnedNullifier || undefined,
                     }
                   )
                   if (!(privacyPayload.denom_id || "").trim()) {
-                    privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                    privacyPayload.denom_id = String(effectiveHideTierUsdt)
                   }
                   const noteRetryBackoffMs = [8000, 12000, 15000, 20000, 25000, 30000]
                   for (let retryIndex = 0; ; retryIndex += 1) {
@@ -4145,14 +4146,14 @@ export function FloatingAIAssistant() {
                         toToken,
                         swapAmountText,
                         {
-                          denomId: String(selectedAiHideTier.minUsdt),
+                          denomId: String(effectiveHideTierUsdt),
                           noteVersion: "v3",
                           noteCommitment: pinnedNoteCommitment || undefined,
                           nullifier: pinnedNullifier || undefined,
                         }
                       )
                       if (!(privacyPayload.denom_id || "").trim()) {
-                        privacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                        privacyPayload.denom_id = String(effectiveHideTierUsdt)
                       }
                     }
                   }
@@ -4745,25 +4746,26 @@ export function FloatingAIAssistant() {
                 "Hide relayer pool is not enabled. Set NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_ENABLED=true and restart frontend/backend."
               )
             }
-            if (HIDE_BALANCE_SHIELDED_POOL_V3) {
-              stakeAmountText = await resolveAiHideTierAmountText({
-                fromToken: token,
-                fallbackAmountText: amountText,
-                providerHint,
-                requireOnchainRule: true,
-              })
-            }
+	            if (HIDE_BALANCE_SHIELDED_POOL_V3) {
+	              stakeAmountText = await resolveAiHideTierAmountText({
+	                fromToken: token,
+	                fallbackAmountText: amountText,
+	                providerHint,
+	                requireOnchainRule: true,
+	                tierUsdtOverride: effectiveHideTierUsdt,
+	              })
+	            }
             stakePrivacyPayload = await requestGaragaPayload(
               "stake",
               token,
               token,
               stakeAmountText,
               HIDE_BALANCE_SHIELDED_POOL_V3
-                ? { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                ? { denomId: String(effectiveHideTierUsdt), noteVersion: "v3" }
                 : undefined
             )
             if (HIDE_BALANCE_SHIELDED_POOL_V3 && !(stakePrivacyPayload.denom_id || "").trim()) {
-              stakePrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+              stakePrivacyPayload.denom_id = String(effectiveHideTierUsdt)
             }
             const submitPrivateStake = async (privacyPayload: PrivacyVerificationPayload) =>
               stakeDeposit({
@@ -4851,14 +4853,14 @@ export function FloatingAIAssistant() {
                   token,
                   stakeAmountText,
                   {
-                    denomId: String(selectedAiHideTier.minUsdt),
+                    denomId: String(effectiveHideTierUsdt),
                     noteVersion: "v3",
                     noteCommitment: pinnedNoteCommitment || undefined,
                     nullifier: pinnedNullifier || undefined,
                   }
                 )
                 if (!(stakePrivacyPayload.denom_id || "").trim()) {
-                  stakePrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                  stakePrivacyPayload.denom_id = String(effectiveHideTierUsdt)
                 }
                 const noteRetryBackoffMs = [8000, 12000, 15000, 20000, 25000, 30000]
                 for (let retryIndex = 0; ; retryIndex += 1) {
@@ -4895,14 +4897,14 @@ export function FloatingAIAssistant() {
                       token,
                       stakeAmountText,
                       {
-                        denomId: String(selectedAiHideTier.minUsdt),
+                        denomId: String(effectiveHideTierUsdt),
                         noteVersion: "v3",
                         noteCommitment: pinnedNoteCommitment || undefined,
                         nullifier: pinnedNullifier || undefined,
                       }
                     )
                     if (!(stakePrivacyPayload.denom_id || "").trim()) {
-                      stakePrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                      stakePrivacyPayload.denom_id = String(effectiveHideTierUsdt)
                     }
                   }
                 }
@@ -5137,25 +5139,26 @@ export function FloatingAIAssistant() {
                 "Hide limit-order relayer is disabled. Enable NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true (frontend) and HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true (backend), then retry."
               )
             }
-            if (HIDE_BALANCE_SHIELDED_POOL_V3) {
-              orderAmountText = await resolveAiHideTierAmountText({
-                fromToken,
-                fallbackAmountText: amountText,
-                providerHint,
-                requireOnchainRule: true,
-              })
-            }
+	            if (HIDE_BALANCE_SHIELDED_POOL_V3) {
+	              orderAmountText = await resolveAiHideTierAmountText({
+	                fromToken,
+	                fallbackAmountText: amountText,
+	                providerHint,
+	                requireOnchainRule: true,
+	                tierUsdtOverride: effectiveHideTierUsdt,
+	              })
+	            }
             limitPrivacyPayload = await requestGaragaPayload(
               "limit_order",
               fromToken,
               toToken,
               orderAmountText,
               HIDE_BALANCE_SHIELDED_POOL_V3
-                ? { denomId: String(selectedAiHideTier.minUsdt), noteVersion: "v3" }
+                ? { denomId: String(effectiveHideTierUsdt), noteVersion: "v3" }
                 : undefined
             )
             if (HIDE_BALANCE_SHIELDED_POOL_V3 && !(limitPrivacyPayload.denom_id || "").trim()) {
-              limitPrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+              limitPrivacyPayload.denom_id = String(effectiveHideTierUsdt)
             }
             const submitPrivateLimitOrder = async (privacyPayload: PrivacyVerificationPayload) =>
               createLimitOrder({
@@ -5248,14 +5251,14 @@ export function FloatingAIAssistant() {
                   toToken,
                   orderAmountText,
                   {
-                    denomId: String(selectedAiHideTier.minUsdt),
+                    denomId: String(effectiveHideTierUsdt),
                     noteVersion: "v3",
                     noteCommitment: pinnedNoteCommitment || undefined,
                     nullifier: pinnedNullifier || undefined,
                   }
                 )
                 if (!(limitPrivacyPayload.denom_id || "").trim()) {
-                  limitPrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                  limitPrivacyPayload.denom_id = String(effectiveHideTierUsdt)
                 }
                 const noteRetryBackoffMs = [8000, 12000, 15000, 20000, 25000, 30000]
                 for (let retryIndex = 0; ; retryIndex += 1) {
@@ -5292,14 +5295,14 @@ export function FloatingAIAssistant() {
                       toToken,
                       orderAmountText,
                       {
-                        denomId: String(selectedAiHideTier.minUsdt),
+                        denomId: String(effectiveHideTierUsdt),
                         noteVersion: "v3",
                         noteCommitment: pinnedNoteCommitment || undefined,
                         nullifier: pinnedNullifier || undefined,
                       }
                     )
                     if (!(limitPrivacyPayload.denom_id || "").trim()) {
-                      limitPrivacyPayload.denom_id = String(selectedAiHideTier.minUsdt)
+                      limitPrivacyPayload.denom_id = String(effectiveHideTierUsdt)
                     }
                   }
                 }
