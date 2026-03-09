@@ -2877,7 +2877,7 @@ export function FloatingAIAssistant() {
             executorAddress,
             tokenAddress,
             denomId,
-            providerHint
+            "starknet"
           )
           // If rule can be read from wallet provider:
           // - `>0` means rule exists and we can use exact fixed amount.
@@ -2904,7 +2904,17 @@ export function FloatingAIAssistant() {
               `Hide Balance V3 asset rule is not set for ${tokenSymbol} tier $${tierUsdt}. Ask admin to set_asset_rule for this token+tier before retrying.`
             )
           }
+          if (requireOnchainRule) {
+            throw new Error(
+              `Failed to read exact Hide Balance V3 fixed amount for ${tokenSymbol} tier $${tierUsdt}. Retry after Starknet RPC is healthy.`
+            )
+          }
           // Provider-side read failed (RPC/wallet variant), fall through to deterministic fallback.
+        }
+        if (requireOnchainRule) {
+          throw new Error(
+            `Failed to read exact Hide Balance V3 fixed amount for ${tokenSymbol} tier $${tierUsdt}. Retry after Starknet RPC is healthy.`
+          )
         }
       }
 
@@ -3000,10 +3010,15 @@ export function FloatingAIAssistant() {
         }
       }
 
+      const approvalBufferBps = BigInt(100) // 1%
+      const approvalAmount =
+        (requiredAmount * (BigInt(10_000) + approvalBufferBps) + BigInt(9_999)) / BigInt(10_000)
+      const approvalAmountLow = toHexFelt(approvalAmount & ((BigInt(1) << BigInt(128)) - BigInt(1)))
+      const approvalAmountHigh = toHexFelt(approvalAmount >> BigInt(128))
       const approvalCall: StarknetInvokeCall = {
         contractAddress: tokenAddress,
         entrypoint: "approve",
-        calldata: [executorAddress, amountLow, amountHigh],
+        calldata: [executorAddress, approvalAmountLow, approvalAmountHigh],
       }
       const depositCall: StarknetInvokeCall = {
         contractAddress: executorAddress,
