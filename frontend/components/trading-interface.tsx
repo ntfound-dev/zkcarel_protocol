@@ -6735,7 +6735,7 @@ export function TradingInterface() {
           </div>
         )}
 
-        {hasTrackedActiveHideV3Note && (
+        {hasTrackedActiveHideV3Note && hideMixingWindowBlocked && (
           <div className="mt-4 p-3 rounded-xl border border-primary/30 bg-primary/10 space-y-2">
             <p className="text-sm font-medium text-foreground">🔒 Your note is mixing...</p>
             <p className="text-xs text-muted-foreground">
@@ -6768,7 +6768,7 @@ export function TradingInterface() {
         )}
 
         {/* Execute Button */}
-        {!hasTrackedActiveHideV3Note && (
+        {(!hasTrackedActiveHideV3Note || !hideMixingWindowBlocked) && (
           <>
             <Button 
               onClick={handleExecuteTrade}
@@ -6795,7 +6795,7 @@ export function TradingInterface() {
         </p>
       </div>
 
-      {!hasTrackedActiveHideV3Note && (
+      {(!hasTrackedActiveHideV3Note || !hideMixingWindowBlocked) && (
       <div className="fixed md:hidden inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto w-full max-w-xl px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
           <div className="mb-2 grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
