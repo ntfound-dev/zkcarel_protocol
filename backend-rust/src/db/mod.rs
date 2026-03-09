@@ -934,7 +934,8 @@ impl Database {
 
         sqlx::query(
             "UPDATE points
-             SET total_points = total_points - $3
+             SET spent_points = COALESCE(spent_points, 0) + $3,
+                 total_points = GREATEST(0, total_points - $3)
              WHERE user_address = $1 AND epoch = $2",
         )
         .bind(address)

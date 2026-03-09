@@ -524,7 +524,7 @@ impl PointCalculator {
             "UPDATE points 
              SET staking_multiplier = $1,
                  nft_boost = $2,
-                 total_points = (swap_points + bridge_points + stake_points + referral_points + social_points) * $1 * $3
+                 total_points = GREATEST(0, ((swap_points + bridge_points + stake_points + referral_points + social_points) * $1 * $3) - COALESCE(spent_points, 0))
              WHERE user_address = $4 AND epoch = $5"
         )
         .bind(rust_decimal::Decimal::from_f64_retain(multiplier).unwrap())

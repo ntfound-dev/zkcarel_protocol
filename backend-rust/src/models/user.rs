@@ -37,6 +37,7 @@ pub struct UserPoints {
     pub stake_points: Decimal,
     pub referral_points: Decimal,
     pub social_points: Decimal,
+    pub spent_points: Decimal,
     pub total_points: Decimal,
     pub staking_multiplier: Decimal,
     pub nft_boost: bool,

@@ -114,13 +114,7 @@ impl SocialVerifier {
             VALUES ($1, $2, $3, $3)
             ON CONFLICT (user_address, epoch) DO UPDATE
             SET social_points = points.social_points + EXCLUDED.social_points,
-                total_points =
-                    (points.swap_points
-                    + points.bridge_points
-                    + points.stake_points
-                    + points.referral_points
-                    + points.social_points
-                    + EXCLUDED.social_points) * points.staking_multiplier,
+                total_points = points.total_points + (EXCLUDED.social_points * points.staking_multiplier),
                 updated_at = NOW()
             "#,
         )
