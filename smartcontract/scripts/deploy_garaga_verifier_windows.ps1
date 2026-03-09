@@ -131,7 +131,7 @@ function Invoke-Sncast {
 }
 
 $smartcontractDir = Join-Path $RepoRoot "smartcontract"
-$regenDir = Join-Path $smartcontractDir "garaga_real_bls_regen"
+$regenDir = Join-Path $smartcontractDir "garaga_real_bls_regen_v3"
 $envPath = Join-Path $smartcontractDir ".env"
 
 Load-EnvFile -Path $envPath
