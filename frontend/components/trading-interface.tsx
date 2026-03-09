@@ -5504,7 +5504,7 @@ export function TradingInterface() {
                   const waitMs =
                     retryDelaysMs[Math.min(retryAttempt - 1, retryDelaysMs.length - 1)] || 15_000
                   throw new Error(
-                    `HIDE_NOTE_INDEXER_WAIT::${waitMs}::Hide note belum terbaca penuh di indexer. Retry ${retryAttempt}/${maxRetries} in ${formatRemainingDuration(
+                    `HIDE_NOTE_INDEXER_WAIT::${waitMs}::Hide note belum dikenali penuh oleh executor aktif. Retry ${retryAttempt}/${maxRetries} in ${formatRemainingDuration(
                       waitMs
                     )}.`
                   )
@@ -5717,10 +5717,10 @@ export function TradingInterface() {
         const [, , indexedMessage] = rawErrorMessage.split("::", 3)
         notifications.addNotification({
           type: "info",
-          title: "Indexer syncing",
+          title: "Executor syncing",
           message:
             indexedMessage?.trim() ||
-            "Hide note belum terbaca penuh di indexer. Retry private swap in a few seconds.",
+            "Hide note belum dikenali penuh oleh executor aktif. Retry private swap in a few seconds.",
         })
         setSwapState("idle")
         return
