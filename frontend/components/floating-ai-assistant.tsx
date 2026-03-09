@@ -11,6 +11,7 @@ import {
   executeAiCommand,
   executeBridge,
   executeSwap,
+  fetchPrivacyFixedAmount,
   getAiPendingActions,
   prepareAiAction,
   getAiRuntimeConfig,
@@ -2872,13 +2873,34 @@ export function FloatingAIAssistant() {
       const executorAddress = PRIVATE_ACTION_EXECUTOR_ADDRESS
 
       if (tokenAddress && executorAddress && HIDE_BALANCE_SHIELDED_POOL_V3) {
+        let fixedAmount: bigint | null = null
+        let readFailure = ""
         try {
-          const fixedAmount = await readStarknetShieldedPoolV3FixedAmountFromWallet(
-            executorAddress,
-            tokenAddress,
-            denomId,
-            "starknet"
-          )
+          const exactAmount = await fetchPrivacyFixedAmount({
+            executor_address: executorAddress,
+            token: tokenAddress,
+            denom_id: denomId,
+          })
+          fixedAmount =
+            BigInt(exactAmount.amount_low || "0") + (BigInt(exactAmount.amount_high || "0") << BigInt(128))
+        } catch (error) {
+          readFailure = error instanceof Error ? error.message : String(error ?? "")
+        }
+        if (fixedAmount === null) {
+          try {
+            fixedAmount = await readStarknetShieldedPoolV3FixedAmountFromWallet(
+              executorAddress,
+              tokenAddress,
+              denomId,
+              providerHint
+            )
+          } catch (error) {
+            if (!readFailure) {
+              readFailure = error instanceof Error ? error.message : String(error ?? "")
+            }
+          }
+        }
+        try {
           // If rule can be read from wallet provider:
           // - `>0` means rule exists and we can use exact fixed amount.
           // - `==0` means rule truly missing.
@@ -2906,14 +2928,14 @@ export function FloatingAIAssistant() {
           }
           if (requireOnchainRule) {
             throw new Error(
-              `Failed to read exact Hide Balance V3 fixed amount for ${tokenSymbol} tier $${tierUsdt}. Retry after Starknet RPC is healthy.`
+              `Failed to read exact Hide Balance V3 fixed amount for ${tokenSymbol} tier $${tierUsdt}.${readFailure ? ` ${readFailure}` : ""}`
             )
           }
           // Provider-side read failed (RPC/wallet variant), fall through to deterministic fallback.
         }
         if (requireOnchainRule) {
           throw new Error(
-            `Failed to read exact Hide Balance V3 fixed amount for ${tokenSymbol} tier $${tierUsdt}. Retry after Starknet RPC is healthy.`
+            `Failed to read exact Hide Balance V3 fixed amount for ${tokenSymbol} tier $${tierUsdt}.${readFailure ? ` ${readFailure}` : ""}`
           )
         }
       }

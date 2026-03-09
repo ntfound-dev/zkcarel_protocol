@@ -2618,6 +2618,20 @@ export async function preparePrivateExit(payload: {
   )
 }
 
+export async function fetchPrivacyFixedAmount(payload: {
+  executor_address?: string
+  token: string
+  denom_id: string
+}) {
+  return apiFetch<{ amount_low: string; amount_high: string }>("/api/v1/privacy/fixed-amount", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    context: "Fetch privacy fixed amount",
+    suppressErrorNotification: true,
+    timeoutMs: 30000,
+  })
+}
+
 export async function relayPrivateExecution(payload: PrivacyRelayerExecutePayload) {
   return apiFetch<PrivacyRelayerExecuteResponse>("/api/v1/privacy/relayer-execute", {
     method: "POST",

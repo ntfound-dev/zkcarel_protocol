@@ -509,6 +509,10 @@ fn build_router(state: api::AppState) -> Router {
             post(api::privacy::prepare_private_exit),
         )
         .route(
+            "/api/v1/privacy/fixed-amount",
+            post(api::privacy::get_private_fixed_amount),
+        )
+        .route(
             "/api/v1/privacy/relayer-execute",
             post(api::privacy::relay_private_execution),
         )

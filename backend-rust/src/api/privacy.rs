@@ -170,6 +170,19 @@ pub struct PreparePrivateExitResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PrivacyFixedAmountRequest {
+    pub executor_address: Option<String>,
+    pub token: String,
+    pub denom_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrivacyFixedAmountResponse {
+    pub amount_low: String,
+    pub amount_high: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RelayerPrivateExecutionRequest {
     pub user: String,
     pub token: String,
@@ -539,6 +552,41 @@ pub async fn prepare_private_exit(
         payload,
         exit_hash,
         onchain_calls: vec![call],
+    })))
+}
+
+pub async fn get_private_fixed_amount(
+    State(state): State<AppState>,
+    Json(req): Json<PrivacyFixedAmountRequest>,
+) -> Result<Json<ApiResponse<PrivacyFixedAmountResponse>>> {
+    let executor_address = req
+        .executor_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or(resolve_private_action_executor_address(&state.config)?);
+    let reader = crate::services::onchain::OnchainReader::from_config(&state.config)?;
+    let contract_address = parse_felt(&executor_address)?;
+    let token_felt = parse_felt(req.token.trim())?;
+    let denom_felt = parse_felt(req.denom_id.trim())?;
+    let selector = get_selector_from_name("fixed_amount")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let out = reader
+        .call(FunctionCall {
+            contract_address,
+            entry_point_selector: selector,
+            calldata: vec![token_felt, denom_felt],
+        })
+        .await?;
+    let amount_low = out
+        .first()
+        .copied()
+        .ok_or_else(|| AppError::BadRequest("ShieldedPoolV3 fixed_amount returned empty response".to_string()))?;
+    let amount_high = out.get(1).copied().unwrap_or(Felt::ZERO);
+    Ok(Json(ApiResponse::success(PrivacyFixedAmountResponse {
+        amount_low: amount_low.to_string(),
+        amount_high: amount_high.to_string(),
     })))
 }
 
