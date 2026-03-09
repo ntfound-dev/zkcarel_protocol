@@ -3,6 +3,7 @@ This is the internal repo security checklist. It tracks the current contract sec
 
 ## Table of Contents
 - [Project Status](#project-status)
+- [ShieldedPoolV3 Remediation](#shieldedpoolv3-remediation)
 - [Access Control](#access-control)
 - [Input Validation](#input-validation)
 - [Arithmetic Safety](#arithmetic-safety)
@@ -32,6 +33,26 @@ Gas snapshot (current vs target):
 | AI rate-limit path | ~4.9-5.1M gas | 1.5M gas | Above target |
 | TWAP calculation | ~3.4M gas | 100-200K gas | Above target |
 | TWAP deviation check | ~3.7M gas | 100-200K gas | Above target |
+
+## ShieldedPoolV3 Remediation
+Current hide-mode runtime uses `ShieldedPoolV3` as the active baseline. Internal review found and remediated multiple privacy and fund-safety issues from the earlier design.
+
+Closed or mitigated:
+- [x] Deposit path no longer exposes `nullifier` in calldata or deposit event.
+- [x] Unlimited approval drain path replaced with exact approval flow.
+- [x] Zero-hash / short-proof bypass is rejected.
+- [x] Action hash and exit hash are domain-separated by deployment context.
+- [x] Submit, execute, and exit paths have reentrancy protection.
+- [x] Cancel/retry path no longer leaves users with permanently stuck pending actions.
+- [x] Cross-user replay after cancel is blocked by submitter binding.
+- [x] Same-token payout accounting handles approve-then-pull targets safely.
+- [x] Direct public withdrawal is disabled; user redemption path is `private_exit_v3`.
+- [x] AI `L3` runtime is aligned to private swap/stake/limit only; bridge stays on `L2`.
+
+Explicit production hardening still required:
+- [ ] Circuit audit for `private_exit_v3` binding of `token` and `amount`.
+- [ ] Governance hardening: `admin` should be multisig/governance, not a single EOA.
+- [ ] Mixing-window policy is still primarily runtime/UX-enforced, not fully on-chain.
 
 ## Access Control
 - [x] Owner/admin checks exist for critical parameter updates.
