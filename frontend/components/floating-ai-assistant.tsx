@@ -1319,11 +1319,34 @@ function parseStakeTokenAmountFromCommand(
   const direct = normalized.match(
     /\b(?:(?:hide|private)\s+)?stake\b\s+([0-9]+(?:\.[0-9]+)?)\s+([a-z0-9]{2,12})\b/i
   )
-  if (!direct) return null
-  const amountText = (direct[1] || "").trim()
-  const token = resolveStakeTokenSymbol((direct[2] || "").trim())
-  if (!amountText || !token) return null
-  return { token, amountText }
+  if (direct) {
+    const amountText = (direct[1] || "").trim()
+    const token = resolveStakeTokenSymbol((direct[2] || "").trim())
+    if (!amountText || !token) return null
+    return { token, amountText }
+  }
+
+  const tierSyntax = normalized.match(
+    /\b(?:(?:hide|private)\s+)?stake\b\s+([0-9]+(?:\.[0-9]+)?)\s+(?:hide\s+)?tier\s+\$?\s*([a-z0-9]{2,12})\b/i
+  )
+  if (tierSyntax) {
+    const amountText = (tierSyntax[1] || "").trim()
+    const token = resolveStakeTokenSymbol((tierSyntax[2] || "").trim())
+    if (!amountText || !token) return null
+    return { token, amountText }
+  }
+
+  const tierSyntaxTrailing = normalized.match(
+    /\b(?:(?:hide|private)\s+)?stake\b\s+([a-z0-9]{2,12})\s+(?:with\s+)?(?:hide\s+)?tier\s+\$?\s*([0-9]+(?:\.[0-9]+)?)\b/i
+  )
+  if (tierSyntaxTrailing) {
+    const token = resolveStakeTokenSymbol((tierSyntaxTrailing[1] || "").trim())
+    const amountText = (tierSyntaxTrailing[2] || "").trim()
+    if (!amountText || !token) return null
+    return { token, amountText }
+  }
+
+  return null
 }
 
 // Internal helper that parses staking-related token hints from stake/unstake/claim commands.
@@ -2069,10 +2092,14 @@ export function FloatingAIAssistant() {
       `please private swap CAREL to USDT with tier $${activeTier}`,
       `please private swap USDC to STRK with tier $${activeTier}`,
       `please private swap STRK to WBTC with tier $${activeTier}`,
-      `please private stake ${activeTier} USDT`,
-      `please private stake ${activeTier} CAREL`,
+      `please private stake ${activeTier} tier USDT`,
+      `please private stake ${activeTier} tier USDC`,
+      `please private stake ${activeTier} tier CAREL`,
+      `please private stake ${activeTier} tier WBTC`,
       `please private limit order USDT/USDC amount ${activeTier} at 1.25 expiry 3d`,
       `please private limit order CAREL/USDC amount ${activeTier} at 1.25 expiry 1d`,
+      `please private limit order USDC/STRK amount ${activeTier} at 0.85 expiry 3d`,
+      `please private limit order WBTC/USDC amount ${activeTier} at 68000 expiry 1d`,
     ]
   }, [aiHideUsdtTierMin, selectedTier])
   const featureList = featureListByTier[selectedTier] ?? featureListByTier[1]
