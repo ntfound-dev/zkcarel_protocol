@@ -233,9 +233,11 @@ export function Leaderboard() {
   }, [activeTab, isYouAddress])
 
   const currentData = entries
-  const yourEntry = currentData.find(e => e.isYou)
-  const aheadOf = currentData.find(e => e.rank === (yourEntry?.rank || 0) + 1)
-  const behindOf = currentData.find(e => e.rank === (yourEntry?.rank || 0) - 1)
+  const yourEntryIndex = currentData.findIndex((entry) => entry.isYou)
+  const yourEntry = yourEntryIndex >= 0 ? currentData[yourEntryIndex] : undefined
+  const previousEntry = yourEntryIndex > 0 ? currentData[yourEntryIndex - 1] : undefined
+  const nextEntry =
+    yourEntryIndex >= 0 && yourEntryIndex < currentData.length - 1 ? currentData[yourEntryIndex + 1] : undefined
 
   return (
     <section id="leaderboard" className="py-12">
@@ -303,15 +305,19 @@ export function Leaderboard() {
                 </p>
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Points behind #{(yourEntry.rank - 1) || 1}</p>
+                <p className="text-sm text-muted-foreground">
+                  {previousEntry ? `Points behind #${previousEntry.rank}` : "Points behind leader"}
+                </p>
                 <p className="text-xl font-bold text-foreground">
-                  {behindOf ? (behindOf.points - yourEntry.points).toLocaleString() : "—"}
+                  {previousEntry ? (previousEntry.points - yourEntry.points).toLocaleString() : "—"}
                 </p>
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Points ahead of #{yourEntry.rank + 1}</p>
+                <p className="text-sm text-muted-foreground">
+                  {nextEntry ? `Points ahead of #${nextEntry.rank}` : yourEntry.rank === 1 ? "You're leading" : "Points ahead of next"}
+                </p>
                 <p className="text-xl font-bold text-success">
-                  {aheadOf ? (yourEntry.points - aheadOf.points).toLocaleString() : "—"}
+                  {nextEntry ? (yourEntry.points - nextEntry.points).toLocaleString() : "—"}
                 </p>
               </div>
             </div>

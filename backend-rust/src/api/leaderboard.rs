@@ -632,14 +632,14 @@ async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
             GROUP BY COALESCE(uw.user_address, p.user_address)
         )
         SELECT
-            ROW_NUMBER() OVER (ORDER BY ip.total_points DESC) as rank,
+            RANK() OVER (ORDER BY ip.total_points DESC) as rank,
             ip.identity as user_address,
             COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(ip.identity, 6))) as display_name,
             CAST(ip.total_points AS FLOAT) as value,
             NULL as change_24h
         FROM identity_points ip
         LEFT JOIN users u ON LOWER(u.address) = LOWER(ip.identity)
-        ORDER BY ip.total_points DESC
+        ORDER BY ip.total_points DESC, ip.identity ASC
         LIMIT 100
         "#,
     )
@@ -665,14 +665,14 @@ async fn get_volume_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
             GROUP BY COALESCE(uw.user_address, t.user_address)
         )
         SELECT
-            ROW_NUMBER() OVER (ORDER BY iv.volume_usd DESC) as rank,
+            RANK() OVER (ORDER BY iv.volume_usd DESC) as rank,
             iv.identity as user_address,
             COALESCE(NULLIF(TRIM(u.display_name), ''), CONCAT('user_', RIGHT(iv.identity, 6))) as display_name,
             CAST(iv.volume_usd AS FLOAT) as value,
             NULL as change_24h
         FROM identity_volume iv
         LEFT JOIN users u ON LOWER(u.address) = LOWER(iv.identity)
-        ORDER BY iv.volume_usd DESC
+        ORDER BY iv.volume_usd DESC, iv.identity ASC
         LIMIT 100
         "#,
     )
@@ -697,7 +697,7 @@ async fn get_referrals_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEn
             GROUP BY COALESCE(uw.user_address, u.referrer)
         )
         SELECT
-            ROW_NUMBER() OVER (ORDER BY rc.referral_count DESC, rc.identity ASC) as rank,
+            RANK() OVER (ORDER BY rc.referral_count DESC) as rank,
             rc.identity as user_address,
             COALESCE(NULLIF(TRIM(owner.display_name), ''), CONCAT('user_', RIGHT(rc.identity, 6))) as display_name,
             CAST(rc.referral_count AS FLOAT) as value,
