@@ -39,6 +39,8 @@ class GaragaPayload(TypedDict):
     note_commitment: NotRequired[str]
     denom_id: NotRequired[str]
     spendable_at_unix: NotRequired[int]
+    vk_path_used: NotRequired[str]
+    vk_n_public: NotRequired[int]
 
 
 def fail(message: str, code: int = 1) -> NoReturn:
@@ -692,6 +694,8 @@ def build_payload(stdin_payload: Mapping[str, object]) -> GaragaPayload:
     ).strip().lower()
     is_v3 = note_version == "v3"
     try:
+        vk_path_used: str | None = None
+        vk_n_public: int | None = None
         if prove_cmd:
             # Isolate per-request prover outputs to avoid cross-request overwrite races on shared paths.
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -717,6 +721,8 @@ def build_payload(stdin_payload: Mapping[str, object]) -> GaragaPayload:
                 proof_path=proof_path,
             )
             vk_path = resolve_vk_path(vk_raw, public_inputs, is_v3)
+            vk_path_used = str(vk_path)
+            vk_n_public = read_vk_n_public(vk_path)
             proof = generate_full_proof_with_hints(
                 uvx_cmd=uvx_cmd,
                 system=system,
@@ -801,6 +807,10 @@ def build_payload(stdin_payload: Mapping[str, object]) -> GaragaPayload:
                 payload["denom_id"] = denom_id
             if spendable_at_unix is not None and spendable_at_unix > 0:
                 payload["spendable_at_unix"] = spendable_at_unix
+        if vk_path_used:
+            payload["vk_path_used"] = vk_path_used
+        if vk_n_public is not None:
+            payload["vk_n_public"] = vk_n_public
         return payload
     finally:
         if request_temp_dir is not None and not keep_temp_files:

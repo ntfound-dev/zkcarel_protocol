@@ -1029,6 +1029,8 @@ async fn load_auto_garaga_payload_from_prover_cmd(
     let note_commitment = extract_optional_string(&raw, &["note_commitment"]);
     let denom_id = extract_optional_string(&raw, &["denom_id"]);
     let spendable_at_unix = extract_optional_u64(&raw, &["spendable_at_unix"]);
+    let vk_path_used = extract_optional_string(&raw, &["vk_path_used"]);
+    let vk_n_public = extract_optional_u64(&raw, &["vk_n_public"]);
     if proof.is_empty() || public_inputs.is_empty() {
         return Err(AppError::BadRequest(
             "Auto Garaga prover response has empty proof/public_inputs".to_string(),
@@ -1066,6 +1068,16 @@ async fn load_auto_garaga_payload_from_prover_cmd(
             "auto Garaga prover response",
         )?;
     }
+
+    tracing::info!(
+        "Auto Garaga payload parsed: verifier={}, note_version={:?}, proof_len={}, public_inputs_len={}, vk_path_used={:?}, vk_n_public={:?}",
+        verifier,
+        note_version,
+        proof.len(),
+        public_inputs.len(),
+        vk_path_used,
+        vk_n_public
+    );
 
     Ok(AutoPrivacyPayloadResponse {
         verifier: verifier.to_string(),
