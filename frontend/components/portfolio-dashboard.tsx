@@ -613,15 +613,15 @@ export function PortfolioDashboard() {
         const response = await getTransactionsHistory({ page: 1, limit: 20 })
         if (!active) return
         const aiTxSourceIds = loadAiTransactionSourceIds()
-        const mapped = response.items.map((tx: Transaction) => {
-	          const txType = (tx.tx_type || "").trim()
-	          const txTypeLower = txType.toLowerCase()
-	          const blockNumber = Number(tx.block_number || 0)
-	          const hasOnchainBlock = Number.isFinite(blockNumber) && blockNumber > 0
-	          const isCompleted = hasOnchainBlock || Boolean(tx.processed)
-	          const tokenLabel = tx.token_out
-	            ? `${tx.token_in || ""} → ${tx.token_out}`
-	            : tx.token_in || tx.tx_type
+        const mapped: UiTransaction[] = response.items.map((tx: Transaction) => {
+          const txType = (tx.tx_type || "").trim()
+          const txTypeLower = txType.toLowerCase()
+          const blockNumber = Number(tx.block_number || 0)
+          const hasOnchainBlock = Number.isFinite(blockNumber) && blockNumber > 0
+          const isCompleted = hasOnchainBlock || Boolean(tx.processed)
+          const tokenLabel = tx.token_out
+            ? `${tx.token_in || ""} → ${tx.token_out}`
+            : tx.token_in || tx.tx_type
           const amountIn = parseNumber(tx.amount_in)
           const amountOut = parseNumber(tx.amount_out)
           const amount = parseNumber(tx.amount_in || tx.amount_out || 0)
@@ -639,7 +639,7 @@ export function PortfolioDashboard() {
             amount: amount ? amount.toString() : "—",
             value: usdValue ? `$${usdValue.toLocaleString()}` : "—",
             time: formatRelativeTime(tx.timestamp),
-	            status: isCompleted ? "Completed" : "Pending",
+            status: isCompleted ? "Completed" : "Pending",
             visibility,
             requestSource: aiTxSourceIds.has(normalizedTxHash) ? "ai" : "manual",
             amountIn,

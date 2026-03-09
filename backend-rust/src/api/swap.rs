@@ -490,7 +490,7 @@ async fn shielded_executor_supports_deposit_fixed_v3(
         .call(FunctionCall {
             contract_address: executor,
             entry_point_selector: selector,
-            calldata: vec![Felt::ONE, Felt::ONE, Felt::ONE, Felt::ONE],
+            calldata: vec![Felt::ONE, Felt::ONE, Felt::ONE],
         })
         .await;
     match probe {
@@ -885,6 +885,8 @@ struct SwapPayoutCallInput<'a> {
     action_selector: Felt,
     action_calldata: &'a [Felt],
     approval_token: Felt,
+    approval_amount_low: Felt,
+    approval_amount_high: Felt,
     payout_token: Felt,
     recipient: Felt,
     min_payout_low: Felt,
@@ -900,7 +902,7 @@ fn build_execute_private_swap_with_payout_call(
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
 
     let kind = hide_executor_kind();
-    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
+    let mut calldata: Vec<Felt> = Vec::with_capacity(12 + input.action_calldata.len());
     if kind == HideExecutorKind::ShieldedPoolV3 {
         calldata.push(parse_felt(payload.nullifier.trim())?);
     } else {
@@ -913,6 +915,10 @@ fn build_execute_private_swap_with_payout_call(
     calldata.push(Felt::from(input.action_calldata.len() as u64));
     calldata.extend_from_slice(input.action_calldata);
     calldata.push(input.approval_token);
+    if kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.approval_amount_low);
+        calldata.push(input.approval_amount_high);
+    }
     calldata.push(input.payout_token);
     if kind != HideExecutorKind::ShieldedPoolV3 {
         calldata.push(input.recipient);
@@ -1065,7 +1071,7 @@ async fn compute_swap_payout_intent_hash_on_executor(
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
-    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
+    let mut calldata: Vec<Felt> = Vec::with_capacity(12 + input.action_calldata.len());
     if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
         calldata.push(input.action_target);
     }
@@ -1073,6 +1079,10 @@ async fn compute_swap_payout_intent_hash_on_executor(
     calldata.push(Felt::from(input.action_calldata.len() as u64));
     calldata.extend_from_slice(input.action_calldata);
     calldata.push(input.approval_token);
+    if kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.approval_amount_low);
+        calldata.push(input.approval_amount_high);
+    }
     calldata.push(input.payout_token);
     if kind != HideExecutorKind::ShieldedPoolV3 {
         calldata.push(input.recipient);
@@ -3117,6 +3127,8 @@ pub async fn execute_swap(
                 action_selector,
                 action_calldata: &action_calldata,
                 approval_token: onchain_context.from_token,
+                approval_amount_low: onchain_context.amount_low,
+                approval_amount_high: onchain_context.amount_high,
                 payout_token: onchain_context.to_token,
                 recipient: recipient_felt,
                 min_payout_low: onchain_context.route.min_amount_out_low,

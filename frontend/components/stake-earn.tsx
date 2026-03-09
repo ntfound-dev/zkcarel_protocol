@@ -17,6 +17,7 @@ import { useLivePrices } from "@/hooks/use-live-prices"
 import {
   autoSubmitPrivacyAction,
   getOwnedNfts,
+  preparePrivateExit,
   preparePrivateExecution,
   getStakePools,
   getStakePositions,
@@ -1152,6 +1153,24 @@ export function StakeEarn() {
     async (note: PendingHideNoteRecord) => {
       const noteCommitment = (note.note_commitment || "").trim()
       if (!noteCommitment) return
+      const noteNullifier = (note.nullifier || "").trim()
+      if (!noteNullifier) {
+        notifications.addNotification({
+          type: "error",
+          title: "Withdraw failed",
+          message: "Nullifier tidak tersedia untuk note ini.",
+        })
+        return
+      }
+      const root = (note.root || "").trim()
+      if (!root) {
+        notifications.addNotification({
+          type: "error",
+          title: "Withdraw failed",
+          message: "Root V3 tidak tersedia untuk note ini.",
+        })
+        return
+      }
       const executorAddress =
         (note.executor_address || PRIVATE_ACTION_EXECUTOR_ADDRESS || "").trim()
       if (!executorAddress) {
@@ -1162,31 +1181,94 @@ export function StakeEarn() {
         })
         return
       }
+      const tokenSymbol = (note.token_symbol || "").trim().toUpperCase()
+      const tokenAddress = resolvePoolTokenAddress(tokenSymbol).trim()
+      if (!tokenAddress) {
+        notifications.addNotification({
+          type: "error",
+          title: "Withdraw failed",
+          message: `Token address untuk ${tokenSymbol || "note"} tidak tersedia.`,
+        })
+        return
+      }
+      const amountText = (note.amount || "").trim()
+      if (!amountText) {
+        notifications.addNotification({
+          type: "error",
+          title: "Withdraw failed",
+          message: "Jumlah note tidak tersedia untuk private exit.",
+        })
+        return
+      }
+      const decimals = POOL_DECIMALS[tokenSymbol] ?? 18
+      const [amountLow, amountHigh] = decimalToU256Parts(amountText, decimals)
+      const recipientAddress = (wallet.starknetAddress || wallet.address || "").trim()
+      if (!recipientAddress) {
+        notifications.addNotification({
+          type: "error",
+          title: "Withdraw failed",
+          message: "Alamat Starknet wallet belum tersedia.",
+        })
+        return
+      }
       try {
+        const preparedExit = await preparePrivateExit({
+          verifier: (note.verifier || "garaga").trim() || "garaga",
+          executor_address: executorAddress,
+          root,
+          nullifier: noteNullifier,
+          note_commitment: noteCommitment,
+          denom_id: (note.denom_id || "").trim() || undefined,
+          token: tokenAddress,
+          amount_low: amountLow,
+          amount_high: amountHigh,
+          recipient: recipientAddress,
+          tx_context: {
+            flow: "exit",
+            note_version: "v3",
+            root,
+            nullifier: noteNullifier,
+            recipient: recipientAddress,
+            note_commitment: noteCommitment,
+            denom_id: (note.denom_id || "").trim() || undefined,
+            from_token: tokenSymbol,
+            amount: amountText,
+          },
+        })
+        const exitCalls = preparedExit.onchain_calls
+          .filter((call) => {
+            return (
+              typeof call.contract_address === "string" &&
+              call.contract_address.trim().length > 0 &&
+              typeof call.entrypoint === "string" &&
+              call.entrypoint.trim().length > 0
+            )
+          })
+          .map((call) => ({
+            contractAddress: call.contract_address.trim(),
+            entrypoint: call.entrypoint.trim(),
+            calldata: Array.isArray(call.calldata) ? call.calldata.map((item) => String(item)) : [],
+          }))
+        if (exitCalls.length === 0) {
+          throw new Error("prepare-private-exit returned empty onchain_calls")
+        }
         notifications.addNotification({
           type: "info",
           title: "Wallet signature required",
-          message: "Confirm Withdraw to return note funds to your wallet.",
+          message: `Confirm private exit for ${amountText} ${tokenSymbol} in your Starknet wallet.`,
         })
-        const txHash = await invokeStarknetCallsFromWallet(
-          [
-            {
-              contractAddress: executorAddress,
-              entrypoint: "withdraw_note_v3",
-              calldata: [toHexFelt(noteCommitment)],
-            },
-          ],
-          starknetProviderHint
-        )
-        removePendingHideNote(noteCommitment, note.nullifier)
-        setPendingHideNotes(loadPendingHideNotes())
-        if (isManuallySelectedHideNote(noteCommitment, note.nullifier)) {
+        const txHash = await invokeStarknetCallsFromWallet(exitCalls, starknetProviderHint)
+        removePendingHideNote(noteCommitment, noteNullifier)
+        if (isManuallySelectedHideNote(noteCommitment, noteNullifier)) {
           clearManuallySelectedHideNote()
         }
+        clearTradePrivacyPayload()
+        setHasTradePrivacyPayload(false)
+        setBalanceHidden(false)
         notifications.addNotification({
           type: "success",
-          title: "Hide note withdrawn",
-          message: `Note cancelled and funds returned (${txHash.slice(0, 10)}...).`,
+          title: "Withdraw submitted",
+          message: `Private exit submitted (${txHash.slice(0, 10)}...).`,
           txHash,
           txNetwork: "starknet",
         })
@@ -1199,7 +1281,16 @@ export function StakeEarn() {
         })
       }
     },
-    [clearManuallySelectedHideNote, isManuallySelectedHideNote, notifications, starknetProviderHint]
+    [
+      clearManuallySelectedHideNote,
+      clearTradePrivacyPayload,
+      isManuallySelectedHideNote,
+      notifications,
+      removePendingHideNote,
+      resolvePoolTokenAddress,
+      starknetProviderHint,
+      wallet,
+    ]
   )
 
   React.useEffect(() => {
@@ -1315,12 +1406,7 @@ export function StakeEarn() {
           {
             contractAddress: executorAddress,
             entrypoint: "deposit_fixed_v3",
-            calldata: [
-              tokenAddress,
-              toHexFelt(denomId),
-              toHexFelt(noteCommitment),
-              toHexFelt(nullifier),
-            ],
+            calldata: [tokenAddress, toHexFelt(denomId), toHexFelt(noteCommitment)],
           },
         ],
         starknetProviderHint

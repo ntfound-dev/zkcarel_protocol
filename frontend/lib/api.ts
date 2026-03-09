@@ -535,6 +535,25 @@ export interface PrivacyPreparePrivateExecutionResponse {
   }
 }
 
+export interface PrivacyPreparePrivateExitResponse {
+  payload: {
+    verifier: string
+    nullifier: string
+    commitment: string
+    executor_address?: string
+    recipient?: string
+    root?: string
+    note_version?: string
+    note_commitment?: string
+    denom_id?: string
+    spendable_at_unix?: number
+    proof: string[]
+    public_inputs: string[]
+  }
+  exit_hash: string
+  onchain_calls: StarknetWalletCall[]
+}
+
 export interface PrivacyRelayerExecuteResponse {
   tx_hash: string
 }
@@ -2546,6 +2565,53 @@ export async function preparePrivateExecution(payload: {
       method: "POST",
       body: JSON.stringify(payload),
       context: "Prepare private execution",
+      suppressErrorNotification: true,
+      timeoutMs: 120000,
+    }
+  )
+}
+
+export async function preparePrivateExit(payload: {
+  verifier?: string
+  executor_address?: string
+  root: string
+  nullifier: string
+  note_commitment?: string
+  denom_id?: string
+  token: string
+  amount_low: string
+  amount_high: string
+  recipient: string
+  tx_context?: {
+    flow?: string
+    from_token?: string
+    to_token?: string
+    amount?: string
+    recipient?: string
+    from_network?: string
+    to_network?: string
+    note_version?: string
+    root?: string
+    intent_hash?: string
+    action_hash?: string
+    action_target?: string
+    action_selector?: string
+    calldata_hash?: string
+    approval_token?: string
+    payout_token?: string
+    min_payout?: string
+    note_commitment?: string
+    denom_id?: string
+    spendable_at_unix?: number
+    nullifier?: string
+  }
+}) {
+  return apiFetch<PrivacyPreparePrivateExitResponse>(
+    "/api/v1/privacy/prepare-private-exit",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      context: "Prepare private exit",
       suppressErrorNotification: true,
       timeoutMs: 120000,
     }

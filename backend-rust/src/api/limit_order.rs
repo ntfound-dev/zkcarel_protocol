@@ -716,6 +716,8 @@ struct LimitActionCallInput<'a> {
     action_selector: Felt,
     action_calldata: &'a [Felt],
     approval_token: Felt,
+    approval_amount_low: Felt,
+    approval_amount_high: Felt,
     payout_token: Felt,
     min_payout_low: Felt,
     min_payout_high: Felt,
@@ -737,7 +739,7 @@ async fn compute_limit_intent_hash_on_executor(
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
     let kind = hide_executor_kind();
-    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
+    let mut calldata: Vec<Felt> = Vec::with_capacity(12 + input.action_calldata.len());
     if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
         calldata.push(input.action_target);
     }
@@ -748,6 +750,8 @@ async fn compute_limit_intent_hash_on_executor(
         calldata.push(input.approval_token);
     }
     if kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.approval_amount_low);
+        calldata.push(input.approval_amount_high);
         calldata.push(input.payout_token);
         calldata.push(input.min_payout_low);
         calldata.push(input.min_payout_high);
@@ -835,7 +839,7 @@ fn build_execute_private_limit_call(
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
+    let mut calldata: Vec<Felt> = Vec::with_capacity(12 + input.action_calldata.len());
     if kind == HideExecutorKind::ShieldedPoolV3 {
         calldata.push(parse_felt(payload.nullifier.trim())?);
     } else {
@@ -851,6 +855,8 @@ fn build_execute_private_limit_call(
         calldata.push(input.approval_token);
     }
     if kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.approval_amount_low);
+        calldata.push(input.approval_amount_high);
         calldata.push(input.payout_token);
         calldata.push(input.min_payout_low);
         calldata.push(input.min_payout_high);
@@ -1215,6 +1221,8 @@ pub async fn create_order(
             action_selector,
             action_calldata: &action_calldata,
             approval_token: from_token,
+            approval_amount_low: amount_low,
+            approval_amount_high: amount_high,
             payout_token: to_token,
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
@@ -1689,6 +1697,8 @@ pub async fn cancel_order(
             action_selector,
             action_calldata: &action_calldata,
             approval_token,
+            approval_amount_low: Felt::ZERO,
+            approval_amount_high: Felt::ZERO,
             payout_token: Felt::ZERO,
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,

@@ -147,6 +147,29 @@ pub struct PreparePrivateExecutionResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PreparePrivateExitRequest {
+    pub verifier: Option<String>,
+    pub executor_address: Option<String>,
+    pub root: String,
+    pub nullifier: String,
+    pub note_commitment: Option<String>,
+    pub denom_id: Option<String>,
+    pub token: String,
+    pub amount_low: String,
+    pub amount_high: String,
+    pub recipient: String,
+    #[serde(default)]
+    pub tx_context: Option<AutoPrivacyTxContext>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PreparePrivateExitResponse {
+    pub payload: AutoPrivacyPayloadResponse,
+    pub exit_hash: String,
+    pub onchain_calls: Vec<StarknetWalletCall>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RelayerPrivateExecutionRequest {
     pub user: String,
     pub token: String,
@@ -392,6 +415,128 @@ pub async fn prepare_private_execution(
             relayer,
         },
     )))
+}
+
+pub async fn prepare_private_exit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PreparePrivateExitRequest>,
+) -> Result<Json<ApiResponse<PreparePrivateExitResponse>>> {
+    let user_address = require_starknet_user(&headers, &state).await?;
+    let verifier_kind = parse_privacy_verifier_kind(req.verifier.as_deref())?;
+
+    let executor_address = req
+        .executor_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or(resolve_private_action_executor_address(&state.config)?);
+
+    let root_felt = parse_felt(req.root.trim())?;
+    let nullifier_felt = parse_felt(req.nullifier.trim())?;
+    let token_felt = parse_felt(req.token.trim())?;
+    let amount_low_felt = parse_felt(req.amount_low.trim())?;
+    let amount_high_felt = parse_felt(req.amount_high.trim())?;
+    let recipient_felt = parse_felt(req.recipient.trim())?;
+
+    let exit_hash = compute_exit_hash_on_executor(
+        &state,
+        &executor_address,
+        token_felt,
+        amount_low_felt,
+        amount_high_felt,
+        recipient_felt,
+    )
+    .await?;
+
+    let mut tx_context = req.tx_context.unwrap_or_default();
+    tx_context.flow = Some(
+        tx_context
+            .flow
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("exit")
+            .to_string(),
+    );
+    tx_context.note_version = Some("v3".to_string());
+    tx_context.root = Some(root_felt.to_string());
+    tx_context.intent_hash = Some(exit_hash.clone());
+    tx_context.action_hash = Some(exit_hash.clone());
+    tx_context.nullifier = Some(nullifier_felt.to_string());
+    tx_context.recipient = Some(recipient_felt.to_string());
+    tx_context.from_token = Some(token_felt.to_string());
+    tx_context.amount = Some(format!("{}:{}", amount_low_felt, amount_high_felt));
+    if let Some(note_commitment) = req
+        .note_commitment
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        tx_context.note_commitment = Some(note_commitment.to_string());
+    }
+    if let Some(denom_id) = req
+        .denom_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        tx_context.denom_id = Some(denom_id.to_string());
+    }
+
+    let mut payload = generate_auto_garaga_payload(
+        &state.config,
+        &user_address,
+        verifier_kind.as_str(),
+        Some(&tx_context),
+    )
+    .await?;
+    payload.executor_address = Some(executor_address.clone());
+    payload.note_version = Some("v3".to_string());
+
+    bind_intent_hash_into_payload(&mut payload, &exit_hash)?;
+    ensure_public_inputs_bind_v3_shape(&payload.public_inputs, "prepared private exit payload")?;
+    ensure_public_inputs_bind_root_nullifier(
+        &root_felt.to_string(),
+        &nullifier_felt.to_string(),
+        &payload.public_inputs,
+        "prepared private exit payload",
+    )?;
+
+    let payload_root = payload
+        .root
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("Hide Balance V3 private exit payload requires root".to_string()))?;
+    let payload_root_felt = parse_felt(payload_root)?;
+    if payload_root_felt != root_felt {
+        return Err(AppError::BadRequest(
+            "Private exit payload root mismatch with requested root".to_string(),
+        ));
+    }
+    let payload_nullifier_felt = parse_felt(payload.nullifier.trim())?;
+    if payload_nullifier_felt != nullifier_felt {
+        return Err(AppError::BadRequest(
+            "Private exit payload nullifier mismatch with requested nullifier".to_string(),
+        ));
+    }
+
+    let call = build_private_exit_wallet_call(
+        &executor_address,
+        root_felt,
+        nullifier_felt,
+        &payload.proof,
+        token_felt,
+        amount_low_felt,
+        amount_high_felt,
+        recipient_felt,
+    )?;
+
+    Ok(Json(ApiResponse::success(PreparePrivateExitResponse {
+        payload,
+        exit_hash,
+        onchain_calls: vec![call],
+    })))
 }
 
 pub async fn relay_private_execution(
@@ -1218,6 +1363,32 @@ async fn compute_intent_hash_on_executor(
     Ok(intent_hash.to_string())
 }
 
+async fn compute_exit_hash_on_executor(
+    state: &AppState,
+    executor_address: &str,
+    token: Felt,
+    amount_low: Felt,
+    amount_high: Felt,
+    recipient: Felt,
+) -> Result<String> {
+    let reader = crate::services::onchain::OnchainReader::from_config(&state.config)?;
+    let contract_address = parse_felt(executor_address)?;
+    let preview_selector = get_selector_from_name("preview_exit_hash")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let out = reader
+        .call(FunctionCall {
+            contract_address,
+            entry_point_selector: preview_selector,
+            calldata: vec![token, amount_low, amount_high, recipient],
+        })
+        .await?;
+    let exit_hash = out
+        .first()
+        .ok_or_else(|| AppError::BadRequest("ShieldedPoolV3 preview_exit_hash returned empty response".to_string()))?;
+    Ok(exit_hash.to_string())
+}
+
 // Builds a two-call wallet batch: first `submit_private_intent`, then the flow-specific `execute_private_*`.
 // Carries forward commitment-bound calldata so execution matches the proven intent.
 fn build_private_executor_wallet_calls(
@@ -1360,6 +1531,41 @@ fn build_relayer_private_execution_draft(
         public_inputs: payload.public_inputs.clone(),
         action_calldata: action_calldata.to_vec(),
         message_hash: message_hash.to_string(),
+    })
+}
+
+fn build_private_exit_wallet_call(
+    executor_address: &str,
+    root: Felt,
+    nullifier: Felt,
+    proof: &[String],
+    token: Felt,
+    amount_low: Felt,
+    amount_high: Felt,
+    recipient: Felt,
+) -> Result<StarknetWalletCall> {
+    if proof.is_empty() {
+        return Err(AppError::BadRequest(
+            "Private exit payload proof must be non-empty".to_string(),
+        ));
+    }
+
+    let mut calldata: Vec<String> = Vec::with_capacity(8 + proof.len());
+    calldata.push(root.to_string());
+    calldata.push(nullifier.to_string());
+    calldata.push(format!("0x{:x}", proof.len()));
+    for value in proof {
+        calldata.push(parse_felt(value)?.to_string());
+    }
+    calldata.push(token.to_string());
+    calldata.push(amount_low.to_string());
+    calldata.push(amount_high.to_string());
+    calldata.push(recipient.to_string());
+
+    Ok(StarknetWalletCall {
+        contract_address: executor_address.to_string(),
+        entrypoint: "private_exit_v3".to_string(),
+        calldata,
     })
 }
 

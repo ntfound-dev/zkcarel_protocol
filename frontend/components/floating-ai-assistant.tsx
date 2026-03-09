@@ -257,8 +257,6 @@ const U256_MAX_WORD_HEX = "0xffffffffffffffffffffffffffffffff"
 const SUPPORTED_SWAP_TOKENS = new Set(["USDT", "USDC", "STRK", "WBTC", "CAREL"])
 const SUPPORTED_LIMIT_ORDER_TOKENS = new Set(["USDT", "USDC", "STRK", "WBTC", "CAREL"])
 const SUPPORTED_STAKE_TOKENS = new Set(["CAREL", "USDC", "USDT", "STRK", "WBTC"])
-const L3_GARAGA_BRIDGE_ENABLED =
-  (process.env.NEXT_PUBLIC_L3_GARAGA_BRIDGE_ENABLED || "false").toLowerCase() === "true"
 const GARDEN_ORDER_EXPLORER_BASE_URL =
   process.env.NEXT_PUBLIC_GARDEN_ORDER_EXPLORER_URL || "https://testnet-explorer.garden.finance/order"
 type TxExplorerNetwork = "starknet" | "evm" | "btc"
@@ -2966,12 +2964,7 @@ export function FloatingAIAssistant() {
       const depositCall: StarknetInvokeCall = {
         contractAddress: executorAddress,
         entrypoint: "deposit_fixed_v3",
-        calldata: [
-          tokenAddress,
-          toHexFelt(denomId),
-          toHexFelt(noteCommitment),
-          toHexFelt(nullifier),
-        ],
+        calldata: [tokenAddress, toHexFelt(denomId), toHexFelt(noteCommitment)],
       }
       const calls = hasEnoughAllowance ? [depositCall] : [approvalCall, depositCall]
       notifications.addNotification({
@@ -3156,7 +3149,7 @@ export function FloatingAIAssistant() {
     }
 
     const isBridgeCommand = BRIDGE_COMMAND_REGEX.test(command)
-    if (activeTier >= 3 && isBridgeCommand && !L3_GARAGA_BRIDGE_ENABLED) {
+    if (activeTier >= 3 && isBridgeCommand) {
       if (!hasPendingConfirmation) {
         appendMessagesForTier(activeTier, [
           {
@@ -3172,7 +3165,7 @@ export function FloatingAIAssistant() {
         {
           role: "assistant",
           content:
-            "Bridge is currently disabled on Level 3 because Garaga bridge flow is not implemented for public Garden API yet. Use Level 2 for bridge, or enable custom provider with `NEXT_PUBLIC_L3_GARAGA_BRIDGE_ENABLED=true`.",
+            "Bridge is not available on Level 3 yet. For now use Level 2 for bridge. Private L3 bridge will be added later.",
           timestamp: nowTimestampLabel(),
         },
       ])
@@ -4268,7 +4261,6 @@ export function FloatingAIAssistant() {
       const canAutoExecuteBridge =
         !directExecutionMessage &&
         activeTier >= 2 &&
-        !(tierUsesGaraga && !L3_GARAGA_BRIDGE_ENABLED) &&
         BRIDGE_COMMAND_REGEX.test(command) &&
         (response.actions || []).includes("get_bridge_quote")
       if (canAutoExecuteBridge) {
@@ -5336,6 +5328,7 @@ export function FloatingAIAssistant() {
             title: "Limit order created",
             message: `Order ${limitResult.order_id} submitted.`,
           })
+          const limitTxHash = (limitResult.privacy_tx_hash || txHash || "").trim()
           if (limitTxHash) {
             markAiTransaction(limitTxHash)
           }
@@ -5362,7 +5355,6 @@ export function FloatingAIAssistant() {
               removeAiPendingHideNote(consumedNoteCommitment, consumedNullifier)
             }
           }
-          const limitTxHash = (limitResult.privacy_tx_hash || txHash || "").trim()
           const limitTxPreview = limitTxHash ? `${limitTxHash.slice(0, 14)}...` : "-"
           const limitTxUrl = limitTxHash ? buildTxExplorerUrl(limitTxHash, "starknet") : ""
           const hideDepositTxPreview = hideDepositTxHash

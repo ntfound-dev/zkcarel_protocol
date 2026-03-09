@@ -129,7 +129,7 @@ flowchart LR
 - `SwapAggregator` below is the CAREL routing contract. It can call registered DEX routers and use oracle-based quoting/fallback logic.
 - `KeeperNetwork` is the contract name in `src/trading/dca_orders.cairo`. The app/runtime layer refers to this flow as `Limit Order Book`.
 - `StakingBTC` is the contract used for WBTC staking.
-- Hide V3 uses pre-funded notes on `ShieldedPoolV3` via `deposit_fixed_v3` before relayer execution. After deposit, the owner can still call `withdraw_note_v3` while no pending private action exists.
+- Hide V3 uses pre-funded notes on `ShieldedPoolV3` via `deposit_fixed_v3` before relayer execution. Direct `withdraw_note_v3` is disabled; exits use `private_exit_v3`.
 
 ### Swap
 ```mermaid
@@ -138,7 +138,7 @@ flowchart LR
   B -->|Normal| U[User wallet]
   U --> SWAP[CAREL SwapAggregator]
   B -->|Hide| NOTE[User deposit_fixed_v3]
-  NOTE --> WD[withdraw_note_v3]
+  NOTE --> EXIT[private_exit_v3]
   NOTE --> EXEC[ShieldedPoolV3]
   R[Relayer] --> EXEC
   EXEC --> SWAP
@@ -155,7 +155,7 @@ flowchart LR
   B -->|Normal| U[User wallet]
   U --> LOB[KeeperNetwork]
   B -->|Hide| NOTE[User deposit_fixed_v3]
-  NOTE --> WD[withdraw_note_v3]
+  NOTE --> EXIT[private_exit_v3]
   NOTE --> EXEC[ShieldedPoolV3]
   R[Relayer] --> EXEC
   EXEC --> LOB
@@ -172,7 +172,7 @@ flowchart LR
   U --> SSTABLE[StakingStablecoin]
   U --> SBTC[StakingBTC]
   B -->|Hide| NOTE[User deposit_fixed_v3]
-  NOTE --> WD[withdraw_note_v3]
+  NOTE --> EXIT[private_exit_v3]
   NOTE --> EXEC[ShieldedPoolV3]
   R[Relayer] --> EXEC
   EXEC --> SCAREL
@@ -198,17 +198,18 @@ flowchart LR
   AIEXEC --> AIVER[AISignatureVerifier]
   AIEXEC --> CAREL[CAREL token]
 
-  B --> E[L3 normal]
-  E --> U
-
-  B --> F[L3 hide execute]
-  F --> NOTE[User deposit_fixed_v3]
+  B --> E[L3 hide execute]
+  E --> NOTE[User deposit_fixed_v3]
   NOTE --> EXEC[ShieldedPoolV3]
   R[Relayer] --> EXEC
   EXEC --> TARGET[Swap/Limit/Stake]
+
+  B --> F[L3 bridge]
+  F --> F1[Not available yet]
+  F1 --> F2[Use L2 for bridge]
 ```
 
-`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2` covers normal bridge/swap/limit/stake execution through `AIExecutor`, `L3` can also use normal execution paths, and `L3 hide` continues through `ShieldedPoolV3`. Direct hide flows can withdraw a note after deposit, but the current AI hide path does not expose note withdrawal.
+`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2` covers normal bridge/swap/limit/stake execution through `AIExecutor`, and `L3` is reserved for private swap/stake/limit execution through `ShieldedPoolV3`. Bridge does not run on `L3` yet; users should stay on `L2` for bridge until the private bridge path exists. Direct hide flows can withdraw a note after deposit, but the current AI hide path does not expose note withdrawal.
 
 ## Rewards, Points, and Discount NFT
 `PointStorage`, `SnapshotDistributor`, `ReferralSystem`, and `DiscountSoulbound` are the core rewards stack. The important split is that point formulas mostly live in runtime/backend code, while the Starknet contracts store epoch state, consume points, and settle claims.
@@ -375,7 +376,7 @@ Source: `smartcontract/.env`.
 | Garaga Adapter | `GARAGA_ADAPTER_ADDRESS` | `0x07dc2000785cd8a8a1f8435b386d2fdf1a9f2b23c66670ea87bdd59e3c3c2d03` |
 | Garaga Verifier | `GARAGA_VERIFIER_ADDRESS` | `0x04bc6f22779e528785ee27b844b93e92cf92d8ff0b6bed2f9b5cf41ee467ff45` |
 | PrivacyIntermediary | `PRIVACY_INTERMEDIARY_ADDRESS` | `0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab` |
-| Private Action Executor (catalog) | `PRIVATE_ACTION_EXECUTOR_ADDRESS` | `0x03b7aa4252fbbe12b94aa145a1372f519ad75d6774e2d4cb969e6ed3f0d9a143` |
+| Private Action Executor (catalog) | `PRIVATE_ACTION_EXECUTOR_ADDRESS` | `0x01f7f3bcdfd94d0b28dd658882bef53787b4e9d40a6aa4ced65440ab76e0e191` |
 | ShieldedVault | `SHIELDED_VAULT_ADDRESS` | `0x07e09754f159ee7bce0b1d297315eea6bb22bc912e92741a7e8c793ef24a6abb` |
 | PrivatePayments | `PRIVATE_PAYMENTS_ADDRESS` | `0x00e9efd7e5cb33f1d8eb4779c8fe68d1836141feb826b18d132c8ca1da391b94` |
 | AnonymousCredentials | `ANONYMOUS_CREDENTIALS_ADDRESS` | `0x040a454139f2df866b3ea34247d67126f8a6a8e61e5e9ac3b3ed27ad12e1d57d` |
@@ -393,7 +394,7 @@ Source: `smartcontract/.env`.
 ## Runtime Address Overrides (FE/BE Profile)
 Active app runtime profile currently uses these overrides (from `backend-rust/.env`):
 - `ZK_PRIVACY_ROUTER_ADDRESS`: `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f`
-- `PRIVATE_ACTION_EXECUTOR_ADDRESS`: `0x0112a5f60db409d74c4e67b5c29c85c7fbeefffccf9762a37460a42854cc74c2`
+- `PRIVATE_ACTION_EXECUTOR_ADDRESS`: `0x01f7f3bcdfd94d0b28dd658882bef53787b4e9d40a6aa4ced65440ab76e0e191`
 - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
 - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
 - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
@@ -405,6 +406,24 @@ Use this override set for FE/BE runtime demos. Keep catalog inventory unchanged 
 - `MockGaragaVerifier` usage is testnet-only.
 - Contract upgrades currently require redeploy/migration (no proxy strategy in current baseline).
 - Bridge behavior depends on external providers.
+
+## Internal Audit Status
+Hide-mode `ShieldedPoolV3` went through an internal remediation cycle before the current runtime profile was activated.
+
+Closed in the current baseline:
+- Deposit path no longer leaks `nullifier` through calldata or deposit event.
+- Unlimited approval drain path was removed in favor of exact approvals.
+- Zero-hash / short-proof bypass was closed.
+- Action hash now includes deployment domain separation.
+- Reentrancy on submit/execute/exit paths is guarded.
+- Cancel/resubmit flow no longer leaves users with permanently stuck pending actions.
+- Public direct withdrawal was intentionally disabled and replaced by `private_exit_v3`.
+- AI `L3` is aligned to private swap/stake/limit only; bridge stays on `L2`.
+
+Still open as explicit hardening items:
+- Circuit audit remains mandatory for `private_exit_v3` token/amount binding.
+- Admin operations should run behind multisig/governance for production.
+- Mixing-window enforcement is still primarily runtime/UX-based, not fully on-chain.
 
 ## Development Plan
 - Short term:

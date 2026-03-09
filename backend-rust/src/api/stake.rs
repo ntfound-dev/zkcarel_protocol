@@ -1106,6 +1106,8 @@ struct StakeActionCallInput<'a> {
     action_selector: Felt,
     action_calldata: &'a [Felt],
     approval_token: Felt,
+    approval_amount_low: Felt,
+    approval_amount_high: Felt,
     payout_token: Felt,
     min_payout_low: Felt,
     min_payout_high: Felt,
@@ -1145,12 +1147,14 @@ async fn compute_stake_intent_hash_on_executor(
     if hide_executor_kind() == HideExecutorKind::ShieldedPoolV3 {
         let selector = get_selector_from_name("preview_stake_action_hash")
             .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-        let mut calldata: Vec<Felt> = Vec::with_capacity(8 + input.action_calldata.len());
+        let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
         calldata.push(input.target);
         calldata.push(input.action_selector);
         calldata.push(Felt::from(input.action_calldata.len() as u64));
         calldata.extend_from_slice(input.action_calldata);
         calldata.push(input.approval_token);
+        calldata.push(input.approval_amount_low);
+        calldata.push(input.approval_amount_high);
         calldata.push(input.payout_token);
         calldata.push(input.min_payout_low);
         calldata.push(input.min_payout_high);
@@ -1344,7 +1348,7 @@ fn build_execute_private_stake_call(
         }
         StakeExecuteMode::ShieldedPoolV3 => (
             "execute_private_stake_with_payout",
-            9 + input.action_calldata.len(),
+            11 + input.action_calldata.len(),
         ),
     };
     let selector = get_selector_from_name(entrypoint)
@@ -1369,6 +1373,8 @@ fn build_execute_private_stake_call(
     }
     if matches!(execute_mode, StakeExecuteMode::ShieldedPoolV3) {
         calldata.push(input.approval_token);
+        calldata.push(input.approval_amount_low);
+        calldata.push(input.approval_amount_high);
         calldata.push(input.payout_token);
         calldata.push(input.min_payout_low);
         calldata.push(input.min_payout_high);
@@ -2091,6 +2097,16 @@ pub async fn deposit(
             action_selector,
             action_calldata: &action_calldata,
             approval_token,
+            approval_amount_low: if action_calldata.len() >= 2 {
+                action_calldata[action_calldata.len() - 2]
+            } else {
+                Felt::ZERO
+            },
+            approval_amount_high: if action_calldata.len() >= 1 {
+                action_calldata[action_calldata.len() - 1]
+            } else {
+                Felt::ZERO
+            },
             payout_token: Felt::ZERO,
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
@@ -2482,6 +2498,8 @@ pub async fn withdraw(
             action_selector,
             action_calldata: &action_calldata,
             approval_token,
+            approval_amount_low: Felt::ZERO,
+            approval_amount_high: Felt::ZERO,
             payout_token,
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
@@ -2819,6 +2837,8 @@ pub async fn claim(
             action_selector,
             action_calldata: &action_calldata,
             approval_token,
+            approval_amount_low: Felt::ZERO,
+            approval_amount_high: Felt::ZERO,
             payout_token,
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,

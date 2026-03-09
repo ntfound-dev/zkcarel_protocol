@@ -215,10 +215,9 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
     if level >= 3
         && matches!(scope, AIGuardScope::SwapBridge)
         && is_bridge_command(command)
-        && !ai_level3_bridge_enabled()
     {
         return Err(AppError::BadRequest(
-            "Level 3 bridge is currently disabled because Garaga bridge flow is not implemented for public Garden API yet. Use Level 2 for bridge commands, or enable AI_LEVEL3_BRIDGE_ENABLED=true for custom provider."
+            "Level 3 bridge is not available yet. Use Level 2 for bridge commands for now; private L3 bridge will be added later."
                 .to_string(),
         ));
     }
@@ -254,7 +253,7 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
                     | AIGuardScope::Unknown
             ) {
                 return Err(AppError::BadRequest(
-                    "Level 3 supports all AI commands: read-only, swap/bridge, portfolio, and alerts."
+                    "Level 3 supports read-only, private swap/stake/limit execution, portfolio, and alerts. Bridge stays on Level 2 for now."
                         .to_string(),
                 ));
             }
@@ -264,19 +263,6 @@ fn ensure_ai_level_scope(level: u8, command: &str) -> Result<()> {
         }
     }
     Ok(())
-}
-
-// Internal helper that supports `ai_level3_bridge_enabled` operations.
-fn ai_level3_bridge_enabled() -> bool {
-    std::env::var("AI_LEVEL3_BRIDGE_ENABLED")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
 }
 
 // Internal helper that supports `is_bridge_command` operations.
@@ -2339,6 +2325,13 @@ mod tests {
     fn level_3_allows_generic_chat_prompt() {
         // Memastikan level 3 tetap menerima prompt umum/non-intent.
         assert!(ensure_ai_level_scope(3, "what do you think about market mood today?").is_ok());
+    }
+
+    #[test]
+    // Internal helper that supports `level_3_rejects_bridge_scope_until_private_bridge_exists` operations.
+    fn level_3_rejects_bridge_scope_until_private_bridge_exists() {
+        let err = ensure_ai_level_scope(3, "bridge 0.05 ETH to WBTC").expect_err("must reject");
+        assert!(err.to_string().to_ascii_lowercase().contains("level 2"));
     }
 
     #[test]

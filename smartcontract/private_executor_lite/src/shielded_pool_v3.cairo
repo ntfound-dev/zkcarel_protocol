@@ -10,8 +10,18 @@ pub trait IGroth16VerifierBlsOutput<TContractState> {
 
 #[starknet::interface]
 pub trait IShieldedPoolV3<TContractState> {
+    /// Starts a two-step admin transfer to a new address.
+    fn transfer_admin(ref self: TContractState, new_admin: ContractAddress);
+    /// Accepts a pending admin transfer.
+    fn accept_admin(ref self: TContractState);
+    /// Pauses user-facing entrypoints during incident response.
+    fn pause(ref self: TContractState);
+    /// Resumes user-facing entrypoints after incident response.
+    fn unpause(ref self: TContractState);
     /// Updates the verifier contract used for private-action proof checks.
     fn set_verifier(ref self: TContractState, verifier: ContractAddress);
+    /// Applies a verifier update after the governance delay has elapsed.
+    fn apply_verifier_update(ref self: TContractState);
     /// Updates the relayer account allowed to execute private actions.
     fn set_relayer(ref self: TContractState, relayer: ContractAddress);
     /// Stores a new accepted Merkle root for later private-action submissions.
@@ -21,16 +31,25 @@ pub trait IShieldedPoolV3<TContractState> {
         ref self: TContractState, token: ContractAddress, denom_id: felt252, fixed_amount: u256,
     );
 
-    /// Locks a fixed token amount and binds it to a note commitment and nullifier.
+    /// Locks a fixed token amount and records a fresh note commitment.
     fn deposit_fixed_v3(
         ref self: TContractState,
         token: ContractAddress,
         denom_id: felt252,
         note_commitment: felt252,
-        nullifier: felt252,
     );
-    /// Lets the original depositor cancel an unused note and pull funds back out.
+    /// Legacy direct withdrawal is disabled because it cannot coexist safely with unlinkable spends.
     fn withdraw_note_v3(ref self: TContractState, note_commitment: felt252);
+    /// Privately exits a note to the bound recipient without revealing its deposit linkage.
+    fn private_exit_v3(
+        ref self: TContractState,
+        root: felt252,
+        nullifier: felt252,
+        proof: Span<felt252>,
+        token: ContractAddress,
+        amount: u256,
+        recipient: ContractAddress,
+    );
 
     /// Registers a private swap action after the proof passes verification.
     fn submit_private_swap(
@@ -44,6 +63,8 @@ pub trait IShieldedPoolV3<TContractState> {
     fn submit_private_stake(
         ref self: TContractState, root: felt252, nullifier: felt252, proof: Span<felt252>,
     );
+    /// Clears a pending private action so it can be re-submitted with different execution details.
+    fn cancel_private_action(ref self: TContractState, nullifier: felt252);
 
     /// Executes a queued private swap and forwards any payout to the stored recipient.
     fn execute_private_swap_with_payout(
@@ -53,6 +74,7 @@ pub trait IShieldedPoolV3<TContractState> {
         entrypoint_selector: felt252,
         calldata: Span<felt252>,
         approval_token: ContractAddress,
+        approval_amount: u256,
         payout_token: ContractAddress,
         min_payout: u256,
     );
@@ -64,6 +86,7 @@ pub trait IShieldedPoolV3<TContractState> {
         entrypoint_selector: felt252,
         calldata: Span<felt252>,
         approval_token: ContractAddress,
+        approval_amount: u256,
         payout_token: ContractAddress,
         min_payout: u256,
     );
@@ -75,12 +98,25 @@ pub trait IShieldedPoolV3<TContractState> {
         entrypoint_selector: felt252,
         calldata: Span<felt252>,
         approval_token: ContractAddress,
+        approval_amount: u256,
         payout_token: ContractAddress,
         min_payout: u256,
     );
 
     /// Returns the current active Merkle root.
     fn get_root(self: @TContractState) -> felt252;
+    /// Returns the current admin.
+    fn get_admin(self: @TContractState) -> ContractAddress;
+    /// Returns the pending admin, if any.
+    fn get_pending_admin(self: @TContractState) -> ContractAddress;
+    /// Returns whether user-facing entrypoints are currently paused.
+    fn is_paused(self: @TContractState) -> bool;
+    /// Returns the currently active verifier.
+    fn get_verifier(self: @TContractState) -> ContractAddress;
+    /// Returns the pending verifier, if any.
+    fn get_pending_verifier(self: @TContractState) -> ContractAddress;
+    /// Returns when the pending verifier can be applied.
+    fn get_pending_verifier_ready_at(self: @TContractState) -> u64;
     /// Returns how many roots have been stored so far.
     fn get_root_count(self: @TContractState) -> u64;
     /// Returns the deposit timestamp recorded for a note commitment.
@@ -95,6 +131,7 @@ pub trait IShieldedPoolV3<TContractState> {
         entrypoint_selector: felt252,
         calldata: Span<felt252>,
         approval_token: ContractAddress,
+        approval_amount: u256,
         payout_token: ContractAddress,
         min_payout: u256,
     ) -> felt252;
@@ -105,6 +142,7 @@ pub trait IShieldedPoolV3<TContractState> {
         entrypoint_selector: felt252,
         calldata: Span<felt252>,
         approval_token: ContractAddress,
+        approval_amount: u256,
         payout_token: ContractAddress,
         min_payout: u256,
     ) -> felt252;
@@ -115,8 +153,16 @@ pub trait IShieldedPoolV3<TContractState> {
         entrypoint_selector: felt252,
         calldata: Span<felt252>,
         approval_token: ContractAddress,
+        approval_amount: u256,
         payout_token: ContractAddress,
         min_payout: u256,
+    ) -> felt252;
+    /// Precomputes the exit hash that must be bound into a private exit proof.
+    fn preview_exit_hash(
+        self: @TContractState,
+        token: ContractAddress,
+        amount: u256,
+        recipient: ContractAddress,
     ) -> felt252;
 
     /// Returns whether a nullifier has already been consumed.
@@ -152,6 +198,7 @@ pub mod ShieldedPoolV3 {
     };
     use starknet::{
         ContractAddress, SyscallResultTrait, get_block_timestamp, get_caller_address,
+        get_contract_address, get_tx_info,
     };
     use super::{
         IGroth16VerifierBlsOutputDispatcher, IGroth16VerifierBlsOutputDispatcherTrait,
@@ -161,11 +208,18 @@ pub mod ShieldedPoolV3 {
     const ACTION_SWAP_PAYOUT_V3: felt252 = 'SWAP_PAYOUT_V3';
     const ACTION_LIMIT_PAYOUT_V3: felt252 = 'LIMIT_PAYOUT_V3';
     const ACTION_STAKE_PAYOUT_V3: felt252 = 'STAKE_PAYOUT_V3';
+    const ACTION_PRIVATE_EXIT_V3: felt252 = 'PRIVATE_EXIT_V3';
+    const VERIFIER_UPDATE_DELAY_SECS: u64 = 86400;
+    const PENDING_ACTION_EXPIRY_SECS: u64 = 86400;
 
     #[starknet::interface]
     pub trait IERC20<TContractState> {
         /// Grants an allowance to a spender.
         fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
+        /// Returns the current allowance from owner to spender.
+        fn allowance(
+            self: @TContractState, owner: ContractAddress, spender: ContractAddress,
+        ) -> u256;
         /// Transfers tokens from the caller to a recipient.
         fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
         /// Transfers tokens from one account to another using allowance.
@@ -179,8 +233,12 @@ pub mod ShieldedPoolV3 {
     #[storage]
     pub struct Storage {
         pub admin: ContractAddress,
+        pub pending_admin: ContractAddress,
         pub relayer: ContractAddress,
         pub verifier: ContractAddress,
+        pub pending_verifier: ContractAddress,
+        pub pending_verifier_ready_at: u64,
+        pub paused: bool,
 
         pub fixed_amount_by_rule_key: Map<felt252, u256>,
 
@@ -189,11 +247,15 @@ pub mod ShieldedPoolV3 {
         pub roots: Map<u64, felt252>,
         pub root_seen: Map<felt252, bool>,
 
+        pub reentrancy_lock: bool,
+
         pub nullifier_used: Map<felt252, bool>,
         pub pending_action_exists_by_nullifier: Map<felt252, bool>,
         pub pending_action_type_by_nullifier: Map<felt252, felt252>,
         pub pending_action_hash_by_nullifier: Map<felt252, felt252>,
         pub pending_recipient_by_nullifier: Map<felt252, ContractAddress>,
+        pub pending_submitter_by_nullifier: Map<felt252, ContractAddress>,
+        pub authorized_submitter_by_nullifier: Map<felt252, ContractAddress>,
         pub pending_submitted_at_by_nullifier: Map<felt252, u64>,
 
         pub note_seen: Map<felt252, bool>,
@@ -201,27 +263,59 @@ pub mod ShieldedPoolV3 {
         pub note_owner_by_commitment: Map<felt252, ContractAddress>,
         pub note_token_by_commitment: Map<felt252, ContractAddress>,
         pub note_amount_by_commitment: Map<felt252, u256>,
-        pub note_nullifier_by_commitment: Map<felt252, felt252>,
-        pub note_commitment_by_nullifier: Map<felt252, felt252>,
-        pub note_spent_by_commitment: Map<felt252, bool>,
     }
 
     #[event]
     #[derive(Drop, starknet::Event)]
     pub enum Event {
+        AdminTransferStarted: AdminTransferStarted,
+        AdminTransferred: AdminTransferred,
+        Paused: Paused,
+        Unpaused: Unpaused,
         VerifierUpdated: VerifierUpdated,
+        VerifierUpdateScheduled: VerifierUpdateScheduled,
         RelayerUpdated: RelayerUpdated,
         RootUpdated: RootUpdated,
         AssetRuleUpdated: AssetRuleUpdated,
         DepositRegisteredV3: DepositRegisteredV3,
-        NoteWithdrawnV3: NoteWithdrawnV3,
+        PrivateExitV3: PrivateExitV3,
         PrivateActionSubmittedV3: PrivateActionSubmittedV3,
+        PrivateActionCancelledV3: PrivateActionCancelledV3,
         PrivateActionExecutedV3: PrivateActionExecutedV3,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct AdminTransferStarted {
+        pub current_admin: ContractAddress,
+        pub pending_admin: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct AdminTransferred {
+        pub previous_admin: ContractAddress,
+        pub new_admin: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct Paused {
+        pub admin: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct Unpaused {
+        pub admin: ContractAddress,
     }
 
     #[derive(Drop, starknet::Event)]
     pub struct VerifierUpdated {
         pub verifier: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct VerifierUpdateScheduled {
+        pub current_verifier: ContractAddress,
+        pub proposed_verifier: ContractAddress,
+        pub executable_at: u64,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -249,18 +343,16 @@ pub mod ShieldedPoolV3 {
         pub denom_id: felt252,
         pub amount: u256,
         pub note_commitment: felt252,
-        pub nullifier: felt252,
         pub timestamp: u64,
     }
 
     #[derive(Drop, starknet::Event)]
-    pub struct NoteWithdrawnV3 {
-        pub sender: ContractAddress,
-        pub token: ContractAddress,
-        pub amount: u256,
-        pub note_commitment: felt252,
+    pub struct PrivateExitV3 {
         pub nullifier: felt252,
-        pub timestamp: u64,
+        pub exit_hash: felt252,
+        pub token: ContractAddress,
+        pub recipient: ContractAddress,
+        pub amount: u256,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -272,6 +364,14 @@ pub mod ShieldedPoolV3 {
         pub action_hash: felt252,
         pub recipient: ContractAddress,
         pub submitted_at: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct PrivateActionCancelledV3 {
+        pub canceled_by: ContractAddress,
+        pub nullifier: felt252,
+        pub action_type: felt252,
+        pub action_hash: felt252,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -297,16 +397,95 @@ pub mod ShieldedPoolV3 {
         self.relayer.write(relayer);
         self.current_root.write(0);
         self.root_count.write(0);
+        self.reentrancy_lock.write(false);
     }
 
     #[abi(embed_v0)]
     impl ShieldedPoolV3Impl of IShieldedPoolV3<ContractState> {
+        /// Starts a two-step admin transfer so key rotation is possible without instant handover.
+        fn transfer_admin(ref self: ContractState, new_admin: ContractAddress) {
+            self._assert_admin();
+            assert!(!new_admin.is_zero(), "Pending admin required");
+            assert!(new_admin != self.admin.read(), "Admin unchanged");
+            self.pending_admin.write(new_admin);
+            self
+                .emit(
+                    Event::AdminTransferStarted(
+                        AdminTransferStarted {
+                            current_admin: self.admin.read(), pending_admin: new_admin,
+                        },
+                    ),
+                );
+        }
+
+        /// Finalizes the admin handover from the pending admin address.
+        fn accept_admin(ref self: ContractState) {
+            let caller = get_caller_address();
+            let pending_admin = self.pending_admin.read();
+            assert!(!pending_admin.is_zero(), "No pending admin");
+            assert!(caller == pending_admin, "Only pending admin");
+
+            let previous_admin = self.admin.read();
+            self.admin.write(pending_admin);
+            self.pending_admin.write(_zero_address());
+            self
+                .emit(
+                    Event::AdminTransferred(
+                        AdminTransferred { previous_admin, new_admin: pending_admin },
+                    ),
+                );
+        }
+
+        /// Stops deposits, submits, exits, and executes during incident response.
+        fn pause(ref self: ContractState) {
+            self._assert_admin();
+            assert!(!self.paused.read(), "Already paused");
+            self.paused.write(true);
+            self.emit(Event::Paused(Paused { admin: get_caller_address() }));
+        }
+
+        /// Re-enables normal user flows after the incident is resolved.
+        fn unpause(ref self: ContractState) {
+            self._assert_admin();
+            assert!(self.paused.read(), "Not paused");
+            self.paused.write(false);
+            self.emit(Event::Unpaused(Unpaused { admin: get_caller_address() }));
+        }
+
         /// Admin-only setter for the active proof verifier.
         fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             self._assert_admin();
             assert!(!verifier.is_zero(), "Verifier required");
-            self.verifier.write(verifier);
-            self.emit(Event::VerifierUpdated(VerifierUpdated { verifier }));
+            let current = self.verifier.read();
+            assert!(current != verifier, "Verifier unchanged");
+
+            let executable_at = get_block_timestamp() + VERIFIER_UPDATE_DELAY_SECS;
+            self.pending_verifier.write(verifier);
+            self.pending_verifier_ready_at.write(executable_at);
+            self
+                .emit(
+                    Event::VerifierUpdateScheduled(
+                        VerifierUpdateScheduled {
+                            current_verifier: current, proposed_verifier: verifier, executable_at,
+                        },
+                    ),
+                );
+        }
+
+        /// Applies a previously scheduled verifier update once the delay has elapsed.
+        fn apply_verifier_update(ref self: ContractState) {
+            self._assert_admin();
+
+            let proposed = self.pending_verifier.read();
+            assert!(!proposed.is_zero(), "No verifier update pending");
+
+            let executable_at = self.pending_verifier_ready_at.read();
+            assert!(get_block_timestamp() >= executable_at, "Verifier update timelocked");
+
+            self.verifier.write(proposed);
+            self.pending_verifier.write(_zero_address());
+            self.pending_verifier_ready_at.write(0);
+            self.emit(Event::VerifierUpdated(VerifierUpdated { verifier: proposed }));
         }
 
         /// Admin-only setter for the relayer allowed to execute private actions.
@@ -348,23 +527,20 @@ pub mod ShieldedPoolV3 {
             token: ContractAddress,
             denom_id: felt252,
             note_commitment: felt252,
-            nullifier: felt252,
         ) {
+            self._assert_not_paused();
             let sender = get_caller_address();
             assert!(!sender.is_zero(), "Sender required");
             assert!(!token.is_zero(), "Token required");
             assert!(denom_id != 0, "denom_id required");
             assert!(note_commitment != 0, "note_commitment required");
-            assert!(nullifier != 0, "Nullifier required");
             assert!(!self.note_seen.read(note_commitment), "Note already exists");
-            assert!(!self.nullifier_used.read(nullifier), "Nullifier already spent");
-            assert!(self.note_commitment_by_nullifier.read(nullifier) == 0, "Nullifier already bound");
 
             let amount = self.fixed_amount(token, denom_id);
             assert!(!_is_zero_u256(amount), "Asset rule not set");
 
             let token_dispatcher = IERC20Dispatcher { contract_address: token };
-            let self_address = starknet::get_contract_address();
+            let self_address = get_contract_address();
             let transferred = token_dispatcher.transfer_from(sender, self_address, amount);
             assert!(transferred, "Deposit transfer_from failed");
 
@@ -374,59 +550,87 @@ pub mod ShieldedPoolV3 {
             self.note_owner_by_commitment.write(note_commitment, sender);
             self.note_token_by_commitment.write(note_commitment, token);
             self.note_amount_by_commitment.write(note_commitment, amount);
-            self.note_nullifier_by_commitment.write(note_commitment, nullifier);
-            self.note_commitment_by_nullifier.write(nullifier, note_commitment);
-            self.note_spent_by_commitment.write(note_commitment, false);
             self
                 .emit(
                     Event::DepositRegisteredV3(
                         DepositRegisteredV3 {
-                            sender, token, denom_id, amount, note_commitment, nullifier, timestamp: ts,
+                            sender, token, denom_id, amount, note_commitment, timestamp: ts,
                         },
                     ),
                 );
         }
 
-        /// Cancels an unused note and returns the locked funds to the original depositor.
+        /// Disabled because direct owner withdrawal is fundamentally incompatible with unlinkable spend nullifiers.
         fn withdraw_note_v3(ref self: ContractState, note_commitment: felt252) {
-            let sender = get_caller_address();
-            assert!(!sender.is_zero(), "Sender required");
-            assert!(note_commitment != 0, "note_commitment required");
-            assert!(self.note_seen.read(note_commitment), "Note not found");
-            let owner = self.note_owner_by_commitment.read(note_commitment);
-            assert!(owner == sender, "Only note owner");
-            assert!(!self.note_spent_by_commitment.read(note_commitment), "Note already spent");
+            let _ = note_commitment;
+            panic!("Direct note withdrawal disabled")
+        }
 
-            let token = self.note_token_by_commitment.read(note_commitment);
-            assert!(!token.is_zero(), "Note token missing");
-            let amount = self.note_amount_by_commitment.read(note_commitment);
-            assert!(!_is_zero_u256(amount), "Note amount missing");
-            let nullifier = self.note_nullifier_by_commitment.read(note_commitment);
-            assert!(nullifier != 0, "Note nullifier missing");
-            assert!(!self.pending_action_exists_by_nullifier.read(nullifier), "Pending action exists");
+        /// Verifies a proof-bound exit and transfers the proven note amount to the bound recipient.
+        fn private_exit_v3(
+            ref self: ContractState,
+            root: felt252,
+            nullifier: felt252,
+            proof: Span<felt252>,
+            token: ContractAddress,
+            amount: u256,
+            recipient: ContractAddress,
+        ) {
+            self._assert_not_paused();
+            self._enter_reentrancy_guard();
+
+            assert!(root != 0, "Root required");
+            assert!(nullifier != 0, "Nullifier required");
+            assert!(!token.is_zero(), "Token required");
+            assert!(!_is_zero_u256(amount), "Amount required");
+            assert!(!recipient.is_zero(), "Recipient required");
             assert!(!self.nullifier_used.read(nullifier), "Nullifier already spent");
+            assert!(!self.pending_action_exists_by_nullifier.read(nullifier), "Pending action exists");
 
-            let token_dispatcher = IERC20Dispatcher { contract_address: token };
-            let transferred = token_dispatcher.transfer(sender, amount);
-            assert!(transferred, "Withdraw transfer failed");
+            let current_root = self.current_root.read();
+            assert!(current_root != 0, "Root not initialized");
+            assert!(self.root_seen.read(root), "Unknown root");
 
-            self.note_spent_by_commitment.write(note_commitment, true);
-            self.nullifier_used.write(nullifier, true);
+            let verifier = self.verifier.read();
+            assert!(!verifier.is_zero(), "Verifier not set");
+            let dispatcher = IGroth16VerifierBlsOutputDispatcher { contract_address: verifier };
+            let verification = dispatcher.verify_groth16_proof_bls12_381(proof);
+            match verification {
+                Option::Some(outputs) => {
+                    assert!(outputs.len() >= 4, "Verifier output too short");
 
-            let ts = get_block_timestamp();
-            self
-                .emit(
-                    Event::NoteWithdrawnV3(
-                        NoteWithdrawnV3 {
-                            sender,
-                            token,
-                            amount,
-                            note_commitment,
-                            nullifier,
-                            timestamp: ts,
-                        },
-                    ),
-                );
+                    let out_root = _u256_to_felt(*outputs.at(0_usize));
+                    let out_nullifier = _u256_to_felt(*outputs.at(1_usize));
+                    let exit_hash = _u256_to_felt(*outputs.at(2_usize));
+                    let recipient_felt = _u256_to_felt(*outputs.at(3_usize));
+
+                    assert!(out_root == root, "Proof root mismatch");
+                    assert!(out_nullifier == nullifier, "Proof nullifier mismatch");
+                    assert!(exit_hash != 0, "Exit hash required");
+                    assert!(recipient_felt != 0, "Recipient required");
+
+                    let proof_recipient: ContractAddress = recipient_felt.try_into().unwrap();
+                    assert!(proof_recipient == recipient, "Proof recipient mismatch");
+
+                    let computed_hash = self._compute_exit_hash(token, amount, recipient);
+                    assert!(computed_hash == exit_hash, "Exit hash mismatch");
+
+                    self.nullifier_used.write(nullifier, true);
+
+                    let token_dispatcher = IERC20Dispatcher { contract_address: token };
+                    let transferred = token_dispatcher.transfer(recipient, amount);
+                    assert!(transferred, "Exit transfer failed");
+
+                    self
+                        .emit(
+                            Event::PrivateExitV3(
+                                PrivateExitV3 { nullifier, exit_hash, token, recipient, amount },
+                            ),
+                        );
+                    self._exit_reentrancy_guard();
+                },
+                Option::None => panic!("Invalid proof"),
+            };
         }
 
         /// Thin wrapper for submitting a private swap action.
@@ -450,6 +654,27 @@ pub mod ShieldedPoolV3 {
             self._submit_private_action(root, nullifier, proof, ACTION_STAKE_PAYOUT_V3);
         }
 
+        /// Lets the original submitter or admin clear a pending action for safe re-submission.
+        fn cancel_private_action(ref self: ContractState, nullifier: felt252) {
+            assert!(nullifier != 0, "Nullifier required");
+            assert!(self.pending_action_exists_by_nullifier.read(nullifier), "Pending action not found");
+
+            let caller = get_caller_address();
+            let submitter = self.pending_submitter_by_nullifier.read(nullifier);
+            let admin = self.admin.read();
+            assert!(caller == submitter || caller == admin, "Only submitter/admin");
+
+            let action_type = self.pending_action_type_by_nullifier.read(nullifier);
+            let action_hash = self.pending_action_hash_by_nullifier.read(nullifier);
+            self._clear_pending_action(nullifier);
+            self
+                .emit(
+                    Event::PrivateActionCancelledV3(
+                        PrivateActionCancelledV3 { canceled_by: caller, nullifier, action_type, action_hash },
+                    ),
+                );
+        }
+
         /// Executes a queued private swap and handles optional payout forwarding.
         fn execute_private_swap_with_payout(
             ref self: ContractState,
@@ -458,6 +683,7 @@ pub mod ShieldedPoolV3 {
             entrypoint_selector: felt252,
             calldata: Span<felt252>,
             approval_token: ContractAddress,
+            approval_amount: u256,
             payout_token: ContractAddress,
             min_payout: u256,
         ) {
@@ -469,6 +695,7 @@ pub mod ShieldedPoolV3 {
                     entrypoint_selector,
                     calldata,
                     approval_token,
+                    approval_amount,
                     payout_token,
                     min_payout,
                 );
@@ -482,6 +709,7 @@ pub mod ShieldedPoolV3 {
             entrypoint_selector: felt252,
             calldata: Span<felt252>,
             approval_token: ContractAddress,
+            approval_amount: u256,
             payout_token: ContractAddress,
             min_payout: u256,
         ) {
@@ -493,6 +721,7 @@ pub mod ShieldedPoolV3 {
                     entrypoint_selector,
                     calldata,
                     approval_token,
+                    approval_amount,
                     payout_token,
                     min_payout,
                 );
@@ -506,6 +735,7 @@ pub mod ShieldedPoolV3 {
             entrypoint_selector: felt252,
             calldata: Span<felt252>,
             approval_token: ContractAddress,
+            approval_amount: u256,
             payout_token: ContractAddress,
             min_payout: u256,
         ) {
@@ -517,6 +747,7 @@ pub mod ShieldedPoolV3 {
                     entrypoint_selector,
                     calldata,
                     approval_token,
+                    approval_amount,
                     payout_token,
                     min_payout,
                 );
@@ -525,6 +756,36 @@ pub mod ShieldedPoolV3 {
         /// Returns the current active root.
         fn get_root(self: @ContractState) -> felt252 {
             self.current_root.read()
+        }
+
+        /// Returns the current admin address.
+        fn get_admin(self: @ContractState) -> ContractAddress {
+            self.admin.read()
+        }
+
+        /// Returns the pending admin address.
+        fn get_pending_admin(self: @ContractState) -> ContractAddress {
+            self.pending_admin.read()
+        }
+
+        /// Returns whether incident pause mode is active.
+        fn is_paused(self: @ContractState) -> bool {
+            self.paused.read()
+        }
+
+        /// Returns the active verifier address.
+        fn get_verifier(self: @ContractState) -> ContractAddress {
+            self.verifier.read()
+        }
+
+        /// Returns the pending verifier update address.
+        fn get_pending_verifier(self: @ContractState) -> ContractAddress {
+            self.pending_verifier.read()
+        }
+
+        /// Returns when the pending verifier update becomes executable.
+        fn get_pending_verifier_ready_at(self: @ContractState) -> u64 {
+            self.pending_verifier_ready_at.read()
         }
 
         /// Returns how many roots have been stored.
@@ -550,6 +811,7 @@ pub mod ShieldedPoolV3 {
             entrypoint_selector: felt252,
             calldata: Span<felt252>,
             approval_token: ContractAddress,
+            approval_amount: u256,
             payout_token: ContractAddress,
             min_payout: u256,
         ) -> felt252 {
@@ -560,6 +822,7 @@ pub mod ShieldedPoolV3 {
                     entrypoint_selector,
                     calldata,
                     approval_token,
+                    approval_amount,
                     payout_token,
                     min_payout,
                 )
@@ -572,6 +835,7 @@ pub mod ShieldedPoolV3 {
             entrypoint_selector: felt252,
             calldata: Span<felt252>,
             approval_token: ContractAddress,
+            approval_amount: u256,
             payout_token: ContractAddress,
             min_payout: u256,
         ) -> felt252 {
@@ -582,6 +846,7 @@ pub mod ShieldedPoolV3 {
                     entrypoint_selector,
                     calldata,
                     approval_token,
+                    approval_amount,
                     payout_token,
                     min_payout,
                 )
@@ -594,6 +859,7 @@ pub mod ShieldedPoolV3 {
             entrypoint_selector: felt252,
             calldata: Span<felt252>,
             approval_token: ContractAddress,
+            approval_amount: u256,
             payout_token: ContractAddress,
             min_payout: u256,
         ) -> felt252 {
@@ -604,9 +870,20 @@ pub mod ShieldedPoolV3 {
                     entrypoint_selector,
                     calldata,
                     approval_token,
+                    approval_amount,
                     payout_token,
                     min_payout,
                 )
+        }
+
+        /// Computes the exit hash off-chain callers should bind into private exit proofs.
+        fn preview_exit_hash(
+            self: @ContractState,
+            token: ContractAddress,
+            amount: u256,
+            recipient: ContractAddress,
+        ) -> felt252 {
+            self._compute_exit_hash(token, amount, recipient)
         }
 
         /// Returns whether the nullifier has been permanently consumed.
@@ -649,12 +926,20 @@ pub mod ShieldedPoolV3 {
 
         /// Legacy alias kept so older backend code can still read the action hash.
         fn get_pending_swap_action_hash(self: @ContractState, nullifier: felt252) -> felt252 {
-            self.pending_action_hash_by_nullifier.read(nullifier)
+            if self.pending_action_type_by_nullifier.read(nullifier) == ACTION_SWAP_PAYOUT_V3 {
+                self.pending_action_hash_by_nullifier.read(nullifier)
+            } else {
+                0
+            }
         }
 
         /// Legacy alias kept so older backend code can still read the recipient.
         fn get_pending_swap_recipient(self: @ContractState, nullifier: felt252) -> ContractAddress {
-            self.pending_recipient_by_nullifier.read(nullifier)
+            if self.pending_action_type_by_nullifier.read(nullifier) == ACTION_SWAP_PAYOUT_V3 {
+                self.pending_recipient_by_nullifier.read(nullifier)
+            } else {
+                _zero_address()
+            }
         }
     }
 
@@ -663,6 +948,11 @@ pub mod ShieldedPoolV3 {
         /// Ensures only the admin can call the current code path.
         fn _assert_admin(self: @ContractState) {
             assert!(get_caller_address() == self.admin.read(), "Only admin");
+        }
+
+        /// Blocks normal user entrypoints while the contract is paused for incident response.
+        fn _assert_not_paused(self: @ContractState) {
+            assert!(!self.paused.read(), "Paused");
         }
 
         /// Ensures the caller is either the relayer or the admin override account.
@@ -674,6 +964,17 @@ pub mod ShieldedPoolV3 {
             );
         }
 
+        /// Lightweight global reentrancy guard for paths that perform external calls.
+        fn _enter_reentrancy_guard(ref self: ContractState) {
+            assert!(!self.reentrancy_lock.read(), "Reentrancy blocked");
+            self.reentrancy_lock.write(true);
+        }
+
+        /// Releases the reentrancy guard once the external-call path is complete.
+        fn _exit_reentrancy_guard(ref self: ContractState) {
+            self.reentrancy_lock.write(false);
+        }
+
         /// Verifies a proof, extracts its bound action data, and stores the pending action.
         fn _submit_private_action(
             ref self: ContractState,
@@ -682,15 +983,14 @@ pub mod ShieldedPoolV3 {
             proof: Span<felt252>,
             action_type: felt252,
         ) {
+            self._assert_not_paused();
+            self._enter_reentrancy_guard();
+
             let sender = get_caller_address();
             assert!(root != 0, "Root required");
             assert!(nullifier != 0, "Nullifier required");
             assert!(!self.nullifier_used.read(nullifier), "Nullifier already spent");
             assert!(!self.pending_action_exists_by_nullifier.read(nullifier), "Pending action exists");
-            let note_commitment = self.note_commitment_by_nullifier.read(nullifier);
-            assert!(note_commitment != 0, "Nullifier note missing");
-            assert!(self.note_seen.read(note_commitment), "Note missing");
-            assert!(!self.note_spent_by_commitment.read(note_commitment), "Note already spent");
 
             let current_root = self.current_root.read();
             assert!(current_root != 0, "Root not initialized");
@@ -702,39 +1002,33 @@ pub mod ShieldedPoolV3 {
             let verification = dispatcher.verify_groth16_proof_bls12_381(proof);
             match verification {
                 Option::Some(outputs) => {
-                    // Backward-compatible verifier output:
-                    // - preferred: [root, nullifier, action_hash, recipient]
-                    // - legacy-v3: [root, nullifier, action_hash]
-                    // - legacy-v2: [x] (root/nullifier/action_hash unavailable from verifier output)
-                    assert!(outputs.len() > 0, "Verifier output too short");
-                    let mut action_hash: felt252 = 0;
-                    if outputs.len() >= 2 {
-                        let out_root = _u256_to_felt(*outputs.at(0_usize));
-                        let out_nullifier = _u256_to_felt(*outputs.at(1_usize));
-                        assert!(out_root == root, "Proof root mismatch");
-                        assert!(out_nullifier == nullifier, "Proof nullifier mismatch");
-                    }
-                    if outputs.len() >= 3 {
-                        action_hash = _u256_to_felt(*outputs.at(2_usize));
-                        assert!(action_hash != 0, "Action hash required");
-                    }
-                    let recipient: ContractAddress = if outputs.len() >= 4 {
-                        let recipient_felt = _u256_to_felt(*outputs.at(3_usize));
-                        assert!(recipient_felt != 0, "Recipient required");
-                        let recipient_from_output: ContractAddress = recipient_felt.try_into().unwrap();
-                        assert!(!recipient_from_output.is_zero(), "Recipient required");
-                        recipient_from_output
+                    assert!(outputs.len() >= 4, "Verifier output too short");
+
+                    let out_root = _u256_to_felt(*outputs.at(0_usize));
+                    let out_nullifier = _u256_to_felt(*outputs.at(1_usize));
+                    let action_hash = _u256_to_felt(*outputs.at(2_usize));
+                    let recipient_felt = _u256_to_felt(*outputs.at(3_usize));
+
+                    assert!(out_root == root, "Proof root mismatch");
+                    assert!(out_nullifier == nullifier, "Proof nullifier mismatch");
+                    assert!(action_hash != 0, "Action hash required");
+                    assert!(recipient_felt != 0, "Recipient required");
+
+                    let recipient: ContractAddress = recipient_felt.try_into().unwrap();
+                    assert!(!recipient.is_zero(), "Recipient required");
+                    let authorized_submitter = self.authorized_submitter_by_nullifier.read(nullifier);
+                    if authorized_submitter.is_zero() {
+                        self.authorized_submitter_by_nullifier.write(nullifier, sender);
                     } else {
-                        let fallback_recipient = self.note_owner_by_commitment.read(note_commitment);
-                        assert!(!fallback_recipient.is_zero(), "Recipient fallback missing");
-                        fallback_recipient
-                    };
+                        assert!(authorized_submitter == sender, "Only original submitter");
+                    }
 
                     let submitted_at = get_block_timestamp();
                     self.pending_action_exists_by_nullifier.write(nullifier, true);
                     self.pending_action_type_by_nullifier.write(nullifier, action_type);
                     self.pending_action_hash_by_nullifier.write(nullifier, action_hash);
                     self.pending_recipient_by_nullifier.write(nullifier, recipient);
+                    self.pending_submitter_by_nullifier.write(nullifier, sender);
                     self.pending_submitted_at_by_nullifier.write(nullifier, submitted_at);
                     self
                         .emit(
@@ -750,12 +1044,13 @@ pub mod ShieldedPoolV3 {
                                 },
                             ),
                         );
+                    self._exit_reentrancy_guard();
                 },
                 Option::None => panic!("Invalid proof"),
             };
         }
 
-        /// Executes a previously queued private action, then marks the note and nullifier as spent.
+        /// Executes a previously queued private action using exact approvals and state-first replay protection.
         fn _execute_private_action_with_payout(
             ref self: ContractState,
             nullifier: felt252,
@@ -764,10 +1059,14 @@ pub mod ShieldedPoolV3 {
             entrypoint_selector: felt252,
             calldata: Span<felt252>,
             approval_token: ContractAddress,
+            approval_amount: u256,
             payout_token: ContractAddress,
             min_payout: u256,
         ) {
             self._assert_relayer_or_admin();
+            self._assert_not_paused();
+            self._enter_reentrancy_guard();
+
             assert!(nullifier != 0, "Nullifier required");
             assert!(!self.nullifier_used.read(nullifier), "Nullifier already spent");
             assert!(self.pending_action_exists_by_nullifier.read(nullifier), "Pending action not found");
@@ -779,6 +1078,11 @@ pub mod ShieldedPoolV3 {
             let expected_hash = self.pending_action_hash_by_nullifier.read(nullifier);
             let recipient = self.pending_recipient_by_nullifier.read(nullifier);
             assert!(!recipient.is_zero(), "Recipient missing");
+            let submitted_at = self.pending_submitted_at_by_nullifier.read(nullifier);
+            assert!(
+                get_block_timestamp() <= submitted_at + PENDING_ACTION_EXPIRY_SECS,
+                "Pending action expired",
+            );
 
             let computed_hash = self
                 ._compute_action_hash(
@@ -787,17 +1091,18 @@ pub mod ShieldedPoolV3 {
                     entrypoint_selector,
                     calldata,
                     approval_token,
+                    approval_amount,
                     payout_token,
                     min_payout,
                 );
-            if expected_hash != 0 {
-                assert!(computed_hash == expected_hash, "Action hash mismatch");
-            }
-            let final_action_hash = if expected_hash == 0 { computed_hash } else { expected_hash };
+            assert!(computed_hash == expected_hash, "Action hash mismatch");
 
-            self._approve_if_needed(approval_token, target);
+            self._clear_pending_action(nullifier);
+            self.nullifier_used.write(nullifier, true);
 
-            let self_address = starknet::get_contract_address();
+            self._approve_exact_if_needed(approval_token, target, approval_amount);
+
+            let self_address = get_contract_address();
             let payout_amount = if payout_token.is_zero() {
                 assert!(_is_zero_u256(min_payout), "min_payout requires payout_token");
                 let _ = starknet::syscalls::call_contract_syscall(target, entrypoint_selector, calldata)
@@ -809,28 +1114,31 @@ pub mod ShieldedPoolV3 {
                 let _ = starknet::syscalls::call_contract_syscall(target, entrypoint_selector, calldata)
                     .unwrap_syscall();
                 let after_balance = payout_dispatcher.balance_of(self_address);
-                assert!(after_balance >= before_balance, "Payout underflow");
-                let payout_amount_local = after_balance - before_balance;
+                let payout_amount_local = if approval_token == payout_token {
+                    let remaining_allowance = payout_dispatcher.allowance(self_address, target);
+                    assert!(approval_amount >= remaining_allowance, "Allowance accounting invalid");
+                    let approval_spent = approval_amount - remaining_allowance;
+                    let total_received = after_balance + approval_spent;
+                    assert!(total_received >= before_balance, "Payout underflow");
+                    total_received - before_balance
+                } else {
+                    assert!(after_balance >= before_balance, "Payout underflow");
+                    after_balance - before_balance
+                };
                 assert!(payout_amount_local >= min_payout, "Payout below min");
                 let transferred = payout_dispatcher.transfer(recipient, payout_amount_local);
                 assert!(transferred, "Payout transfer failed");
                 payout_amount_local
             };
 
-            self._clear_pending_action(nullifier);
-            self.nullifier_used.write(nullifier, true);
-            let note_commitment = self.note_commitment_by_nullifier.read(nullifier);
-            if note_commitment != 0 {
-                self.note_spent_by_commitment.write(note_commitment, true);
-            }
-
+            self._reset_approval_if_needed(approval_token, target);
             self
                 .emit(
                     Event::PrivateActionExecutedV3(
                         PrivateActionExecutedV3 {
                             nullifier,
                             action_type,
-                            action_hash: final_action_hash,
+                            action_hash: expected_hash,
                             target,
                             selector: entrypoint_selector,
                             payout_token,
@@ -839,6 +1147,7 @@ pub mod ShieldedPoolV3 {
                         },
                     ),
                 );
+            self._exit_reentrancy_guard();
         }
 
         /// Clears all pending-action fields for a nullifier after execution or cancellation.
@@ -847,25 +1156,41 @@ pub mod ShieldedPoolV3 {
             self.pending_action_type_by_nullifier.write(nullifier, 0);
             self.pending_action_hash_by_nullifier.write(nullifier, 0);
             self.pending_recipient_by_nullifier.write(nullifier, _zero_address());
+            self.pending_submitter_by_nullifier.write(nullifier, _zero_address());
             self.pending_submitted_at_by_nullifier.write(nullifier, 0);
         }
 
-        /// Gives the target contract a max allowance when an approval token is supplied.
-        fn _approve_if_needed(
-            self: @ContractState, approval_token: ContractAddress, target: ContractAddress,
+        /// Grants only the exact allowance needed for the current action.
+        fn _approve_exact_if_needed(
+            self: @ContractState,
+            approval_token: ContractAddress,
+            target: ContractAddress,
+            approval_amount: u256,
         ) {
-            if !approval_token.is_zero() {
-                let approval_dispatcher = IERC20Dispatcher { contract_address: approval_token };
-                let max_u256: u256 = u256 {
-                    low: 0xffffffffffffffffffffffffffffffff,
-                    high: 0xffffffffffffffffffffffffffffffff,
-                };
-                let approved = approval_dispatcher.approve(target, max_u256);
-                assert!(approved, "Approval failed");
+            if approval_token.is_zero() {
+                assert!(_is_zero_u256(approval_amount), "approval_amount requires approval_token");
+                return;
             }
+
+            let approval_dispatcher = IERC20Dispatcher { contract_address: approval_token };
+            let approved = approval_dispatcher.approve(target, approval_amount);
+            assert!(approved, "Approval failed");
         }
 
-        /// Hashes the execution payload so the proof and relayer execution bind to the same action.
+        /// Resets allowance back to zero after the action completes.
+        fn _reset_approval_if_needed(
+            self: @ContractState, approval_token: ContractAddress, target: ContractAddress,
+        ) {
+            if approval_token.is_zero() {
+                return;
+            }
+
+            let approval_dispatcher = IERC20Dispatcher { contract_address: approval_token };
+            let reset = approval_dispatcher.approve(target, u256 { low: 0, high: 0 });
+            assert!(reset, "Approval reset failed");
+        }
+
+        /// Hashes the execution payload so the proof and relayer execution bind to the same action on this deployment.
         fn _compute_action_hash(
             self: @ContractState,
             action_type: felt252,
@@ -873,25 +1198,56 @@ pub mod ShieldedPoolV3 {
             entrypoint_selector: felt252,
             calldata: Span<felt252>,
             approval_token: ContractAddress,
+            approval_amount: u256,
             payout_token: ContractAddress,
             min_payout: u256,
         ) -> felt252 {
+            let contract_address_felt: felt252 = get_contract_address().into();
+            let chain_id = get_tx_info().unbox().chain_id;
             let target_felt: felt252 = target.into();
             let approval_token_felt: felt252 = approval_token.into();
             let payout_token_felt: felt252 = payout_token.into();
+            let approval_amount_low: felt252 = approval_amount.low.into();
+            let approval_amount_high: felt252 = approval_amount.high.into();
             let min_payout_low: felt252 = min_payout.low.into();
             let min_payout_high: felt252 = min_payout.high.into();
             let calldata_hash = poseidon_hash_span(calldata);
 
             let mut binding: Array<felt252> = array![];
+            binding.append(contract_address_felt);
+            binding.append(chain_id);
             binding.append(action_type);
             binding.append(target_felt);
             binding.append(entrypoint_selector);
             binding.append(calldata_hash);
             binding.append(approval_token_felt);
+            binding.append(approval_amount_low);
+            binding.append(approval_amount_high);
             binding.append(payout_token_felt);
             binding.append(min_payout_low);
             binding.append(min_payout_high);
+            poseidon_hash_span(binding.span())
+        }
+
+        /// Hashes the private-exit payload so the proof and withdrawal recipient bind to this deployment only.
+        fn _compute_exit_hash(
+            self: @ContractState, token: ContractAddress, amount: u256, recipient: ContractAddress,
+        ) -> felt252 {
+            let contract_address_felt: felt252 = get_contract_address().into();
+            let chain_id = get_tx_info().unbox().chain_id;
+            let token_felt: felt252 = token.into();
+            let recipient_felt: felt252 = recipient.into();
+            let amount_low: felt252 = amount.low.into();
+            let amount_high: felt252 = amount.high.into();
+
+            let mut binding: Array<felt252> = array![];
+            binding.append(contract_address_felt);
+            binding.append(chain_id);
+            binding.append(ACTION_PRIVATE_EXIT_V3);
+            binding.append(token_felt);
+            binding.append(amount_low);
+            binding.append(amount_high);
+            binding.append(recipient_felt);
             poseidon_hash_span(binding.span())
         }
     }
