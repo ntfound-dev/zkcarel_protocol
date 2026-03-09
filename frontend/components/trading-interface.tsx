@@ -2149,16 +2149,23 @@ export function TradingInterface() {
         Math.max(1e-9, Math.pow(10, -Math.min(6, resolveTokenDecimals(fromToken.symbol))))
     const cachedPayloadNoteMismatch =
       cachedPayloadIsV3 && !manualSelectionLocked && (lockedTokenMismatch || lockedAmountMismatch)
+    const cachedPayloadStillMixing =
+      cachedPayloadIsV3 &&
+      !manualSelectionLocked &&
+      typeof cachedPayload?.spendable_at_unix === "number" &&
+      Number.isFinite(cachedPayload.spendable_at_unix) &&
+      cachedPayload.spendable_at_unix * 1000 > Date.now()
+    const shouldReuseCachedV3Note =
+      cachedPayloadIsV3 && !manualSelectionLocked && !cachedPayloadNoteMismatch && !cachedPayloadStillMixing
     const hasLockedV3Note =
-      (cachedPayloadIsV3 || manualSelectionLocked) &&
-      !cachedPayloadNoteMismatch &&
+      (shouldReuseCachedV3Note || manualSelectionLocked) &&
       !!lockedNoteNullifier &&
       !!lockedNoteCommitment
     // For manually selected notes, always regenerate proof against current pair/quote context.
     const forceRefreshForManualSelectedNote = Boolean(manuallySelectedHideNoteRef.current)
     if (
       hasCompleteV3SpendPayload(cachedPayload) &&
-      !cachedPayloadNoteMismatch &&
+      shouldReuseCachedV3Note &&
       !forceRefreshForManualSelectedNote
     ) {
       setHasTradePrivacyPayload(true)
@@ -2222,20 +2229,19 @@ export function TradingInterface() {
             from_network: fromToken.network,
             to_network: toToken.network,
             note_version: HIDE_BALANCE_SHIELDED_POOL_V3 ? "v3" : undefined,
-            denom_id: inferredHideDenomId || cachedPayload?.denom_id,
+            denom_id: inferredHideDenomId || (shouldReuseCachedV3Note ? cachedPayload?.denom_id : undefined),
             note_commitment:
               manualSelectedCommitment ||
-              (cachedPayloadNoteMismatch
+              (!shouldReuseCachedV3Note
                 ? undefined
                 : cachedPayload?.note_commitment || cachedPayload?.commitment),
             nullifier:
-              manualSelectedNullifier ||
-              (cachedPayloadNoteMismatch ? undefined : cachedPayload?.nullifier),
+              manualSelectedNullifier || (shouldReuseCachedV3Note ? cachedPayload?.nullifier : undefined),
             root:
-              manualSelectedRoot || (cachedPayloadNoteMismatch ? undefined : cachedPayload?.root),
+              manualSelectedRoot || (shouldReuseCachedV3Note ? cachedPayload?.root : undefined),
             spendable_at_unix:
               manualSelectedSpendableAtUnix ||
-              (cachedPayloadNoteMismatch ? undefined : cachedPayload?.spendable_at_unix),
+              (shouldReuseCachedV3Note ? cachedPayload?.spendable_at_unix : undefined),
           },
         })
         const responseProof = normalizeHexArray(response.payload?.proof)
@@ -2251,19 +2257,19 @@ export function TradingInterface() {
           executor_address: response.payload?.executor_address?.trim() || undefined,
           root:
             responseRoot ||
-            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.root?.trim()) ||
+            (shouldReuseCachedV3Note ? cachedPayload?.root?.trim() : undefined) ||
             undefined,
           nullifier:
             response.payload?.nullifier?.trim() ||
-            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.nullifier?.trim()),
+            (shouldReuseCachedV3Note ? cachedPayload?.nullifier?.trim() : undefined),
           commitment:
             response.payload?.commitment?.trim() ||
-            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.commitment?.trim()),
+            (shouldReuseCachedV3Note ? cachedPayload?.commitment?.trim() : undefined),
           recipient: response.payload?.recipient?.trim() || recipientForPayload,
           note_commitment:
             response.payload?.note_commitment?.trim() ||
-            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.note_commitment?.trim()) ||
-            (cachedPayloadNoteMismatch ? undefined : cachedPayload?.commitment?.trim()) ||
+            (shouldReuseCachedV3Note ? cachedPayload?.note_commitment?.trim() : undefined) ||
+            (shouldReuseCachedV3Note ? cachedPayload?.commitment?.trim() : undefined) ||
             undefined,
           denom_id:
             response.payload?.denom_id?.trim() ||
@@ -2273,7 +2279,7 @@ export function TradingInterface() {
             typeof response.payload?.spendable_at_unix === "number" &&
             Number.isFinite(response.payload.spendable_at_unix)
               ? Math.floor(response.payload.spendable_at_unix)
-              : !cachedPayloadNoteMismatch && typeof cachedPayload?.spendable_at_unix === "number"
+              : shouldReuseCachedV3Note && typeof cachedPayload?.spendable_at_unix === "number"
               ? Math.floor(cachedPayload.spendable_at_unix)
               : undefined,
           proof: responseProof,
@@ -2353,7 +2359,7 @@ export function TradingInterface() {
               ? error.message
               : "Gagal menyiapkan payload Garaga otomatis.",
         })
-        if (cachedPayload && !hasLockedV3Note && !cachedPayloadNoteMismatch) {
+        if (cachedPayload && !hasLockedV3Note && shouldReuseCachedV3Note) {
           // Fallback: keep active cached note payload so execute path can continue.
           // Backend will regenerate proof when payload is incomplete.
           return cachedPayload
@@ -3432,7 +3438,7 @@ export function TradingInterface() {
       ? "Quote on-chain calldata is not ready yet. Refresh the quote."
       : isCrossChain && !resolvedReceiveAddress
       ? "Receive address is required."
-      : hideMixingWindowBlocked
+      : hideMixingWindowBlocked && isManuallySelectedHideNote(activeHideNoteCommitment, activeHideNoteNullifier)
       ? `Hide note is still mixing. Ready in ${formatRemainingDuration(hideMixingWindowRemainingMs)}.`
       : activeHideExecutorMismatch
       ? "Active hide note uses an old executor. Pick a note on current executor or withdraw old note."
@@ -4883,11 +4889,23 @@ export function TradingInterface() {
         HIDE_BALANCE_SHIELDED_POOL_V3 &&
         typeof tradePrivacyPayload?.spendable_at_unix === "number"
       ) {
+        const payloadNoteCommitment = (
+          tradePrivacyPayload.note_commitment ||
+          tradePrivacyPayload.commitment ||
+          ""
+        )
+          .trim()
+          .toLowerCase()
+        const payloadNullifier = (tradePrivacyPayload.nullifier || "").trim().toLowerCase()
+        const payloadWasManuallySelected = isManuallySelectedHideNote(
+          payloadNoteCommitment,
+          payloadNullifier
+        )
         const remainingMs = Math.max(
           0,
           tradePrivacyPayload.spendable_at_unix * 1000 - Date.now()
         )
-        if (remainingMs > 0) {
+        if (remainingMs > 0 && payloadWasManuallySelected) {
           notifications.addNotification({
             type: "warning",
             title: "Mixing window aktif",
