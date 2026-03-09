@@ -1213,6 +1213,50 @@ function buildPrivateHideTierHint(command: string, selectedTierUsdt: number): st
   return `${baseLine} For ${sourceToken}, the final token amount is approximate and is resolved at execution time from the on-chain rule or live quote.`
 }
 
+function readAiKnownTokenBalance(
+  wallet: ReturnType<typeof useWallet>,
+  symbol: string
+): number | null {
+  const normalized = symbol.trim().toUpperCase()
+  const candidates: number[] = []
+  const pushIfFinite = (value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      candidates.push(value)
+    }
+  }
+
+  switch (normalized) {
+    case "CAREL":
+      pushIfFinite(wallet.onchainBalance?.CAREL)
+      pushIfFinite(wallet.balance?.CAREL)
+      break
+    case "STRK":
+      pushIfFinite(wallet.onchainBalance?.STRK_L2)
+      pushIfFinite(wallet.balance?.STRK)
+      break
+    case "USDC":
+      pushIfFinite(wallet.onchainBalance?.USDC)
+      pushIfFinite(wallet.balance?.USDC)
+      break
+    case "USDT":
+      pushIfFinite(wallet.onchainBalance?.USDT)
+      pushIfFinite(wallet.balance?.USDT)
+      break
+    case "WBTC":
+    case "BTC":
+      pushIfFinite(wallet.onchainBalance?.WBTC)
+      pushIfFinite(wallet.balance?.WBTC)
+      pushIfFinite(wallet.onchainBalance?.BTC)
+      pushIfFinite(wallet.balance?.BTC)
+      break
+    default:
+      break
+  }
+
+  if (candidates.length === 0) return null
+  return Math.max(...candidates)
+}
+
 // Internal helper that parses token pair/amount from limit-order commands.
 function parseLimitOrderIntentFromCommand(
   command: string
@@ -3488,6 +3532,44 @@ export function FloatingAIAssistant() {
               {
                 role: "assistant",
                 content: `Swap pre-check failed before on-chain setup: ${message}\nNo CAREL was burned.`,
+                timestamp: nowTimestampLabel(),
+              },
+            ])
+            return
+          }
+        }
+
+        if (tierUsesGaraga && HIDE_BALANCE_SHIELDED_POOL_V3) {
+          const requiredHideAmount = Number.parseFloat(swapAmountForPrecheck)
+          let knownTokenBalance = readAiKnownTokenBalance(wallet, fromToken)
+          if (knownTokenBalance === null || (Number.isFinite(requiredHideAmount) && requiredHideAmount > 0 && knownTokenBalance + 1e-12 < requiredHideAmount)) {
+            try {
+              await wallet.refreshOnchainBalances()
+              knownTokenBalance = readAiKnownTokenBalance(wallet, fromToken)
+            } catch {
+              // Continue with the best known local balance snapshot.
+            }
+          }
+          if (
+            Number.isFinite(requiredHideAmount) &&
+            requiredHideAmount > 0 &&
+            knownTokenBalance !== null &&
+            knownTokenBalance + 1e-12 < requiredHideAmount
+          ) {
+            const insufficientMessage =
+              `Private swap pre-check failed: tier $${effectiveHideTierUsdt} requires ${swapAmountForPrecheck} ${fromToken}, ` +
+              `but available balance is ${knownTokenBalance.toFixed(6)} ${fromToken}.`
+            notifications.addNotification({
+              type: "warning",
+              title: "Swap pre-check failed",
+              message: insufficientMessage,
+            })
+            appendMessagesForTier(activeTier, [
+              {
+                role: "assistant",
+                content:
+                  `${insufficientMessage}\n` +
+                  "No CAREL was burned. Lower the hide tier or fund the source token first, then retry.",
                 timestamp: nowTimestampLabel(),
               },
             ])
