@@ -16,7 +16,7 @@ type CarelBrandLogoProps = {
 }
 
 /**
- * Branded mark for Carel Protocol (shield + Z monogram).
+ * Branded mark for Carel Protocol (technical shield + C glyph).
  */
 export function CarelLogoMark({ className, size = 34 }: CarelLogoMarkProps) {
   return (
@@ -26,7 +26,7 @@ export function CarelLogoMark({ className, size = 34 }: CarelLogoMarkProps) {
       aria-hidden="true"
     >
       <img
-        src="/brand/carel-logo-mark.svg"
+        src="/brand/carel-logo-starknet-technical.svg"
         alt=""
         width={size}
         height={size}

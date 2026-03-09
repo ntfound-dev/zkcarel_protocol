@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="outerStroke" x1="190" y1="180" x2="835" y2="848" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4FAFF"/>
+      <stop offset="0.2" stop-color="#8CB7D6"/>
+      <stop offset="0.45" stop-color="#36D3FF"/>
+      <stop offset="0.72" stop-color="#6283A6"/>
+      <stop offset="1" stop-color="#F7FBFF"/>
+    </linearGradient>
+    <linearGradient id="innerPlate" x1="278" y1="250" x2="758" y2="780" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#09111D"/>
+      <stop offset="0.52" stop-color="#0E1A29"/>
+      <stop offset="1" stop-color="#08111A"/>
+    </linearGradient>
+    <linearGradient id="coreAccent" x1="312" y1="264" x2="724" y2="714" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DFF7FF"/>
+      <stop offset="0.2" stop-color="#78ECFF"/>
+      <stop offset="0.48" stop-color="#1FD4FF"/>
+      <stop offset="0.8" stop-color="#9FB8D8"/>
+      <stop offset="1" stop-color="#F5FAFF"/>
+    </linearGradient>
+    <linearGradient id="traceAccent" x1="366" y1="320" x2="704" y2="646" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6EEAFF"/>
+      <stop offset="1" stop-color="#D9F4FF"/>
+    </linearGradient>
+    <filter id="glow" x="116" y="116" width="792" height="792" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+      <feGaussianBlur stdDeviation="26" result="effect1_foregroundBlur_0_1"/>
+    </filter>
+    <filter id="shadow" x="130" y="126" width="760" height="780" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="20"/>
+      <feGaussianBlur stdDeviation="24"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.02 0 0 0 0 0.07 0 0 0 0 0.13 0 0 0 0.5 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#glow)" opacity="0.42">
+    <path d="M512 170L776 280V510C776 678 663 802 512 872C361 802 248 678 248 510V280L512 170Z" stroke="#37D7FF" stroke-width="20"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <path d="M512 178L788 292V515C788 693 670 822 512 894C354 822 236 693 236 515V292L512 178Z" fill="url(#outerStroke)"/>
+    <path d="M512 218L748 315V510C748 660 648 772 512 840C376 772 276 660 276 510V315L512 218Z" fill="url(#innerPlate)"/>
+
+    <path d="M512 255L711 337V509C711 634 626 728 512 789C398 728 313 634 313 509V337L512 255Z" stroke="#173044" stroke-width="3" opacity="0.78"/>
+
+    <path d="M365 344L430 344L566 344L616 394L566 444L430 444L394 480L394 543L430 579L566 579L616 629L566 679L430 679L365 679L316 630L316 394L365 344Z" fill="url(#coreAccent)"/>
+    <path d="M456 392H608" stroke="#0A1522" stroke-width="24" stroke-linecap="round"/>
+    <path d="M422 512H576" stroke="#0A1522" stroke-width="24" stroke-linecap="round"/>
+    <path d="M456 632H608" stroke="#0A1522" stroke-width="24" stroke-linecap="round"/>
+
+    <path d="M661 336V290L704 247" stroke="url(#traceAccent)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="720" cy="230" r="14" fill="#DDF6FF"/>
+    <circle cx="720" cy="230" r="8" fill="#58E2FF"/>
+
+    <path d="M664 686V733L707 776" stroke="url(#traceAccent)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="724" cy="792" r="14" fill="#DDF6FF"/>
+    <circle cx="724" cy="792" r="8" fill="#58E2FF"/>
+
+    <path d="M312 418H254L215 379" stroke="#8CC4DF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+    <circle cx="198" cy="362" r="11" fill="#CFE4F1"/>
+    <path d="M312 605H250L214 641" stroke="#8CC4DF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+    <circle cx="198" cy="658" r="11" fill="#CFE4F1"/>
+
+    <path d="M402 274H621" stroke="#6CEAFF" stroke-width="6" stroke-linecap="round" opacity="0.35"/>
+    <path d="M406 750H617" stroke="#6CEAFF" stroke-width="6" stroke-linecap="round" opacity="0.22"/>
+  </g>
+</svg>
