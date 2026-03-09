@@ -3306,17 +3306,6 @@ export function TradingInterface() {
     hideBalanceOnchain &&
     ((activeTradePrivacyPayload?.note_version || "").trim().toLowerCase() === "v3" ||
       HIDE_BALANCE_SHIELDED_POOL_V3)
-  const privacySpendableAtMs =
-    typeof activeTradePrivacyPayload?.spendable_at_unix === "number" &&
-    Number.isFinite(activeTradePrivacyPayload.spendable_at_unix)
-      ? activeTradePrivacyPayload.spendable_at_unix * 1000
-      : null
-  const hideMixingWindowRemainingMs =
-    activeHidePayloadIsV3 && privacySpendableAtMs
-      ? Math.max(0, privacySpendableAtMs - nowMs)
-      : 0
-  const hideMixingWindowBlocked =
-    activeHidePayloadIsV3 && hideMixingWindowRemainingMs > 0
   const hasActiveHideV3Note =
     activeHidePayloadIsV3 &&
     !!activeTradePrivacyPayload &&
@@ -3345,6 +3334,24 @@ export function TradingInterface() {
       }) || null
     )
   }, [activeHideNoteCommitment, activeHideNoteNullifier, hasActiveHideV3Note, pendingHideNotes])
+  const activeHideTrackedNote =
+    hasActiveHideV3Note && activeHideNoteRecord ? activeHideNoteRecord : null
+  const hasTrackedActiveHideV3Note = !!activeHideTrackedNote
+  const privacySpendableAtMs =
+    typeof activeHideTrackedNote?.spendable_at_unix === "number" &&
+    Number.isFinite(activeHideTrackedNote.spendable_at_unix)
+      ? activeHideTrackedNote.spendable_at_unix * 1000
+      : typeof activeTradePrivacyPayload?.spendable_at_unix === "number" &&
+        Number.isFinite(activeTradePrivacyPayload.spendable_at_unix) &&
+        pendingHideNotes.length === 0
+      ? activeTradePrivacyPayload.spendable_at_unix * 1000
+      : null
+  const hideMixingWindowRemainingMs =
+    activeHidePayloadIsV3 && privacySpendableAtMs
+      ? Math.max(0, privacySpendableAtMs - nowMs)
+      : 0
+  const hideMixingWindowBlocked =
+    activeHidePayloadIsV3 && hideMixingWindowRemainingMs > 0
   const activeHideNoteTokenSymbol = (activeHideNoteRecord?.token_symbol || "").trim().toUpperCase()
   const activeHideNoteAmountText = (activeHideNoteRecord?.amount || "").trim()
   const activeExecutorNormalized = normalizeExecutorAddress(PRIVATE_ACTION_EXECUTOR_ADDRESS)
@@ -3448,7 +3455,7 @@ export function TradingInterface() {
       )
     }
     if (isCrossChain) return "Execute Bridge"
-    if (hideBalanceOnchain && !hasActiveHideV3Note) return "Execute Note"
+    if (hideBalanceOnchain && !activeHideTrackedNote) return "Execute Note"
     return "Execute Trade"
   })()
 
@@ -6226,7 +6233,7 @@ export function TradingInterface() {
               )}
               {hideBalanceOnchain &&
                 HIDE_BALANCE_SHIELDED_POOL_V3 &&
-                hasActiveHideV3Note &&
+                hasTrackedActiveHideV3Note &&
                 activeHideNoteAmountText && (
                   <p className="text-xs text-muted-foreground">
                     Nominal note V3 terkunci: {activeHideNoteAmountText}{" "}
@@ -6728,7 +6735,7 @@ export function TradingInterface() {
           </div>
         )}
 
-        {hasActiveHideV3Note && (
+        {hasTrackedActiveHideV3Note && (
           <div className="mt-4 p-3 rounded-xl border border-primary/30 bg-primary/10 space-y-2">
             <p className="text-sm font-medium text-foreground">🔒 Your note is mixing...</p>
             <p className="text-xs text-muted-foreground">
@@ -6761,7 +6768,7 @@ export function TradingInterface() {
         )}
 
         {/* Execute Button */}
-        {!hasActiveHideV3Note && (
+        {!hasTrackedActiveHideV3Note && (
           <>
             <Button 
               onClick={handleExecuteTrade}
@@ -6788,7 +6795,7 @@ export function TradingInterface() {
         </p>
       </div>
 
-      {!hasActiveHideV3Note && (
+      {!hasTrackedActiveHideV3Note && (
       <div className="fixed md:hidden inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto w-full max-w-xl px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
           <div className="mb-2 grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
