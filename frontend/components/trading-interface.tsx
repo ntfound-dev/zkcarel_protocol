@@ -5485,7 +5485,7 @@ export function TradingInterface() {
               (HIDE_BALANCE_SHIELDED_POOL_V3 ||
                 payloadLooksV3 ||
                 /hide balance v3/i.test(message)) &&
-              /note belum terdaftar/i.test(message) &&
+              /note belum terdaftar|note not registered|note is not registered yet/i.test(message) &&
               noteDepositPayload
             ) {
               if (manuallySelectedHideNoteRef.current) {

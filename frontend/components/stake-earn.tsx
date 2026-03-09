@@ -1898,7 +1898,7 @@ export function StakeEarn() {
         }
         if (
           useRelayerPoolHide &&
-          /note belum terdaftar/i.test(message) &&
+          /note belum terdaftar|note not registered|note is not registered yet/i.test(message) &&
           (payloadForBackend || resolvedPrivacyPayload)
         ) {
           const payload = payloadForBackend || resolvedPrivacyPayload

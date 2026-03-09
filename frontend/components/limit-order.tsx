@@ -1931,7 +1931,11 @@ export function LimitOrder() {
             "HIDE_NOTE_SPENT::Selected hide note was already spent. Refreshing note state and retrying with a fresh payload."
           )
         }
-        if (useRelayerPoolHide && /note belum terdaftar/i.test(message) && payloadForBackend) {
+        if (
+          useRelayerPoolHide &&
+          /note belum terdaftar|note not registered|note is not registered yet/i.test(message) &&
+          payloadForBackend
+        ) {
           const selectedCommitment = (
             payloadForBackend.note_commitment ||
             payloadForBackend.commitment ||
