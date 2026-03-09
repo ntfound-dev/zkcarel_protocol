@@ -433,7 +433,7 @@ pub async fn prepare_private_exit(
         .map(ToOwned::to_owned)
         .unwrap_or(resolve_private_action_executor_address(&state.config)?);
 
-    let root_felt = parse_felt(req.root.trim())?;
+    let executor_root_felt = shielded_current_root(&state, &executor_address).await?;
     let nullifier_felt = parse_felt(req.nullifier.trim())?;
     let token_felt = parse_felt(req.token.trim())?;
     let amount_low_felt = parse_felt(req.amount_low.trim())?;
@@ -461,7 +461,10 @@ pub async fn prepare_private_exit(
             .to_string(),
     );
     tx_context.note_version = Some("v3".to_string());
-    tx_context.root = Some(root_felt.to_string());
+    // For V3 private exit, never trust a cached frontend root.
+    // Always bind the proof to the executor's current on-chain root so wallet
+    // calldata cannot be built with a stale root that would revert as "Unknown root".
+    tx_context.root = Some(executor_root_felt.to_string());
     tx_context.intent_hash = Some(exit_hash.clone());
     tx_context.action_hash = Some(exit_hash.clone());
     tx_context.nullifier = Some(nullifier_felt.to_string());
@@ -498,7 +501,7 @@ pub async fn prepare_private_exit(
     bind_intent_hash_into_payload(&mut payload, &exit_hash)?;
     ensure_public_inputs_bind_v3_shape(&payload.public_inputs, "prepared private exit payload")?;
     ensure_public_inputs_bind_root_nullifier(
-        &root_felt.to_string(),
+        &executor_root_felt.to_string(),
         &nullifier_felt.to_string(),
         &payload.public_inputs,
         "prepared private exit payload",
@@ -509,9 +512,9 @@ pub async fn prepare_private_exit(
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("Hide Balance V3 private exit payload requires root".to_string()))?;
     let payload_root_felt = parse_felt(payload_root)?;
-    if payload_root_felt != root_felt {
+    if payload_root_felt != executor_root_felt {
         return Err(AppError::BadRequest(
-            "Private exit payload root mismatch with requested root".to_string(),
+            "Private exit payload root mismatch with executor current root".to_string(),
         ));
     }
     let payload_nullifier_felt = parse_felt(payload.nullifier.trim())?;
@@ -523,7 +526,7 @@ pub async fn prepare_private_exit(
 
     let call = build_private_exit_wallet_call(
         &executor_address,
-        root_felt,
+        executor_root_felt,
         nullifier_felt,
         &payload.proof,
         token_felt,
@@ -537,6 +540,28 @@ pub async fn prepare_private_exit(
         exit_hash,
         onchain_calls: vec![call],
     })))
+}
+
+async fn shielded_current_root(state: &AppState, executor_address: &str) -> Result<Felt> {
+    let reader = crate::services::onchain::OnchainReader::from_config(&state.config)?;
+    let contract_address = parse_felt(executor_address)?;
+    let selector = get_selector_from_name("get_root")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let out = reader
+        .call(FunctionCall {
+            contract_address,
+            entry_point_selector: selector,
+            calldata: vec![],
+        })
+        .await?;
+    let root = out.first().copied().unwrap_or(Felt::ZERO);
+    if root == Felt::ZERO {
+        return Err(AppError::BadRequest(
+            "ShieldedPoolV3 root is not initialized yet (get_root=0).".to_string(),
+        ));
+    }
+    Ok(root)
 }
 
 pub async fn relay_private_execution(
