@@ -773,7 +773,11 @@ function estimateOptimisticPoints(amountText: string, tier: number): string {
 }
 
 // Internal helper that builds TX preview details while user is typing.
-function buildOptimisticExecutionPreview(command: string, tier: number): OptimisticExecutionPreview | null {
+function buildOptimisticExecutionPreview(
+  command: string,
+  tier: number,
+  selectedHideTierUsdt?: number
+): OptimisticExecutionPreview | null {
   if (tier < 2) return null
   const normalized = normalizeAiCommandInput(command)
   if (!normalized) return null
@@ -786,6 +790,35 @@ function buildOptimisticExecutionPreview(command: string, tier: number): Optimis
       toToken: swap.toToken,
       amountText: swap.amountText,
       estimatedPoints: estimateOptimisticPoints(swap.amountText, tier),
+    }
+  }
+
+  if (tier >= 3 && /\b(private|hide)\b/i.test(normalized)) {
+    const privateSwapPair = normalized.match(
+      /\b(?:please\s+)?(?:(?:hide|private)\s+)?(?:swap|tukar)\b\s+([a-z0-9]{2,12})\s*(?:to|ke|->|→)\s*([a-z0-9]{2,12})\b/i
+    )
+    if (privateSwapPair) {
+      const inferredTier = parseHideTierFromCommand(normalized)
+      const tierUsdt =
+        inferredTier ||
+        (typeof selectedHideTierUsdt === "number" && Number.isFinite(selectedHideTierUsdt)
+          ? selectedHideTierUsdt
+          : 0)
+      const fromToken = (privateSwapPair[1] || "").trim().toUpperCase()
+      const toToken = (privateSwapPair[2] || "").trim().toUpperCase()
+      if (fromToken && toToken && tierUsdt > 0) {
+        const tierAmountLabel =
+          fromToken === "USDT" || fromToken === "USDC" || fromToken === "CAREL"
+            ? String(tierUsdt)
+            : `$${tierUsdt} tier`
+        return {
+          title: "Swap Preview",
+          fromToken,
+          toToken,
+          amountText: tierAmountLabel,
+          estimatedPoints: estimateOptimisticPoints(String(tierUsdt), tier),
+        }
+      }
     }
   }
 
@@ -2015,8 +2048,8 @@ export function FloatingAIAssistant() {
     prepareContext
   )
   const optimisticPreview = React.useMemo(
-    () => buildOptimisticExecutionPreview(normalizedInput, selectedTier),
-    [normalizedInput, selectedTier]
+    () => buildOptimisticExecutionPreview(normalizedInput, selectedTier, selectedAiHideTier.minUsdt),
+    [normalizedInput, selectedAiHideTier.minUsdt, selectedTier]
   )
   const canTogglePromptExamples = selectedTier >= 2
   const shouldShowPromptExamples = selectedTier === 1 || showPromptExamples
