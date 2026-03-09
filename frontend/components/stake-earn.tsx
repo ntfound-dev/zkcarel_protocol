@@ -157,6 +157,25 @@ const toU256HexPartsFromBigInt = (value: bigint): [string, string] => {
   return [toHexFelt(low), toHexFelt(high)]
 }
 
+const normalizeFeltAddress = (value?: string) => {
+  const trimmed = (value || "").trim()
+  if (!trimmed) return ""
+  if (!trimmed.startsWith("0x")) return trimmed.toLowerCase()
+  try {
+    return `0x${BigInt(trimmed).toString(16)}`
+  } catch {
+    return trimmed.toLowerCase()
+  }
+}
+
+const normalizeExecutorAddress = (value?: string) => {
+  const trimmed = (value || "").trim()
+  if (!trimmed) return ""
+  return normalizeFeltAddress(trimmed)
+}
+
+const CURRENT_HIDE_EXECUTOR_NORMALIZED = normalizeExecutorAddress(PRIVATE_ACTION_EXECUTOR_ADDRESS)
+
 const normalizeHexArray = (values?: string[] | null): string[] => {
   if (!Array.isArray(values)) return []
   return values
@@ -184,10 +203,20 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
       window.localStorage.removeItem(STAKE_PRIVACY_PAYLOAD_KEY)
       return undefined
     }
+    const payloadExecutorAddress = parsed.executor_address?.trim() || undefined
+    const payloadExecutorNormalized = normalizeExecutorAddress(payloadExecutorAddress)
+    if (
+      CURRENT_HIDE_EXECUTOR_NORMALIZED &&
+      payloadExecutorNormalized &&
+      payloadExecutorNormalized !== CURRENT_HIDE_EXECUTOR_NORMALIZED
+    ) {
+      window.localStorage.removeItem(STAKE_PRIVACY_PAYLOAD_KEY)
+      return undefined
+    }
     return {
       verifier: (parsed.verifier || "garaga").trim() || "garaga",
       note_version: parsed.note_version?.trim() || undefined,
-      executor_address: parsed.executor_address?.trim() || undefined,
+      executor_address: payloadExecutorAddress,
       root: parsed.root?.trim() || undefined,
       nullifier,
       commitment,
@@ -274,7 +303,18 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
         }
       })
       .filter((item): item is PendingHideNoteRecord => item !== null)
-    return mapped.sort((a, b) => b.deposited_at_unix - a.deposited_at_unix)
+    const filtered = mapped.filter((item) => {
+      const noteExecutorNormalized = normalizeExecutorAddress(item.executor_address)
+      return (
+        !CURRENT_HIDE_EXECUTOR_NORMALIZED ||
+        !noteExecutorNormalized ||
+        noteExecutorNormalized === CURRENT_HIDE_EXECUTOR_NORMALIZED
+      )
+    })
+    if (filtered.length !== mapped.length) {
+      window.localStorage.setItem(STAKE_PRIVACY_PENDING_NOTES_KEY, JSON.stringify(filtered))
+    }
+    return filtered.sort((a, b) => b.deposited_at_unix - a.deposited_at_unix)
   } catch {
     return []
   }

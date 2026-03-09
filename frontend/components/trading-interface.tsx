@@ -391,6 +391,8 @@ const normalizeExecutorAddress = (value?: string) => {
   return normalizeFeltAddress(trimmed)
 }
 
+const CURRENT_HIDE_EXECUTOR_NORMALIZED = normalizeExecutorAddress(PRIVATE_ACTION_EXECUTOR_ADDRESS)
+
 const normalizeHexArray = (value: unknown): string[] => {
   if (typeof value === "string") {
     return value
@@ -503,6 +505,19 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
         : inferredV3 && commitment
         ? commitment
         : undefined
+    const payloadExecutorAddress =
+      typeof parsed.executor_address === "string" && parsed.executor_address.trim().length > 0
+        ? parsed.executor_address.trim()
+        : undefined
+    const payloadExecutorNormalized = normalizeExecutorAddress(payloadExecutorAddress)
+    if (
+      CURRENT_HIDE_EXECUTOR_NORMALIZED &&
+      payloadExecutorNormalized &&
+      payloadExecutorNormalized !== CURRENT_HIDE_EXECUTOR_NORMALIZED
+    ) {
+      window.localStorage.removeItem(TRADE_PRIVACY_PAYLOAD_KEY)
+      return undefined
+    }
     const normalizedNoteCommitment = (noteCommitment || "").trim().toLowerCase()
     const normalizedNullifier = (nullifier || "").trim().toLowerCase()
     let hasTrackedPendingNote = false
@@ -533,10 +548,7 @@ const loadTradePrivacyPayload = (): PrivacyVerificationPayload | undefined => {
     return {
       verifier: (parsed.verifier || "garaga").trim() || "garaga",
       note_version: inferredNoteVersion || (inferredV3 ? "v3" : undefined),
-      executor_address:
-        typeof parsed.executor_address === "string" && parsed.executor_address.trim().length > 0
-          ? parsed.executor_address.trim()
-          : undefined,
+      executor_address: payloadExecutorAddress,
       root:
         typeof parsed.root === "string" && parsed.root.trim().length > 0
           ? parsed.root.trim()
@@ -692,9 +704,19 @@ const loadPendingHideNotes = (): PendingHideNoteRecord[] => {
           spendable_at_unix: spendableAt,
         }
       })
-    return mapped
-      .filter((item): item is PendingHideNoteRecord => item !== null)
-      .sort((a, b) => b.deposited_at_unix - a.deposited_at_unix)
+    const notes = mapped.filter((item): item is PendingHideNoteRecord => item !== null)
+    const filtered = notes.filter((item) => {
+      const noteExecutorNormalized = normalizeExecutorAddress(item.executor_address)
+      return (
+        !CURRENT_HIDE_EXECUTOR_NORMALIZED ||
+        !noteExecutorNormalized ||
+        noteExecutorNormalized === CURRENT_HIDE_EXECUTOR_NORMALIZED
+      )
+    })
+    if (filtered.length !== notes.length) {
+      window.localStorage.setItem(TRADE_PRIVACY_PENDING_NOTES_KEY, JSON.stringify(filtered))
+    }
+    return filtered.sort((a, b) => b.deposited_at_unix - a.deposited_at_unix)
   } catch {
     return []
   }
