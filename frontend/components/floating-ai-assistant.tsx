@@ -2109,6 +2109,12 @@ export function FloatingAIAssistant() {
     selectedTier,
     prepareContext
   )
+  const selectedAiHideTier = React.useMemo(
+    () =>
+      AI_HIDE_USDT_TIER_OPTIONS.find((option) => option.minUsdt === aiHideUsdtTierMin) ||
+      AI_HIDE_USDT_TIER_OPTIONS[0],
+    [aiHideUsdtTierMin]
+  )
   const optimisticPreview = React.useMemo(
     () => buildOptimisticExecutionPreview(normalizedInput, selectedTier, selectedAiHideTier.minUsdt),
     [normalizedInput, selectedAiHideTier.minUsdt, selectedTier]
@@ -2116,12 +2122,6 @@ export function FloatingAIAssistant() {
   const canTogglePromptExamples = selectedTier >= 2
   const shouldShowPromptExamples = selectedTier === 1 || showPromptExamples
   const messages = messagesByTier[selectedTier] || []
-  const selectedAiHideTier = React.useMemo(
-    () =>
-      AI_HIDE_USDT_TIER_OPTIONS.find((option) => option.minUsdt === aiHideUsdtTierMin) ||
-      AI_HIDE_USDT_TIER_OPTIONS[0],
-    [aiHideUsdtTierMin]
-  )
   const quickPrompts = React.useMemo(() => {
     if (selectedTier !== 3) {
       return quickPromptsByTier[selectedTier] ?? quickPromptsByTier[1]
