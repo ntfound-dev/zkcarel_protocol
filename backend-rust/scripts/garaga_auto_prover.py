@@ -550,6 +550,88 @@ def resolve_public_inputs(public_inputs_path: Path | None, proof_path: Path) -> 
         )
 
 
+def read_vk_n_public(path: Path) -> int | None:
+    if not path.is_file():
+        return None
+    try:
+        raw: object = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("nPublic")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip(), 10)
+        except ValueError:
+            return None
+    return None
+
+
+def resolve_vk_path(vk_raw: str, public_inputs: list[str], is_v3: bool) -> Path:
+    expected_n_public = len(public_inputs)
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def add_candidate(raw_path: str) -> None:
+        if not raw_path:
+            return
+        path = Path(raw_path).expanduser()
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    add_candidate(vk_raw)
+    add_candidate("./garaga_vk.json")
+    add_candidate("backend-rust/garaga_vk.json")
+    add_candidate("/app/garaga_vk.json")
+
+    matching: list[tuple[Path, int]] = []
+    mismatched: list[tuple[Path, int | None]] = []
+    for candidate in candidates:
+        n_public = read_vk_n_public(candidate)
+        if n_public == expected_n_public:
+            matching.append((candidate, n_public))
+        else:
+            mismatched.append((candidate, n_public))
+
+    if matching:
+        selected, _ = matching[0]
+        if vk_raw:
+            env_path = Path(vk_raw).expanduser()
+            if env_path != selected:
+                warn(
+                    "GARAGA_VK_PATH did not match prover public_inputs length; "
+                    f"using fallback VK {selected} instead of {env_path}"
+                )
+        return selected
+
+    env_path = Path(vk_raw).expanduser() if vk_raw else None
+    env_n_public = read_vk_n_public(env_path) if env_path is not None else None
+    mismatch_detail = ", ".join(
+        f"{path}:{'missing' if n_public is None else f'nPublic={n_public}'}"
+        for path, n_public in mismatched
+    )
+    v3_hint = " Expected V3 prover output is 4 public inputs." if is_v3 else ""
+    if env_path is not None:
+        fail(
+            "GARAGA_VK_PATH/public_inputs mismatch. "
+            f"selected_env={env_path}, env_nPublic={env_n_public}, "
+            f"prover_public_inputs_len={expected_n_public}.{v3_hint} "
+            "This causes 'scalars and points length mismatch'. "
+            f"Checked candidates: {mismatch_detail}"
+        )
+    fail(
+        "No compatible Garaga VK found for current prover output. "
+        f"prover_public_inputs_len={expected_n_public}.{v3_hint} "
+        f"Checked candidates: {mismatch_detail}"
+    )
+
+
 def maybe_load_precomputed_payload(path: Path | None) -> tuple[list[str], list[str]] | None:
     if path is None:
         return None
@@ -630,9 +712,11 @@ def build_payload(stdin_payload: Mapping[str, object]) -> GaragaPayload:
         if precomputed_payload is not None:
             proof, public_inputs = precomputed_payload
         else:
-            if not vk_raw:
-                fail("Missing required env: GARAGA_VK_PATH")
-            vk_path = Path(vk_raw).expanduser()
+            public_inputs = resolve_public_inputs(
+                public_inputs_path=public_inputs_path,
+                proof_path=proof_path,
+            )
+            vk_path = resolve_vk_path(vk_raw, public_inputs, is_v3)
             proof = generate_full_proof_with_hints(
                 uvx_cmd=uvx_cmd,
                 system=system,
@@ -640,10 +724,6 @@ def build_payload(stdin_payload: Mapping[str, object]) -> GaragaPayload:
                 proof_path=proof_path,
                 public_inputs_path=public_inputs_path,
                 timeout_secs=calldata_timeout_secs,
-            )
-            public_inputs = resolve_public_inputs(
-                public_inputs_path=public_inputs_path,
-                proof_path=proof_path,
             )
 
         intent_hash, nonce = compute_intent_hash(stdin_payload)
@@ -815,15 +895,18 @@ def run_warmup_mode() -> None:
         timeout_secs = max(base_timeout_secs, 120)
     uvx_cmd = getenv_clean("GARAGA_UVX_CMD", "uvx --python 3.10")
     system = getenv_clean("GARAGA_SYSTEM", "groth16") or "groth16"
-    vk_path = Path(getenv_required("GARAGA_VK_PATH")).expanduser()
+    vk_raw = getenv_required("GARAGA_VK_PATH")
     proof_path = Path(getenv_required("GARAGA_PROOF_PATH")).expanduser()
     public_inputs_raw = getenv_clean("GARAGA_PUBLIC_INPUTS_PATH")
     public_inputs_path = Path(public_inputs_raw).expanduser() if public_inputs_raw else None
+    note_version = (
+        getenv_clean("GARAGA_NOTE_VERSION") or getenv_clean("HIDE_BALANCE_POOL_VERSION_DEFAULT")
+    ).strip().lower()
+    is_v3 = note_version == "v3"
 
-    if not vk_path.exists():
-        fail(f"GARAGA warmup skipped: VK not found at {vk_path}")
     validate_proof_json_file(proof_path)
-    _ = resolve_public_inputs(public_inputs_path=public_inputs_path, proof_path=proof_path)
+    public_inputs = resolve_public_inputs(public_inputs_path=public_inputs_path, proof_path=proof_path)
+    vk_path = resolve_vk_path(vk_raw, public_inputs, is_v3)
 
     calldata = generate_full_proof_with_hints(
         uvx_cmd=uvx_cmd,
