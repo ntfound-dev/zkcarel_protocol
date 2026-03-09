@@ -264,7 +264,17 @@ pub async fn get_user_rank(
 
     let rank_result: RankResult = sqlx::query_as(
         r#"
-        WITH identity_points AS (
+        WITH all_identities AS (
+            SELECT address as identity
+            FROM users
+            UNION
+            SELECT COALESCE(uw.user_address, p.user_address) as identity
+            FROM points p
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+            WHERE p.epoch = $1
+        ),
+        aggregated_points AS (
             SELECT
                 COALESCE(uw.user_address, p.user_address) as identity,
                 COALESCE(SUM(p.total_points), 0) as total_points
@@ -273,6 +283,14 @@ pub async fn get_user_rank(
               ON LOWER(uw.wallet_address) = LOWER(p.user_address)
             WHERE p.epoch = $1
             GROUP BY COALESCE(uw.user_address, p.user_address)
+        ),
+        identity_points AS (
+            SELECT
+                ai.identity,
+                COALESCE(ap.total_points, 0) as total_points
+            FROM all_identities ai
+            LEFT JOIN aggregated_points ap
+              ON LOWER(ap.identity) = LOWER(ai.identity)
         )
         SELECT COUNT(*) + 1 as rank
         FROM identity_points
@@ -294,15 +312,18 @@ pub async fn get_user_rank(
 
     let total_users_res: CountResult = sqlx::query_as(
         r#"
-            SELECT COUNT(*) as count
-            FROM (
+            WITH all_identities AS (
+                SELECT address as identity
+                FROM users
+                UNION
                 SELECT COALESCE(uw.user_address, p.user_address) as identity
                 FROM points p
                 LEFT JOIN user_wallet_addresses uw
                   ON LOWER(uw.wallet_address) = LOWER(p.user_address)
                 WHERE p.epoch = $1
-                GROUP BY COALESCE(uw.user_address, p.user_address)
-            ) s
+            )
+            SELECT COUNT(*) as count
+            FROM all_identities
             "#,
     )
     .bind(current_epoch)
@@ -393,7 +414,17 @@ pub async fn get_user_categories(
         async {
             let rank: RankResult = sqlx::query_as(
                 r#"
-                    WITH identity_points AS (
+                    WITH all_identities AS (
+                        SELECT address as identity
+                        FROM users
+                        UNION
+                        SELECT COALESCE(uw.user_address, p.user_address) as identity
+                        FROM points p
+                        LEFT JOIN user_wallet_addresses uw
+                          ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+                        WHERE p.epoch = $1
+                    ),
+                    aggregated_points AS (
                         SELECT
                             COALESCE(uw.user_address, p.user_address) as identity,
                             COALESCE(SUM(p.total_points), 0) as total_points
@@ -402,6 +433,14 @@ pub async fn get_user_categories(
                           ON LOWER(uw.wallet_address) = LOWER(p.user_address)
                         WHERE p.epoch = $1
                         GROUP BY COALESCE(uw.user_address, p.user_address)
+                    ),
+                    identity_points AS (
+                        SELECT
+                            ai.identity,
+                            COALESCE(ap.total_points, 0) as total_points
+                        FROM all_identities ai
+                        LEFT JOIN aggregated_points ap
+                          ON LOWER(ap.identity) = LOWER(ai.identity)
                     )
                     SELECT COUNT(*) + 1 as rank
                     FROM identity_points
@@ -425,15 +464,18 @@ pub async fn get_user_categories(
         async {
             let total: CountResult = sqlx::query_as(
                 r#"
-                    SELECT COUNT(*) as count
-                    FROM (
+                    WITH all_identities AS (
+                        SELECT address as identity
+                        FROM users
+                        UNION
                         SELECT COALESCE(uw.user_address, p.user_address) as identity
                         FROM points p
                         LEFT JOIN user_wallet_addresses uw
                           ON LOWER(uw.wallet_address) = LOWER(p.user_address)
                         WHERE p.epoch = $1
-                        GROUP BY COALESCE(uw.user_address, p.user_address)
-                    ) s
+                    )
+                    SELECT COUNT(*) as count
+                    FROM all_identities
                     "#,
             )
             .bind(current_epoch)
@@ -621,7 +663,17 @@ async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
 
     let entries = sqlx::query_as::<_, LeaderboardEntry>(
         r#"
-        WITH identity_points AS (
+        WITH all_identities AS (
+            SELECT address as identity
+            FROM users
+            UNION
+            SELECT COALESCE(uw.user_address, p.user_address) as identity
+            FROM points p
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+            WHERE p.epoch = $1
+        ),
+        aggregated_points AS (
             SELECT
                 COALESCE(uw.user_address, p.user_address) as identity,
                 COALESCE(SUM(p.total_points), 0) as total_points
@@ -630,6 +682,14 @@ async fn get_points_leaderboard(state: &AppState) -> Result<Vec<LeaderboardEntry
               ON LOWER(uw.wallet_address) = LOWER(p.user_address)
             WHERE p.epoch = $1
             GROUP BY COALESCE(uw.user_address, p.user_address)
+        ),
+        identity_points AS (
+            SELECT
+                ai.identity,
+                COALESCE(ap.total_points, 0) as total_points
+            FROM all_identities ai
+            LEFT JOIN aggregated_points ap
+              ON LOWER(ap.identity) = LOWER(ai.identity)
         )
         SELECT
             RANK() OVER (ORDER BY ip.total_points DESC) as rank,
