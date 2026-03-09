@@ -1308,6 +1308,45 @@ function parseLimitOrderIntentFromCommand(
       expiry: ((pairFormat[5] || "7d").trim() || "7d").toLowerCase(),
     }
   }
+
+  const tierLeading = normalized.match(
+    /\b(?:(?:hide|private)\s+)?limit(?:\s|-)?order\b\s+(?:hide\s+)?tier\s+\$?\s*([0-9]+(?:\.[0-9]+)?)\s+([a-z0-9]{2,12})\s*\/\s*([a-z0-9]{2,12})\s+(?:at|price)\s+([0-9]+(?:\.[0-9]+)?)(?:\s+expiry\s+([a-z0-9]+))?/i
+  )
+  if (tierLeading) {
+    return {
+      fromToken: (tierLeading[2] || "").trim().toUpperCase(),
+      toToken: (tierLeading[3] || "").trim().toUpperCase(),
+      amountText: (tierLeading[1] || "").trim(),
+      priceText: (tierLeading[4] || "").trim(),
+      expiry: ((tierLeading[5] || "7d").trim() || "7d").toLowerCase(),
+    }
+  }
+
+  const tierTrailing = normalized.match(
+    /\b(?:(?:hide|private)\s+)?limit(?:\s|-)?order\b\s+([a-z0-9]{2,12})\s*\/\s*([a-z0-9]{2,12})\s+(?:hide\s+)?tier\s+\$?\s*([0-9]+(?:\.[0-9]+)?)\s+(?:at|price)\s+([0-9]+(?:\.[0-9]+)?)(?:\s+expiry\s+([a-z0-9]+))?/i
+  )
+  if (tierTrailing) {
+    return {
+      fromToken: (tierTrailing[1] || "").trim().toUpperCase(),
+      toToken: (tierTrailing[2] || "").trim().toUpperCase(),
+      amountText: (tierTrailing[3] || "").trim(),
+      priceText: (tierTrailing[4] || "").trim(),
+      expiry: ((tierTrailing[5] || "7d").trim() || "7d").toLowerCase(),
+    }
+  }
+
+  const tierValueFirst = normalized.match(
+    /\b(?:(?:hide|private)\s+)?limit(?:\s|-)?order\b\s+([0-9]+(?:\.[0-9]+)?)\s+(?:hide\s+)?tier\s+([a-z0-9]{2,12})\s*\/\s*([a-z0-9]{2,12})\s+(?:at|price)\s+([0-9]+(?:\.[0-9]+)?)(?:\s+expiry\s+([a-z0-9]+))?/i
+  )
+  if (tierValueFirst) {
+    return {
+      fromToken: (tierValueFirst[2] || "").trim().toUpperCase(),
+      toToken: (tierValueFirst[3] || "").trim().toUpperCase(),
+      amountText: (tierValueFirst[1] || "").trim(),
+      priceText: (tierValueFirst[4] || "").trim(),
+      expiry: ((tierValueFirst[5] || "7d").trim() || "7d").toLowerCase(),
+    }
+  }
   return null
 }
 
@@ -2100,6 +2139,8 @@ export function FloatingAIAssistant() {
       `please private limit order CAREL/USDC amount ${activeTier} at 1.25 expiry 1d`,
       `please private limit order USDC/STRK amount ${activeTier} at 0.85 expiry 3d`,
       `please private limit order WBTC/USDC amount ${activeTier} at 68000 expiry 1d`,
+      `please private limit order tier ${activeTier} USDC/STRK at 0.85 expiry 3d`,
+      `please private limit order ${activeTier} tier WBTC/USDC at 68000 expiry 1d`,
     ]
   }, [aiHideUsdtTierMin, selectedTier])
   const featureList = featureListByTier[selectedTier] ?? featureListByTier[1]
