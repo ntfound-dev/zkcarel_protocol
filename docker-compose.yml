@@ -34,7 +34,7 @@ services:
   backend:
     build:
       context: ./backend-rust
-      dockerfile: docker
+      dockerfile: Dockerfile
     container_name: zkcare-backend
     env_file:
       - ./backend-rust/.env

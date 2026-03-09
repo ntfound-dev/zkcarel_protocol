@@ -336,6 +336,20 @@ npm run dev
 
 Open: `http://localhost:3000`
 
+Full Docker local run:
+```bash
+# make sure frontend/.env and backend-rust/.env are filled locally
+docker compose up --build -d postgres redis backend frontend
+```
+
+Useful Docker commands:
+```bash
+docker compose ps
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose down
+```
+
 ## Documentation Map
 | Need | Document |
 | --- | --- |
