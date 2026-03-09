@@ -849,6 +849,261 @@ export async function readStarknetShieldedPoolV3FixedAmountFromWallet(
   return null
 }
 
+export async function readStarknetShieldedPoolV3NoteDepositTimestampFromWallet(
+  executorAddress: string,
+  noteCommitment: string,
+  providerHint: StarknetWalletHint = "starknet"
+): Promise<number | null> {
+  const executor = executorAddress.trim()
+  const commitment = noteCommitment.trim()
+  if (!executor || !commitment) return null
+
+  const injected = getInjectedStarknet(providerHint)
+  if (!injected) return null
+
+  await ensureStarknetAccounts(injected)
+  const chainId = await ensureStarknetSepolia(injected)
+  if (!isStarknetSepolia(chainId)) return null
+
+  const parseFelt = (value: unknown): string | null => {
+    if (typeof value === "string") {
+      const trimmed = value.trim()
+      if (!trimmed) return null
+      if (/^0x[0-9a-fA-F]+$/.test(trimmed) || /^\d+$/.test(trimmed)) {
+        try {
+          return toHexFelt(trimmed)
+        } catch {
+          return null
+        }
+      }
+      return null
+    }
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || value < 0) return null
+      try {
+        return toHexFelt(Math.trunc(value))
+      } catch {
+        return null
+      }
+    }
+    if (typeof value === "bigint") {
+      if (value < BIGINT_ZERO) return null
+      try {
+        return toHexFelt(value)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+
+  const extractFelts = (value: unknown): string[] => {
+    const direct = parseFelt(value)
+    if (direct) return [direct]
+    if (Array.isArray(value)) return value.flatMap((item) => extractFelts(item))
+    if (typeof value !== "object" || !value) return []
+    const anyValue = value as Record<string, unknown>
+    const commonFields = [
+      "result",
+      "data",
+      "response",
+      "values",
+      "calldata",
+      "return_data",
+      "returnData",
+      "output",
+      "outputs",
+      "payload",
+    ] as const
+    for (const field of commonFields) {
+      if (field in anyValue) {
+        const parsed = extractFelts(anyValue[field])
+        if (parsed.length > 0) return parsed
+      }
+    }
+    const numericKeys = Object.keys(anyValue).filter((key) => /^\d+$/.test(key))
+    if (numericKeys.length > 0) {
+      const parsed = numericKeys
+        .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10))
+        .flatMap((key) => extractFelts(anyValue[key]))
+      if (parsed.length > 0) return parsed
+    }
+    return []
+  }
+
+  const callShapes: Array<Record<string, unknown>> = [
+    {
+      contract_address: executor,
+      entry_point_selector: "get_note_deposit_timestamp",
+      calldata: [commitment],
+    },
+    {
+      contract_address: executor,
+      selector: "get_note_deposit_timestamp",
+      calldata: [commitment],
+    },
+    {
+      contract_address: executor,
+      entrypoint: "get_note_deposit_timestamp",
+      calldata: [commitment],
+    },
+    {
+      contractAddress: executor,
+      entrypoint: "get_note_deposit_timestamp",
+      calldata: [commitment],
+    },
+    {
+      to: executor,
+      entrypoint: "get_note_deposit_timestamp",
+      calldata: [commitment],
+    },
+  ]
+  const blockTags: unknown[] = ["latest", { block_tag: "latest" }, { block_number: "latest" }]
+  const requestMethods = ["starknet_call", "wallet_call"] as const
+
+  for (const method of requestMethods) {
+    for (const callShape of callShapes) {
+      for (const blockTag of blockTags) {
+        const paramsVariants: unknown[] = [
+          { request: callShape, block_id: blockTag },
+          { call: callShape, block_id: blockTag },
+          [callShape, blockTag],
+        ]
+        for (const params of paramsVariants) {
+          try {
+            const result = await requestStarknet(injected, { type: method, params })
+            const parsed = extractFelts(result)
+            if (parsed.length > 0) {
+              const value = BigInt(parsed[0])
+              if (value <= BigInt(Number.MAX_SAFE_INTEGER)) {
+                return Number(value)
+              }
+            }
+          } catch {
+            // continue with next payload variant
+          }
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+export async function readStarknetShieldedPoolV3CurrentRootFromWallet(
+  executorAddress: string,
+  providerHint: StarknetWalletHint = "starknet"
+): Promise<string | null> {
+  const executor = executorAddress.trim()
+  if (!executor) return null
+
+  const injected = getInjectedStarknet(providerHint)
+  if (!injected) return null
+
+  await ensureStarknetAccounts(injected)
+  const chainId = await ensureStarknetSepolia(injected)
+  if (!isStarknetSepolia(chainId)) return null
+
+  const parseFelt = (value: unknown): string | null => {
+    if (typeof value === "string") {
+      const trimmed = value.trim()
+      if (!trimmed) return null
+      if (/^0x[0-9a-fA-F]+$/.test(trimmed) || /^\d+$/.test(trimmed)) {
+        try {
+          return toHexFelt(trimmed)
+        } catch {
+          return null
+        }
+      }
+      return null
+    }
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || value < 0) return null
+      try {
+        return toHexFelt(Math.trunc(value))
+      } catch {
+        return null
+      }
+    }
+    if (typeof value === "bigint") {
+      if (value < BIGINT_ZERO) return null
+      try {
+        return toHexFelt(value)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+
+  const extractFelts = (value: unknown): string[] => {
+    const direct = parseFelt(value)
+    if (direct) return [direct]
+    if (Array.isArray(value)) return value.flatMap((item) => extractFelts(item))
+    if (typeof value !== "object" || !value) return []
+    const anyValue = value as Record<string, unknown>
+    const commonFields = [
+      "result",
+      "data",
+      "response",
+      "values",
+      "calldata",
+      "return_data",
+      "returnData",
+      "output",
+      "outputs",
+      "payload",
+    ] as const
+    for (const field of commonFields) {
+      if (field in anyValue) {
+        const parsed = extractFelts(anyValue[field])
+        if (parsed.length > 0) return parsed
+      }
+    }
+    const numericKeys = Object.keys(anyValue).filter((key) => /^\d+$/.test(key))
+    if (numericKeys.length > 0) {
+      const parsed = numericKeys
+        .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10))
+        .flatMap((key) => extractFelts(anyValue[key]))
+      if (parsed.length > 0) return parsed
+    }
+    return []
+  }
+
+  const callShapes: Array<Record<string, unknown>> = [
+    { contract_address: executor, entry_point_selector: "get_root", calldata: [] },
+    { contract_address: executor, selector: "get_root", calldata: [] },
+    { contract_address: executor, entrypoint: "get_root", calldata: [] },
+    { contractAddress: executor, entrypoint: "get_root", calldata: [] },
+    { to: executor, entrypoint: "get_root", calldata: [] },
+  ]
+  const blockTags: unknown[] = ["latest", { block_tag: "latest" }, { block_number: "latest" }]
+  const requestMethods = ["starknet_call", "wallet_call"] as const
+
+  for (const method of requestMethods) {
+    for (const callShape of callShapes) {
+      for (const blockTag of blockTags) {
+        const paramsVariants: unknown[] = [
+          { request: callShape, block_id: blockTag },
+          { call: callShape, block_id: blockTag },
+          [callShape, blockTag],
+        ]
+        for (const params of paramsVariants) {
+          try {
+            const result = await requestStarknet(injected, { type: method, params })
+            const parsed = extractFelts(result)
+            if (parsed.length > 0) return parsed[0]
+          } catch {
+            // continue with next payload variant
+          }
+        }
+      }
+    }
+  }
+
+  return null
+}
+
 export async function signPrivacyParamsForRelayer(
   typedData: Record<string, unknown>,
   providerHint: StarknetWalletHint = "starknet"

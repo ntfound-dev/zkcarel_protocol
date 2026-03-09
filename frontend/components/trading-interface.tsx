@@ -3455,7 +3455,9 @@ export function TradingInterface() {
       )
     }
     if (isCrossChain) return "Execute Bridge"
-    if (hideBalanceOnchain && !activeHideTrackedNote) return "Execute Note"
+    if (hideBalanceOnchain && (hasTrackedActiveHideV3Note || !activeHideTrackedNote)) {
+      return "Execute Note"
+    }
     return "Execute Trade"
   })()
 
@@ -6735,59 +6737,23 @@ export function TradingInterface() {
           </div>
         )}
 
-        {hasTrackedActiveHideV3Note && hideMixingWindowBlocked && (
-          <div className="mt-4 p-3 rounded-xl border border-primary/30 bg-primary/10 space-y-2">
-            <p className="text-sm font-medium text-foreground">🔒 Your note is mixing...</p>
-            <p className="text-xs text-muted-foreground">
-              ⏱️ Ready in:{" "}
-              {hideMixingWindowBlocked
-                ? formatRemainingDuration(hideMixingWindowRemainingMs)
-                : "now"}
-            </p>
-            <div className="grid grid-cols-1 gap-2">
-              <Button
-                onClick={handleExecuteTrade}
-                disabled={swapState !== "idle" || !!executeDisabledReason}
-                className={cn(
-                  "h-11 text-sm font-semibold text-primary-foreground",
-                  swapState === "idle" &&
-                    "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
-                  swapState === "confirming" && "bg-primary/80",
-                  swapState === "processing" && "bg-secondary/80",
-                  swapState === "success" && "bg-success",
-                  swapState === "error" && "bg-destructive"
-                )}
-              >
-                Execute Note
-              </Button>
-            </div>
-            {swapState === "idle" && executeDisabledReason && (
-              <p className="text-center text-xs text-warning">{executeDisabledReason}</p>
-            )}
-          </div>
-        )}
-
         {/* Execute Button */}
-        {(!hasTrackedActiveHideV3Note || !hideMixingWindowBlocked) && (
-          <>
-            <Button 
-              onClick={handleExecuteTrade}
-              disabled={swapState !== "idle" || !!executeDisabledReason}
-              className={cn(
-                "hidden md:inline-flex w-full mt-6 py-6 text-lg font-bold transition-all text-primary-foreground",
-                swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
-                swapState === "confirming" && "bg-primary/80",
-                swapState === "processing" && "bg-secondary/80",
-                swapState === "success" && "bg-success",
-                swapState === "error" && "bg-destructive"
-              )}
-            >
-              {executeButtonLabel}
-            </Button>
-            {swapState === "idle" && executeDisabledReason && (
-              <p className="hidden md:block text-center text-xs text-warning mt-2">{executeDisabledReason}</p>
-            )}
-          </>
+        <Button 
+          onClick={handleExecuteTrade}
+          disabled={swapState !== "idle" || !!executeDisabledReason}
+          className={cn(
+            "hidden md:inline-flex w-full mt-6 py-6 text-lg font-bold transition-all text-primary-foreground",
+            swapState === "idle" && "bg-gradient-to-r from-primary via-accent to-primary bg-[length:200%_100%] animate-gradient hover:opacity-90",
+            swapState === "confirming" && "bg-primary/80",
+            swapState === "processing" && "bg-secondary/80",
+            swapState === "success" && "bg-success",
+            swapState === "error" && "bg-destructive"
+          )}
+        >
+          {executeButtonLabel}
+        </Button>
+        {swapState === "idle" && executeDisabledReason && (
+          <p className="hidden md:block text-center text-xs text-warning mt-2">{executeDisabledReason}</p>
         )}
 
         <p className="text-center text-xs text-muted-foreground mt-4">
@@ -6795,7 +6761,6 @@ export function TradingInterface() {
         </p>
       </div>
 
-      {(!hasTrackedActiveHideV3Note || !hideMixingWindowBlocked) && (
       <div className="fixed md:hidden inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto w-full max-w-xl px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
           <div className="mb-2 grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
@@ -6822,7 +6787,6 @@ export function TradingInterface() {
           )}
         </div>
       </div>
-      )}
 
       {previewOpen ? (
         <TradePreviewDialog
