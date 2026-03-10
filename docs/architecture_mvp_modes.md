@@ -155,6 +155,7 @@ sequenceDiagram
 Hide mode V3 properties:
 - Final sender is relayer account.
 - V3 path binds action to nullifier/root/proof context.
+- Starknet calldata and ERC20 transfers remain public; hide mode reduces linkability (commitment vs nullifier), not trade-parameter confidentiality.
 - `v2` contract remains for redemption-only migration window.
 
 ## 6. Optional Intermediary Relay Flow

@@ -131,6 +131,11 @@ flowchart LR
 - `StakingBTC` is the contract used for WBTC staking.
 - Hide V3 uses pre-funded notes on `ShieldedPoolV3` via `deposit_fixed_v3` before relayer execution. Direct `withdraw_note_v3` is disabled; exits use `private_exit_v3`.
 
+Privacy note (important):
+- Starknet calldata and ERC20 transfers are public. Hide mode does **not** hide trade parameters (token pair, amount, route).
+- Deposits/exits/payouts still create public token transfers (depositor/recipient and denomination tier remain observable).
+- Hide mode focuses on note unlinkability (commitment vs nullifier) and proof-bound execution (relayer cannot mutate bound action/exit params).
+
 ### Swap
 ```mermaid
 flowchart LR
@@ -209,7 +214,7 @@ flowchart LR
   F1 --> F2[Use L2 for bridge]
 ```
 
-`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2` covers normal bridge/swap/limit/stake execution through `AIExecutor`, and `L3` is reserved for private swap/stake/limit execution through `ShieldedPoolV3`. Bridge does not run on `L3` yet; users should stay on `L2` for bridge until the private bridge path exists. Direct hide flows can withdraw a note after deposit, but the current AI hide path does not expose note withdrawal.
+`KeeperNetwork` stores user orders and registered keeper stats. All three staking pools also expose private staking hooks through the privacy router. Rewards behavior is not normal-only: normal and hide flows can both feed points/NFT logic at the runtime layer, while hide adds the note path before relayer execution. For AI, `L1` stays off-chain, `L2` covers normal bridge/swap/limit/stake execution through `AIExecutor`, and `L3` is reserved for private swap/stake/limit execution through `ShieldedPoolV3`. Bridge does not run on `L3` yet; users should stay on `L2` for bridge until the private bridge path exists. Direct hide flows can exit a note via `private_exit_v3` (requires a ZK proof), but the current AI hide path does not expose note exits in the AI UI.
 
 ## Rewards, Points, and Discount NFT
 `PointStorage`, `SnapshotDistributor`, `ReferralSystem`, and `DiscountSoulbound` are the core rewards stack. The important split is that point formulas mostly live in runtime/backend code, while the Starknet contracts store epoch state, consume points, and settle claims.

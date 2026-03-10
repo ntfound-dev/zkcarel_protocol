@@ -234,7 +234,8 @@ Privacy impact (what stays public vs what is obfuscated):
   - Relayer tampering: the proof binds `recipient` and `action_hash`/`exit_hash`, so the relayer cannot change the intended action/exit details without invalidating the proof.
 - What still remains public on-chain (by design):
   - Deposit/exit token + fixed denomination amount, plus depositor/recipient addresses (ERC20 transfers are public).
-  - When the relayer executes, the action call data and resulting token transfers are visible (`target`, `approval_token`, `payout_token`, `approval_amount`, `payout_amount`, etc.).
+  - When the relayer executes, the action call data and resulting token transfers are visible (`target`, `entrypoint_selector`, calldata (route/pair/amount/min_out), `approval_token`, `payout_token`, `approval_amount`, `payout_amount`, etc.).
+  - Hide mode therefore does **not** provide confidentiality for trade parameters (token pair, amount, route); it focuses on note unlinkability and proof-bound execution.
 - What "privacy" practically means in this system:
   - **Sender privacy** vs normal mode: the user wallet is not the `sender_address` that interacts with DEX/limit/stake targets (relayer + executor do).
   - **Conditional unlinkability**: linking a deposit to a later action/exit is probabilistic and improves with more same-denom notes and larger time gaps.

@@ -7,6 +7,7 @@ This README is backend-only and covers API modules, relayer flow, workers, runti
 - [Scope](#scope)
 - [Repository Structure](#repository-structure)
 - [Runtime Architecture](#runtime-architecture)
+- [Privacy Model (Hide Mode)](#privacy-model-hide-mode)
 - [API Domains](#api-domains)
 - [Background Workers](#background-workers)
 - [Build and Test](#build-and-test)
@@ -79,6 +80,24 @@ flowchart LR
     BRIDGE --> ETH["Ethereum Sepolia"]
     BRIDGE --> BTC["Bitcoin testnet"]
 ```
+
+## Privacy Model (Hide Mode)
+Problem:
+- In normal mode, the user wallet directly calls swap/limit/stake targets, so the wallet becomes linkable to trading behavior on-chain.
+
+What hide mode **does**:
+- Uses a note model (`deposit_fixed_v3` -> `submit_private_*` -> `execute_private_*_with_payout` / `private_exit_v3`) so later spends use a `nullifier` + ZK proof instead of revealing which `note_commitment` was deposited.
+- Shifts the on-chain `tx.from` for execution to the backend relayer account (the user wallet is not the sender that interacts with DEX/LOB/staking targets).
+- Enforces **proof-bound execution**: the verifier output includes an `action_hash`/`exit_hash` and a `recipient`, and `ShieldedPoolV3` recomputes the hash on-chain to prevent relayer parameter tampering.
+
+What hide mode **does not** do (important):
+- Starknet calldata and ERC20 transfers are public. Explorers will still show token addresses, amounts, routes, and transfers for `execute_private_*_with_payout`.
+- Deposits (`deposit_fixed_v3`) and exits (`private_exit_v3`) are still user-signed on-chain calls; depositor/recipient addresses and denomination tiers remain observable.
+- Hide mode is therefore not “full anonymous trading”; it is primarily *note unlinkability* (commitment vs nullifier) plus *integrity* (proof-bound execution).
+
+Role of Garaga in this backend:
+- Garaga is used to generate/verify the ZK proof that proves membership/non-spend and binds the execution hash/recipient.
+- Garaga does **not** encrypt calldata or hide token transfers; it prevents invalid spends and relayer manipulation.
 
 ## API Domains
 Main modules under `src/api/`:
@@ -284,7 +303,7 @@ bash scripts/smoke_test_api.sh
 ```
 
 ## Current Constraints
-- Hide mode reduces linkability but public chain metadata remains observable.
+- Hide mode reduces linkability between deposit and execution, but does **not** hide calldata, token transfers, or trade amounts/pairs.
 - Bridge quality depends on external provider uptime, API limits, and liquidity.
 - RPC quota/availability can affect indexer and quote latency.
 - Advanced privacy flows remain sensitive to prover payload correctness.

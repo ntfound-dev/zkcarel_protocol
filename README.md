@@ -142,7 +142,12 @@ These show the normal-path targets. Hide mode reaches the same target contracts 
 - `Limit Order Book` is the runtime/UI name used in app flows.
 - WBTC staking uses the `StakingBTC` contract.
 - Normal mode still earns points and can use an active NFT discount.
-- Hide mode uses `deposit_fixed_v3` first. After deposit, user can still withdraw the note if not proceeding. If continuing, the note waits the mixing window/cooldown, then the relayer executes through `ShieldedPoolV3`. Hide mode still earns points, can use NFT discount, and adds hide-tier bonus points.
+- Hide mode uses `deposit_fixed_v3` first. After deposit, the user can exit the note via `private_exit_v3` (requires a ZK proof) if not proceeding. If continuing, the note waits the mixing window/cooldown, then the relayer executes through `ShieldedPoolV3`. Hide mode still earns points, can use NFT discount, and adds hide-tier bonus points.
+
+Privacy note (important):
+- Starknet calldata and ERC20 transfers are public. Hide mode does **not** hide trade parameters (token pair, amount, route).
+- Deposits/exits/payouts still create public token transfers (depositor/recipient and denomination tier remain observable).
+- Hide mode focuses on reducing linkability between deposits and later spends (commitment vs nullifier) and enforcing proof-bound execution.
 
 ### Swap
 ```mermaid
@@ -153,7 +158,7 @@ flowchart TD
   N2 --> SWAP[CAREL SwapAggregator]
 
   B -->|Hide| H1[User deposit note]
-  H1 --> HW[Withdraw note]
+  H1 --> HW[Private exit private_exit_v3]
   H1 --> H2[Mixing window]
   H2 --> H3[BE prep payload]
   H3 --> H4[Relayer submit]
@@ -169,7 +174,7 @@ flowchart TD
   N1 --> LOB[Limit Order Book]
 
   B -->|Hide| H1[User deposit note]
-  H1 --> HW[Withdraw note]
+  H1 --> HW[Private exit private_exit_v3]
   H1 --> H2[Mixing window]
   H2 --> H3[BE prep payload]
   H3 --> H4[Relayer submit]
@@ -188,7 +193,7 @@ flowchart TD
   P1 --> S3[Staking WBTC]
 
   B -->|Hide| H1[User deposit note]
-  H1 --> HW[Withdraw note]
+  H1 --> HW[Private exit private_exit_v3]
   H1 --> H2[Mixing window]
   H2 --> H3[BE prep payload]
   H3 --> H4[Relayer submit]
@@ -364,7 +369,7 @@ docker compose down
 
 ## Current Constraints
 - Testnet-first deployment posture.
-- Hide mode reduces linkability but does not hide public chain metadata.
+- Hide mode reduces linkability between deposit and execution, but does **not** hide calldata, token transfers, or trade amounts/pairs.
 - Bridge path depends on third-party provider uptime/liquidity.
 - No proxy-based upgrade path in current contracts; upgrades require redeploy/migration.
 
