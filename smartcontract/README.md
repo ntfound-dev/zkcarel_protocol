@@ -403,7 +403,7 @@ Use this override set for FE/BE runtime demos. Keep catalog inventory unchanged 
 
 ## Current Constraints
 - Hide mode reduces linkability, but chain-level metadata remains public.
-- `MockGaragaVerifier` usage is testnet-only.
+- `MockGaragaVerifier` is test-only (unit tests/local dev). Public Sepolia demo uses the real Garaga verifier contracts (`GARAGA_VERIFIER_ADDRESS` + adapter).
 - Contract upgrades currently require redeploy/migration (no proxy strategy in current baseline).
 - Bridge behavior depends on external providers.
 
