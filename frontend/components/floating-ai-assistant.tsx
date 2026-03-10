@@ -1355,16 +1355,6 @@ function parseStakeTokenAmountFromCommand(
   command: string
 ): { token: string; amountText: string } | null {
   const normalized = normalizeMessageText(command).replace(/[,()]/g, " ")
-  const direct = normalized.match(
-    /\b(?:(?:hide|private)\s+)?stake\b\s+([0-9]+(?:\.[0-9]+)?)\s+([a-z0-9]{2,12})\b/i
-  )
-  if (direct) {
-    const amountText = (direct[1] || "").trim()
-    const token = resolveStakeTokenSymbol((direct[2] || "").trim())
-    if (!amountText || !token) return null
-    return { token, amountText }
-  }
-
   const tierSyntax = normalized.match(
     /\b(?:(?:hide|private)\s+)?stake\b\s+([0-9]+(?:\.[0-9]+)?)\s+(?:hide\s+)?tier\s+\$?\s*([a-z0-9]{2,12})\b/i
   )
@@ -1381,6 +1371,16 @@ function parseStakeTokenAmountFromCommand(
   if (tierSyntaxTrailing) {
     const token = resolveStakeTokenSymbol((tierSyntaxTrailing[1] || "").trim())
     const amountText = (tierSyntaxTrailing[2] || "").trim()
+    if (!amountText || !token) return null
+    return { token, amountText }
+  }
+
+  const direct = normalized.match(
+    /\b(?:(?:hide|private)\s+)?stake\b\s+([0-9]+(?:\.[0-9]+)?)\s+(?!tier\b)([a-z0-9]{2,12})\b/i
+  )
+  if (direct) {
+    const amountText = (direct[1] || "").trim()
+    const token = resolveStakeTokenSymbol((direct[2] || "").trim())
     if (!amountText || !token) return null
     return { token, amountText }
   }

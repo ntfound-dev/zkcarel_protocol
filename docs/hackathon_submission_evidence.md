@@ -107,6 +107,109 @@ Snapshot notes:
 - Current frontend behavior now shows cooldown status in chat after hide note deposit and marks AI-created transactions/orders/staking positions in the UI.
 - Route and pool pre-checks are expected to stop unsupported or illiquid AI actions before CAREL burn.
 
+### AI Agent Level 2 Bridge Transcript Evidence (Mar 10, 2026)
+Agent banner (chat UI excerpt):
+- "Welcome to CAREL Agent (Level 2). I can execute live DeFi actions after wallet confirmation. Each execution burns 1 CAREL."
+- "Bridge execution usually has 2 steps: (1) Starknet setup burn, (2) source-chain transfer (BTC/ETH)."
+
+Bridge `BTC -> WBTC` (0.005 BTC):
+- Burn tx (Starknet setup, burns 1 CAREL): https://sepolia.voyager.online/tx/0x5187238b69de24ab2069e20e8afb8e1387eccbbbb41d50cb4ee1fcc0eb764e4
+- Garden order: https://testnet-explorer.garden.finance/order/1c474904692e12d5188a3424dda6e215e578d08b6c9119152b15e864ad9701ed
+- BTC deposit tx: https://mempool.space/testnet/tx/97aca2209b80cf5af2e4f62126181ffe4f203aab6dfe840012051f128e25201e
+
+Bridge `ETH -> WBTC` (0.05 ETH):
+- Burn tx (Starknet setup, burns 1 CAREL): https://sepolia.voyager.online/tx/0x75cb30c0d83b03713b5a071af233bfabae58aaa76df5c4b32ef7f61791ca764
+- ETH source tx: https://sepolia.etherscan.io/tx/0x9a7c2f2f6a7c24c0f003bdef0a0c8420167974937c982cb0c308ebbec3f923a7
+- Garden order: https://testnet-explorer.garden.finance/order/79bbcccc277274fb5294925ffc1e917b91af280ffd600d9f14fd0e47dc0dddc6
+
+### AI Agent Level 3 Private Transcript Evidence (Mar 10, 2026)
+Agent banner (chat UI excerpt):
+- "Welcome to CAREL Agent (Level 3). I can run private Garaga-mode execution for swap, stake, and limit order. Each execution burns 2 CAREL. Bridge stays on Level 2."
+- "Private hide flow uses a 60s cooldown after note deposit."
+
+Private swap `CAREL -> USDT` (tier `$5`, burns `2 CAREL`, cooldown `60s`):
+- Burn tx (Starknet setup): https://sepolia.voyager.online/tx/0x398efe083271845492dc2162b9de3362307b7b2cfeafdf2494fab8cebeb43c0
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0x153e78f4cd1575b49345828ff94698f47a0f3ceaf346ac3387eae4f67f49708
+- Private execution tx: https://sepolia.voyager.online/tx/0x6ed77802ca6ec525a3b6086bff70b2fca5766f0c722893b89634dd8d524c3b1
+
+Private swap `USDC -> STRK` (tier `$5`, burns `2 CAREL`, cooldown `60s`):
+- Burn tx (Starknet setup): https://sepolia.voyager.online/tx/0x451c797777f1e26c905fdb0e4d69da36c3601b79fd172accac7499d16b85a05
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0x3353d6df2fb5b53d19dabba16efc07957b83059b7956228d67e5b31b9bef6ea
+- Private execution tx: https://sepolia.voyager.online/tx/0x52f8691ae240b56a0f589ee05528c7dbc969d34947b7de1d73e78a9032c7aac
+
+Private swap `STRK -> WBTC` (tier `$5`, burns `2 CAREL`, cooldown `60s`):
+- Burn tx (Starknet setup): https://sepolia.voyager.online/tx/0x5cb25efbf221d4349e1c715bfc7271638fa26b57d15534eb71f7211c4c5473d
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0x5e2d3d10fdb814cee2261a7e0bd46a029c4d51e294f208f72207aaf7894c4e6
+- Private execution tx: https://sepolia.voyager.online/tx/0x4d5d283ebc9cb2231d003190c471e22d1514096d434df52ba0bb6649106927a
+
+### AI Agent Level 3 Private Limit Order Transcript Evidence (Mar 11-12, 2026)
+Private limit order `USDT/USDC` (tier `$100`, price `1.25`, requested expiry `3d`):
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0x1164d8aa72cc72c765d54f212c280bacaceada13821f1e2a5cb26c50f4a21c9
+- Private execution tx (order created `0x11cbe002...5443`, UI shows expiry `7d`): https://sepolia.voyager.online/tx/0x26396a09992fa86cd1159897ccb9c8d86403b5a82b94ddd192e0c9580f896aa
+- Note: setup burn tx is not shown in this transcript (setup may have been reused).
+
+Private limit order `CAREL/USDC` (tier `$10`, price `1.25`, expiry `1d`):
+- Burn tx (Starknet setup): https://sepolia.voyager.online/tx/0x675047f8c755538f46a78c789520610a1169e0f5e26c49788b2960b399be4fd
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0x7c0fcea6571e1ba077ba426e217cecb35dafd89856690c0789a7ca8852eca2
+- Private execution tx (order created `0x59115402...d2fe`): https://sepolia.voyager.online/tx/0x166bbf475ec39eee9a216fef5d35e8b838cba62bf8ba9699a224c45365cf70e
+
+Private limit order `WBTC/USDC` (tier `$10`, price `68000`, expiry `1d`):
+- Burn tx (Starknet setup): https://sepolia.voyager.online/tx/0x3153fba346cdba2e8dd92fc17ea4603950c382f9a8ca3bef2dcf268b20bdced
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0x1d09b1a15d48d97f8dcce84262803a297a2757b47638a80714d1c5b410d77ae
+- Private execution tx (order created `0x84f7b3f5...9cc8`): https://sepolia.voyager.online/tx/0x6102cd1b609b94acbfcf2090d8cf23886feb5d174c50202c9a7e56ed9904ebe
+
+### Manual Hide Flow Validation (Mar 10, 2026)
+- Hide note deposit (user wallet, `approve` + `deposit_fixed_v3`, `CAREL` denom `0xa`, amount `10 CAREL`): https://sepolia.voyager.online/tx/0x1cae4f759730b228b51a27e776dd2dd4fb43bd78715fe6578201a51a2a84bcd
+- Hide private swap execution (relayer, `submit_private_swap` + `execute_private_swap_with_payout`, `CAREL -> USDC`): https://sepolia.voyager.online/tx/0x61f4c7e353d793a2c7f066aa99d22dede2a2ff67c4231e2658722954a1646fe
+- Hide note deposit (user wallet, `approve` + `deposit_fixed_v3`, `USDT` denom `0xa`, amount `10 USDT`): https://sepolia.voyager.online/tx/0x792cc7e0d939597600e407f0f1632963d37b720661b625dd285bb47d6369184
+- Hide private limit order execution (relayer, `submit_private_limit` + `execute_private_limit_with_payout`, `USDT -> WBTC`): https://sepolia.voyager.online/tx/0x221d9deeca00ef656133f13562091d82507081d5299a9bfbe2ff48010260f50
+- Hide note deposit (user wallet, `approve` + `deposit_fixed_v3`, `WBTC`): https://sepolia.voyager.online/tx/0x5bfd33ad05b4ddc4ed2e1c974577b11e9487aaf7592d282cb6851ed12db0d8e
+- Hide private stake execution (relayer, `submit_private_stake` + `execute_private_stake_with_payout`, stake `WBTC` via `StakingBTC`): https://sepolia.voyager.online/tx/0x47abb39188bd05331da1cf9024bcf8be29107eae2317c2f6dcd03b1903125ed
+- Hide note withdrawal (user wallet, `private_exit_v3`, `USDC` amount `10`): https://sepolia.voyager.online/tx/0x5bb254cc480a12525331bc911a2365efc0966f681fb7f8faa9e1068ddaf928d
+- Hide note withdrawal (user wallet, `private_exit_v3`, `USDT` amount `10`): https://sepolia.voyager.online/tx/0xa9acb749f708346360beea84f8d35eacee3aa3bed1e7da10259f0c9d00032f
+- Hide note withdrawal (user wallet, `private_exit_v3`, `USDT` amount `10`): https://sepolia.voyager.online/tx/0x45a918b757ce55b470097bb32f00b1436164294e0c303c9d2a6ac4d94047e7d
+
+Analysis (what these prove on-chain):
+- Actors:
+  - User wallet / account: `0x0469de079832d5da0591fc5f8fd2957f70b908d62c5d0dcb057d030cfc827705`
+  - Hide relayer / executor submitter: `0x0289f797b9c2dc6c661fd058968d9ba39d01c7547f8259f01b7bce55696d0ff0`
+  - Hide executor (V3, `deposit_fixed_v3` + `private_exit_v3` entrypoints): `0x075cdfaaf113cfaf458fc695cc9ec694a5b581fd8572d18fc83aee7d8d57be3c`
+  - Note: the executor address above is taken directly from the decoded calldata of these tx (Mar 10, 2026) and can differ from older runtime/env snapshots in this repo.
+- Target contracts (called by the executor during private execution):
+  - `SwapAggregator`: `0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28`
+  - `LimitOrderBook`: `0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a`
+  - `StakingBTC`: `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8`
+- Private swap (`CAREL -> USDC`) evidence:
+  - `0x1cae...bcd`: user signs `approve(token=CAREL, spender=executor)` then `deposit_fixed_v3(token=CAREL, denom_id=0xa, note_commitment=...)`; internal `transfer_from` moves the fixed note amount into the executor.
+  - `0x61f4...6fe`: relayer signs `submit_private_swap(root=0x11, nullifier, proof)` then `execute_private_swap_with_payout(target=SwapAggregator, approval_token=CAREL, payout_token=USDC, min_payout=...)`; token transfers show `USDC` ends at the user via the executor.
+- Private limit order (`USDT -> WBTC`) evidence:
+  - `0x792c...184`: user signs `approve(token=USDT, spender=executor)` then `deposit_fixed_v3(token=USDT, denom_id=0xa, note_commitment=...)`.
+  - `0x221d...0f50`: relayer signs `submit_private_limit(...)` then `execute_private_limit_with_payout(target=LimitOrderBook, approval_token=USDT, payout_token=WBTC, min_payout=0)`.
+  - `min_payout=0` and Voyager showing `0 WBTC` transferred is consistent with a placed order that does not fill immediately (order creation rather than swap-like payout).
+- Private stake (stake `WBTC`) evidence:
+  - `0x5bfd...0d8e`: user signs `approve(token=WBTC, spender=executor)` then `deposit_fixed_v3(token=WBTC, denom_id=..., note_commitment=...)`.
+  - `0x47ab...25ed`: relayer signs `submit_private_stake(...)` then `execute_private_stake_with_payout(target=StakingBTC, approval_token=WBTC)`; transfers show `WBTC` moved into the staking contract.
+- Private exit (note withdrawal) evidence:
+  - `0x5bb2...928d`, `0xa9ac...032f`, `0x45a9...7e7d`: user signs `private_exit_v3(root=0x11, nullifier, proof, token, amount, recipient=user)`.
+  - These tx are signed by the user wallet (no relayer) and transfer the specified token amount from the executor back to the user, proving user-controlled withdrawal.
+
+Privacy impact (what stays public vs what is obfuscated):
+- What the ZK layer hides (cryptographically):
+  - The specific deposited note being spent: private execution/exit uses `nullifier` + ZK proof and does **not** reveal `note_commitment`.
+  - The secret behind the note commitment: observers can see deposits but cannot prove which deposit is being spent without additional off-chain correlation.
+  - Relayer tampering: the proof binds `recipient` and `action_hash`/`exit_hash`, so the relayer cannot change the intended action/exit details without invalidating the proof.
+- What still remains public on-chain (by design):
+  - Deposit/exit token + fixed denomination amount, plus depositor/recipient addresses (ERC20 transfers are public).
+  - When the relayer executes, the action call data and resulting token transfers are visible (`target`, `approval_token`, `payout_token`, `approval_amount`, `payout_amount`, etc.).
+- What "privacy" practically means in this system:
+  - **Sender privacy** vs normal mode: the user wallet is not the `sender_address` that interacts with DEX/limit/stake targets (relayer + executor do).
+  - **Conditional unlinkability**: linking a deposit to a later action/exit is probabilistic and improves with more same-denom notes and larger time gaps.
+- Linkability risks (important for demo claims):
+  - If the payout/exit recipient is the same wallet that deposited (as in several links above), observers can correlate by address.
+  - Small anonymity sets on testnet + fast execution can reduce unlinkability (timing correlation).
+- How to improve privacy in practice:
+  - Use a fresh recipient for payouts/exits, wait past cooldown, and avoid withdrawing immediately after a deposit.
+
 ### Historical MVP Demo-Flow Links (Feb 23-25, 2026)
 - Normal Swap: https://sepolia.voyager.online/tx/0x22a53b1af0f7d62e19569a99b38d67e9165faad2804ca50a1b0a53f289bab98
 - Hide Swap: https://sepolia.voyager.online/tx/0x71b6c99287c78b082d105dc7169faa56b419a3e2568b3ea9a70ef1ff653a2d2

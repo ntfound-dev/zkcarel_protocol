@@ -168,7 +168,12 @@ const tokenCatalog = [
 
 const slippagePresets = ["0.1", "0.3", "0.5", "1.0"]
 const MEV_FEE_RATE = 0.01
-const STARKNET_STRK_GAS_RESERVE = 0.02
+// Keep STRK to pay Starknet L2 fees. Too-low reserve causes Argent/Ready multicall to revert
+// with `u256_sub Overflow` when the fee token transfer is charged.
+const STARKNET_STRK_GAS_RESERVE = 10
+// If backend on-chain quotes diverge too much from live USD prices (common on testnets),
+// normalize the displayed output amount to avoid showing unrealistic profit/loss.
+const LIVE_PRICE_NORMALIZATION_THRESHOLD = 0.1
 const QUOTE_CACHE_TTL_MS = 20_000
 const MAX_QUOTE_CACHE_ENTRIES = 120
 const TRADE_PRIVACY_PAYLOAD_KEY = "trade_privacy_garaga_payload_v2"
@@ -2901,8 +2906,10 @@ export function TradingInterface() {
             hasLiveReference &&
             (!Number.isFinite(backendToAmountRaw) ||
               backendToAmountRaw <= 0 ||
-              backendToAmountRaw > (liveReferenceToAmount as number) * 1.35 ||
-              backendToAmountRaw < (liveReferenceToAmount as number) * 0.65)
+              backendToAmountRaw >
+                (liveReferenceToAmount as number) * (1 + LIVE_PRICE_NORMALIZATION_THRESHOLD) ||
+              backendToAmountRaw <
+                (liveReferenceToAmount as number) * (1 - LIVE_PRICE_NORMALIZATION_THRESHOLD))
           const normalizedByLivePrice = Boolean(backendDeviatesTooMuch)
           const normalizedToAmount = normalizedByLivePrice
             ? normalizeTokenAmountDisplay(liveReferenceToAmount as number, toSymbol)

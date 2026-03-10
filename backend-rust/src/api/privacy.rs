@@ -150,6 +150,7 @@ pub struct PreparePrivateExecutionResponse {
 pub struct PreparePrivateExitRequest {
     pub verifier: Option<String>,
     pub executor_address: Option<String>,
+    #[allow(dead_code)]
     pub root: String,
     pub nullifier: String,
     pub note_commitment: Option<String>,
