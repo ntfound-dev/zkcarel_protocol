@@ -142,7 +142,7 @@ Private swap `STRK -> WBTC` (tier `$5`, burns `2 CAREL`, cooldown `60s`):
 - Hide note deposit tx: https://sepolia.voyager.online/tx/0x5e2d3d10fdb814cee2261a7e0bd46a029c4d51e294f208f72207aaf7894c4e6
 - Private execution tx: https://sepolia.voyager.online/tx/0x4d5d283ebc9cb2231d003190c471e22d1514096d434df52ba0bb6649106927a
 
-### AI Agent Level 3 Private Limit Order Transcript Evidence (Mar 11-12, 2026)
+### AI Agent Level 3 Private Limit Order Transcript Evidence (Mar 10, 2026)
 Private limit order `USDT/USDC` (tier `$100`, price `1.25`, requested expiry `3d`):
 - Hide note deposit tx: https://sepolia.voyager.online/tx/0x1164d8aa72cc72c765d54f212c280bacaceada13821f1e2a5cb26c50f4a21c9
 - Private execution tx (order created `0x11cbe002...5443`, UI shows expiry `7d`): https://sepolia.voyager.online/tx/0x26396a09992fa86cd1159897ccb9c8d86403b5a82b94ddd192e0c9580f896aa
