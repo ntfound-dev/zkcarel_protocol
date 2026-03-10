@@ -209,6 +209,24 @@ Analysis (what these prove on-chain):
   - `0x5bb2...928d`, `0xa9ac...032f`, `0x45a9...7e7d`: user signs `private_exit_v3(root=0x11, nullifier, proof, token, amount, recipient=user)`.
   - These tx are signed by the user wallet (no relayer) and transfer the specified token amount from the executor back to the user, proving user-controlled withdrawal.
 
+#### Decoded calldata snapshot (ShieldedPoolV3, Mar 10, 2026)
+Selected decoded fields from Voyager calldata (proof arrays omitted for readability):
+
+Deposit (`approve` + `deposit_fixed_v3`) example:
+- `approve(spender=0x75cdfaaf113cfaf458fc695cc9ec694a5b581fd8572d18fc83aee7d8d57be3c, amount=0x4615343e73b90000 = 5.05 CAREL)`
+- `deposit_fixed_v3(token=0x517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545 (CAREL), denom_id=0x5, note_commitment=0x5adca82827b60dc211bdb314035bbfc098f2bd100c87980a580be301f0fae23)`
+
+Private swap (`submit_private_swap` + `execute_private_swap_with_payout`) example:
+- `submit_private_swap(root=0x11, nullifier=0x350d5e5866ed333c3988f98af5574958d7c003f59bd81e66944e3a0f04257a5, proof=[omitted])`
+- `execute_private_swap_with_payout(target=0x6f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28 (SwapAggregator), approval_token=CAREL, approval_amount=0x4563918244f40000 = 5 CAREL, payout_token=0x30fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5 (USDT), min_payout=0x4b87f0 = 4.95 USDT)`
+
+Exit / withdrawal (`private_exit_v3`) example:
+- `private_exit_v3(root=0x11, nullifier=0x1c1e4e923c6273aad307e2aa51ad2ce722b4895f94cfa626d58fde7904535da, token=0x179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8 (USDC), amount=0x989680 = 10 USDC, recipient=0x469de079832d5da0591fc5f8fd2957f70b908d62c5d0dcb057d030cfc827705)`
+
+Notes:
+- The proof is public in calldata but (by ZK design) does not reveal the note secret/witness; it proves membership + correct binding to the public inputs above.
+- The public fields above show why hide mode is about *note unlinkability* (commitment vs nullifier) and *relayer execution*, not full “amount/pair privacy”.
+
 Privacy impact (what stays public vs what is obfuscated):
 - What the ZK layer hides (cryptographically):
   - The specific deposited note being spent: private execution/exit uses `nullifier` + ZK proof and does **not** reveal `note_commitment`.
