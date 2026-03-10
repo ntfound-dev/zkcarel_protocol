@@ -158,6 +158,22 @@ Private limit order `WBTC/USDC` (tier `$10`, price `68000`, expiry `1d`):
 - Hide note deposit tx: https://sepolia.voyager.online/tx/0x1d09b1a15d48d97f8dcce84262803a297a2757b47638a80714d1c5b410d77ae
 - Private execution tx (order created `0x84f7b3f5...9cc8`): https://sepolia.voyager.online/tx/0x6102cd1b609b94acbfcf2090d8cf23886feb5d174c50202c9a7e56ed9904ebe
 
+### AI Agent Level 3 Private Stake Transcript Evidence (Mar 10, 2026)
+Private stake `USDT` (tier `$10`):
+- Burn tx (Starknet setup): https://sepolia.voyager.online/tx/0xd5fef23407e40a61c1a527b0f7c1d9b50026a060a941eae204de92ba555e56
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0x1261e90311f2c344e4acae6eb3b9db11e0157a2ba256659394bf39aefcc1508
+- Private execution tx: https://sepolia.voyager.online/tx/0x602476528c3d879b64a63091e38fc118d5c6041e66c261062bf9880f1ac92bc
+
+Private stake `USDC` (tier `$10`):
+- Burn tx (Starknet setup): https://sepolia.voyager.online/tx/0x5d71742c530c0c6c51a124e6e1ed427316f68d8217aa41303be2aab4b130faf
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0x4d42fb6788364c9c10e7dcd7193125b8810bcb08af276881b0efea031ea958b
+- Private execution tx: https://sepolia.voyager.online/tx/0x54d02cbc2103b2dd865145165263add603fa6afaeb3ac4c6555a666c89b2b9
+
+Private stake `WBTC` (tier `$50`, executed amount `0.000725 WBTC`):
+- Burn tx (Starknet setup): https://sepolia.voyager.online/tx/0x6124f8b5b00c48f912a64662d0cb7039e5087fda6aa1b093a57e2cae67f4c80
+- Hide note deposit tx: https://sepolia.voyager.online/tx/0xf56b92cc33ed0e2d78a7205023aff18bc56aec11e7b0415bd4cd31e06ac3fa
+- Private execution tx: https://sepolia.voyager.online/tx/0x1a5eb1a42b819f92ad660986d4b6546dc5dfa3a41fe4e0457deba4606cb9d36
+
 ### Manual Hide Flow Validation (Mar 10, 2026)
 - Hide note deposit (user wallet, `approve` + `deposit_fixed_v3`, `CAREL` denom `0xa`, amount `10 CAREL`): https://sepolia.voyager.online/tx/0x1cae4f759730b228b51a27e776dd2dd4fb43bd78715fe6578201a51a2a84bcd
 - Hide private swap execution (relayer, `submit_private_swap` + `execute_private_swap_with_payout`, `CAREL -> USDC`): https://sepolia.voyager.online/tx/0x61f4c7e353d793a2c7f066aa99d22dede2a2ff67c4231e2658722954a1646fe
