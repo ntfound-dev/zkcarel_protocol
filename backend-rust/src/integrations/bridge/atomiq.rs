@@ -1,4 +1,8 @@
-use crate::error::Result;
+use crate::{
+    bridge_amounts::{float_from_units_lossy, units_from_float_lossy},
+    error::Result,
+    integrations::bridge::BridgeQuote,
+};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -40,14 +44,15 @@ impl AtomiqClient {
         from_chain: &str,
         to_chain: &str,
         token: &str,
-        amount: f64,
-    ) -> Result<AtomiqQuote> {
+        amount_units: u128,
+    ) -> Result<BridgeQuote> {
         if self.api_url.trim().is_empty() {
             return Err(crate::error::AppError::ExternalAPI(
                 "Atomiq API is not configured".to_string(),
             ));
         }
 
+        let amount = float_from_units_lossy(amount_units, token);
         let url = format!("{}/quote", self.api_url.trim_end_matches('/'));
         let timeout_secs = std::env::var("BRIDGE_QUOTE_TIMEOUT_SECS")
             .ok()
@@ -89,13 +94,21 @@ impl AtomiqClient {
             crate::error::AppError::ExternalAPI(format!("Atomiq quote parse failed: {}", err))
         })?;
 
-        Ok(AtomiqQuote {
-            from_chain: from_chain.to_string(),
-            to_chain: to_chain.to_string(),
-            token: token.to_string(),
-            amount_in: amount,
-            amount_out: body.amount_out.unwrap_or(amount),
-            fee: body.fee.unwrap_or(0.0),
+        let amount_out_units = body
+            .amount_out
+            .and_then(|value| units_from_float_lossy(value, token))
+            .unwrap_or(amount_units);
+        let fee_units = body
+            .fee
+            .and_then(|value| units_from_float_lossy(value, token))
+            .unwrap_or(0);
+
+        Ok(BridgeQuote {
+            from_token: token.to_string(),
+            to_token: token.to_string(),
+            amount_in_units: amount_units,
+            amount_out_units,
+            fee_units,
             estimated_time_minutes: body.estimated_time_minutes.unwrap_or(20),
         })
     }
@@ -205,8 +218,10 @@ mod tests {
     // Internal helper that fetches data for `get_quote_without_api_url_returns_error`.
     async fn get_quote_without_api_url_returns_error() {
         let client = AtomiqClient::new("api_key".to_string(), "".to_string());
+        let amount_units =
+            crate::bridge_amounts::units_from_float_lossy(200.0, "ETH").unwrap_or_default();
         let err = client
-            .get_quote("ethereum", "starknet", "ETH", 200.0)
+            .get_quote("ethereum", "starknet", "ETH", amount_units)
             .await
             .expect_err("quote should fail without API config");
         assert!(err

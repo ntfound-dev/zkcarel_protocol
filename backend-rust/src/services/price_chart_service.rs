@@ -14,8 +14,103 @@ use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+
+const COINGECKO_PRICE_CACHE_TTL_SECS: u64 = 45;
+const COINGECKO_OHLCV_CACHE_TTL_SECS: u64 = 60;
+
+#[derive(Clone)]
+struct CachedDecimal {
+    fetched_at: Instant,
+    value: Decimal,
+}
+
+#[derive(Clone)]
+struct CachedOhlcv {
+    fetched_at: Instant,
+    value: Vec<PriceTick>,
+}
+
+static COINGECKO_PRICE_CACHE: OnceLock<RwLock<HashMap<String, CachedDecimal>>> = OnceLock::new();
+static COINGECKO_OHLCV_CACHE: OnceLock<RwLock<HashMap<String, CachedOhlcv>>> = OnceLock::new();
+
+// Internal helper that supports `coingecko_price_cache` operations.
+fn coingecko_price_cache() -> &'static RwLock<HashMap<String, CachedDecimal>> {
+    COINGECKO_PRICE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+// Internal helper that supports `coingecko_ohlcv_cache` operations.
+fn coingecko_ohlcv_cache() -> &'static RwLock<HashMap<String, CachedOhlcv>> {
+    COINGECKO_OHLCV_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+// Internal helper that supports `get_cached_price` operations.
+async fn get_cached_price(key: &str, ttl: Duration) -> Option<Decimal> {
+    let cache = coingecko_price_cache();
+    let guard = cache.read().await;
+    guard.get(key).and_then(|entry| {
+        if entry.fetched_at.elapsed() <= ttl {
+            Some(entry.value)
+        } else {
+            None
+        }
+    })
+}
+
+// Internal helper that supports `get_cached_price_any` operations.
+async fn get_cached_price_any(key: &str) -> Option<Decimal> {
+    let cache = coingecko_price_cache();
+    let guard = cache.read().await;
+    guard.get(key).map(|entry| entry.value)
+}
+
+// Internal helper that supports `store_cached_price` operations.
+async fn store_cached_price(key: &str, value: Decimal) {
+    let cache = coingecko_price_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedDecimal {
+            fetched_at: Instant::now(),
+            value,
+        },
+    );
+}
+
+// Internal helper that supports `get_cached_ohlcv` operations.
+async fn get_cached_ohlcv(key: &str, ttl: Duration) -> Option<Vec<PriceTick>> {
+    let cache = coingecko_ohlcv_cache();
+    let guard = cache.read().await;
+    guard.get(key).and_then(|entry| {
+        if entry.fetched_at.elapsed() <= ttl {
+            Some(entry.value.clone())
+        } else {
+            None
+        }
+    })
+}
+
+// Internal helper that supports `get_cached_ohlcv_any` operations.
+async fn get_cached_ohlcv_any(key: &str) -> Option<Vec<PriceTick>> {
+    let cache = coingecko_ohlcv_cache();
+    let guard = cache.read().await;
+    guard.get(key).map(|entry| entry.value.clone())
+}
+
+// Internal helper that supports `store_cached_ohlcv` operations.
+async fn store_cached_ohlcv(key: &str, value: Vec<PriceTick>) {
+    let cache = coingecko_ohlcv_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedOhlcv {
+            fetched_at: Instant::now(),
+            value,
+        },
+    );
+}
 
 // Internal helper that supports `candle_start_time` operations.
 fn candle_start_time(time: DateTime<Utc>, interval: &str) -> DateTime<Utc> {
@@ -191,6 +286,16 @@ impl PriceChartService {
             .coingecko_id_or_default(token)
             .ok_or_else(|| AppError::NotFound(format!("Missing CoinGecko id for {}", token)))?;
 
+        let cache_key = format!("price:{}", coin_id);
+        if let Some(cached) = get_cached_price(
+            &cache_key,
+            Duration::from_secs(COINGECKO_PRICE_CACHE_TTL_SECS),
+        )
+        .await
+        {
+            return Ok(cached);
+        }
+
         let base_url = self.config.coingecko_api_url.trim_end_matches('/');
         let url = format!("{}/simple/price", base_url);
         let client = reqwest::Client::new();
@@ -207,15 +312,26 @@ impl PriceChartService {
             }
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+        let response = request.send().await;
+        let response = match response {
+            Ok(value) => value,
+            Err(err) => {
+                if let Some(cached) = get_cached_price_any(&cache_key).await {
+                    return Ok(cached);
+                }
+                return Err(AppError::BlockchainRPC(err.to_string()));
+            }
+        };
 
-        let data: CoinGeckoPriceResponse = response
-            .json()
-            .await
-            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+        let data: CoinGeckoPriceResponse = match response.json().await {
+            Ok(value) => value,
+            Err(err) => {
+                if let Some(cached) = get_cached_price_any(&cache_key).await {
+                    return Ok(cached);
+                }
+                return Err(AppError::BlockchainRPC(err.to_string()));
+            }
+        };
 
         let usd_price = data
             .prices
@@ -228,7 +344,10 @@ impl PriceChartService {
         }
         let sane = sanitize_price_usd(token, usd_price)
             .ok_or_else(|| AppError::Internal(format!("Outlier CoinGecko price for {}", token)))?;
-        Decimal::from_f64(sane).ok_or_else(|| AppError::Internal("Failed to convert price".into()))
+        let price = Decimal::from_f64(sane)
+            .ok_or_else(|| AppError::Internal("Failed to convert price".into()))?;
+        store_cached_price(&cache_key, price).await;
+        Ok(price)
     }
 
     /// Fetches data for `get_ohlcv_from_coingecko`.
@@ -250,6 +369,20 @@ impl PriceChartService {
     ) -> Result<Vec<PriceTick>> {
         let symbol = token.to_ascii_uppercase();
         let max_len = limit.max(1) as usize;
+        let cache_key = format!(
+            "ohlcv:{}:{}:{}",
+            symbol,
+            interval.to_ascii_lowercase(),
+            max_len
+        );
+        if let Some(cached) = get_cached_ohlcv(
+            &cache_key,
+            Duration::from_secs(COINGECKO_OHLCV_CACHE_TTL_SECS),
+        )
+        .await
+        {
+            return Ok(cached);
+        }
         let coin_id = match self.coingecko_id_or_default(&symbol) {
             Some(value) => value,
             None => {
@@ -286,14 +419,25 @@ impl PriceChartService {
             }
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
-        let rows: Vec<Vec<f64>> = response
-            .json()
-            .await
-            .map_err(|e| AppError::BlockchainRPC(e.to_string()))?;
+        let response = request.send().await;
+        let response = match response {
+            Ok(value) => value,
+            Err(err) => {
+                if let Some(cached) = get_cached_ohlcv_any(&cache_key).await {
+                    return Ok(cached);
+                }
+                return Err(AppError::BlockchainRPC(err.to_string()));
+            }
+        };
+        let rows: Vec<Vec<f64>> = match response.json().await {
+            Ok(value) => value,
+            Err(err) => {
+                if let Some(cached) = get_cached_ohlcv_any(&cache_key).await {
+                    return Ok(cached);
+                }
+                return Err(AppError::BlockchainRPC(err.to_string()));
+            }
+        };
 
         let mut candles = Vec::with_capacity(rows.len());
         for row in rows {
@@ -343,6 +487,7 @@ impl PriceChartService {
             candles = candles[candles.len() - max_len..].to_vec();
         }
 
+        store_cached_ohlcv(&cache_key, candles.clone()).await;
         Ok(candles)
     }
 

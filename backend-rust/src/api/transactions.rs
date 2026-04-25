@@ -5,10 +5,14 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use serde::Deserialize;
+use serde::Serialize;
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 use crate::{
-    error::Result,
+    error::{AppError, Result},
     models::{ApiResponse, PaginatedResponse, Transaction},
     services::TransactionHistoryService,
     utils::ensure_page_limit,
@@ -25,8 +29,101 @@ pub struct HistoryQuery {
     pub limit: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CursorHistoryQuery {
+    pub tx_type: Option<String>,
+    pub from_date: Option<String>,
+    pub to_date: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CursorPaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+    pub limit: i32,
+}
+
 // Helper function agar logika parsing tanggal tidak berulang (DRY)
 fn parse_dates(query: &HistoryQuery) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    let from = query.from_date.as_ref().and_then(|d| {
+        DateTime::parse_from_rfc3339(d)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
+    });
+    let to = query.to_date.as_ref().and_then(|d| {
+        DateTime::parse_from_rfc3339(d)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
+    });
+    (from, to)
+}
+
+// Internal helper that parses or transforms values for `parse_cursor`.
+fn cursor_signature(secret: &str, ts: &str, hash: &str, user: &str) -> Result<String> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .map_err(|_| AppError::Internal("Failed to initialize cursor signature".to_string()))?;
+    mac.update(ts.as_bytes());
+    mac.update(b"|");
+    mac.update(hash.as_bytes());
+    mac.update(b"|");
+    mac.update(user.as_bytes());
+    Ok(hex::encode(mac.finalize().into_bytes()))
+}
+
+// Internal helper that supports `build_cursor` operations.
+fn build_cursor(ts: &DateTime<Utc>, hash: &str, user: &str, secret: &str) -> Result<String> {
+    let ts_str = ts.to_rfc3339();
+    let sig = cursor_signature(secret, &ts_str, hash, user)?;
+    Ok(format!("{}|{}|{}", ts_str, hash, sig))
+}
+
+// Internal helper that parses or transforms values for `parse_cursor`.
+fn parse_cursor(
+    raw: Option<&str>,
+    user: &str,
+    secret: &str,
+) -> Result<Option<(DateTime<Utc>, String)>> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if user.trim().is_empty() {
+        return Err(AppError::BadRequest("Invalid cursor context".to_string()));
+    }
+    let parts: Vec<&str> = raw.split('|').collect();
+    if parts.len() != 3 {
+        return Err(AppError::BadRequest("Invalid cursor format".to_string()));
+    }
+    let ts_str = parts[0].trim();
+    let hash = parts[1].trim();
+    let sig = parts[2].trim();
+    let ts = DateTime::parse_from_rfc3339(ts_str)
+        .map_err(|_| crate::error::AppError::BadRequest("Invalid cursor timestamp".to_string()))?
+        .with_timezone(&Utc);
+    if hash.is_empty() {
+        return Err(crate::error::AppError::BadRequest(
+            "Invalid cursor tx hash".to_string(),
+        ));
+    }
+    if sig.is_empty() {
+        return Err(crate::error::AppError::BadRequest(
+            "Invalid cursor signature".to_string(),
+        ));
+    }
+    let expected = cursor_signature(secret, ts_str, hash, user)?;
+    if expected.len() != sig.len() || expected.as_bytes().ct_eq(sig.as_bytes()).unwrap_u8() != 1 {
+        return Err(crate::error::AppError::BadRequest(
+            "Invalid cursor signature".to_string(),
+        ));
+    }
+    Ok(Some((ts, hash.to_string())))
+}
+
+// Internal helper that parses or transforms values for `parse_dates_cursor`.
+fn parse_dates_cursor(
+    query: &CursorHistoryQuery,
+) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
     let from = query.from_date.as_ref().and_then(|d| {
         DateTime::parse_from_rfc3339(d)
             .ok()
@@ -75,6 +172,57 @@ pub async fn get_history(
     }
 
     Ok(Json(ApiResponse::success(history)))
+}
+
+/// GET /api/v1/transactions/history-cursor
+pub async fn get_history_cursor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<CursorHistoryQuery>,
+) -> Result<Json<ApiResponse<CursorPaginatedResponse<Transaction>>>> {
+    let user_addresses = resolve_user_scope_addresses(&headers, &state).await?;
+    let auth_subject = user_addresses.first().cloned().unwrap_or_default();
+    if auth_subject.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "No wallet address available for transaction history".to_string(),
+        ));
+    }
+    let (from_date, to_date) = parse_dates_cursor(&query);
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    ensure_page_limit(limit, state.config.rate_limit_authenticated)?;
+    let cursor = parse_cursor(
+        query.cursor.as_deref(),
+        &auth_subject,
+        &state.config.jwt_secret,
+    )?;
+
+    let service = TransactionHistoryService::new(state.db);
+    let (items, next_cursor) = service
+        .get_user_history_cursor(
+            &user_addresses,
+            query.tx_type,
+            from_date,
+            to_date,
+            cursor,
+            limit,
+        )
+        .await?;
+
+    let next_cursor = match next_cursor {
+        Some((ts, hash)) => Some(build_cursor(
+            &ts,
+            &hash,
+            &auth_subject,
+            &state.config.jwt_secret,
+        )?),
+        None => None,
+    };
+
+    Ok(Json(ApiResponse::success(CursorPaginatedResponse {
+        items,
+        next_cursor,
+        limit,
+    })))
 }
 
 /// GET /api/v1/transactions/:tx_hash
@@ -160,5 +308,35 @@ mod tests {
         let (from, to) = parse_dates(&query);
         assert!(from.is_some());
         assert!(to.is_none());
+    }
+
+    #[test]
+    // Internal helper that supports `parse_cursor_accepts_valid` operations.
+    fn parse_cursor_accepts_valid() {
+        let secret = "cursor_secret";
+        let user = "0xabc";
+        let ts = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let cursor = build_cursor(&ts, "0xabc", user, secret).unwrap();
+        let parsed = parse_cursor(Some(cursor.as_str()), user, secret).unwrap();
+        assert!(parsed.is_some());
+        let (ts, hash) = parsed.unwrap();
+        assert_eq!(ts.to_rfc3339(), "2024-01-01T00:00:00+00:00");
+        assert_eq!(hash, "0xabc");
+    }
+
+    #[test]
+    // Internal helper that supports `parse_cursor_rejects_invalid` operations.
+    fn parse_cursor_rejects_invalid() {
+        let secret = "cursor_secret";
+        let user = "0xabc";
+        assert!(parse_cursor(Some("invalid"), user, secret).is_err());
+        assert!(parse_cursor(Some("2024-01-01T00:00:00Z|"), user, secret).is_err());
+        let ts = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let cursor = build_cursor(&ts, "0xabc", "0xdef", secret).unwrap();
+        assert!(parse_cursor(Some(cursor.as_str()), user, secret).is_err());
     }
 }

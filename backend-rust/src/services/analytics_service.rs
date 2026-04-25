@@ -252,6 +252,34 @@ impl AnalyticsService {
             worst_trade,
         })
     }
+
+    /// Get system health metrics for analytics monitoring.
+    pub async fn get_system_health(&self) -> Result<SystemHealth> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                EXTRACT(EPOCH FROM (NOW() - MAX(timestamp)))::FLOAT AS indexer_delay_seconds,
+                EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp)))::FLOAT
+                    / NULLIF(COUNT(*) - 1, 0) AS avg_block_time_seconds,
+                COUNT(*)::BIGINT AS total_transactions
+            FROM transactions
+            "#,
+        )
+        .fetch_one(self.db.pool())
+        .await?;
+
+        let indexer_delay_seconds = row
+            .try_get::<Option<f64>, _>("indexer_delay_seconds")?
+            .map(|value| value.round() as i64);
+        let avg_block_time_seconds = row.try_get::<Option<f64>, _>("avg_block_time_seconds")?;
+        let total_transactions = row.try_get::<i64, _>("total_transactions").unwrap_or(0);
+
+        Ok(SystemHealth {
+            indexer_delay_seconds,
+            avg_block_time_seconds,
+            total_transactions,
+        })
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -279,6 +307,13 @@ pub struct TradingPerformance {
     pub win_rate: f64,
     pub best_trade: f64,
     pub worst_trade: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SystemHealth {
+    pub indexer_delay_seconds: Option<i64>,
+    pub avg_block_time_seconds: Option<f64>,
+    pub total_transactions: i64,
 }
 
 #[cfg(test)]

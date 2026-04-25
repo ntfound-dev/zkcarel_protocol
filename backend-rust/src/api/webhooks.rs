@@ -43,7 +43,7 @@ pub async fn register(
     Json(req): Json<RegisterWebhookRequest>,
 ) -> Result<Json<ApiResponse<WebhookInfo>>> {
     let user_address = require_user(&headers, &state).await?;
-    let service = WebhookService::new(state.db.clone(), state.config.clone());
+    let service = WebhookService::new(state.db.clone(), state.config.clone())?;
 
     let id = service
         .register(&user_address, &req.url, req.events.clone())
@@ -106,7 +106,7 @@ pub async fn delete(
     Path(id): Path<i64>,
 ) -> Result<Json<ApiResponse<String>>> {
     let user_address = require_user(&headers, &state).await?;
-    let service = WebhookService::new(state.db.clone(), state.config.clone());
+    let service = WebhookService::new(state.db.clone(), state.config.clone())?;
     service.deactivate(id, &user_address).await?;
     Ok(Json(ApiResponse::success("Webhook deleted".to_string())))
 }

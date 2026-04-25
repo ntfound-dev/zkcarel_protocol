@@ -1,0 +1,27 @@
+note_secret = "0x01"
+note_amount = "10"
+note_token = "0x02"
+merkle_path = [
+  "0x0","0x0","0x0","0x0","0x0",
+  "0x0","0x0","0x0","0x0","0x0",
+  "0x0","0x0","0x0","0x0","0x0",
+  "0x0","0x0","0x0","0x0","0x0"
+]
+merkle_index = [
+  false,false,false,false,false,
+  false,false,false,false,false,
+  false,false,false,false,false,
+  false,false,false,false,false
+]
+target_protocol = "0x44"
+stake_token = "0x02"
+stake_amount = "5"
+min_yield_token = "0x55"
+lock_duration = "3600"
+expected_apy_bps = "500"
+merkle_root = "0x27c46bd4885255fc6d8bae5cacc6320132d0e31732b4a4c9f28022a77e01f6fd"
+nullifier = "0x28bb28a2c7566e896a177dc7328d4298d197973bcac177fb8291984a1cc43b7f"
+action_hash = "0x999"
+recipient = "0xabc"
+chain_id = "0x1"
+contract_address = "0x555"

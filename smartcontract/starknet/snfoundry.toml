@@ -1,0 +1,7 @@
+[sncast.default]
+account = "sepolia"
+url = "https://starknet-sepolia.infura.io/v3/a85e1b33d75e4c598f50f28a640f4c89"
+
+[sncast.sepolia]
+account = "sepolia"
+url = "https://starknet-sepolia.infura.io/v3/a85e1b33d75e4c598f50f28a640f4c89"

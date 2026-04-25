@@ -2061,11 +2061,11 @@ impl AIService {
             FROM (
                 SELECT UPPER(token_out) as token, COALESCE(CAST(amount_out AS FLOAT8), 0) as amount
                 FROM transactions
-                WHERE user_address = $1 AND token_out IS NOT NULL AND COALESCE(is_private, false) = false
+                WHERE LOWER(user_address) = LOWER($1) AND token_out IS NOT NULL AND COALESCE(is_private, false) = false
                 UNION ALL
                 SELECT UPPER(token_in) as token, -COALESCE(CAST(amount_in AS FLOAT8), 0) as amount
                 FROM transactions
-                WHERE user_address = $1 AND token_in IS NOT NULL AND COALESCE(is_private, false) = false
+                WHERE LOWER(user_address) = LOWER($1) AND token_in IS NOT NULL AND COALESCE(is_private, false) = false
             ) t
             GROUP BY token
             HAVING SUM(amount) > 0

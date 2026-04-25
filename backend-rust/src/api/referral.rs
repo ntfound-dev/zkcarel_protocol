@@ -49,12 +49,24 @@ struct CountResult {
 
 // Internal helper that builds inputs for `build_referral_code`.
 fn build_referral_code(user_address: &str) -> String {
-    format!("CAREL_{}", &user_address[2..10].to_uppercase())
+    let trimmed = user_address.trim();
+    let normalized = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    let upper = normalized.to_ascii_uppercase();
+    let suffix = if upper.len() >= 8 {
+        &upper[upper.len() - 8..]
+    } else {
+        "DEFAULT"
+    };
+    format!("CAREL_{}", suffix)
 }
 
 // Internal helper that builds inputs for `build_referral_url`.
-fn build_referral_url(code: &str) -> String {
-    format!("https://zkcarel.io?ref={}", code)
+fn build_referral_url(code: &str, base_url: Option<&str>) -> String {
+    let base = base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("https://zkcarel.io");
+    format!("{}?ref={}", base.trim_end_matches('/'), code)
 }
 
 // Internal helper that supports `onchain_referral_count` operations.
@@ -90,7 +102,7 @@ pub async fn get_code(
 
     let response = ReferralCode {
         code: code.clone(),
-        url: build_referral_url(&code),
+        url: build_referral_url(&code, state.config.app_base_url.as_deref()),
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -263,16 +275,16 @@ mod tests {
     #[test]
     // Internal helper that builds inputs for `build_referral_code_uses_address_slice`.
     fn build_referral_code_uses_address_slice() {
-        // Memastikan kode referral mengambil substring alamat
+        // Memastikan kode referral deterministic dan formatnya valid
         let code = build_referral_code("0x1234567890abcdef");
-        assert_eq!(code, "CAREL_12345678");
+        assert_eq!(code, "CAREL_90ABCDEF");
     }
 
     #[test]
     // Internal helper that builds inputs for `build_referral_url_appends_code`.
     fn build_referral_url_appends_code() {
         // Memastikan URL referral memakai kode yang diberikan
-        let url = build_referral_url("CAREL_TEST");
-        assert_eq!(url, "https://zkcarel.io?ref=CAREL_TEST");
+        let url = build_referral_url("CAREL_TEST", Some("https://example.com/"));
+        assert_eq!(url, "https://example.com?ref=CAREL_TEST");
     }
 }

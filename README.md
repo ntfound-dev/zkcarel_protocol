@@ -42,7 +42,8 @@ Use this split to avoid profile drift:
   - `backend-rust/.env`
   - `frontend/.env.local` (overrides `frontend/.env`)
 - Smart contract catalog source (deployment inventory):
-  - `smartcontract/.env`
+  - `smartcontract/starknet/.env` (current)
+  - `docs/runtime_addresses_archive.md` (legacy snapshots)
 - If values differ across documents, treat them as either:
   - `runtime profile` (active app execution), or
   - `catalog profile` (deployment inventory/history).
@@ -140,7 +141,7 @@ These show the normal-path targets. Hide mode reaches the same target contracts 
 
 - `SwapAggregator` here is CAREL's routing contract, not an external DEX.
 - `Limit Order Book` is the runtime/UI name used in app flows.
-- WBTC staking uses the `StakingBTC` contract.
+- WBTC staking uses the `WBTCStaking` contract.
 - Normal mode still earns points and can use an active NFT discount.
 - Hide mode uses `deposit_fixed_v3` first. After deposit, the user can exit the note via `private_exit_v3` (requires a ZK proof) if not proceeding. If continuing, the note waits the mixing window/cooldown, then the relayer executes through `ShieldedPoolV3`. Hide mode still earns points, can use NFT discount, and adds hide-tier bonus points.
 
@@ -294,24 +295,30 @@ Latest local report snapshot (2026-03-05):
 Total reported automated tests (BE + SC): `402/402`.
 
 ## Runtime Addresses (Starknet Sepolia)
-Runtime addresses below follow `backend-rust/.env` (V3 baseline profile):
+Snapshot updated **18 March 2026** from `smartcontract/starknet/.env`.
+Full inventory: `docs/runtime_addresses_sepolia_2026-03-18.md`.
+Legacy V3 baseline: `docs/runtime_addresses_archive.md`.
 
 | Contract | Address |
 | --- | --- |
-| Swap Aggregator | `0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28` |
-| Bridge Aggregator | `0x047ed770a6945fc51ce3ed32645ed71260fae278421826ee4edabeae32b755d5` |
-| Limit Order Book | `0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a` |
-| Staking CAREL | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` |
-| Staking Stablecoin | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` |
-| Staking WBTC (contract: `StakingBTC`) | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
-| ZK Privacy Router | `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f` |
-| PrivacyIntermediary | `0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab` |
-| Private Action Executor (V3 runtime) | `0x01f7f3bcdfd94d0b28dd658882bef53787b4e9d40a6aa4ced65440ab76e0e191` |
-| PointStorage | `0x0501e74ab48e605ef81348a087d21c95ea5d43694ee1a60d6ca1e9186be54029` |
-| SnapshotDistributor | `0x04fcc58ba819766fe19b8f7a96ed5bd7b7558e8ad62f495815e825d8e8f822dd` |
-| ReferralSystem | `0x040bfc6214d3204c53898c730285d79d6e7cd2cd987e3ecde048b330ed3a2d06` |
-| DiscountSoulbound | `0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809` |
-| AIExecutor | `0x00d8ada9eb26d133f9f2656ac1618d8cdf9fcefe6c8e292cf9b7ee580b72a690` |
+| CAREL Token | `0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545` |
+| Swap Aggregator | `0x03a62618aac9871ba9c2588f91b2397c511b74bc2b4eb9848de1e1fd0807f349` |
+| Limit Order Book | `0x002b900401690afde0571675dbf982c5f52b68235cdfe7b04f0f0868ab24a2a8` |
+| Staking CAREL | `0x07341f7062470231d58e5eb6420b58469391b4756d82d091ab69c30936ca7d46` |
+| Staking Stablecoin | `0x03be7d988a8b0379915517db9b5d3272714229e1db53d4eb7cc3d551272981c7` |
+| Staking WBTC (contract: `WBTCStaking`) | `0x00d5611d4cff0a794e475fc6771b88c329c74adb67481fdddfc3f083bd5fa578` |
+| Privacy Router V4 | `0x0514361b7584954bada37cdaa923ef172722a74644fccae12c1443ae229b4065` |
+| ShieldedPoolV4 | `0x00897405ab38dfe26ae10fdc8a28599291b29bb09060f667761c03edf578061f` |
+| PrivacyIntermediary | `0x060c253818ae440583fae490baf688eb0ea5e0d4149da138b0c38d4564e65e2d` |
+| AIExecutor | `0x031cc1d55f9e98f8a970b13dd72d09f8104a6875416da2f7bbb37243f9503dbf` |
+| AIPlanRouter | `0x02cdffa746555b68279cf4fafd1ba5da6f2b08058cc5eb4a95fb5dcd03987420` |
+| PointStorage | `0x05d3b87e47d008c48a5058cd2ff10893459c227f6c2b587674435931709c1dd1` |
+| SnapshotDistributor | `0x040d1832545f7daa7e37f224175f8b6fd0984fd60b7d294ba790ec25094ca854` |
+| ReferralSystem | `0x0106f99977e2961bdde5dc338607da00ba0da98abfd4b0dfcbe9953e7d14964c` |
+| DiscountSoulbound | `0x0338ef369a49c73e1840c520540c9bd29322896269f0e089848d32cdd1afa042` |
+| PriceOracle | `0x075c1746af30d08b9c08c6eb525c22fcb9eaa95adc74aee3d2b94eb7e319065f` |
+| ShadowBridgeReceiver | `0x023a6858cde73047f5fb1baaf87b3249a8eed06b318b56c6289ea67f8457005f` |
+| CarelMultiFaucet | `0x0277964147d63e375e50d3e660a86575221eb89442fa5fbf472d9a2990e0b448` |
 
 ## Quick Start
 Public testnet usage:
@@ -357,6 +364,8 @@ docker compose down
 | Smartcontract module README | `smartcontract/README.md` |
 | Runtime architecture and mode behavior | `docs/architecture_mvp_modes.md` |
 | Testnet deploy and wiring guide | `docs/deploy_testnet.md` |
+| Runtime address inventory (current) | `docs/runtime_addresses_sepolia_2026-03-18.md` |
+| Runtime address archive (legacy) | `docs/runtime_addresses_archive.md` |
 | Runtime env and active binding audit | `docs/env_runtime_audit_mvp.md` |
 | Consolidated backend/frontend/smartcontract test results | `docs/test_reports.md` |
 | AI architecture and Garaga notes | `docs/ai_architecture.md` |

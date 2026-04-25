@@ -27,7 +27,7 @@ impl EventParser {
             return None;
         }
 
-        let event_key = &event.keys[0];
+        let event_key = event.keys.get(0)?;
         if key_is(event_key, "SwapExecuted") {
             return self.parse_swap_event(event);
         }
@@ -56,19 +56,55 @@ impl EventParser {
 
         let (token_in, token_out, amount_in, amount_out) = if event.keys.len() > 1 {
             (
-                event.data.get(1).cloned(),
-                event.data.get(2).cloned(),
-                event.data.first().cloned(),
-                event.data.get(3).cloned(),
+                event.data.get(1)?,
+                event.data.get(2)?,
+                event.data.first()?,
+                event.data.get(3)?,
             )
         } else {
             (
-                event.data.get(1).cloned(),
-                event.data.get(2).cloned(),
-                event.data.get(3).cloned(),
-                event.data.get(4).cloned(),
+                event.data.get(1)?,
+                event.data.get(2)?,
+                event.data.get(3)?,
+                event.data.get(4)?,
             )
         };
+
+        if !looks_like_hex(token_in)
+            || !looks_like_hex(token_out)
+            || !looks_like_hex(amount_in)
+            || !looks_like_hex(amount_out)
+        {
+            return None;
+        }
+
+        let data = serde_json::json!({
+            "user": user,
+            "token_in": token_in,
+            "token_out": token_out,
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+        });
+
+        Some(ParsedEvent {
+            event_type: "Swap".to_string(),
+            data,
+        })
+    }
+
+    // Internal helper that parses or transforms values for `parse_bridge_event`.
+    fn parse_bridge_event(&self, event: &Event) -> Option<ParsedEvent> {
+        let user = if key_is(event.keys.first()?.as_str(), "BridgeInitiated") {
+            event.data.get(1)?.clone()
+        } else {
+            user_from_keys_or_data(event, 0)?
+        };
+
+        let filtered = filtered_event_data(event, &user);
+        let amount_in = data_at_hex(&filtered, 0);
+        let token_in = data_at_hex(&filtered, 1);
+        let token_out = data_at_hex(&filtered, 2);
+        let amount_out = data_at_hex(&filtered, 3);
 
         let mut data = serde_json::json!({
             "user": user,
@@ -87,24 +123,8 @@ impl EventParser {
         }
 
         Some(ParsedEvent {
-            event_type: "Swap".to_string(),
-            data,
-        })
-    }
-
-    // Internal helper that parses or transforms values for `parse_bridge_event`.
-    fn parse_bridge_event(&self, event: &Event) -> Option<ParsedEvent> {
-        let user = if key_is(event.keys.first()?.as_str(), "BridgeInitiated") {
-            event.data.get(1)?.clone()
-        } else {
-            user_from_keys_or_data(event, 0)?
-        };
-
-        Some(ParsedEvent {
             event_type: "Bridge".to_string(),
-            data: serde_json::json!({
-                "user": user,
-            }),
+            data,
         })
     }
 
@@ -112,11 +132,23 @@ impl EventParser {
     fn parse_stake_event(&self, event: &Event) -> Option<ParsedEvent> {
         let user = user_from_keys_or_data(event, 0)?;
 
+        let filtered = filtered_event_data(event, &user);
+        let amount = data_at_hex(&filtered, 0);
+        let token = data_at_hex(&filtered, 1);
+
+        let mut data = serde_json::json!({
+            "user": user,
+        });
+        if let Some(value) = token {
+            data["token"] = Value::String(value);
+        }
+        if let Some(value) = amount {
+            data["amount"] = Value::String(value);
+        }
+
         Some(ParsedEvent {
             event_type: "Stake".to_string(),
-            data: serde_json::json!({
-                "user": user,
-            }),
+            data,
         })
     }
 
@@ -124,11 +156,23 @@ impl EventParser {
     fn parse_unstake_event(&self, event: &Event) -> Option<ParsedEvent> {
         let user = user_from_keys_or_data(event, 0)?;
 
+        let filtered = filtered_event_data(event, &user);
+        let amount = data_at_hex(&filtered, 0);
+        let token = data_at_hex(&filtered, 1);
+
+        let mut data = serde_json::json!({
+            "user": user,
+        });
+        if let Some(value) = token {
+            data["token"] = Value::String(value);
+        }
+        if let Some(value) = amount {
+            data["amount"] = Value::String(value);
+        }
+
         Some(ParsedEvent {
             event_type: "Unstake".to_string(),
-            data: serde_json::json!({
-                "user": user,
-            }),
+            data,
         })
     }
 
@@ -136,11 +180,23 @@ impl EventParser {
     fn parse_claim_event(&self, event: &Event) -> Option<ParsedEvent> {
         let user = user_from_keys_or_data(event, 0)?;
 
+        let filtered = filtered_event_data(event, &user);
+        let amount = data_at_hex(&filtered, 0);
+        let token = data_at_hex(&filtered, 1);
+
+        let mut data = serde_json::json!({
+            "user": user,
+        });
+        if let Some(value) = token {
+            data["token"] = Value::String(value);
+        }
+        if let Some(value) = amount {
+            data["amount"] = Value::String(value);
+        }
+
         Some(ParsedEvent {
             event_type: "Claim".to_string(),
-            data: serde_json::json!({
-                "user": user,
-            }),
+            data,
         })
     }
 
@@ -184,12 +240,39 @@ fn normalize_hex(value: &str) -> String {
     normalized.to_ascii_lowercase()
 }
 
+// Internal helper that supports `looks_like_hex` operations.
+fn looks_like_hex(value: &str) -> bool {
+    let trimmed = value.trim();
+    let Some(stripped) = trimmed.strip_prefix("0x") else {
+        return false;
+    };
+    !stripped.is_empty() && stripped.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 // Internal helper that supports `key_is` operations.
 fn key_is(key: &str, name: &str) -> bool {
     let Some(selector) = selector_hex(name) else {
         return false;
     };
     normalize_hex(key) == normalize_hex(&selector)
+}
+
+// Internal helper that supports `filtered_event_data` operations.
+fn filtered_event_data(event: &Event, user: &str) -> Vec<String> {
+    event
+        .data
+        .iter()
+        .filter(|value| value.as_str() != user)
+        .cloned()
+        .collect()
+}
+
+// Internal helper that supports `data_at_hex` operations.
+fn data_at_hex(values: &[String], index: usize) -> Option<String> {
+    values
+        .get(index)
+        .cloned()
+        .filter(|value| looks_like_hex(value))
 }
 
 // Internal helper that supports `user_from_keys_or_data` operations.
@@ -227,8 +310,8 @@ mod tests {
             keys: vec![selector],
             data: vec![
                 "0x456".to_string(),
-                "0xETH".to_string(),
-                "0xUSDT".to_string(),
+                "0x111".to_string(),
+                "0x222".to_string(),
                 "0x1000".to_string(),
                 "0x2000".to_string(),
             ],

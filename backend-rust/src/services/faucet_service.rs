@@ -8,7 +8,7 @@ use crate::{
     error::{AppError, Result},
     models::FaucetClaim,
     services::onchain::{
-        parse_felt, resolve_backend_account, u256_from_felts, u256_to_felts, OnchainInvoker,
+        parse_felt, resolve_backend_account, u256_from_felts_u128, u256_to_felts, OnchainInvoker,
         OnchainReader,
     },
 };
@@ -93,6 +93,8 @@ fn amount_for_token(token: &str, config: &Config) -> Result<f64> {
     Ok(amount)
 }
 
+const FAUCET_PENDING_GRACE_MINUTES: i64 = 10;
+
 pub struct FaucetService {
     db: Database,
     config: Config,
@@ -154,7 +156,7 @@ impl FaucetService {
         let result = self.reader.call(call).await;
         if let Ok(values) = result {
             if let Some(value) = values.first() {
-                if let Ok(decoded) = u256_from_felts(value, &Felt::from(0_u128)) {
+                if let Ok(decoded) = u256_from_felts_u128(value, &Felt::from(0_u128)) {
                     return Ok(decoded as u8);
                 }
                 if let Ok(parsed) = value.to_string().parse::<u8>() {
@@ -182,7 +184,7 @@ impl FaucetService {
         let high = values
             .get(1)
             .ok_or_else(|| AppError::Internal("Balance high missing".into()))?;
-        u256_from_felts(low, high)
+        u256_from_felts_u128(low, high)
     }
 
     // Internal helper that fetches data for `should_bypass_cooldown_for_failed_claim`.
@@ -198,9 +200,15 @@ impl FaucetService {
         let Some(last_claim) = last_claim else {
             return false;
         };
+        if chrono::Utc::now() - last_claim.claimed_at
+            < chrono::Duration::minutes(FAUCET_PENDING_GRACE_MINUTES)
+        {
+            return false;
+        }
         let tx_hash = last_claim.tx_hash.trim();
         if tx_hash.is_empty() {
-            return false;
+            // Stale pending claim (e.g. tx hash failed to persist). Allow retry after grace window.
+            return true;
         }
         let tx_hash_felt = match parse_felt(tx_hash) {
             Ok(value) => value,
@@ -431,12 +439,26 @@ impl FaucetService {
             return Err(AppError::InsufficientBalance);
         }
 
-        let tx_hash = self
+        let Some(claim_id) = self
+            .db
+            .reserve_faucet_claim(user_address, &token_symbol, amount)
+            .await?
+        else {
+            return Err(AppError::FaucetCooldown);
+        };
+
+        let tx_hash = match self
             .send_tokens(user_address, token_address, amount_u128)
-            .await?;
-        self.db
-            .record_faucet_claim(user_address, &token_symbol, amount, &tx_hash)
-            .await?;
+            .await
+        {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = self.db.release_faucet_claim(claim_id).await;
+                return Err(error);
+            }
+        };
+
+        self.db.finalize_faucet_claim(claim_id, &tx_hash).await?;
 
         let _ = self
             .db
@@ -470,7 +492,7 @@ impl FaucetService {
             calldata,
         };
         let tx_hash = self.invoker.invoke(call).await?;
-        Ok(tx_hash.to_string())
+        Ok(format!("{:#x}", tx_hash))
     }
 
     /// Fetches data for `get_stats`.
@@ -526,8 +548,12 @@ mod tests {
             host: "0.0.0.0".to_string(),
             port: 3000,
             environment: "testnet".to_string(),
+            app_base_url: None,
             database_url: "postgres://localhost".to_string(),
             database_max_connections: 1,
+            database_connect_timeout_secs: 1,
+            database_connect_retries: 1,
+            database_connect_retry_delay_ms: 0,
             redis_url: "redis://localhost:6379".to_string(),
             point_calculator_batch_size: 100,
             point_calculator_max_batches_per_tick: 1,
@@ -545,6 +571,9 @@ mod tests {
             referral_system_address: None,
             ai_executor_address: "0x6".to_string(),
             ai_signature_verifier_address: None,
+            ai_plan_router_address: None,
+            ai_identity_registry_address: None,
+            ai_agent_id: None,
             bridge_aggregator_address: "0x7".to_string(),
             zk_privacy_router_address: "0x8".to_string(),
             battleship_garaga_address: None,
@@ -553,11 +582,8 @@ mod tests {
             privacy_auto_garaga_proof_file: None,
             privacy_auto_garaga_public_inputs_file: None,
             privacy_auto_garaga_prover_cmd: None,
+            privacy_auto_garaga_prover_sha256: None,
             privacy_auto_garaga_prover_timeout_ms: 45_000,
-            private_btc_swap_address: "0x9".to_string(),
-            dark_pool_address: "0x10".to_string(),
-            private_payments_address: "0x11".to_string(),
-            anonymous_credentials_address: "0x12".to_string(),
             token_strk_address: None,
             token_eth_address: None,
             token_btc_address: None,
@@ -587,6 +613,7 @@ mod tests {
             discord_bot_token: None,
             social_tasks_json: None,
             admin_manual_key: None,
+            admin_reset_confirm_key: None,
             dev_wallet_address: None,
             ai_level_burn_address: None,
             layerswap_api_key: None,
@@ -595,11 +622,19 @@ mod tests {
             atomiq_api_url: "".to_string(),
             garden_api_key: None,
             garden_api_url: "".to_string(),
-            sumo_login_api_key: None,
-            sumo_login_api_url: "".to_string(),
             xverse_api_key: None,
             xverse_api_url: "".to_string(),
             privacy_verifier_routers: "".to_string(),
+            filecoin_backend: None,
+            filecoin_pin_api_url: None,
+            filecoin_pin_api_key: None,
+            filecoin_synapse_script: None,
+            filecoin_synapse_private_key: None,
+            filecoin_synapse_rpc_url: None,
+            filecoin_synapse_with_cdn: None,
+            filecoin_synapse_source: None,
+            ipfs_api_url: None,
+            ipfs_api_key: None,
             stripe_secret_key: None,
             moonpay_api_key: None,
             rate_limit_public: 1,
@@ -609,6 +644,7 @@ mod tests {
             ai_rate_limit_level_1_per_window: 20,
             ai_rate_limit_level_2_per_window: 10,
             ai_rate_limit_level_3_per_window: 8,
+            api_docs_enabled: true,
             cors_allowed_origins: "*".to_string(),
             oracle_asset_ids: "".to_string(),
             bridge_provider_ids: "".to_string(),

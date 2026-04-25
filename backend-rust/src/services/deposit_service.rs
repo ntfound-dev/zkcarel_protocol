@@ -26,7 +26,7 @@ fn build_qris_payload(deposit_id: &str, amount: f64) -> String {
 
 // Internal helper that builds inputs for `build_stripe_url`.
 fn build_stripe_url(deposit_id: &str) -> String {
-    format!("https://checkout.stripe.com{}", deposit_id)
+    format!("https://checkout.stripe.com/{}", deposit_id)
 }
 
 pub struct DepositService {
@@ -271,6 +271,6 @@ mod tests {
     fn build_stripe_url_appends_id() {
         // Memastikan URL stripe berisi deposit_id
         let url = build_stripe_url("DEP_CARD_TEST");
-        assert_eq!(url, "https://checkout.stripe.comDEP_CARD_TEST");
+        assert_eq!(url, "https://checkout.stripe.com/DEP_CARD_TEST");
     }
 }

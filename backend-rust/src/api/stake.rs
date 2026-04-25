@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::{HashMap, HashSet};
 
-use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader};
+use crate::error::Result;
+use crate::services::onchain::{felt_to_u128, parse_felt, u256_from_felts_u128, OnchainReader};
 use crate::{
     constants::{
         token_address_for, EPOCH_DURATION_SECONDS, POINTS_MIN_STAKE_BTC,
@@ -18,8 +19,8 @@ use crate::{
     },
     // 1. Import hasher agar fungsi di hash.rs terhitung "used"
     crypto::hash,
-    error::Result,
     models::{user::PrivacyVerificationPayload as ModelPrivacyVerificationPayload, ApiResponse},
+    services::ai_plan::ensure_plan_active_for_user,
     services::nft_discount::{consume_nft_usage_if_active, read_active_discount_rate},
     services::price_guard::{
         fallback_price_for, first_sane_price, sanitize_points_usd_base, sanitize_usd_notional,
@@ -33,7 +34,7 @@ use starknet_core::utils::get_selector_from_name;
 
 use super::{
     onchain_privacy::{
-        normalize_onchain_tx_hash, should_run_privacy_verification,
+        ensure_nullifier_unused, normalize_onchain_tx_hash, should_run_privacy_verification,
         verify_onchain_hide_balance_invoke_tx, HideBalanceFlow,
         PrivacyVerificationPayload as OnchainPrivacyPayload,
     },
@@ -43,7 +44,10 @@ use super::{
         generate_auto_garaga_payload, AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
     },
     require_starknet_user, require_user,
-    swap::{parse_decimal_to_u256_parts, token_decimals},
+    swap::{
+        parse_decimal_to_u256_parts, payload_from_request as swap_payload_from_request,
+        token_decimals, wait_for_shielded_note_deposit_timestamp,
+    },
     AppState,
 };
 use tokio::time::{sleep, timeout, Duration};
@@ -84,7 +88,9 @@ struct StakePoolTotalRow {
 pub struct DepositRequest {
     pub pool_id: String,
     pub amount: String,
+    pub lock_duration_secs: Option<u64>,
     pub onchain_tx_hash: Option<String>,
+    pub plan_id: Option<String>,
     pub hide_balance: Option<bool>,
     pub privacy: Option<ModelPrivacyVerificationPayload>,
 }
@@ -93,7 +99,9 @@ pub struct DepositRequest {
 pub struct WithdrawRequest {
     pub position_id: String,
     pub amount: String,
+    pub lock_duration_secs: Option<u64>,
     pub onchain_tx_hash: Option<String>,
+    pub plan_id: Option<String>,
     pub hide_balance: Option<bool>,
     pub privacy: Option<ModelPrivacyVerificationPayload>,
 }
@@ -101,7 +109,9 @@ pub struct WithdrawRequest {
 #[derive(Debug, Deserialize)]
 pub struct ClaimRequest {
     pub position_id: String,
+    pub lock_duration_secs: Option<u64>,
     pub onchain_tx_hash: Option<String>,
+    pub plan_id: Option<String>,
     pub hide_balance: Option<bool>,
     pub privacy: Option<ModelPrivacyVerificationPayload>,
 }
@@ -133,7 +143,7 @@ pub struct ClaimResponse {
 const STARKNET_ONCHAIN_STAKE_POOLS: &[&str] = &["CAREL", "USDC", "USDT", "WBTC", "STRK"];
 const BTC_GARDEN_POOL: &str = "BTC";
 const WBTC_STAKING_NOT_REGISTERED_MSG: &str =
-    "WBTC staking token is not registered on StakingBTC yet. Admin must call add_btc_token first.";
+    "WBTC staking token is not registered on WBTCStaking yet. Admin must call add_wbtc_token first.";
 const AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 20.0;
 const AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 40.0;
 const TWO_POW_128_F64: f64 = 340282366920938463463374607431768211456.0;
@@ -565,6 +575,8 @@ fn map_privacy_payload(
 ) -> Option<OnchainPrivacyPayload> {
     payload.map(|value| OnchainPrivacyPayload {
         verifier: value.verifier.clone(),
+        note_version: value.note_version.clone(),
+        root: value.root.clone(),
         nullifier: value.nullifier.clone(),
         commitment: value.commitment.clone(),
         proof: value.proof.clone(),
@@ -584,8 +596,8 @@ enum StakeExecuteMode {
     TargetWithApproval,
     TargetNoApproval,
     LegacyNoApproval,
-    ShieldedPoolV2,
-    ShieldedPoolV3,
+    ShieldedPoolV4Internal,
+    ShieldedPoolV4External,
 }
 
 // Internal helper that supports `env_flag` operations.
@@ -606,14 +618,6 @@ fn hide_balance_relayer_pool_enabled() -> bool {
     env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", false)
 }
 
-fn hide_balance_strict_privacy_mode_enabled() -> bool {
-    env_flag("HIDE_BALANCE_STRICT_PRIVACY_MODE", false)
-}
-
-fn hide_balance_v2_redeem_only_enabled() -> bool {
-    env_flag("HIDE_BALANCE_V2_REDEEM_ONLY", false)
-}
-
 fn hide_balance_min_note_age_secs() -> u64 {
     std::env::var("HIDE_BALANCE_MIN_NOTE_AGE_SECS")
         .or_else(|_| std::env::var("NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS"))
@@ -626,8 +630,7 @@ fn hide_balance_min_note_age_secs() -> u64 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HideExecutorKind {
     PrivateActionExecutorV1,
-    ShieldedPoolV2,
-    ShieldedPoolV3,
+    ShieldedPoolV4,
 }
 
 // Internal helper that supports `hide_executor_kind` operations.
@@ -636,10 +639,8 @@ fn hide_executor_kind() -> HideExecutorKind {
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    if matches!(raw.as_str(), "shielded_pool_v3" | "shielded-v3" | "v3") {
-        HideExecutorKind::ShieldedPoolV3
-    } else if matches!(raw.as_str(), "shielded_pool_v2" | "shielded-v2" | "v2") {
-        HideExecutorKind::ShieldedPoolV2
+    if matches!(raw.as_str(), "shielded_pool_v4" | "shielded-v4" | "v4") {
+        HideExecutorKind::ShieldedPoolV4
     } else {
         HideExecutorKind::PrivateActionExecutorV1
     }
@@ -647,36 +648,33 @@ fn hide_executor_kind() -> HideExecutorKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HidePoolVersion {
-    V2,
-    V3,
+    V4,
 }
 
 fn hide_balance_pool_version_default() -> HidePoolVersion {
-    let raw = std::env::var("HIDE_BALANCE_POOL_VERSION_DEFAULT")
-        .unwrap_or_else(|_| "v2".to_string())
+    let _ = std::env::var("HIDE_BALANCE_POOL_VERSION_DEFAULT")
+        .unwrap_or_else(|_| "v4".to_string())
         .trim()
         .to_ascii_lowercase();
-    if raw == "v3" {
-        HidePoolVersion::V3
-    } else {
-        HidePoolVersion::V2
-    }
+    HidePoolVersion::V4
 }
 
-fn resolve_hide_pool_version(payload: Option<&ModelPrivacyVerificationPayload>) -> HidePoolVersion {
+fn resolve_hide_pool_version(
+    payload: Option<&ModelPrivacyVerificationPayload>,
+) -> Result<HidePoolVersion> {
     if let Some(note_version) = payload
         .and_then(|value| value.note_version.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if note_version.eq_ignore_ascii_case("v3") {
-            return HidePoolVersion::V3;
+        if note_version.eq_ignore_ascii_case("v4") {
+            return Ok(HidePoolVersion::V4);
         }
-        if note_version.eq_ignore_ascii_case("v2") {
-            return HidePoolVersion::V2;
-        }
+        return Err(crate::error::AppError::BadRequest(
+            "Hide Balance V4 only. Update note_version to v4.".to_string(),
+        ));
     }
-    hide_balance_pool_version_default()
+    Ok(hide_balance_pool_version_default())
 }
 
 // Internal helper that fetches data for `resolve_private_action_executor_candidates`.
@@ -816,17 +814,13 @@ async fn resolve_private_action_executor_felt_for_stake_hide(state: &AppState) -
             "submit_private_intent",
             "execute_private_stake",
         ],
-        HideExecutorKind::ShieldedPoolV2 => &[
-            "deposit_fixed_for",
+        HideExecutorKind::ShieldedPoolV4 => &[
+            "deposit_fixed_v4",
             "preview_stake_action_hash",
-            "submit_private_action",
-            "execute_private_stake",
-        ],
-        HideExecutorKind::ShieldedPoolV3 => &[
-            "deposit_fixed_v3",
-            "preview_stake_action_hash",
+            "preview_stake_action_hash_internal",
             "submit_private_stake",
-            "execute_private_stake_with_payout",
+            "execute_private_stake_internal_v4",
+            "execute_private_stake_external_v4",
         ],
     };
 
@@ -864,8 +858,8 @@ fn resolve_staking_target_felt(state: &AppState, pool_token: &str) -> Result<Fel
             std::env::var("NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS").ok(),
         ],
         "WBTC" => vec![
-            std::env::var("STAKING_BTC_ADDRESS").ok(),
-            std::env::var("NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS").ok(),
+            std::env::var("STAKING_WBTC_ADDRESS").ok(),
+            std::env::var("NEXT_PUBLIC_STARKNET_STAKING_WBTC_ADDRESS").ok(),
         ],
         _ => {
             return Err(crate::error::AppError::BadRequest(format!(
@@ -889,11 +883,11 @@ fn resolve_staking_target_felt(state: &AppState, pool_token: &str) -> Result<Fel
     )))
 }
 
-// Internal helper that fetches data for `resolve_staking_btc_contract_felt`.
-fn resolve_staking_btc_contract_felt() -> Result<Felt> {
+// Internal helper that fetches data for `resolve_staking_wbtc_contract_felt`.
+fn resolve_staking_wbtc_contract_felt() -> Result<Felt> {
     for raw in [
-        std::env::var("STAKING_BTC_ADDRESS").ok(),
-        std::env::var("NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS").ok(),
+        std::env::var("STAKING_WBTC_ADDRESS").ok(),
+        std::env::var("NEXT_PUBLIC_STARKNET_STAKING_WBTC_ADDRESS").ok(),
     ]
     .into_iter()
     .flatten()
@@ -905,13 +899,13 @@ fn resolve_staking_btc_contract_felt() -> Result<Felt> {
         return parse_felt(trimmed);
     }
     Err(crate::error::AppError::BadRequest(
-        "STAKING_BTC_ADDRESS is not configured".to_string(),
+        "STAKING_WBTC_ADDRESS is not configured".to_string(),
     ))
 }
 
-// Internal helper that checks conditions for `is_wbtc_registered_on_staking_btc`.
-async fn is_wbtc_registered_on_staking_btc(state: &AppState) -> Result<bool> {
-    let contract = resolve_staking_btc_contract_felt()?;
+// Internal helper that checks conditions for `is_wbtc_registered_on_staking_wbtc`.
+async fn is_wbtc_registered_on_staking_wbtc(state: &AppState) -> Result<bool> {
+    let contract = resolve_staking_wbtc_contract_felt()?;
     let wbtc_token = token_address_for("WBTC")
         .ok_or(crate::error::AppError::InvalidToken)
         .and_then(parse_felt)?;
@@ -949,10 +943,7 @@ fn build_stake_action(
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
     let token = pool_token.trim().to_ascii_uppercase();
 
-    let shielded_mode = matches!(
-        hide_executor_kind(),
-        HideExecutorKind::ShieldedPoolV2 | HideExecutorKind::ShieldedPoolV3
-    );
+    let shielded_mode = matches!(hide_executor_kind(), HideExecutorKind::ShieldedPoolV4);
 
     if token == "CAREL" {
         let carel_token = token_address_for("CAREL")
@@ -1022,83 +1013,29 @@ fn build_stake_action(
     }
 }
 
-// Internal helper that parses or transforms values for `normalize_hex_items`.
-fn normalize_hex_items(items: &[String]) -> Vec<String> {
-    items
-        .iter()
-        .map(|item| item.trim())
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 // Internal helper that supports `payload_from_request` operations.
+// Delegates to the shared swap helper so V4 payload normalization stays consistent.
 fn payload_from_request(
     payload: Option<&ModelPrivacyVerificationPayload>,
     verifier: &str,
 ) -> Option<AutoPrivacyPayloadResponse> {
     let payload = payload?;
-    let nullifier = payload.nullifier.as_deref()?.trim();
-    if nullifier.is_empty() {
-        return None;
-    }
-    let commitment = payload
-        .commitment
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("0x0");
-    let proof = normalize_hex_items(payload.proof.as_ref()?);
-    let public_inputs = normalize_hex_items(payload.public_inputs.as_ref()?);
-    if proof.is_empty() || public_inputs.is_empty() {
-        return None;
-    }
-    if proof.len() == 1
-        && public_inputs.len() == 1
-        && proof[0].eq_ignore_ascii_case("0x1")
-        && public_inputs[0].eq_ignore_ascii_case("0x1")
-    {
-        return None;
-    }
-    Some(AutoPrivacyPayloadResponse {
-        verifier: payload
-            .verifier
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(verifier)
-            .to_string(),
-        nullifier: nullifier.to_string(),
-        commitment: commitment.to_string(),
-        executor_address: None,
-        root: payload
-            .root
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        note_version: payload
-            .note_version
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        note_commitment: payload
-            .note_commitment
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        denom_id: payload
-            .denom_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
+    let mapped = super::swap::PrivacyVerificationPayload {
+        verifier: payload.verifier.clone(),
+        note_version: payload.note_version.clone(),
+        root: payload.root.clone(),
+        nullifier: payload.nullifier.clone(),
+        commitment: payload.commitment.clone(),
+        note_commitment: payload.note_commitment.clone(),
+        note_ciphertext: payload.note_ciphertext.clone(),
+        note_cid: payload.note_cid.clone(),
+        noir_inputs: payload.noir_inputs.clone(),
+        denom_id: payload.denom_id.clone(),
         spendable_at_unix: payload.spendable_at_unix,
-        proof,
-        public_inputs,
-    })
+        proof: payload.proof.clone(),
+        public_inputs: payload.public_inputs.clone(),
+    };
+    swap_payload_from_request(Some(&mapped), verifier)
 }
 
 struct StakeActionCallInput<'a> {
@@ -1111,6 +1048,7 @@ struct StakeActionCallInput<'a> {
     payout_token: Felt,
     min_payout_low: Felt,
     min_payout_high: Felt,
+    lock_duration_secs: Option<u64>,
 }
 
 // Internal helper that supports `compute_stake_intent_hash_on_executor` operations.
@@ -1118,17 +1056,33 @@ async fn compute_stake_intent_hash_on_executor(
     state: &AppState,
     executor: Felt,
     input: &StakeActionCallInput<'_>,
+    action: StakeAction,
+    is_internal_stake: bool,
 ) -> Result<(String, StakeExecuteMode)> {
     let reader = OnchainReader::from_config(&state.config)?;
-    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-        let selector = get_selector_from_name("preview_stake_action_hash")
+    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4
+        && is_internal_stake
+        && matches!(action, StakeAction::Deposit)
+    {
+        let selector = get_selector_from_name("preview_stake_action_hash_internal")
             .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-        let mut calldata: Vec<Felt> = Vec::with_capacity(5 + input.action_calldata.len());
+        let lock_duration = input.lock_duration_secs.ok_or_else(|| {
+            crate::error::AppError::BadRequest(
+                "Hide Balance V4 internal stake requires lock_duration_secs".to_string(),
+            )
+        })?;
+        let mut calldata: Vec<Felt> = Vec::with_capacity(11 + input.action_calldata.len());
         calldata.push(input.target);
         calldata.push(input.action_selector);
         calldata.push(Felt::from(input.action_calldata.len() as u64));
         calldata.extend_from_slice(input.action_calldata);
         calldata.push(input.approval_token);
+        calldata.push(input.approval_amount_low);
+        calldata.push(input.approval_amount_high);
+        calldata.push(input.payout_token);
+        calldata.push(input.min_payout_low);
+        calldata.push(input.min_payout_high);
+        calldata.push(Felt::from(lock_duration));
 
         let out = reader
             .call(FunctionCall {
@@ -1139,12 +1093,15 @@ async fn compute_stake_intent_hash_on_executor(
             .await?;
         let intent_hash = out.first().ok_or_else(|| {
             crate::error::AppError::BadRequest(
-                "ShieldedPoolV2 preview returned empty response".to_string(),
+                "ShieldedPoolV4 preview returned empty response".to_string(),
             )
         })?;
-        return Ok((intent_hash.to_string(), StakeExecuteMode::ShieldedPoolV2));
+        return Ok((
+            intent_hash.to_string(),
+            StakeExecuteMode::ShieldedPoolV4Internal,
+        ));
     }
-    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV3 {
+    if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
         let selector = get_selector_from_name("preview_stake_action_hash")
             .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
         let mut calldata: Vec<Felt> = Vec::with_capacity(10 + input.action_calldata.len());
@@ -1168,10 +1125,13 @@ async fn compute_stake_intent_hash_on_executor(
             .await?;
         let intent_hash = out.first().ok_or_else(|| {
             crate::error::AppError::BadRequest(
-                "ShieldedPoolV3 preview returned empty response".to_string(),
+                "ShieldedPoolV4 preview returned empty response".to_string(),
             )
         })?;
-        return Ok((intent_hash.to_string(), StakeExecuteMode::ShieldedPoolV3));
+        return Ok((
+            intent_hash.to_string(),
+            StakeExecuteMode::ShieldedPoolV4External,
+        ));
     }
 
     let approval_aware_selector =
@@ -1280,8 +1240,7 @@ fn build_submit_private_intent_call(
     let kind = hide_executor_kind();
     let selector_name = match kind {
         HideExecutorKind::PrivateActionExecutorV1 => "submit_private_intent",
-        HideExecutorKind::ShieldedPoolV2 => "submit_private_action",
-        HideExecutorKind::ShieldedPoolV3 => "submit_private_stake",
+        HideExecutorKind::ShieldedPoolV4 => "submit_private_stake",
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
@@ -1290,9 +1249,9 @@ fn build_submit_private_intent_call(
         .iter()
         .map(|felt| parse_felt(felt))
         .collect::<Result<Vec<_>>>()?;
-    let calldata = if kind == HideExecutorKind::ShieldedPoolV3 {
+    let calldata = if kind == HideExecutorKind::ShieldedPoolV4 {
         let root = payload.root.as_deref().ok_or_else(|| {
-            crate::error::AppError::BadRequest("Hide Balance V3 requires privacy.root".to_string())
+            crate::error::AppError::BadRequest("Hide Balance V4 requires privacy.root".to_string())
         })?;
         let mut calldata: Vec<Felt> = Vec::with_capacity(3 + proof.len());
         calldata.push(parse_felt(root.trim())?);
@@ -1329,8 +1288,79 @@ fn build_execute_private_stake_call(
     executor: Felt,
     payload: &AutoPrivacyPayloadResponse,
     input: &StakeActionCallInput<'_>,
+    action: StakeAction,
     execute_mode: StakeExecuteMode,
 ) -> Result<Call> {
+    if matches!(
+        execute_mode,
+        StakeExecuteMode::ShieldedPoolV4Internal | StakeExecuteMode::ShieldedPoolV4External
+    ) {
+        let entrypoint = match action {
+            StakeAction::Deposit => match execute_mode {
+                StakeExecuteMode::ShieldedPoolV4Internal => "execute_private_stake_internal_v4",
+                StakeExecuteMode::ShieldedPoolV4External => "execute_private_stake_external_v4",
+                _ => unreachable!("handled above"),
+            },
+            StakeAction::Withdraw => "execute_private_unstake_v4",
+            StakeAction::Claim => "execute_private_claim_v4",
+        };
+        let selector = get_selector_from_name(entrypoint)
+            .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
+        let root = payload.root.as_deref().ok_or_else(|| {
+            crate::error::AppError::BadRequest("Hide Balance V4 requires privacy.root".to_string())
+        })?;
+        let nullifier = payload.nullifier.trim();
+        if nullifier.is_empty() {
+            return Err(crate::error::AppError::BadRequest(
+                "Hide Balance V4 requires non-empty nullifier".to_string(),
+            ));
+        }
+        let proof: Vec<Felt> = payload
+            .proof
+            .iter()
+            .map(|felt| parse_felt(felt))
+            .collect::<Result<Vec<_>>>()?;
+        let public_inputs: Vec<Felt> = payload
+            .public_inputs
+            .iter()
+            .map(|felt| parse_felt(felt))
+            .collect::<Result<Vec<_>>>()?;
+        let mut calldata: Vec<Felt> = Vec::with_capacity(
+            12 + input.action_calldata.len() + proof.len() + public_inputs.len(),
+        );
+        calldata.push(parse_felt(root.trim())?);
+        calldata.push(parse_felt(nullifier)?);
+        calldata.push(Felt::from(proof.len() as u64));
+        calldata.extend(proof);
+        calldata.push(Felt::from(public_inputs.len() as u64));
+        calldata.extend(public_inputs);
+        calldata.push(input.target);
+        calldata.push(input.action_selector);
+        calldata.push(Felt::from(input.action_calldata.len() as u64));
+        calldata.extend_from_slice(input.action_calldata);
+        calldata.push(input.approval_token);
+        calldata.push(input.approval_amount_low);
+        calldata.push(input.approval_amount_high);
+        calldata.push(input.payout_token);
+        calldata.push(input.min_payout_low);
+        calldata.push(input.min_payout_high);
+        if matches!(execute_mode, StakeExecuteMode::ShieldedPoolV4Internal)
+            && matches!(action, StakeAction::Deposit)
+        {
+            let lock_duration = input.lock_duration_secs.ok_or_else(|| {
+                crate::error::AppError::BadRequest(
+                    "Hide Balance V4 internal stake requires lock_duration_secs".to_string(),
+                )
+            })?;
+            calldata.push(Felt::from(lock_duration));
+        }
+        return Ok(Call {
+            to: executor,
+            selector,
+            calldata,
+        });
+    }
+
     let (entrypoint, estimated_capacity) = match execute_mode {
         StakeExecuteMode::TargetWithApproval => (
             "execute_private_stake_with_target_and_approval",
@@ -1343,41 +1373,22 @@ fn build_execute_private_stake_call(
         StakeExecuteMode::LegacyNoApproval => {
             ("execute_private_stake", 3 + input.action_calldata.len())
         }
-        StakeExecuteMode::ShieldedPoolV2 => {
-            ("execute_private_stake", 5 + input.action_calldata.len())
+        StakeExecuteMode::ShieldedPoolV4Internal | StakeExecuteMode::ShieldedPoolV4External => {
+            unreachable!("handled above")
         }
-        StakeExecuteMode::ShieldedPoolV3 => (
-            "execute_private_stake_with_payout",
-            11 + input.action_calldata.len(),
-        ),
     };
     let selector = get_selector_from_name(entrypoint)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
     let mut calldata: Vec<Felt> = Vec::with_capacity(estimated_capacity);
-    if matches!(execute_mode, StakeExecuteMode::ShieldedPoolV3) {
-        calldata.push(parse_felt(payload.nullifier.trim())?);
-    } else {
-        calldata.push(parse_felt(payload.commitment.trim())?);
-    }
+    calldata.push(parse_felt(payload.commitment.trim())?);
     if !matches!(execute_mode, StakeExecuteMode::LegacyNoApproval) {
         calldata.push(input.target);
     }
     calldata.push(input.action_selector);
     calldata.push(Felt::from(input.action_calldata.len() as u64));
     calldata.extend_from_slice(input.action_calldata);
-    if matches!(
-        execute_mode,
-        StakeExecuteMode::TargetWithApproval | StakeExecuteMode::ShieldedPoolV2
-    ) {
+    if matches!(execute_mode, StakeExecuteMode::TargetWithApproval) {
         calldata.push(input.approval_token);
-    }
-    if matches!(execute_mode, StakeExecuteMode::ShieldedPoolV3) {
-        calldata.push(input.approval_token);
-        calldata.push(input.approval_amount_low);
-        calldata.push(input.approval_amount_high);
-        calldata.push(input.payout_token);
-        calldata.push(input.min_payout_low);
-        calldata.push(input.min_payout_high);
     }
 
     Ok(Call {
@@ -1385,82 +1396,6 @@ fn build_execute_private_stake_call(
         selector,
         calldata,
     })
-}
-
-// Internal helper that builds inputs for `build_shielded_set_asset_rule_call`.
-fn build_shielded_set_asset_rule_call(
-    executor: Felt,
-    token: Felt,
-    amount_low: Felt,
-    amount_high: Felt,
-) -> Result<Call> {
-    let selector = get_selector_from_name("set_asset_rule")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    Ok(Call {
-        to: executor,
-        selector,
-        calldata: vec![token, amount_low, amount_high],
-    })
-}
-
-// Internal helper that builds inputs for `build_shielded_deposit_fixed_for_call`.
-fn build_shielded_deposit_fixed_for_call(
-    executor: Felt,
-    depositor: Felt,
-    token: Felt,
-    note_commitment: Felt,
-) -> Result<Call> {
-    let selector = get_selector_from_name("deposit_fixed_for")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    Ok(Call {
-        to: executor,
-        selector,
-        calldata: vec![depositor, token, note_commitment],
-    })
-}
-
-// Internal helper that supports `shielded_note_registered` operations.
-async fn shielded_note_registered(
-    state: &AppState,
-    executor: Felt,
-    note_commitment: Felt,
-) -> Result<bool> {
-    let reader = OnchainReader::from_config(&state.config)?;
-    let selector = get_selector_from_name("is_note_registered")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: executor,
-            entry_point_selector: selector,
-            calldata: vec![note_commitment],
-        })
-        .await?;
-    let flag = out.first().copied().unwrap_or(Felt::ZERO);
-    Ok(flag != Felt::ZERO)
-}
-
-async fn shielded_note_deposit_timestamp(
-    state: &AppState,
-    executor: Felt,
-    note_commitment: Felt,
-) -> Result<u64> {
-    let reader = OnchainReader::from_config(&state.config)?;
-    let selector = get_selector_from_name("get_note_deposit_timestamp")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: executor,
-            entry_point_selector: selector,
-            calldata: vec![note_commitment],
-        })
-        .await?;
-    let raw = out.first().copied().unwrap_or(Felt::ZERO);
-    let value = felt_to_u128(&raw).map_err(|_| {
-        crate::error::AppError::BadRequest(
-            "Invalid note timestamp returned by shielded pool".to_string(),
-        )
-    })?;
-    Ok(value as u64)
 }
 
 async fn shielded_current_root(state: &AppState, executor: Felt) -> Result<Felt> {
@@ -1477,34 +1412,10 @@ async fn shielded_current_root(state: &AppState, executor: Felt) -> Result<Felt>
     let root = out.first().copied().unwrap_or(Felt::ZERO);
     if root == Felt::ZERO {
         return Err(crate::error::AppError::BadRequest(
-            "ShieldedPoolV3 root is not initialized yet (get_root=0).".to_string(),
+            "ShieldedPoolV4 root is not initialized yet (get_root=0).".to_string(),
         ));
     }
     Ok(root)
-}
-
-// Internal helper that supports `shielded_fixed_amount` operations.
-async fn shielded_fixed_amount(
-    state: &AppState,
-    executor: Felt,
-    token: Felt,
-) -> Result<(Felt, Felt)> {
-    let reader = OnchainReader::from_config(&state.config)?;
-    let selector = get_selector_from_name("fixed_amount")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: executor,
-            entry_point_selector: selector,
-            calldata: vec![token],
-        })
-        .await?;
-    if out.len() < 2 {
-        return Err(crate::error::AppError::BadRequest(
-            "ShieldedPoolV2 fixed_amount returned invalid response".to_string(),
-        ));
-    }
-    Ok((out[0], out[1]))
 }
 
 // Internal helper that supports `u256_is_greater` operations.
@@ -1598,122 +1509,6 @@ async fn ensure_hide_executor_has_stake_input_balance(
     Ok(())
 }
 
-// Internal helper that fetches data for `read_erc20_allowance_parts`.
-async fn read_erc20_allowance_parts(
-    reader: &OnchainReader,
-    token: Felt,
-    owner: Felt,
-    spender: Felt,
-) -> Result<(Felt, Felt)> {
-    let selector = get_selector_from_name("allowance")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: token,
-            entry_point_selector: selector,
-            calldata: vec![owner, spender],
-        })
-        .await?;
-    if out.len() < 2 {
-        return Err(crate::error::AppError::BadRequest(
-            "ERC20 allowance returned invalid response".to_string(),
-        ));
-    }
-    Ok((out[0], out[1]))
-}
-
-struct ShieldedNoteRegistrationInput<'a> {
-    executor: Felt,
-    depositor: Felt,
-    commitment: Felt,
-    note_token: Felt,
-    amount_low: Felt,
-    amount_high: Felt,
-    symbol: &'a str,
-    amount_text: &'a str,
-}
-
-// Internal helper that supports `append_shielded_note_registration_calls` operations.
-async fn append_shielded_note_registration_calls(
-    state: &AppState,
-    relayer_calls: &mut Vec<Call>,
-    input: &ShieldedNoteRegistrationInput<'_>,
-) -> Result<()> {
-    if input.note_token == Felt::ZERO {
-        return Err(crate::error::AppError::BadRequest(
-            "ShieldedPoolV2 requires non-zero note token".to_string(),
-        ));
-    }
-    if input.amount_low == Felt::ZERO && input.amount_high == Felt::ZERO {
-        return Err(crate::error::AppError::BadRequest(
-            "ShieldedPoolV2 requires non-zero note amount".to_string(),
-        ));
-    }
-    let note_registered = shielded_note_registered(state, input.executor, input.commitment).await?;
-    if note_registered {
-        return Ok(());
-    }
-    if hide_balance_v2_redeem_only_enabled() {
-        return Err(crate::error::AppError::BadRequest(
-            "Hide Balance V2 is redeem-only. New note deposits to V2 are blocked; use V3 for new notes."
-                .to_string(),
-        ));
-    }
-
-    let (fixed_low, fixed_high) =
-        shielded_fixed_amount(state, input.executor, input.note_token).await?;
-    if fixed_low != input.amount_low || fixed_high != input.amount_high {
-        relayer_calls.push(build_shielded_set_asset_rule_call(
-            input.executor,
-            input.note_token,
-            input.amount_low,
-            input.amount_high,
-        )?);
-    }
-    let reader = OnchainReader::from_config(&state.config)?;
-    let (balance_low, balance_high) =
-        read_erc20_balance_parts(&reader, input.note_token, input.depositor).await?;
-    if u256_is_greater(
-        input.amount_low,
-        input.amount_high,
-        balance_low,
-        balance_high,
-        "requested hide deposit",
-        "user balance",
-    )? {
-        return Err(crate::error::AppError::BadRequest(format!(
-            "Shielded note funding failed: insufficient {} balance. Needed {}.",
-            input.symbol.to_ascii_uppercase(),
-            input.amount_text
-        )));
-    }
-    let (allowance_low, allowance_high) =
-        read_erc20_allowance_parts(&reader, input.note_token, input.depositor, input.executor)
-            .await?;
-    if u256_is_greater(
-        input.amount_low,
-        input.amount_high,
-        allowance_low,
-        allowance_high,
-        "requested hide deposit",
-        "token allowance",
-    )? {
-        return Err(crate::error::AppError::BadRequest(format!(
-            "Shielded note funding failed: insufficient allowance. Approve {} {} to executor {} first.",
-            input.amount_text,
-            input.symbol.to_ascii_uppercase(),
-            format_args!("{:#x}", input.executor)
-        )));
-    }
-    relayer_calls.push(build_shielded_deposit_fixed_for_call(
-        input.executor,
-        input.depositor,
-        input.note_token,
-        input.commitment,
-    )?);
-    Ok(())
-}
-
 const CAREL_DECIMALS: f64 = 1_000_000_000_000_000_000.0;
 const STAKE_POOLS_WBTC_CHECK_TIMEOUT_SECS: u64 = 8;
 const STAKE_POOLS_WBTC_CHECK_ATTEMPTS: usize = 2;
@@ -1725,7 +1520,7 @@ async fn resolve_wbtc_pool_availability(state: &AppState) -> (bool, Option<Strin
     for attempt in 0..STAKE_POOLS_WBTC_CHECK_ATTEMPTS {
         match timeout(
             Duration::from_secs(STAKE_POOLS_WBTC_CHECK_TIMEOUT_SECS),
-            is_wbtc_registered_on_staking_btc(state),
+            is_wbtc_registered_on_staking_wbtc(state),
         )
         .await
         {
@@ -1767,7 +1562,7 @@ async fn resolve_wbtc_pool_availability(state: &AppState) -> (bool, Option<Strin
 async fn ensure_wbtc_registered_for_deposit(state: &AppState) -> Result<()> {
     match timeout(
         Duration::from_secs(STAKE_DEPOSIT_WBTC_CHECK_TIMEOUT_SECS),
-        is_wbtc_registered_on_staking_btc(state),
+        is_wbtc_registered_on_staking_wbtc(state),
     )
     .await
     {
@@ -2014,6 +1809,9 @@ pub async fn deposit(
     Json(req): Json<DepositRequest>,
 ) -> Result<Json<ApiResponse<DepositResponse>>> {
     let user_address = require_starknet_user(&headers, &state).await?;
+    if let Some(plan_id) = req.plan_id.as_deref() {
+        ensure_plan_active_for_user(&state.config, plan_id, &user_address).await?;
+    }
     let now = chrono::Utc::now().timestamp();
 
     let amount: f64 = req
@@ -2054,29 +1852,17 @@ pub async fn deposit(
     }
 
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
-    let strict_privacy_mode = should_hide && hide_balance_strict_privacy_mode_enabled();
     let hide_pool_version = if should_hide {
-        Some(resolve_hide_pool_version(req.privacy.as_ref()))
+        Some(resolve_hide_pool_version(req.privacy.as_ref())?)
     } else {
         None
     };
-    if should_hide {
-        match (hide_executor_kind(), hide_pool_version) {
-            (HideExecutorKind::ShieldedPoolV3, Some(HidePoolVersion::V2)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance config mismatch: executor is V3 but payload/version resolved to V2."
-                        .to_string(),
-                ));
-            }
-            (HideExecutorKind::ShieldedPoolV2, Some(HidePoolVersion::V3))
-            | (HideExecutorKind::PrivateActionExecutorV1, Some(HidePoolVersion::V3)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3."
-                        .to_string(),
-                ));
-            }
-            _ => {}
-        }
+    let is_v4 = matches!(hide_pool_version, Some(HidePoolVersion::V4));
+    let note_version_label = if is_v4 { Some("v4".to_string()) } else { None };
+    if should_hide && !matches!(hide_executor_kind(), HideExecutorKind::ShieldedPoolV4) {
+        return Err(crate::error::AppError::BadRequest(
+            "Hide Balance V4 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4.".to_string(),
+        ));
     }
     let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
     let use_relayer_pool_hide =
@@ -2110,17 +1896,16 @@ pub async fn deposit(
             payout_token: Felt::ZERO,
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
+            lock_duration_secs: req.lock_duration_secs,
         };
-        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
-            tracing::info!(
-                "Ignoring client-provided Hide Balance V3 proof/public_inputs for stake deposit; regenerating payload server-side"
-            );
-            None
-        } else {
-            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
-        };
+        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
+            if is_v4 {
+                tracing::info!(
+                    "Reusing client-provided Hide Balance V4 proof/public_inputs for stake deposit"
+                );
+            }
             request_payload
         } else {
             let mut tx_context = AutoPrivacyTxContext {
@@ -2131,18 +1916,26 @@ pub async fn deposit(
                 recipient: Some(user_address.clone()),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: if hide_pool_version == Some(HidePoolVersion::V3) {
-                    Some("v3".to_string())
-                } else {
-                    None
-                },
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 ..Default::default()
             };
-            if hide_pool_version == Some(HidePoolVersion::V3) {
+            if is_v4 {
                 tx_context.note_commitment = req
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone());
+                tx_context.note_ciphertext = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone());
+                tx_context.note_cid = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone());
                 tx_context.denom_id = req
                     .privacy
                     .as_ref()
@@ -2160,9 +1953,16 @@ pub async fn deposit(
             )
             .await?
         };
-        let (intent_hash, execute_mode) =
-            compute_stake_intent_hash_on_executor(&state, executor, &stake_input).await?;
-        if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
+        let is_internal_stake = pool_token.eq_ignore_ascii_case("CAREL");
+        let (intent_hash, execute_mode) = compute_stake_intent_hash_on_executor(
+            &state,
+            executor,
+            &stake_input,
+            StakeAction::Deposit,
+            is_internal_stake,
+        )
+        .await?;
+        if is_v4 && payload_from_auto {
             let root = shielded_current_root(&state, executor).await?;
             let tx_context = AutoPrivacyTxContext {
                 flow: Some("stake".to_string()),
@@ -2172,7 +1972,11 @@ pub async fn deposit(
                 recipient: Some(user_address.clone()),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: Some("v3".to_string()),
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 root: Some(format!("{root:#x}")),
                 intent_hash: Some(intent_hash.clone()),
                 action_hash: Some(intent_hash.clone()),
@@ -2185,6 +1989,14 @@ pub async fn deposit(
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone()),
+                note_ciphertext: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone()),
+                note_cid: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone()),
                 denom_id: req
                     .privacy
                     .as_ref()
@@ -2204,11 +2016,11 @@ pub async fn deposit(
             .await?;
         }
         bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
-        if hide_pool_version == Some(HidePoolVersion::V3) {
-            payload.note_version = Some("v3".to_string());
+        if is_v4 {
+            payload.note_version = note_version_label.clone();
             let root = payload.root.as_deref().ok_or_else(|| {
                 crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires privacy.root in prover payload".to_string(),
+                    "Hide Balance V4 requires privacy.root in prover payload".to_string(),
                 )
             })?;
             ensure_public_inputs_bind_root_nullifier(
@@ -2230,9 +2042,19 @@ pub async fn deposit(
             )?;
         }
 
+        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
+            let nullifier = payload.nullifier.trim().to_string();
+            if nullifier.is_empty() {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V4 requires non-empty nullifier".to_string(),
+                ));
+            }
+            ensure_nullifier_unused(&state, executor, &nullifier, "stake hide").await?;
+        }
+
         let relayer = RelayerService::from_config(&state.config)?;
         let mut relayer_calls: Vec<Call> = Vec::new();
-        if hide_pool_version == Some(HidePoolVersion::V3) {
+        if is_v4 {
             let note_commitment_raw = payload
                 .note_commitment
                 .as_deref()
@@ -2247,47 +2069,19 @@ pub async fn deposit(
                 })
                 .ok_or_else(|| {
                     crate::error::AppError::BadRequest(
-                        "Hide Balance V3 requires privacy.note_commitment in payload".to_string(),
+                        "Hide Balance V4 requires privacy.note_commitment in payload".to_string(),
                     )
                 })?;
             let note_commitment_felt = parse_felt(note_commitment_raw.trim())?;
-            let deposit_ts =
-                shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
-            if deposit_ts == 0 {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note is not registered yet. Deposit the note first."
-                        .to_string(),
-                ));
-            }
+            let deposit_ts = wait_for_shielded_note_deposit_timestamp(
+                &state,
+                executor,
+                note_commitment_felt,
+                "stake deposit",
+            )
+            .await?;
             payload.spendable_at_unix =
                 Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
-        } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-            let commitment_felt = parse_felt(payload.commitment.trim())?;
-            let user_felt = parse_felt(&user_address)?;
-            let (note_amount_low, note_amount_high) =
-                parse_decimal_to_u256_parts(&req.amount, token_decimals(pool_token))?;
-            if strict_privacy_mode {
-                let note_registered =
-                    shielded_note_registered(&state, executor, commitment_felt).await?;
-                if !note_registered {
-                    return Err(crate::error::AppError::BadRequest(
-                        "Hide Balance strict mode blocks inline deposit+execute in one tx. Pre-fund shielded note first."
-                            .to_string(),
-                    ));
-                }
-            }
-            let shielded_input = ShieldedNoteRegistrationInput {
-                executor,
-                depositor: user_felt,
-                commitment: commitment_felt,
-                note_token: approval_token,
-                amount_low: note_amount_low,
-                amount_high: note_amount_high,
-                symbol: pool_token,
-                amount_text: &req.amount,
-            };
-            append_shielded_note_registration_calls(&state, &mut relayer_calls, &shielded_input)
-                .await?;
         }
         if !action_calldata.is_empty() && action_calldata.len() >= 3 && approval_token != Felt::ZERO
         {
@@ -2312,10 +2106,17 @@ pub async fn deposit(
             )
             .await?;
         }
-        let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call =
-            build_execute_private_stake_call(executor, &payload, &stake_input, execute_mode)?;
-        relayer_calls.push(submit_call);
+        let execute_call = build_execute_private_stake_call(
+            executor,
+            &payload,
+            &stake_input,
+            StakeAction::Deposit,
+            execute_mode,
+        )?;
+        if hide_executor_kind() != HideExecutorKind::ShieldedPoolV4 {
+            let submit_call = build_submit_private_intent_call(executor, &payload)?;
+            relayer_calls.push(submit_call);
+        }
         relayer_calls.push(execute_call);
         let submitted = relayer.submit_calls(relayer_calls).await?;
         submitted.tx_hash
@@ -2393,6 +2194,7 @@ pub async fn deposit(
         usd_value: Some(rust_decimal::Decimal::from_f64_retain(usd_value).unwrap()),
         fee_paid: None,
         points_earned: Some(rust_decimal::Decimal::ZERO),
+        is_private: should_hide,
         timestamp: chrono::Utc::now(),
         processed: false,
     };
@@ -2433,6 +2235,9 @@ pub async fn withdraw(
     Json(req): Json<WithdrawRequest>,
 ) -> Result<Json<ApiResponse<DepositResponse>>> {
     let user_address = require_starknet_user(&headers, &state).await?;
+    if let Some(plan_id) = req.plan_id.as_deref() {
+        ensure_plan_active_for_user(&state.config, plan_id, &user_address).await?;
+    }
 
     let amount: f64 = req
         .amount
@@ -2453,29 +2258,17 @@ pub async fn withdraw(
     }
 
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
-    let strict_privacy_mode = should_hide && hide_balance_strict_privacy_mode_enabled();
     let hide_pool_version = if should_hide {
-        Some(resolve_hide_pool_version(req.privacy.as_ref()))
+        Some(resolve_hide_pool_version(req.privacy.as_ref())?)
     } else {
         None
     };
-    if should_hide {
-        match (hide_executor_kind(), hide_pool_version) {
-            (HideExecutorKind::ShieldedPoolV3, Some(HidePoolVersion::V2)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance config mismatch: executor is V3 but payload/version resolved to V2."
-                        .to_string(),
-                ));
-            }
-            (HideExecutorKind::ShieldedPoolV2, Some(HidePoolVersion::V3))
-            | (HideExecutorKind::PrivateActionExecutorV1, Some(HidePoolVersion::V3)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3."
-                        .to_string(),
-                ));
-            }
-            _ => {}
-        }
+    let is_v4 = matches!(hide_pool_version, Some(HidePoolVersion::V4));
+    let note_version_label = if is_v4 { Some("v4".to_string()) } else { None };
+    if should_hide && !matches!(hide_executor_kind(), HideExecutorKind::ShieldedPoolV4) {
+        return Err(crate::error::AppError::BadRequest(
+            "Hide Balance V4 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4.".to_string(),
+        ));
     }
     let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
     let use_relayer_pool_hide =
@@ -2503,17 +2296,16 @@ pub async fn withdraw(
             payout_token,
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
+            lock_duration_secs: req.lock_duration_secs,
         };
-        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
-            tracing::info!(
-                "Ignoring client-provided Hide Balance V3 proof/public_inputs for stake withdraw; regenerating payload server-side"
-            );
-            None
-        } else {
-            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
-        };
+        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
+            if is_v4 {
+                tracing::info!(
+                    "Reusing client-provided Hide Balance V4 proof/public_inputs for stake withdraw"
+                );
+            }
             request_payload
         } else {
             let mut tx_context = AutoPrivacyTxContext {
@@ -2524,18 +2316,26 @@ pub async fn withdraw(
                 recipient: Some(user_address.clone()),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: if hide_pool_version == Some(HidePoolVersion::V3) {
-                    Some("v3".to_string())
-                } else {
-                    None
-                },
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 ..Default::default()
             };
-            if hide_pool_version == Some(HidePoolVersion::V3) {
+            if is_v4 {
                 tx_context.note_commitment = req
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone());
+                tx_context.note_ciphertext = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone());
+                tx_context.note_cid = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone());
                 tx_context.denom_id = req
                     .privacy
                     .as_ref()
@@ -2553,9 +2353,16 @@ pub async fn withdraw(
             )
             .await?
         };
-        let (intent_hash, execute_mode) =
-            compute_stake_intent_hash_on_executor(&state, executor, &stake_input).await?;
-        if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
+        let is_internal_stake = pool_token.eq_ignore_ascii_case("CAREL");
+        let (intent_hash, execute_mode) = compute_stake_intent_hash_on_executor(
+            &state,
+            executor,
+            &stake_input,
+            StakeAction::Withdraw,
+            is_internal_stake,
+        )
+        .await?;
+        if is_v4 && payload_from_auto {
             let root = shielded_current_root(&state, executor).await?;
             let tx_context = AutoPrivacyTxContext {
                 flow: Some("unstake".to_string()),
@@ -2565,7 +2372,11 @@ pub async fn withdraw(
                 recipient: Some(user_address.clone()),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: Some("v3".to_string()),
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 root: Some(format!("{root:#x}")),
                 intent_hash: Some(intent_hash.clone()),
                 action_hash: Some(intent_hash.clone()),
@@ -2578,6 +2389,14 @@ pub async fn withdraw(
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone()),
+                note_ciphertext: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone()),
+                note_cid: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone()),
                 denom_id: req
                     .privacy
                     .as_ref()
@@ -2597,11 +2416,11 @@ pub async fn withdraw(
             .await?;
         }
         bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
-        if hide_pool_version == Some(HidePoolVersion::V3) {
-            payload.note_version = Some("v3".to_string());
+        if is_v4 {
+            payload.note_version = note_version_label.clone();
             let root = payload.root.as_deref().ok_or_else(|| {
                 crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires privacy.root in prover payload".to_string(),
+                    "Hide Balance V4 requires privacy.root in prover payload".to_string(),
                 )
             })?;
             ensure_public_inputs_bind_root_nullifier(
@@ -2623,9 +2442,19 @@ pub async fn withdraw(
             )?;
         }
 
+        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
+            let nullifier = payload.nullifier.trim().to_string();
+            if nullifier.is_empty() {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V4 requires non-empty nullifier".to_string(),
+                ));
+            }
+            ensure_nullifier_unused(&state, executor, &nullifier, "unstake hide").await?;
+        }
+
         let relayer = RelayerService::from_config(&state.config)?;
         let mut relayer_calls: Vec<Call> = Vec::new();
-        if hide_pool_version == Some(HidePoolVersion::V3) {
+        if is_v4 {
             let note_commitment_raw = payload
                 .note_commitment
                 .as_deref()
@@ -2640,52 +2469,31 @@ pub async fn withdraw(
                 })
                 .ok_or_else(|| {
                     crate::error::AppError::BadRequest(
-                        "Hide Balance V3 requires privacy.note_commitment in payload".to_string(),
+                        "Hide Balance V4 requires privacy.note_commitment in payload".to_string(),
                     )
                 })?;
             let note_commitment_felt = parse_felt(note_commitment_raw.trim())?;
-            let deposit_ts =
-                shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
-            if deposit_ts == 0 {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note is not registered yet. Deposit the note first."
-                        .to_string(),
-                ));
-            }
+            let deposit_ts = wait_for_shielded_note_deposit_timestamp(
+                &state,
+                executor,
+                note_commitment_felt,
+                "stake withdraw",
+            )
+            .await?;
             payload.spendable_at_unix =
                 Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
-        } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-            let commitment_felt = parse_felt(payload.commitment.trim())?;
-            let user_felt = parse_felt(&user_address)?;
-            let (note_amount_low, note_amount_high) =
-                parse_decimal_to_u256_parts(&req.amount, token_decimals(&pool_token))?;
-            if strict_privacy_mode {
-                let note_registered =
-                    shielded_note_registered(&state, executor, commitment_felt).await?;
-                if !note_registered {
-                    return Err(crate::error::AppError::BadRequest(
-                        "Hide Balance strict mode blocks inline deposit+execute in one tx. Pre-fund shielded note first."
-                            .to_string(),
-                    ));
-                }
-            }
-            let shielded_input = ShieldedNoteRegistrationInput {
-                executor,
-                depositor: user_felt,
-                commitment: commitment_felt,
-                note_token: approval_token,
-                amount_low: note_amount_low,
-                amount_high: note_amount_high,
-                symbol: &pool_token,
-                amount_text: &req.amount,
-            };
-            append_shielded_note_registration_calls(&state, &mut relayer_calls, &shielded_input)
-                .await?;
         }
-        let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call =
-            build_execute_private_stake_call(executor, &payload, &stake_input, execute_mode)?;
-        relayer_calls.push(submit_call);
+        let execute_call = build_execute_private_stake_call(
+            executor,
+            &payload,
+            &stake_input,
+            StakeAction::Withdraw,
+            execute_mode,
+        )?;
+        if hide_executor_kind() != HideExecutorKind::ShieldedPoolV4 {
+            let submit_call = build_submit_private_intent_call(executor, &payload)?;
+            relayer_calls.push(submit_call);
+        }
         relayer_calls.push(execute_call);
         let submitted = relayer.submit_calls(relayer_calls).await?;
         submitted.tx_hash
@@ -2737,6 +2545,7 @@ pub async fn withdraw(
         usd_value: Some(rust_decimal::Decimal::from_f64_retain(usd_value).unwrap()),
         fee_paid: None,
         points_earned: Some(rust_decimal::Decimal::ZERO),
+        is_private: should_hide,
         timestamp: chrono::Utc::now(),
         processed: false,
     };
@@ -2777,6 +2586,9 @@ pub async fn claim(
     Json(req): Json<ClaimRequest>,
 ) -> Result<Json<ApiResponse<ClaimResponse>>> {
     let user_address = require_starknet_user(&headers, &state).await?;
+    if let Some(plan_id) = req.plan_id.as_deref() {
+        ensure_plan_active_for_user(&state.config, plan_id, &user_address).await?;
+    }
 
     let pool_token =
         parse_pool_from_position_id(&req.position_id).unwrap_or_else(|| "CAREL".to_string());
@@ -2792,29 +2604,17 @@ pub async fn claim(
     }
 
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
-    let strict_privacy_mode = should_hide && hide_balance_strict_privacy_mode_enabled();
     let hide_pool_version = if should_hide {
-        Some(resolve_hide_pool_version(req.privacy.as_ref()))
+        Some(resolve_hide_pool_version(req.privacy.as_ref())?)
     } else {
         None
     };
-    if should_hide {
-        match (hide_executor_kind(), hide_pool_version) {
-            (HideExecutorKind::ShieldedPoolV3, Some(HidePoolVersion::V2)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance config mismatch: executor is V3 but payload/version resolved to V2."
-                        .to_string(),
-                ));
-            }
-            (HideExecutorKind::ShieldedPoolV2, Some(HidePoolVersion::V3))
-            | (HideExecutorKind::PrivateActionExecutorV1, Some(HidePoolVersion::V3)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3."
-                        .to_string(),
-                ));
-            }
-            _ => {}
-        }
+    let is_v4 = matches!(hide_pool_version, Some(HidePoolVersion::V4));
+    let note_version_label = if is_v4 { Some("v4".to_string()) } else { None };
+    if should_hide && !matches!(hide_executor_kind(), HideExecutorKind::ShieldedPoolV4) {
+        return Err(crate::error::AppError::BadRequest(
+            "Hide Balance V4 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4.".to_string(),
+        ));
     }
     let normalized_onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
     let use_relayer_pool_hide =
@@ -2842,17 +2642,16 @@ pub async fn claim(
             payout_token,
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
+            lock_duration_secs: req.lock_duration_secs,
         };
-        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
-            tracing::info!(
-                "Ignoring client-provided Hide Balance V3 proof/public_inputs for stake claim; regenerating payload server-side"
-            );
-            None
-        } else {
-            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
-        };
+        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
+            if is_v4 {
+                tracing::info!(
+                    "Reusing client-provided Hide Balance V4 proof/public_inputs for stake claim"
+                );
+            }
             request_payload
         } else {
             let mut tx_context = AutoPrivacyTxContext {
@@ -2862,18 +2661,26 @@ pub async fn claim(
                 recipient: Some(user_address.clone()),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: if hide_pool_version == Some(HidePoolVersion::V3) {
-                    Some("v3".to_string())
-                } else {
-                    None
-                },
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 ..Default::default()
             };
-            if hide_pool_version == Some(HidePoolVersion::V3) {
+            if is_v4 {
                 tx_context.note_commitment = req
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone());
+                tx_context.note_ciphertext = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone());
+                tx_context.note_cid = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone());
                 tx_context.denom_id = req
                     .privacy
                     .as_ref()
@@ -2891,9 +2698,16 @@ pub async fn claim(
             )
             .await?
         };
-        let (intent_hash, execute_mode) =
-            compute_stake_intent_hash_on_executor(&state, executor, &stake_input).await?;
-        if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
+        let is_internal_stake = pool_token.eq_ignore_ascii_case("CAREL");
+        let (intent_hash, execute_mode) = compute_stake_intent_hash_on_executor(
+            &state,
+            executor,
+            &stake_input,
+            StakeAction::Claim,
+            is_internal_stake,
+        )
+        .await?;
+        if is_v4 && payload_from_auto {
             let root = shielded_current_root(&state, executor).await?;
             let tx_context = AutoPrivacyTxContext {
                 flow: Some("stake_claim".to_string()),
@@ -2902,7 +2716,11 @@ pub async fn claim(
                 recipient: Some(user_address.clone()),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: Some("v3".to_string()),
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 root: Some(format!("{root:#x}")),
                 intent_hash: Some(intent_hash.clone()),
                 action_hash: Some(intent_hash.clone()),
@@ -2915,6 +2733,14 @@ pub async fn claim(
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone()),
+                note_ciphertext: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone()),
+                note_cid: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone()),
                 denom_id: req
                     .privacy
                     .as_ref()
@@ -2934,11 +2760,11 @@ pub async fn claim(
             .await?;
         }
         bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
-        if hide_pool_version == Some(HidePoolVersion::V3) {
-            payload.note_version = Some("v3".to_string());
+        if is_v4 {
+            payload.note_version = note_version_label.clone();
             let root = payload.root.as_deref().ok_or_else(|| {
                 crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires privacy.root in prover payload".to_string(),
+                    "Hide Balance V4 requires privacy.root in prover payload".to_string(),
                 )
             })?;
             ensure_public_inputs_bind_root_nullifier(
@@ -2960,9 +2786,19 @@ pub async fn claim(
             )?;
         }
 
+        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
+            let nullifier = payload.nullifier.trim().to_string();
+            if nullifier.is_empty() {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V4 requires non-empty nullifier".to_string(),
+                ));
+            }
+            ensure_nullifier_unused(&state, executor, &nullifier, "stake claim hide").await?;
+        }
+
         let relayer = RelayerService::from_config(&state.config)?;
         let mut relayer_calls: Vec<Call> = Vec::new();
-        if hide_pool_version == Some(HidePoolVersion::V3) {
+        if is_v4 {
             let note_commitment_raw = payload
                 .note_commitment
                 .as_deref()
@@ -2977,56 +2813,31 @@ pub async fn claim(
                 })
                 .ok_or_else(|| {
                     crate::error::AppError::BadRequest(
-                        "Hide Balance V3 requires privacy.note_commitment in payload".to_string(),
+                        "Hide Balance V4 requires privacy.note_commitment in payload".to_string(),
                     )
                 })?;
             let note_commitment_felt = parse_felt(note_commitment_raw.trim())?;
-            let deposit_ts =
-                shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
-            if deposit_ts == 0 {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note is not registered yet. Deposit the note first."
-                        .to_string(),
-                ));
-            }
+            let deposit_ts = wait_for_shielded_note_deposit_timestamp(
+                &state,
+                executor,
+                note_commitment_felt,
+                "stake claim",
+            )
+            .await?;
             payload.spendable_at_unix =
                 Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
-        } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-            let commitment_felt = parse_felt(payload.commitment.trim())?;
-            let user_felt = parse_felt(&user_address)?;
-            if strict_privacy_mode {
-                let note_registered =
-                    shielded_note_registered(&state, executor, commitment_felt).await?;
-                if !note_registered {
-                    return Err(crate::error::AppError::BadRequest(
-                        "Hide Balance strict mode blocks inline deposit+execute in one tx. Pre-fund shielded note first."
-                            .to_string(),
-                    ));
-                }
-            }
-            let (mut note_amount_low, mut note_amount_high) =
-                shielded_fixed_amount(&state, executor, approval_token).await?;
-            if note_amount_low == Felt::ZERO && note_amount_high == Felt::ZERO {
-                note_amount_low = Felt::from(1_u8);
-                note_amount_high = Felt::ZERO;
-            }
-            let shielded_input = ShieldedNoteRegistrationInput {
-                executor,
-                depositor: user_felt,
-                commitment: commitment_felt,
-                note_token: approval_token,
-                amount_low: note_amount_low,
-                amount_high: note_amount_high,
-                symbol: &pool_token,
-                amount_text: "required note amount",
-            };
-            append_shielded_note_registration_calls(&state, &mut relayer_calls, &shielded_input)
-                .await?;
         }
-        let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call =
-            build_execute_private_stake_call(executor, &payload, &stake_input, execute_mode)?;
-        relayer_calls.push(submit_call);
+        let execute_call = build_execute_private_stake_call(
+            executor,
+            &payload,
+            &stake_input,
+            StakeAction::Claim,
+            execute_mode,
+        )?;
+        if hide_executor_kind() != HideExecutorKind::ShieldedPoolV4 {
+            let submit_call = build_submit_private_intent_call(executor, &payload)?;
+            relayer_calls.push(submit_call);
+        }
         relayer_calls.push(execute_call);
         let submitted = relayer.submit_calls(relayer_calls).await?;
         submitted.tx_hash
@@ -3075,6 +2886,7 @@ pub async fn claim(
         usd_value: None,
         fee_paid: None,
         points_earned: Some(rust_decimal::Decimal::ZERO),
+        is_private: should_hide,
         timestamp: chrono::Utc::now(),
         processed: false,
     };
@@ -3254,7 +3066,7 @@ async fn fetch_carel_stake_info(
         return Ok(None);
     }
 
-    let amount = u256_from_felts(&result[0], &result[1])?;
+    let amount = u256_from_felts_u128(&result[0], &result[1])?;
     let start_time = felt_to_u128(&result[3])? as u64;
 
     Ok(Some(CarelStakeInfo { amount, start_time }))
@@ -3278,7 +3090,7 @@ async fn fetch_carel_rewards(
         return Ok(0);
     }
 
-    u256_from_felts(&result[0], &result[1])
+    u256_from_felts_u128(&result[0], &result[1])
 }
 
 #[cfg(test)]
@@ -3294,31 +3106,89 @@ mod tests {
             nullifier: None,
             commitment: None,
             note_commitment: None,
+            note_ciphertext: None,
+            note_cid: None,
+            noir_inputs: None,
             denom_id: None,
             spendable_at_unix: None,
             proof: None,
             public_inputs: None,
         };
-        let payload_v2 = ModelPrivacyVerificationPayload {
+        let payload_v4 = ModelPrivacyVerificationPayload {
             verifier: None,
-            note_version: Some("v2".to_string()),
+            note_version: Some("v4".to_string()),
             root: None,
             nullifier: None,
             commitment: None,
             note_commitment: None,
+            note_ciphertext: None,
+            note_cid: None,
+            noir_inputs: None,
             denom_id: None,
             spendable_at_unix: None,
             proof: None,
             public_inputs: None,
         };
         assert!(matches!(
-            resolve_hide_pool_version(Some(&payload_v3)),
-            HidePoolVersion::V3
+            resolve_hide_pool_version(Some(&payload_v4)).unwrap(),
+            HidePoolVersion::V4
         ));
-        assert!(matches!(
-            resolve_hide_pool_version(Some(&payload_v2)),
-            HidePoolVersion::V2
-        ));
+        assert!(resolve_hide_pool_version(Some(&payload_v3)).is_err());
+    }
+
+    #[test]
+    fn payload_from_request_preserves_v4_metadata() {
+        let payload = ModelPrivacyVerificationPayload {
+            verifier: Some("garaga".to_string()),
+            note_version: Some("v4".to_string()),
+            root: Some("0x123".to_string()),
+            nullifier: Some("0x456".to_string()),
+            commitment: Some("0x789".to_string()),
+            note_commitment: Some("0xabc".to_string()),
+            note_ciphertext: None,
+            note_cid: None,
+            noir_inputs: None,
+            denom_id: Some("10".to_string()),
+            spendable_at_unix: Some(1_777_777_777),
+            proof: Some(vec!["0x1".to_string(), "0x2".to_string()]),
+            public_inputs: Some(vec![
+                "0x123".to_string(),
+                "0x456".to_string(),
+                "0x999".to_string(),
+            ]),
+        };
+        let mapped = payload_from_request(Some(&payload), "garaga").expect("payload must map");
+        assert_eq!(mapped.note_version.as_deref(), Some("v4"));
+        assert_eq!(mapped.root.as_deref(), Some("0x123"));
+        assert_eq!(mapped.note_commitment.as_deref(), Some("0xabc"));
+        assert_eq!(mapped.denom_id.as_deref(), Some("10"));
+        assert_eq!(mapped.spendable_at_unix, Some(1_777_777_777));
+    }
+
+    #[test]
+    fn payload_from_request_infers_v4_root_from_public_inputs() {
+        let payload = ModelPrivacyVerificationPayload {
+            verifier: Some("garaga".to_string()),
+            note_version: Some("v4".to_string()),
+            root: None,
+            nullifier: Some("0x456".to_string()),
+            commitment: Some("0x789".to_string()),
+            note_commitment: Some("0xabc".to_string()),
+            note_ciphertext: None,
+            note_cid: None,
+            noir_inputs: None,
+            denom_id: Some("10".to_string()),
+            spendable_at_unix: Some(1_777_777_777),
+            proof: Some(vec!["0x1".to_string(), "0x2".to_string()]),
+            public_inputs: Some(vec![
+                "0x123".to_string(),
+                "0x456".to_string(),
+                "0x999".to_string(),
+            ]),
+        };
+        let mapped = payload_from_request(Some(&payload), "garaga").expect("payload must map");
+        assert_eq!(mapped.note_version.as_deref(), Some("v4"));
+        assert_eq!(mapped.root.as_deref(), Some("0x123"));
     }
 
     #[test]

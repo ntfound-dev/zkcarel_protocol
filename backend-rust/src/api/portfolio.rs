@@ -1,9 +1,12 @@
 use axum::{extract::State, http::HeaderMap, Json};
+use bigdecimal::{BigDecimal, FromPrimitive};
 use chrono::TimeZone;
 use redis::AsyncCommands;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use sqlx::Row;
+use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -26,29 +29,29 @@ use super::{
     AppState,
 };
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BalanceResponse {
-    pub total_value_usd: f64,
+    pub total_value_usd: String,
     pub balances: Vec<TokenBalance>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TokenBalance {
     pub token: String,
     pub amount: f64,
-    pub value_usd: f64,
+    pub value_usd: String,
     pub price: f64,
     pub change_24h: f64,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HistoryResponse {
     pub total_value: Vec<HistoryPoint>,
     pub pnl: f64,
     pub pnl_percentage: f64,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HistoryPoint {
     pub timestamp: i64,
     pub value: f64,
@@ -65,7 +68,7 @@ pub struct PortfolioOHLCVQuery {
     pub limit: Option<i32>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PortfolioOHLCVPoint {
     pub timestamp: i64,
     pub open: f64,
@@ -75,7 +78,7 @@ pub struct PortfolioOHLCVPoint {
     pub volume: f64,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PortfolioOHLCVResponse {
     pub interval: String,
     pub data: Vec<PortfolioOHLCVPoint>,
@@ -94,7 +97,9 @@ struct TokenSeries {
     fallback_price: f64,
 }
 
+#[allow(dead_code)]
 const ONCHAIN_BALANCE_TIMEOUT_SECS: u64 = 8;
+#[allow(dead_code)]
 const ONCHAIN_HOLDINGS_CACHE_TTL_SECS: u64 = 20;
 const ONCHAIN_HOLDINGS_CACHE_STALE_SECS: u64 = 180;
 const ONCHAIN_HOLDINGS_CACHE_MAX_ENTRIES: usize = 50_000;
@@ -108,6 +113,9 @@ const PORTFOLIO_HISTORY_CACHE_MAX_ENTRIES: usize = 50_000;
 const PORTFOLIO_OHLCV_CACHE_TTL_SECS: u64 = 15;
 const PORTFOLIO_OHLCV_CACHE_STALE_SECS: u64 = 180;
 const PORTFOLIO_OHLCV_CACHE_MAX_ENTRIES: usize = 50_000;
+const PORTFOLIO_BALANCE_REDIS_PREFIX: &str = "portfolio:balance:v1";
+const PORTFOLIO_HISTORY_REDIS_PREFIX: &str = "portfolio:history:v1";
+const PORTFOLIO_OHLCV_REDIS_PREFIX: &str = "portfolio:ohlcv:v1";
 
 #[derive(Clone)]
 struct CachedOnchainHoldings {
@@ -318,14 +326,114 @@ fn portfolio_ohlcv_cache_key(
     )
 }
 
+// Internal helper that supports `portfolio_balance_redis_key` operations.
+fn portfolio_balance_redis_key(cache_key: &str) -> String {
+    format!("{}:{}", PORTFOLIO_BALANCE_REDIS_PREFIX, cache_key)
+}
+
+// Internal helper that supports `portfolio_history_redis_key` operations.
+fn portfolio_history_redis_key(cache_key: &str) -> String {
+    format!("{}:{}", PORTFOLIO_HISTORY_REDIS_PREFIX, cache_key)
+}
+
+// Internal helper that supports `portfolio_ohlcv_redis_key` operations.
+fn portfolio_ohlcv_redis_key(cache_key: &str) -> String {
+    format!("{}:{}", PORTFOLIO_OHLCV_REDIS_PREFIX, cache_key)
+}
+
+// Internal helper that supports `cache_portfolio_balance_redis` operations.
+async fn cache_portfolio_balance_redis(state: &AppState, cache_key: &str, value: &BalanceResponse) {
+    let Ok(payload) = serde_json::to_string(value) else {
+        return;
+    };
+    let redis_key = portfolio_balance_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let _: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(redis_key, payload, PORTFOLIO_BALANCE_CACHE_TTL_SECS)
+        .await;
+}
+
+// Internal helper that fetches data for `get_cached_portfolio_balance_redis`.
+async fn get_cached_portfolio_balance_redis(
+    state: &AppState,
+    cache_key: &str,
+) -> Option<BalanceResponse> {
+    let redis_key = portfolio_balance_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = conn.get(redis_key).await.ok()?;
+    raw.and_then(|value| serde_json::from_str(&value).ok())
+}
+
+// Internal helper that supports `cache_portfolio_history_redis` operations.
+async fn cache_portfolio_history_redis(state: &AppState, cache_key: &str, value: &HistoryResponse) {
+    let Ok(payload) = serde_json::to_string(value) else {
+        return;
+    };
+    let redis_key = portfolio_history_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let _: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(redis_key, payload, PORTFOLIO_HISTORY_CACHE_TTL_SECS)
+        .await;
+}
+
+// Internal helper that fetches data for `get_cached_portfolio_history_redis`.
+async fn get_cached_portfolio_history_redis(
+    state: &AppState,
+    cache_key: &str,
+) -> Option<HistoryResponse> {
+    let redis_key = portfolio_history_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = conn.get(redis_key).await.ok()?;
+    raw.and_then(|value| serde_json::from_str(&value).ok())
+}
+
+// Internal helper that supports `cache_portfolio_ohlcv_redis` operations.
+async fn cache_portfolio_ohlcv_redis(
+    state: &AppState,
+    cache_key: &str,
+    value: &PortfolioOHLCVResponse,
+) {
+    let Ok(payload) = serde_json::to_string(value) else {
+        return;
+    };
+    let redis_key = portfolio_ohlcv_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let _: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(redis_key, payload, PORTFOLIO_OHLCV_CACHE_TTL_SECS)
+        .await;
+}
+
+// Internal helper that fetches data for `get_cached_portfolio_ohlcv_redis`.
+async fn get_cached_portfolio_ohlcv_redis(
+    state: &AppState,
+    cache_key: &str,
+) -> Option<PortfolioOHLCVResponse> {
+    let redis_key = portfolio_ohlcv_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = conn.get(redis_key).await.ok()?;
+    raw.and_then(|value| serde_json::from_str(&value).ok())
+}
+
 // Internal helper that fetches data for `get_cached_portfolio_balance`.
-async fn get_cached_portfolio_balance(key: &str, max_age: Duration) -> Option<BalanceResponse> {
+async fn get_cached_portfolio_balance(
+    state: &AppState,
+    key: &str,
+    max_age: Duration,
+) -> Option<BalanceResponse> {
     let cache = portfolio_balance_cache();
     let guard = cache.read().await;
-    let entry = guard.get(key)?;
-    if entry.fetched_at.elapsed() <= max_age {
-        return Some(entry.value.clone());
+    if let Some(entry) = guard.get(key) {
+        if entry.fetched_at.elapsed() <= max_age {
+            return Some(entry.value.clone());
+        }
     }
+    drop(guard);
+
+    if let Some(redis_cached) = get_cached_portfolio_balance_redis(state, key).await {
+        cache_portfolio_balance(key, redis_cached.clone()).await;
+        return Some(redis_cached);
+    }
+
     None
 }
 
@@ -347,13 +455,25 @@ async fn cache_portfolio_balance(key: &str, value: BalanceResponse) {
 }
 
 // Internal helper that fetches data for `get_cached_portfolio_history`.
-async fn get_cached_portfolio_history(key: &str, max_age: Duration) -> Option<HistoryResponse> {
+async fn get_cached_portfolio_history(
+    state: &AppState,
+    key: &str,
+    max_age: Duration,
+) -> Option<HistoryResponse> {
     let cache = portfolio_history_cache();
     let guard = cache.read().await;
-    let entry = guard.get(key)?;
-    if entry.fetched_at.elapsed() <= max_age {
-        return Some(entry.value.clone());
+    if let Some(entry) = guard.get(key) {
+        if entry.fetched_at.elapsed() <= max_age {
+            return Some(entry.value.clone());
+        }
     }
+    drop(guard);
+
+    if let Some(redis_cached) = get_cached_portfolio_history_redis(state, key).await {
+        cache_portfolio_history(key, redis_cached.clone()).await;
+        return Some(redis_cached);
+    }
+
     None
 }
 
@@ -376,15 +496,24 @@ async fn cache_portfolio_history(key: &str, value: HistoryResponse) {
 
 // Internal helper that fetches data for `get_cached_portfolio_ohlcv`.
 async fn get_cached_portfolio_ohlcv(
+    state: &AppState,
     key: &str,
     max_age: Duration,
 ) -> Option<PortfolioOHLCVResponse> {
     let cache = portfolio_ohlcv_cache();
     let guard = cache.read().await;
-    let entry = guard.get(key)?;
-    if entry.fetched_at.elapsed() <= max_age {
-        return Some(entry.value.clone());
+    if let Some(entry) = guard.get(key) {
+        if entry.fetched_at.elapsed() <= max_age {
+            return Some(entry.value.clone());
+        }
     }
+    drop(guard);
+
+    if let Some(redis_cached) = get_cached_portfolio_ohlcv_redis(state, key).await {
+        cache_portfolio_ohlcv(key, redis_cached.clone()).await;
+        return Some(redis_cached);
+    }
+
     None
 }
 
@@ -463,6 +592,7 @@ fn onchain_holdings_redis_key(cache_key: &str) -> String {
 }
 
 // Internal helper that supports `cache_onchain_holdings_redis` operations.
+#[allow(dead_code)]
 async fn cache_onchain_holdings_redis(
     state: &AppState,
     cache_key: &str,
@@ -547,11 +677,13 @@ pub(crate) async fn get_cached_onchain_holdings_for_scope(
 
 // Internal helper that fetches data for `get_cached_portfolio_balance_amounts_for_scope`.
 pub(crate) async fn get_cached_portfolio_balance_amounts_for_scope(
+    state: &AppState,
     auth_subject: &str,
     user_addresses: &[String],
 ) -> Option<HashMap<String, f64>> {
     let cache_key = portfolio_balance_cache_key(auth_subject, user_addresses);
     let cached = get_cached_portfolio_balance(
+        state,
         &cache_key,
         Duration::from_secs(PORTFOLIO_BALANCE_CACHE_STALE_SECS),
     )
@@ -572,6 +704,7 @@ pub(crate) async fn get_cached_portfolio_balance_amounts_for_scope(
 }
 
 // Internal helper that supports `apply_onchain_overrides` operations.
+#[allow(dead_code)]
 fn apply_onchain_overrides(
     holdings: &mut HashMap<String, f64>,
     onchain_values: &HashMap<String, f64>,
@@ -582,6 +715,7 @@ fn apply_onchain_overrides(
 }
 
 // Internal helper that supports `prune_testnet_holdings_without_onchain` operations.
+#[allow(dead_code)]
 fn prune_testnet_holdings_without_onchain(
     holdings: &mut HashMap<String, f64>,
     resolved_onchain: &HashMap<String, f64>,
@@ -613,8 +747,11 @@ fn prune_testnet_holdings_without_onchain(
 }
 
 // Internal helper that supports `total_value_usd` operations.
-fn total_value_usd(balances: &[TokenBalance]) -> f64 {
-    balances.iter().map(|b| b.value_usd).sum()
+fn total_value_usd(balances: &[TokenBalance]) -> String {
+    let total = balances.iter().fold(BigDecimal::from(0), |acc, balance| {
+        acc + bigdecimal_from_str(&balance.value_usd)
+    });
+    format_usd(&total)
 }
 
 // Internal helper that supports `period_to_interval` operations.
@@ -684,6 +821,115 @@ fn tick_prices(tick: &PriceTick) -> (f64, f64, f64, f64, f64) {
     (open, high, low, close, decimal_to_f64(tick.volume))
 }
 
+// Internal helper that converts f64 into BigDecimal safely.
+fn bigdecimal_from_f64(value: f64) -> BigDecimal {
+    if !value.is_finite() {
+        return BigDecimal::from(0);
+    }
+    BigDecimal::from_f64(value).unwrap_or_else(|| BigDecimal::from(0))
+}
+
+// Internal helper that parses BigDecimal from string inputs.
+fn bigdecimal_from_str(value: &str) -> BigDecimal {
+    BigDecimal::from_str(value).unwrap_or_else(|_| BigDecimal::from(0))
+}
+
+// Internal helper that renders BigDecimal values for JSON payloads.
+fn format_usd(value: &BigDecimal) -> String {
+    if value == &BigDecimal::from(0) {
+        "0".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+// Internal helper that supports batch price lookups for `build_balances`.
+async fn batch_latest_prices_with_change(
+    state: &AppState,
+    tokens: &[String],
+) -> Result<HashMap<String, (f64, f64)>> {
+    if tokens.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut token_candidates: HashMap<String, Vec<String>> = HashMap::new();
+    let mut candidate_set: HashSet<String> = HashSet::new();
+    for token in tokens {
+        let upper = token.to_ascii_uppercase();
+        let candidates = symbol_candidates_for(&upper);
+        token_candidates.insert(token.clone(), candidates.clone());
+        for candidate in candidates {
+            candidate_set.insert(candidate);
+        }
+    }
+
+    let candidate_list: Vec<String> = candidate_set.into_iter().collect();
+    if candidate_list.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = sqlx::query(
+        r#"
+        SELECT token, close::FLOAT, rn
+        FROM (
+            SELECT token, close::FLOAT,
+                   ROW_NUMBER() OVER (PARTITION BY token ORDER BY timestamp DESC) as rn
+            FROM price_history
+            WHERE token = ANY($1)
+        ) t
+        WHERE rn <= 16
+        ORDER BY token, rn
+        "#,
+    )
+    .bind(&candidate_list)
+    .fetch_all(state.db.pool())
+    .await?;
+
+    let mut price_rows: HashMap<String, Vec<f64>> = HashMap::new();
+    for row in rows {
+        let token: String = row.get("token");
+        let close: f64 = row.get("close");
+        price_rows.entry(token).or_default().push(close);
+    }
+
+    let mut output = HashMap::new();
+    for token in tokens {
+        let token_upper = token.to_ascii_uppercase();
+        let candidates = token_candidates
+            .get(token)
+            .cloned()
+            .unwrap_or_else(|| vec![token_upper.clone()]);
+        let mut resolved: Option<(f64, f64)> = None;
+
+        for candidate in candidates {
+            if let Some(rows) = price_rows.get(&candidate) {
+                let sane_rows: Vec<f64> = rows
+                    .iter()
+                    .copied()
+                    .filter_map(|value| sanitize_price_usd(&candidate, value))
+                    .take(2)
+                    .collect();
+                if !sane_rows.is_empty() {
+                    let latest = sane_rows[0];
+                    let prev = sane_rows.get(1).copied().unwrap_or(latest);
+                    let change = if prev > 0.0 {
+                        ((latest - prev) / prev) * 100.0
+                    } else {
+                        0.0
+                    };
+                    resolved = Some((latest, change));
+                    break;
+                }
+            }
+        }
+
+        let (price, change) = resolved.unwrap_or_else(|| (fallback_price_for(&token_upper), 0.0));
+        output.insert(token.clone(), (price, change));
+    }
+
+    Ok(output)
+}
+
 // Internal helper that supports `latest_price` operations.
 async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     let token_upper = token.to_ascii_uppercase();
@@ -700,41 +946,6 @@ async fn latest_price(state: &AppState, token: &str) -> Result<f64> {
     }
 
     Ok(fallback_price_for(&token_upper))
-}
-
-// Internal helper that supports `latest_price_with_change` operations.
-async fn latest_price_with_change(state: &AppState, token: &str) -> Result<(f64, f64)> {
-    let token_upper = token.to_ascii_uppercase();
-    let mut sane_rows: Vec<f64> = Vec::new();
-
-    for candidate in symbol_candidates_for(&token_upper) {
-        let rows: Vec<f64> = sqlx::query_scalar(
-            "SELECT close::FLOAT FROM price_history WHERE token = $1 ORDER BY timestamp DESC LIMIT 16",
-        )
-        .bind(&candidate)
-        .fetch_all(state.db.pool())
-        .await?;
-        sane_rows = rows
-            .into_iter()
-            .filter_map(|value| sanitize_price_usd(&candidate, value))
-            .take(2)
-            .collect();
-        if !sane_rows.is_empty() {
-            break;
-        }
-    }
-
-    let latest = sane_rows
-        .first()
-        .copied()
-        .unwrap_or_else(|| fallback_price_for(&token_upper));
-    let prev = sane_rows.get(1).copied().unwrap_or(latest);
-    let change = if prev > 0.0 {
-        ((latest - prev) / prev) * 100.0
-    } else {
-        0.0
-    };
-    Ok((latest, change))
 }
 
 // Internal helper that fetches data for `fetch_token_holdings`.
@@ -770,6 +981,7 @@ async fn fetch_token_holdings(
 }
 
 // Internal helper that supports `override_holding` operations.
+#[allow(dead_code)]
 fn override_holding(holdings: &mut HashMap<String, f64>, token: &str, amount: f64) {
     if !amount.is_finite() {
         return;
@@ -782,6 +994,7 @@ fn override_holding(holdings: &mut HashMap<String, f64>, token: &str, amount: f6
 }
 
 // Internal helper that supports `looks_like_transient_rpc_error` operations.
+#[allow(dead_code)]
 fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("jsonrpcresponse")
@@ -793,6 +1006,7 @@ fn looks_like_transient_rpc_error(message: &str) -> bool {
 }
 
 // Internal helper that fetches data for `fetch_optional_balance_with_timeout`.
+#[allow(dead_code)]
 async fn fetch_optional_balance_with_timeout<F>(label: &str, fut: F) -> Option<f64>
 where
     F: std::future::Future<Output = Result<Option<f64>>>,
@@ -820,6 +1034,7 @@ where
 }
 
 // Internal helper that supports `merge_onchain_holdings` operations.
+#[allow(dead_code)]
 async fn merge_onchain_holdings(
     state: &AppState,
     auth_subject: &str,
@@ -925,7 +1140,7 @@ async fn merge_onchain_holdings(
             evm_address.as_deref(),
             state.config.token_strk_l1_address.as_deref(),
         ) {
-            (Some(addr), Some(token)) => {
+            (Some(addr), Some(token)) if crate::api::wallet::is_valid_evm_address(token) => {
                 fetch_optional_balance_with_timeout(
                     "evm STRK",
                     fetch_evm_erc20_balance(&state.config, addr, token),
@@ -1135,14 +1350,10 @@ async fn build_balances(
     auth_subject: &str,
     user_addresses: &[String],
 ) -> Result<Vec<TokenBalance>> {
-    let rows = fetch_token_holdings(state, user_addresses).await?;
-    let mut holding_map = HashMap::new();
-    for row in rows {
-        if row.amount > 0.0 {
-            holding_map.insert(row.token, row.amount);
-        }
-    }
-    merge_onchain_holdings(state, auth_subject, &mut holding_map).await?;
+    let holding_map = resolve_portfolio_holdings(state, auth_subject, user_addresses).await?;
+
+    let tokens: Vec<String> = holding_map.keys().cloned().collect();
+    let price_map = batch_latest_prices_with_change(state, &tokens).await?;
 
     let mut balances = Vec::new();
 
@@ -1150,12 +1361,15 @@ async fn build_balances(
         if amount <= 0.0 {
             continue;
         }
-        let (price, change) = latest_price_with_change(state, token.as_str()).await?;
-        let value_usd = amount * price;
+        let (price, change) = price_map
+            .get(&token)
+            .copied()
+            .unwrap_or_else(|| (fallback_price_for(token.as_str()), 0.0));
+        let value_usd_decimal = bigdecimal_from_f64(amount) * bigdecimal_from_f64(price);
         balances.push(TokenBalance {
             token,
             amount,
-            value_usd,
+            value_usd: format_usd(&value_usd_decimal),
             price,
             change_24h: change,
         });
@@ -1172,14 +1386,7 @@ async fn build_portfolio_ohlcv(
     interval: &str,
     limit: i64,
 ) -> Result<Vec<PortfolioOHLCVPoint>> {
-    let rows = fetch_token_holdings(state, user_addresses).await?;
-    let mut holding_map = HashMap::new();
-    for row in rows {
-        if row.amount > 0.0 {
-            holding_map.insert(row.token, row.amount);
-        }
-    }
-    merge_onchain_holdings(state, auth_subject, &mut holding_map).await?;
+    let holding_map = resolve_portfolio_holdings(state, auth_subject, user_addresses).await?;
     if holding_map.is_empty() {
         return Ok(Vec::new());
     }
@@ -1256,6 +1463,55 @@ async fn build_portfolio_ohlcv(
     Ok(data)
 }
 
+// Internal helper that fetches data for `resolve_portfolio_holdings`.
+async fn resolve_portfolio_holdings(
+    state: &AppState,
+    auth_subject: &str,
+    user_addresses: &[String],
+) -> Result<HashMap<String, f64>> {
+    let linked = state
+        .db
+        .list_wallet_addresses(auth_subject)
+        .await
+        .unwrap_or_default();
+    let starknet_address = linked
+        .iter()
+        .find(|item| item.chain == "starknet")
+        .map(|item| item.wallet_address.clone());
+    let evm_address = linked
+        .iter()
+        .find(|item| item.chain == "evm")
+        .map(|item| item.wallet_address.clone());
+    let btc_address = linked
+        .iter()
+        .find(|item| item.chain == "bitcoin")
+        .map(|item| item.wallet_address.clone());
+    let has_onchain = starknet_address.is_some() || evm_address.is_some() || btc_address.is_some();
+
+    if has_onchain {
+        if let Some(onchain) = get_cached_onchain_holdings_for_scope(
+            state,
+            auth_subject,
+            starknet_address.as_deref(),
+            evm_address.as_deref(),
+            btc_address.as_deref(),
+        )
+        .await
+        {
+            return Ok(onchain);
+        }
+    }
+
+    let rows = fetch_token_holdings(state, user_addresses).await?;
+    let mut holding_map = HashMap::new();
+    for row in rows {
+        if row.amount > 0.0 {
+            holding_map.insert(row.token, row.amount);
+        }
+    }
+    Ok(holding_map)
+}
+
 /// GET /api/v1/portfolio/balance
 pub async fn get_balance(
     State(state): State<AppState>,
@@ -1265,6 +1521,7 @@ pub async fn get_balance(
     let auth_subject = user_addresses.first().cloned().unwrap_or_default();
     let cache_key = portfolio_balance_cache_key(&auth_subject, &user_addresses);
     if let Some(cached) = get_cached_portfolio_balance(
+        &state,
         &cache_key,
         Duration::from_secs(PORTFOLIO_BALANCE_CACHE_TTL_SECS),
     )
@@ -1276,6 +1533,7 @@ pub async fn get_balance(
     let fetch_lock = portfolio_balance_fetch_lock_for(&cache_key).await;
     let _guard = fetch_lock.lock().await;
     if let Some(cached) = get_cached_portfolio_balance(
+        &state,
         &cache_key,
         Duration::from_secs(PORTFOLIO_BALANCE_CACHE_TTL_SECS),
     )
@@ -1291,10 +1549,12 @@ pub async fn get_balance(
                 balances,
             };
             cache_portfolio_balance(&cache_key, response.clone()).await;
+            cache_portfolio_balance_redis(&state, &cache_key, &response).await;
             Ok(Json(ApiResponse::success(response)))
         }
         Err(err) => {
             if let Some(stale) = get_cached_portfolio_balance(
+                &state,
                 &cache_key,
                 Duration::from_secs(PORTFOLIO_BALANCE_CACHE_STALE_SECS),
             )
@@ -1321,6 +1581,7 @@ pub async fn get_history(
     let auth_subject = user_addresses.first().cloned().unwrap_or_default();
     let cache_key = portfolio_history_cache_key(&auth_subject, &user_addresses, &query.period);
     if let Some(cached) = get_cached_portfolio_history(
+        &state,
         &cache_key,
         Duration::from_secs(PORTFOLIO_HISTORY_CACHE_TTL_SECS),
     )
@@ -1332,6 +1593,7 @@ pub async fn get_history(
     let fetch_lock = portfolio_history_fetch_lock_for(&cache_key).await;
     let _guard = fetch_lock.lock().await;
     if let Some(cached) = get_cached_portfolio_history(
+        &state,
         &cache_key,
         Duration::from_secs(PORTFOLIO_HISTORY_CACHE_TTL_SECS),
     )
@@ -1370,10 +1632,12 @@ pub async fn get_history(
                 pnl_percentage,
             };
             cache_portfolio_history(&cache_key, response.clone()).await;
+            cache_portfolio_history_redis(&state, &cache_key, &response).await;
             Ok(Json(ApiResponse::success(response)))
         }
         Err(err) => {
             if let Some(stale) = get_cached_portfolio_history(
+                &state,
                 &cache_key,
                 Duration::from_secs(PORTFOLIO_HISTORY_CACHE_STALE_SECS),
             )
@@ -1402,6 +1666,7 @@ pub async fn get_portfolio_ohlcv(
     let limit = clamp_ohlcv_limit(query.limit);
     let cache_key = portfolio_ohlcv_cache_key(&auth_subject, &user_addresses, &interval, limit);
     if let Some(cached) = get_cached_portfolio_ohlcv(
+        &state,
         &cache_key,
         Duration::from_secs(PORTFOLIO_OHLCV_CACHE_TTL_SECS),
     )
@@ -1413,6 +1678,7 @@ pub async fn get_portfolio_ohlcv(
     let fetch_lock = portfolio_ohlcv_fetch_lock_for(&cache_key).await;
     let _guard = fetch_lock.lock().await;
     if let Some(cached) = get_cached_portfolio_ohlcv(
+        &state,
         &cache_key,
         Duration::from_secs(PORTFOLIO_OHLCV_CACHE_TTL_SECS),
     )
@@ -1425,10 +1691,12 @@ pub async fn get_portfolio_ohlcv(
         Ok(data) => {
             let response = PortfolioOHLCVResponse { interval, data };
             cache_portfolio_ohlcv(&cache_key, response.clone()).await;
+            cache_portfolio_ohlcv_redis(&state, &cache_key, &response).await;
             Ok(Json(ApiResponse::success(response)))
         }
         Err(err) => {
             if let Some(stale) = get_cached_portfolio_ohlcv(
+                &state,
                 &cache_key,
                 Duration::from_secs(PORTFOLIO_OHLCV_CACHE_STALE_SECS),
             )
@@ -1457,19 +1725,19 @@ mod tests {
             TokenBalance {
                 token: "A".to_string(),
                 amount: 1.0,
-                value_usd: 10.0,
+                value_usd: "10".to_string(),
                 price: 10.0,
                 change_24h: 0.0,
             },
             TokenBalance {
                 token: "B".to_string(),
                 amount: 2.0,
-                value_usd: 15.5,
+                value_usd: "15.5".to_string(),
                 price: 7.75,
                 change_24h: 0.0,
             },
         ];
-        assert!((total_value_usd(&balances) - 25.5).abs() < f64::EPSILON);
+        assert_eq!(total_value_usd(&balances), "25.5");
     }
 
     #[test]

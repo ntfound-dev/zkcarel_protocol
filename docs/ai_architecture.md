@@ -15,6 +15,161 @@ All privacy transactions in this system use the same Garaga contract surface acr
 
 Because both families use the same contract surface, the two bugs below must be fixed together.
 
+## 1.1 Agentic Autonomy (ERC‑8004 — Full)
+
+Target behavior for the AI agent submission:
+- Decision loop: `discover → plan → execute → verify → submit`
+- Single user signature authorizes a **plan hash** that binds agent identity, operator wallet, chain id, expiry, and action list.
+- One plan signature covers **many tasks** until it expires or runs out of action slots (not per-task by default).
+- L2 executes normal flows via `AIExecutor` in batch.
+- L3 executes hide flows via note deposit + relayer submit into `ShieldedPool V4`.
+- Guardrails include preflight validation, bounded retries, and compute budget caps.
+
+On‑chain components (full ERC‑8004 + plan):
+- `ERC8004IdentityRegistry`: agent ownership/operator/wallet/metadata.
+- `ERC8004ValidationRegistry`: validator attestations + proof URIs/hashes.
+- `ERC8004ReputationRegistry`: positive/negative reputation signals.
+- `AIPlanRouter`: single‑signature plan approval + operator‑only execution.
+- `AIExecutor`: executes actions; plan router submits on behalf of user.
+- `PrivacyRouterV4`: routes private actions into `ShieldedPoolV4`.
+
+### Plan Hash (Single Signature)
+The user signs once on a plan hash:
+```
+plan_hash = poseidon(
+  chain_id,
+  plan_router_address,
+  user,
+  agent_id,
+  operator,
+  plan_payload_hash,
+  action_mask,
+  max_actions,
+  expires_at,
+  nonce
+)
+```
+
+### Plan Defaults (Reasonable)
+- Default scope: L2 swap/bridge/stake/limit + L3 private swap/stake/limit.
+- Default max actions: `50`
+- Default expiry: `30 days` from approval time.
+- Default rule: **no per-task signature** after plan approval.
+- Optional safety: per-task confirmation only for high-value actions (UI toggle).
+
+### Spending Caps (Recommended)
+Plan controls **what** can be executed. Token allowances control **how much** can be spent.
+- User sets ERC20 allowance to the relay once per token.
+- Allowance size becomes the on-chain spend cap for auto mode.
+- If user wants stricter safety, lower allowance or reduce max actions.
+
+### Action Mask (Default)
+- Swap = 1
+- Bridge = 2
+- Stake = 4
+- Claim = 8
+- Mint = 16
+- MultiStep = 32
+- Basic = 64
+
+### Guardrails (On‑chain)
+- Optional: `require_validation = true`
+- Optional: `min_validation_count >= 1`
+- Optional: `min_reputation` (positive‑negative)
+
+## 1.2 ShieldedPool V4 Routing
+
+Private action routing uses `PrivacyRouterV4`:
+- `ACTION_SWAP`, `ACTION_SWAP_AGG`, `ACTION_PRIVATE_SWAP` → `submit_private_swap`
+- `ACTION_STAKING` → `submit_private_stake`
+- `ACTION_LIMIT` → `submit_private_limit`
+
+This keeps V4 routing consistent while maintaining the same `IPrivacyRouter` interface.
+
+## 1.3 Wiring Checklist (Prod)
+
+1. Deploy registries:
+   - `ERC8004IdentityRegistry`
+   - `ERC8004ValidationRegistry`
+   - `ERC8004ReputationRegistry`
+2. Deploy `AIPlanRouter`
+3. Deploy `PrivacyRouterV4`
+4. Set addresses:
+   - `AIExecutor.set_plan_router(plan_router)`
+   - `AIExecutor.set_privacy_router(privacy_router_v4)`
+   - `AISignatureVerifier.set_privacy_router(privacy_router_v4)`
+   - `AIPlanRouter.set_executor(ai_executor)`
+   - `AIPlanRouter.set_identity_registry(identity_registry)`
+   - `AIPlanRouter.set_signature_verifier(ai_signature_verifier)`
+   - `PrivacyRouterV4.set_shielded_pool(shielded_pool_v4)`
+
+## 1.4 Agent Manifest (Template)
+
+```json
+{
+  "agent_name": "Carel Autonomous Operator",
+  "operator_wallet": "0x...",
+  "erc8004_identity": "0x...",
+  "supported_tools": [
+    "starknet_rpc",
+    "storage_ipfs",
+    "price_oracle",
+    "relayer_api"
+  ],
+  "supported_stacks": [
+    "cairo",
+    "rust",
+    "typescript"
+  ],
+  "compute_constraints": {
+    "max_cost_usd_per_day": 5,
+    "max_tool_calls_per_run": 30,
+    "max_retries_per_step": 2
+  },
+  "supported_task_categories": [
+    "swap",
+    "limit",
+    "stake",
+    "bridge",
+    "ai_assistant"
+  ],
+  "guardrails": {
+    "validate_tx_params": true,
+    "confirm_chain_id": true,
+    "reject_unknown_tokens": true,
+    "abort_on_high_slippage": true
+  }
+}
+```
+
+## 1.5 Agent Execution Log (Template)
+
+```json
+{
+  "run_id": "0x...",
+  "agent_identity": "0x...",
+  "operator_wallet": "0x...",
+  "decision_loop": [
+    { "phase": "discover", "summary": "User requested private swap", "ts": 0 },
+    { "phase": "plan", "summary": "Compute plan hash + action mask", "ts": 0 },
+    { "phase": "execute", "summary": "Submit plan + swap", "ts": 0 },
+    { "phase": "verify", "summary": "Confirm tx success", "ts": 0 },
+    { "phase": "submit", "summary": "Return result to user", "ts": 0 }
+  ],
+  "tool_calls": [
+    { "tool": "starknet_rpc", "input": "get_nonce", "output": "ok" }
+  ],
+  "retries": [
+    { "step": "submit_plan", "reason": "timeout", "count": 1 }
+  ],
+  "failures": [],
+  "final_output": {
+    "status": "success",
+    "tx_hash": "0x..."
+  }
+}
+```
+
 ## 2. Bug #1 — Static Proof (Identical Proof Across Transactions)
 
 ### 2.1 Root Cause

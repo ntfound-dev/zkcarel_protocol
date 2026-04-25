@@ -7,6 +7,8 @@ use crate::{
         block_processor::BlockProcessor, event_parser::EventParser, starknet_client::StarknetClient,
     },
 };
+use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::Decimal;
 use std::sync::Arc;
 use tokio::time::{interval, sleep, Duration};
 
@@ -212,7 +214,13 @@ impl EventIndexer {
             return Ok(());
         }
 
-        let previous_last_block = *self.last_block.read().await;
+        let mut previous_last_block = *self.last_block.read().await;
+        if previous_last_block == 0 {
+            if let Some(latest) = self.db.get_latest_indexed_block().await? {
+                previous_last_block = latest.block_number as u64;
+                *self.last_block.write().await = previous_last_block;
+            }
+        }
         let current_block = self.get_current_block().await?;
 
         if current_block <= previous_last_block {
@@ -221,6 +229,21 @@ impl EventIndexer {
 
         let initial_backfill = self.initial_backfill_blocks();
         let max_blocks_per_tick = self.max_blocks_per_tick();
+
+        let use_block_processor =
+            is_env_flag_enabled("USE_STARKNET_RPC") && is_env_flag_enabled("USE_BLOCK_PROCESSOR");
+        if use_block_processor && previous_last_block > 0 {
+            let reconciled_block = self.reconcile_reorg(previous_last_block).await?;
+            if reconciled_block != previous_last_block {
+                tracing::warn!(
+                    "Reorg handled. Rolling back from {} to {}",
+                    previous_last_block,
+                    reconciled_block
+                );
+                previous_last_block = reconciled_block;
+                *self.last_block.write().await = previous_last_block;
+            }
+        }
 
         let start_block = if previous_last_block == 0 {
             current_block.saturating_sub(initial_backfill.saturating_sub(1))
@@ -242,8 +265,6 @@ impl EventIndexer {
             previous_last_block
         );
 
-        let use_block_processor =
-            is_env_flag_enabled("USE_STARKNET_RPC") && is_env_flag_enabled("USE_BLOCK_PROCESSOR");
         let processor = if use_block_processor {
             let rpc_urls = indexer_rpc_urls(&self.config);
             Some(BlockProcessor::new(
@@ -436,6 +457,7 @@ impl EventIndexer {
             usd_value: Some(rust_decimal::Decimal::from_f64_retain(amount_usd).unwrap()),
             fee_paid: None,
             points_earned: None,
+            is_private: false,
             timestamp: chrono::Utc::now(),
             processed: false,
         };
@@ -451,6 +473,61 @@ impl EventIndexer {
         Ok(())
     }
 
+    // Internal helper that supports `extract_string_field` operations.
+    fn extract_string_field(data: &serde_json::Value, keys: &[&str]) -> Option<String> {
+        for key in keys {
+            if let Some(value) = data.get(*key) {
+                if let Some(text) = value.as_str() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    // Internal helper that supports `parse_decimal_value` operations.
+    fn parse_decimal_value(value: &serde_json::Value) -> Option<Decimal> {
+        if let Some(num) = value.as_f64() {
+            return Decimal::from_f64_retain(num);
+        }
+        if let Some(num) = value.as_i64() {
+            return Decimal::from_i64(num);
+        }
+        if let Some(num) = value.as_u64() {
+            return Decimal::from_u64(num);
+        }
+        if let Some(text) = value.as_str() {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if let Some(hex) = trimmed.strip_prefix("0x") {
+                if let Ok(raw) = u128::from_str_radix(hex, 16) {
+                    return Decimal::from_u128(raw);
+                }
+            }
+            if let Ok(parsed) = Decimal::from_str_exact(trimmed) {
+                return Some(parsed);
+            }
+        }
+        None
+    }
+
+    // Internal helper that supports `extract_decimal_field` operations.
+    fn extract_decimal_field(data: &serde_json::Value, keys: &[&str]) -> Option<Decimal> {
+        for key in keys {
+            if let Some(value) = data.get(*key) {
+                if let Some(parsed) = Self::parse_decimal_value(value) {
+                    return Some(parsed);
+                }
+            }
+        }
+        None
+    }
+
     // Internal helper that supports `handle_bridge_event` operations.
     async fn handle_bridge_event(&self, event: BlockchainEvent, block_number: u64) -> Result<()> {
         let user = event
@@ -459,18 +536,37 @@ impl EventIndexer {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
+        let token_in = Self::extract_string_field(
+            &event.data,
+            &["token_in", "from_token", "asset_in", "token"],
+        );
+        let token_out = Self::extract_string_field(
+            &event.data,
+            &["token_out", "to_token", "asset_out", "token"],
+        );
+        let amount_in = Self::extract_decimal_field(
+            &event.data,
+            &["amount_in", "amount", "amount_in_units", "amount_units"],
+        );
+        let amount_out =
+            Self::extract_decimal_field(&event.data, &["amount_out", "amount_out_units"]);
+        let usd_value =
+            Self::extract_decimal_field(&event.data, &["amount_usd", "usd_value", "usd_amount"]);
+        let fee_paid = Self::extract_decimal_field(&event.data, &["fee", "fee_paid"]);
+
         let tx = crate::models::Transaction {
             tx_hash: event.tx_hash,
             block_number: block_number as i64,
             user_address: user.to_string(),
             tx_type: "bridge".to_string(),
-            token_in: None,
-            token_out: None,
-            amount_in: None,
-            amount_out: None,
-            usd_value: None,
-            fee_paid: None,
+            token_in,
+            token_out,
+            amount_in,
+            amount_out,
+            usd_value,
+            fee_paid,
             points_earned: None,
+            is_private: false,
             timestamp: chrono::Utc::now(),
             processed: false,
         };
@@ -487,18 +583,25 @@ impl EventIndexer {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
+        let token = Self::extract_string_field(&event.data, &["token", "token_in", "asset"]);
+        let amount =
+            Self::extract_decimal_field(&event.data, &["amount", "amount_in", "amount_units"]);
+        let usd_value =
+            Self::extract_decimal_field(&event.data, &["amount_usd", "usd_value", "usd_amount"]);
+
         let tx = crate::models::Transaction {
             tx_hash: event.tx_hash,
             block_number: block_number as i64,
             user_address: user.to_string(),
             tx_type: "stake".to_string(),
-            token_in: None,
-            token_out: None,
-            amount_in: None,
+            token_in: token.clone(),
+            token_out: token,
+            amount_in: amount,
             amount_out: None,
-            usd_value: None,
+            usd_value,
             fee_paid: None,
             points_earned: None,
+            is_private: false,
             timestamp: chrono::Utc::now(),
             processed: false,
         };
@@ -515,18 +618,25 @@ impl EventIndexer {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
+        let token = Self::extract_string_field(&event.data, &["token", "token_out", "asset"]);
+        let amount =
+            Self::extract_decimal_field(&event.data, &["amount", "amount_out", "amount_units"]);
+        let usd_value =
+            Self::extract_decimal_field(&event.data, &["amount_usd", "usd_value", "usd_amount"]);
+
         let tx = crate::models::Transaction {
             tx_hash: event.tx_hash,
             block_number: block_number as i64,
             user_address: user.to_string(),
             tx_type: "unstake".to_string(),
             token_in: None,
-            token_out: None,
+            token_out: token,
             amount_in: None,
-            amount_out: None,
-            usd_value: None,
+            amount_out: amount,
+            usd_value,
             fee_paid: None,
             points_earned: None,
+            is_private: false,
             timestamp: chrono::Utc::now(),
             processed: false,
         };
@@ -543,18 +653,25 @@ impl EventIndexer {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
+        let token = Self::extract_string_field(&event.data, &["token", "token_out", "asset"]);
+        let amount =
+            Self::extract_decimal_field(&event.data, &["amount", "amount_out", "amount_units"]);
+        let usd_value =
+            Self::extract_decimal_field(&event.data, &["amount_usd", "usd_value", "usd_amount"]);
+
         let tx = crate::models::Transaction {
             tx_hash: event.tx_hash,
             block_number: block_number as i64,
             user_address: user.to_string(),
             tx_type: "claim".to_string(),
             token_in: None,
-            token_out: None,
+            token_out: token,
             amount_in: None,
-            amount_out: None,
-            usd_value: None,
+            amount_out: amount,
+            usd_value,
             fee_paid: None,
             points_earned: None,
+            is_private: false,
             timestamp: chrono::Utc::now(),
             processed: false,
         };
@@ -576,6 +693,41 @@ impl EventIndexer {
 
         tracing::info!("Limit order filled: {}", order_id);
         Ok(())
+    }
+
+    // Internal helper that supports `reconcile_reorg` operations.
+    async fn reconcile_reorg(&self, last_block: u64) -> Result<u64> {
+        if last_block == 0 {
+            return Ok(0);
+        }
+
+        let mut cursor = last_block;
+        loop {
+            let stored_hash = self.db.get_indexed_block_hash(cursor as i64).await?;
+            let Some(stored_hash) = stored_hash else {
+                return Ok(cursor);
+            };
+
+            let chain_block = self.client.get_block(cursor).await?;
+            if chain_block.block_hash == stored_hash {
+                return Ok(cursor);
+            }
+
+            tracing::warn!(
+                "Reorg detected at block {} (stored={}, chain={})",
+                cursor,
+                stored_hash,
+                chain_block.block_hash
+            );
+            self.db.rollback_indexed_blocks_from(cursor as i64).await?;
+            if cursor == 0 {
+                return Ok(0);
+            }
+            cursor = cursor.saturating_sub(1);
+            if cursor == 0 {
+                return Ok(0);
+            }
+        }
     }
 }
 

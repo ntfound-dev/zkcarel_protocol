@@ -1,6 +1,7 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize;
 use sqlx::Row;
+use std::sync::OnceLock;
 
 use crate::{
     constants::{
@@ -60,27 +61,35 @@ fn faucet_cooldown_hours(state: &AppState) -> i64 {
 
 // Internal helper that supports `faucet_carel_unlimited` operations.
 fn faucet_carel_unlimited() -> bool {
-    std::env::var("FAUCET_CAREL_UNLIMITED")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "y" | "on"
-            )
-        })
-        .unwrap_or(false)
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("FAUCET_CAREL_UNLIMITED")
+            .ok()
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "y" | "on"
+                )
+            })
+            .unwrap_or(false)
+    })
 }
 
 // Internal helper that supports `faucet_policy_reset_at` operations.
 fn faucet_policy_reset_at() -> Option<chrono::DateTime<chrono::Utc>> {
-    let raw = std::env::var("FAUCET_POLICY_RESET_AT").ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    chrono::DateTime::parse_from_rfc3339(trimmed)
-        .ok()
-        .map(|value| value.with_timezone(&chrono::Utc))
+    static VALUE: OnceLock<Option<chrono::DateTime<chrono::Utc>>> = OnceLock::new();
+    VALUE
+        .get_or_init(|| {
+            let raw = std::env::var("FAUCET_POLICY_RESET_AT").ok()?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            chrono::DateTime::parse_from_rfc3339(trimmed)
+                .ok()
+                .map(|value| value.with_timezone(&chrono::Utc))
+        })
+        .clone()
 }
 
 // Internal helper that supports `token_faucet_configured` operations.

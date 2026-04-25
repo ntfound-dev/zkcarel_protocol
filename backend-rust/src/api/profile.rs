@@ -12,7 +12,10 @@ use tokio::time::{sleep, Duration};
 use crate::{
     error::{AppError, Result},
     models::{ApiResponse, Transaction},
-    services::onchain::{felt_to_u128, parse_felt, OnchainReader},
+    services::{
+        invoke_parser::parse_execute_calls,
+        onchain::{felt_to_u128, parse_felt, OnchainReader},
+    },
 };
 
 use super::{require_user, AppState};
@@ -88,18 +91,12 @@ pub async fn set_display_name(
             )
         })?;
 
-        if state.db.get_transaction(&tx_hash).await?.is_some() {
-            return Err(AppError::BadRequest(
-                "rename_onchain_tx_hash has already been used".to_string(),
-            ));
-        }
-
         let block_number = verify_rename_payment_tx_hash(&state, &user_address, &tx_hash).await?;
 
         // Persist fee payment tx hash to prevent replay.
-        state
+        let inserted = state
             .db
-            .save_transaction(&Transaction {
+            .insert_transaction_once(&Transaction {
                 tx_hash: tx_hash.clone(),
                 block_number,
                 user_address: user_address.clone(),
@@ -111,10 +108,16 @@ pub async fn set_display_name(
                 usd_value: Some(Decimal::new(1, 0)),
                 fee_paid: Some(Decimal::new(1, 0)),
                 points_earned: Some(Decimal::ZERO),
+                is_private: false,
                 timestamp: Utc::now(),
                 processed: true,
             })
             .await?;
+        if !inserted {
+            return Err(AppError::BadRequest(
+                "rename_onchain_tx_hash has already been used".to_string(),
+            ));
+        }
     }
 
     let user = state
@@ -163,13 +166,6 @@ fn map_display_name_error(err: AppError) -> AppError {
 
 const RENAME_FEE_CAREL_WEI: u128 = 1_000_000_000_000_000_000;
 
-#[derive(Debug, Clone)]
-struct ParsedExecuteCall {
-    to: Felt,
-    selector: Felt,
-    calldata: Vec<Felt>,
-}
-
 // Internal helper that parses or transforms values for `normalize_onchain_tx_hash`.
 fn normalize_onchain_tx_hash(
     tx_hash: Option<&str>,
@@ -193,133 +189,6 @@ fn normalize_onchain_tx_hash(
         ));
     }
     Ok(Some(raw.to_ascii_lowercase()))
-}
-
-// Internal helper that supports `felt_to_usize` operations.
-fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
-    let raw = felt_to_u128(value).map_err(|_| {
-        AppError::BadRequest(format!(
-            "Invalid invoke calldata: {field_name} is not a valid number"
-        ))
-    })?;
-    usize::try_from(raw).map_err(|_| {
-        AppError::BadRequest(format!(
-            "Invalid invoke calldata: {field_name} exceeds supported size"
-        ))
-    })
-}
-
-// Internal helper that parses or transforms values for `parse_execute_calls_offset`.
-fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if calldata.is_empty() {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: empty calldata".to_string(),
-        ));
-    }
-    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
-    let header_start = 1usize;
-    let header_width = 4usize;
-    let headers_end = header_start
-        .checked_add(calls_len.checked_mul(header_width).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: calls_len overflow".to_string())
-        })?)
-        .ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string())
-        })?;
-
-    if calldata.len() <= headers_end {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: missing calldata length".to_string(),
-        ));
-    }
-
-    let flattened_len = felt_to_usize(&calldata[headers_end], "flattened_len")?;
-    let flattened_start = headers_end + 1;
-    let flattened_end = flattened_start.checked_add(flattened_len).ok_or_else(|| {
-        AppError::BadRequest("Invalid invoke calldata: flattened overflow".to_string())
-    })?;
-
-    if calldata.len() < flattened_end {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: flattened segment out of bounds".to_string(),
-        ));
-    }
-
-    let flattened = &calldata[flattened_start..flattened_end];
-    let mut calls = Vec::with_capacity(calls_len);
-    for idx in 0..calls_len {
-        let offset = header_start + idx * header_width;
-        let to = calldata[offset];
-        let selector = calldata[offset + 1];
-        let data_offset = felt_to_usize(&calldata[offset + 2], "data_offset")?;
-        let data_len = felt_to_usize(&calldata[offset + 3], "data_len")?;
-        let data_end = data_offset.checked_add(data_len).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: data segment overflow".to_string())
-        })?;
-        if data_end > flattened.len() {
-            return Err(AppError::BadRequest(
-                "Invalid invoke calldata: call segment out of bounds".to_string(),
-            ));
-        }
-        calls.push(ParsedExecuteCall {
-            to,
-            selector,
-            calldata: flattened[data_offset..data_end].to_vec(),
-        });
-    }
-    Ok(calls)
-}
-
-// Internal helper that parses or transforms values for `parse_execute_calls_inline`.
-fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if calldata.is_empty() {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: empty calldata".to_string(),
-        ));
-    }
-    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
-    let mut cursor = 1usize;
-    let mut calls = Vec::with_capacity(calls_len);
-
-    for _ in 0..calls_len {
-        let header_end = cursor.checked_add(3).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: malformed call header".to_string())
-        })?;
-        if calldata.len() < header_end {
-            return Err(AppError::BadRequest(
-                "Invalid invoke calldata: missing inline call header".to_string(),
-            ));
-        }
-
-        let to = calldata[cursor];
-        let selector = calldata[cursor + 1];
-        let data_len = felt_to_usize(&calldata[cursor + 2], "data_len")?;
-        let data_start = cursor + 3;
-        let data_end = data_start.checked_add(data_len).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: inline data overflow".to_string())
-        })?;
-        if data_end > calldata.len() {
-            return Err(AppError::BadRequest(
-                "Invalid invoke calldata: inline data out of bounds".to_string(),
-            ));
-        }
-
-        calls.push(ParsedExecuteCall {
-            to,
-            selector,
-            calldata: calldata[data_start..data_end].to_vec(),
-        });
-        cursor = data_end;
-    }
-    Ok(calls)
-}
-
-// Internal helper that parses or transforms values for `parse_execute_calls`.
-fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if let Ok(calls) = parse_execute_calls_offset(calldata) {
-        return Ok(calls);
-    }
-    parse_execute_calls_inline(calldata)
 }
 
 // Internal helper that fetches data for `resolve_allowed_starknet_senders_async`.

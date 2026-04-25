@@ -1,14 +1,20 @@
 use axum::{extract::State, Json};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::engine::general_purpose;
+use base64::Engine;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use starknet_core::types::typed_data::TypedData;
+use starknet_core::types::{Felt as CoreFelt, FunctionCall};
+use starknet_core::utils::get_selector_from_name;
 
 use crate::{
     // Import SignatureVerifier agar kode di signature.rs tidak dead code
-    crypto::{hash, signature::SignatureVerifier},
+    crypto::signature::SignatureVerifier,
     error::{AppError, Result},
     models::ApiResponse,
+    services::onchain::{parse_felt, OnchainReader},
 };
 
 use super::AppState;
@@ -22,7 +28,6 @@ pub struct ConnectWalletRequest {
     pub message: String,
     pub chain_id: u64,
     pub wallet_type: Option<String>, // starknet/evm/bitcoin
-    pub sumo_login_token: Option<String>,
     pub referral_code: Option<String>,
 }
 
@@ -51,14 +56,9 @@ pub struct Claims {
     pub iat: usize,  // issued at
 }
 
-#[derive(Debug, Deserialize)]
-struct SumoTokenClaims {
-    sub: Option<String>,
-    iss: Option<String>,
-}
-
 const REFRESH_GRACE_MULTIPLIER: u64 = 7;
 const MIN_REFRESH_GRACE_HOURS: u64 = 24;
+const LOGIN_MESSAGE_MAX_AGE_SECS: i64 = 300;
 
 // ==================== HANDLERS ====================
 
@@ -69,61 +69,28 @@ pub async fn connect_wallet(
 ) -> Result<Json<ApiResponse<ConnectWalletResponse>>> {
     let requested_address = req.address.trim().to_string();
     let detected_chain = detect_wallet_chain(req.chain_id, req.wallet_type.as_deref());
-    let mut sumo_subject: Option<String> = None;
-
-    // 1. Verify signature OR Sumo Login token
-    let canonical_user_address = if let Some(token) = req.sumo_login_token.as_ref() {
-        let client = crate::integrations::sumo_login::SumoLoginClient::new(
-            state.config.sumo_login_api_url.clone(),
-            state.config.sumo_login_api_key.clone(),
-        );
-        let ok = client
-            .verify_login(token)
-            .await
-            .map_err(|e| AppError::AuthError(format!("Sumo login failed: {}", e)))?;
-        if !ok {
-            return Err(AppError::AuthError("Invalid Sumo login token".to_string()));
-        }
-        let subject = derive_sumo_subject_key(token)?;
-        let canonical = if let Some(address) = state.db.find_user_by_sumo_subject(&subject).await? {
-            address
-        } else if !requested_address.is_empty() && !is_zero_placeholder_address(&requested_address)
-        {
-            state
-                .db
-                .find_user_by_wallet_address(&requested_address, detected_chain)
-                .await?
-                .unwrap_or_else(|| requested_address.clone())
-        } else {
-            canonical_address_for_sumo_subject(&subject)
-        };
-        sumo_subject = Some(subject);
-        canonical
-    } else {
-        verify_signature(
-            &requested_address,
-            &req.message,
-            &req.signature,
-            req.chain_id,
-        )?;
-        if requested_address.is_empty() {
-            return Err(AppError::BadRequest("Address is required".to_string()));
-        }
-        state
-            .db
-            .find_user_by_wallet_address(&requested_address, detected_chain)
-            .await?
-            .unwrap_or_else(|| requested_address.clone())
-    };
+    // 1. Verify signature
+    validate_login_timestamp(&req.message)?;
+    verify_wallet_signature(
+        &state,
+        &requested_address,
+        &req.message,
+        &req.signature,
+        req.chain_id,
+        req.wallet_type.as_deref(),
+    )
+    .await?;
+    if requested_address.is_empty() {
+        return Err(AppError::BadRequest("Address is required".to_string()));
+    }
+    let canonical_user_address = state
+        .db
+        .find_user_by_wallet_address(&requested_address, detected_chain)
+        .await?
+        .unwrap_or_else(|| requested_address.clone());
 
     // 2. Create or get user
     state.db.create_user(&canonical_user_address).await?;
-    if let Some(subject) = sumo_subject.as_deref() {
-        state
-            .db
-            .bind_sumo_subject_once(&canonical_user_address, subject)
-            .await?;
-    }
     let mut user = state
         .db
         .get_user(&canonical_user_address)
@@ -256,6 +223,173 @@ fn verify_signature(address: &str, message: &str, signature: &str, chain_id: u64
     Ok(())
 }
 
+// Internal helper that supports `verify_wallet_signature` operations.
+async fn verify_wallet_signature(
+    state: &AppState,
+    address: &str,
+    message: &str,
+    signature: &str,
+    chain_id: u64,
+    wallet_type: Option<&str>,
+) -> Result<()> {
+    tracing::debug!(
+        "Initiating wallet signature verification for {} on chain {} ({:?})",
+        address,
+        chain_id,
+        wallet_type
+    );
+
+    match detect_wallet_chain(chain_id, wallet_type) {
+        Some("starknet") => verify_starknet_signature(state, address, message, signature).await,
+        Some("bitcoin") => verify_bitcoin_signature(address, message, signature),
+        _ => verify_signature(address, message, signature, chain_id),
+    }
+}
+
+// Internal helper that supports `verify_starknet_signature` operations.
+async fn verify_starknet_signature(
+    state: &AppState,
+    address: &str,
+    message: &str,
+    signature: &str,
+) -> Result<()> {
+    let account = parse_felt(address).map_err(|_| AppError::InvalidSignature)?;
+    let chain_id = state.config.starknet_chain_id.trim();
+    let chain_id = if chain_id.is_empty() {
+        "SN_SEPOLIA"
+    } else {
+        chain_id
+    };
+    let typed_data = build_login_typed_data(chain_id, address, message);
+    let data: TypedData = serde_json::from_value(typed_data).map_err(|err| {
+        AppError::Internal(format!(
+            "Failed to parse login typed data for signature verification: {}",
+            err
+        ))
+    })?;
+    let message_hash = data.message_hash(account).map_err(|err| {
+        AppError::Internal(format!(
+            "Failed to compute login typed-data message hash: {}",
+            err
+        ))
+    })?;
+
+    let signature_felts = parse_starknet_signature(signature)?;
+    let selector = get_selector_from_name("is_valid_signature")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let mut calldata = Vec::with_capacity(2 + signature_felts.len());
+    calldata.push(message_hash);
+    calldata.push(CoreFelt::from(signature_felts.len() as u64));
+    calldata.extend(signature_felts);
+
+    let call = FunctionCall {
+        contract_address: account,
+        entry_point_selector: selector,
+        calldata,
+    };
+    let reader = OnchainReader::from_config_for_wallet(&state.config)?;
+    let response = reader.call(call).await?;
+    let is_valid = response
+        .first()
+        .map(|felt| *felt != CoreFelt::from(0u8))
+        .unwrap_or(false);
+    if !is_valid {
+        return Err(AppError::InvalidSignature);
+    }
+    Ok(())
+}
+
+// Internal helper that supports `verify_bitcoin_signature` operations.
+fn verify_bitcoin_signature(address: &str, message: &str, signature: &str) -> Result<()> {
+    if message.trim().is_empty() || signature.trim().is_empty() {
+        return Err(AppError::InvalidSignature);
+    }
+
+    let trimmed = signature.trim();
+    let normalized = if looks_like_hex_signature(trimmed) {
+        let hex_body = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+        let bytes = hex::decode(hex_body).map_err(|_| AppError::InvalidSignature)?;
+        general_purpose::STANDARD.encode(bytes)
+    } else {
+        trimmed.to_string()
+    };
+
+    bip322::verify_simple_encoded(address, message, &normalized)
+        .map_err(|_| AppError::InvalidSignature)?;
+    Ok(())
+}
+
+// Internal helper that supports `looks_like_hex_signature` operations.
+fn looks_like_hex_signature(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let body = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    if body.len() < 64 || body.len() % 2 != 0 {
+        return false;
+    }
+    body.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+// Internal helper that supports `parse_starknet_signature` operations.
+fn parse_starknet_signature(signature: &str) -> Result<Vec<CoreFelt>> {
+    let trimmed = signature.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidSignature);
+    }
+    let hex = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    if hex.len() % 64 != 0 {
+        return Err(AppError::InvalidSignature);
+    }
+    let mut felts = Vec::new();
+    for chunk in hex.as_bytes().chunks(64) {
+        let part = std::str::from_utf8(chunk).map_err(|_| AppError::InvalidSignature)?;
+        let felt = parse_felt(&format!("0x{part}")).map_err(|_| AppError::InvalidSignature)?;
+        felts.push(felt);
+    }
+    if felts.is_empty() {
+        return Err(AppError::InvalidSignature);
+    }
+    Ok(felts)
+}
+
+// Internal helper that supports `build_login_typed_data` operations.
+fn build_login_typed_data(chain_id: &str, address: &str, message: &str) -> serde_json::Value {
+    let short_message = to_short_string(message);
+    json!({
+        "domain": {
+            "name": "Carel Protocol",
+            "version": "1",
+            "chainId": chain_id
+        },
+        "types": {
+            "StarkNetDomain": [
+                { "name": "name", "type": "felt" },
+                { "name": "version", "type": "felt" },
+                { "name": "chainId", "type": "felt" }
+            ],
+            "Message": [
+                { "name": "address", "type": "felt" },
+                { "name": "contents", "type": "felt" }
+            ]
+        },
+        "primaryType": "Message",
+        "message": {
+            "address": address,
+            "contents": short_message
+        }
+    })
+}
+
+// Internal helper that supports `to_short_string` operations.
+fn to_short_string(value: &str) -> String {
+    if value.chars().count() <= 31 {
+        return value.to_string();
+    }
+    value.chars().take(31).collect()
+}
+
 // Internal helper that builds inputs for `generate_jwt_token`.
 fn generate_jwt_token(address: &str, secret: &str, expiry_hours: u64) -> Result<String> {
     let expiration = Utc::now()
@@ -356,41 +490,46 @@ fn is_zero_placeholder_address(address: &str) -> bool {
         || normalized == "0x0000000000000000000000000000000000000000000000000000000000000000"
 }
 
-// Internal helper that supports `derive_sumo_subject_key` operations.
-fn derive_sumo_subject_key(token: &str) -> Result<String> {
-    let claims = token
-        .split('.')
-        .nth(1)
-        .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
-        .and_then(|decoded| serde_json::from_slice::<SumoTokenClaims>(&decoded).ok())
-        .ok_or_else(|| AppError::AuthError("Invalid Sumo token payload".to_string()))?;
-
-    let issuer = claims
-        .iss
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .unwrap_or("sumo");
-    let subject = claims
-        .sub
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| AppError::AuthError("Sumo token missing subject".to_string()))?;
-    let key = format!("{}:{}", issuer.to_ascii_lowercase(), subject);
-
-    if key.len() <= 255 {
-        return Ok(key);
+// Internal helper that supports `validate_login_timestamp` operations.
+fn validate_login_timestamp(message: &str) -> Result<()> {
+    let ts = extract_login_timestamp(message)?;
+    let now = Utc::now().timestamp();
+    if ts <= 0 {
+        return Err(AppError::AuthError(
+            "Invalid login message timestamp".to_string(),
+        ));
     }
-    Ok(format!("sumo:{}", hash::hash_string(&key)))
+    if ts > now + LOGIN_MESSAGE_MAX_AGE_SECS {
+        return Err(AppError::AuthError(
+            "Login message timestamp is in the future".to_string(),
+        ));
+    }
+    let age = now.saturating_sub(ts);
+    if age > LOGIN_MESSAGE_MAX_AGE_SECS {
+        return Err(AppError::AuthError("Login message expired".to_string()));
+    }
+    Ok(())
 }
 
-// Internal helper that supports `canonical_address_for_sumo_subject` operations.
-fn canonical_address_for_sumo_subject(subject: &str) -> String {
-    let digest = hash::hash_string(subject);
-    let hex = digest.strip_prefix("0x").unwrap_or(digest.as_str());
-    let cut = hex.get(..40).unwrap_or(hex);
-    format!("0x{}", cut)
+// Internal helper that fetches data for `extract_login_timestamp`.
+const LOGIN_MSG_PREFIX: &str = "Carel Protocol login at ";
+const LOGIN_MSG_PREFIX_BTC: &str = "Carel Protocol BTC login ";
+
+fn extract_login_timestamp(message: &str) -> Result<i64> {
+    let trimmed = message.trim();
+    let ts_str = trimmed
+        .strip_prefix(LOGIN_MSG_PREFIX)
+        .or_else(|| trimmed.strip_prefix(LOGIN_MSG_PREFIX_BTC))
+        .ok_or_else(|| AppError::AuthError("Invalid login message format".to_string()))?
+        .trim();
+    if ts_str.is_empty() {
+        return Err(AppError::AuthError(
+            "Invalid login message timestamp".to_string(),
+        ));
+    }
+    ts_str
+        .parse::<i64>()
+        .map_err(|_| AppError::AuthError("Invalid login message timestamp".to_string()))
 }
 
 // Internal helper that parses or transforms values for `parse_referral_code`.
@@ -451,21 +590,10 @@ mod tests {
     }
 
     #[test]
-    // Internal helper that supports `derive_sumo_subject_key_prefers_iss_and_sub` operations.
-    fn derive_sumo_subject_key_prefers_iss_and_sub() {
-        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
-        let payload = URL_SAFE_NO_PAD.encode(r#"{"iss":"https://sumo","sub":"user-123"}"#);
-        let token = format!("{}.{}.", header, payload);
-        assert_eq!(
-            derive_sumo_subject_key(&token).unwrap(),
-            "https://sumo:user-123"
-        );
-    }
-
-    #[test]
-    // Internal helper that supports `derive_sumo_subject_key_rejects_invalid_token` operations.
-    fn derive_sumo_subject_key_rejects_invalid_token() {
-        let key = derive_sumo_subject_key("not-a-jwt");
-        assert!(matches!(key, Err(AppError::AuthError(_))));
+    // Internal helper that supports `extract_login_timestamp_parses_last_token`.
+    fn extract_login_timestamp_parses_last_token() {
+        let message = "Carel Protocol login at 1700000000";
+        let ts = extract_login_timestamp(message).expect("valid timestamp");
+        assert_eq!(ts, 1_700_000_000);
     }
 }

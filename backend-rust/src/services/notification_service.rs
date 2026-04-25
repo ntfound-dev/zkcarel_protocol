@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     db::Database,
-    error::Result,
+    error::{AppError, Result},
     models::{Notification, NotificationPreferences},
 };
 use sqlx::Row;
@@ -13,6 +13,25 @@ pub struct NotificationService {
     db: Database,
     config: Config,
     connections: Arc<RwLock<HashMap<String, broadcast::Sender<Notification>>>>,
+}
+
+// Internal helper that checks conditions for `notification_channel_enabled`.
+fn notification_channel_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+        })
+        .unwrap_or(false)
+}
+
+// Internal helper that supports `notification_webhook_url` operations.
+fn notification_webhook_url(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 impl NotificationService {
@@ -179,31 +198,135 @@ impl NotificationService {
 
     // Internal helper that runs side-effecting logic for `send_email`.
     async fn send_email(&self, user_address: &str, notification: &Notification) -> Result<()> {
-        tracing::debug!(
-            "Email notification to {}: {}",
-            user_address,
-            notification.title
-        );
+        if !notification_channel_enabled("NOTIFICATION_EMAIL_ENABLED") {
+            return Err(AppError::BadRequest(
+                "Email notifications are not configured".to_string(),
+            ));
+        }
+        let Some(webhook) = notification_webhook_url("NOTIFICATION_EMAIL_WEBHOOK_URL") else {
+            return Err(AppError::BadRequest(
+                "Email webhook is not configured".to_string(),
+            ));
+        };
+        let payload = serde_json::json!({
+            "channel": "email",
+            "user_address": user_address,
+            "title": notification.title,
+            "message": notification.message,
+            "data": notification.data,
+        });
+        let response = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|err| AppError::Internal(format!("Failed to build email client: {}", err)))?
+            .post(webhook)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| AppError::ExternalAPI(format!("Email webhook failed: {}", err)))?;
+        if !response.status().is_success() {
+            return Err(AppError::ExternalAPI(format!(
+                "Email webhook returned {}",
+                response.status()
+            )));
+        }
         Ok(())
     }
 
     // Internal helper that runs side-effecting logic for `send_push`.
     async fn send_push(&self, user_address: &str, notification: &Notification) -> Result<()> {
-        tracing::debug!(
-            "Push notification to {}: {}",
-            user_address,
-            notification.title
-        );
+        if !notification_channel_enabled("NOTIFICATION_PUSH_ENABLED") {
+            return Err(AppError::BadRequest(
+                "Push notifications are not configured".to_string(),
+            ));
+        }
+        let Some(webhook) = notification_webhook_url("NOTIFICATION_PUSH_WEBHOOK_URL") else {
+            return Err(AppError::BadRequest(
+                "Push webhook is not configured".to_string(),
+            ));
+        };
+        let payload = serde_json::json!({
+            "channel": "push",
+            "user_address": user_address,
+            "title": notification.title,
+            "message": notification.message,
+            "data": notification.data,
+        });
+        let response = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|err| AppError::Internal(format!("Failed to build push client: {}", err)))?
+            .post(webhook)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| AppError::ExternalAPI(format!("Push webhook failed: {}", err)))?;
+        if !response.status().is_success() {
+            return Err(AppError::ExternalAPI(format!(
+                "Push webhook returned {}",
+                response.status()
+            )));
+        }
         Ok(())
     }
 
     // Internal helper that runs side-effecting logic for `send_telegram`.
     async fn send_telegram(&self, user_address: &str, notification: &Notification) -> Result<()> {
-        tracing::debug!(
-            "Telegram notification to {}: {}",
-            user_address,
-            notification.title
-        );
+        if self.config.telegram_bot_token.is_none()
+            || !notification_channel_enabled("NOTIFICATION_TELEGRAM_ENABLED")
+        {
+            return Err(AppError::BadRequest(
+                "Telegram notifications are not configured".to_string(),
+            ));
+        }
+        let username =
+            sqlx::query("SELECT telegram_username FROM users WHERE LOWER(address) = LOWER($1)")
+                .bind(user_address)
+                .fetch_optional(self.db.pool())
+                .await?
+                .and_then(|row| row.try_get::<Option<String>, _>("telegram_username").ok())
+                .flatten()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AppError::BadRequest("Telegram username is not linked".to_string())
+                })?;
+
+        let chat_id = if username.starts_with('@') {
+            username
+        } else {
+            format!("@{}", username)
+        };
+        let token = self
+            .config
+            .telegram_bot_token
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest("Telegram bot token is not configured".to_string())
+            })?;
+        let message = format!("{}: {}", notification.title, notification.message);
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
+        let response = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|err| AppError::Internal(format!("Failed to build Telegram client: {}", err)))?
+            .post(url)
+            .json(&serde_json::json!({
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "HTML"
+            }))
+            .send()
+            .await
+            .map_err(|err| AppError::ExternalAPI(format!("Telegram send failed: {}", err)))?;
+        if !response.status().is_success() {
+            return Err(AppError::ExternalAPI(format!(
+                "Telegram send returned {}",
+                response.status()
+            )));
+        }
         Ok(())
     }
 
@@ -259,12 +382,34 @@ impl NotificationService {
     /// # Notes
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn mark_all_as_read(&self, user_address: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE notifications SET read = true WHERE user_address = $1 AND read = false",
-        )
-        .bind(user_address)
-        .execute(self.db.pool())
-        .await?;
+        let limit = mark_all_limit();
+        if limit == 0 {
+            sqlx::query(
+                "UPDATE notifications SET read = true WHERE user_address = $1 AND read = false",
+            )
+            .bind(user_address)
+            .execute(self.db.pool())
+            .await?;
+        } else {
+            sqlx::query(
+                r#"
+                WITH target AS (
+                    SELECT id
+                    FROM notifications
+                    WHERE user_address = $1 AND read = false
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                )
+                UPDATE notifications
+                SET read = true
+                WHERE id IN (SELECT id FROM target)
+                "#,
+            )
+            .bind(user_address)
+            .bind(limit)
+            .execute(self.db.pool())
+            .await?;
+        }
         Ok(())
     }
 
@@ -280,6 +425,30 @@ impl NotificationService {
         // Menggunakan sqlx::Row di sini
         Ok(row.get::<i64, _>("count"))
     }
+
+    /// Deletes notifications older than `retention_days`.
+    pub async fn cleanup_old_notifications(&self, retention_days: i64) -> Result<u64> {
+        if retention_days <= 0 {
+            return Ok(0);
+        }
+        let result = sqlx::query(
+            "DELETE FROM notifications
+             WHERE created_at < NOW() - ($1::double precision * INTERVAL '1 day')",
+        )
+        .bind(retention_days)
+        .execute(self.db.pool())
+        .await?;
+        Ok(result.rows_affected())
+    }
+}
+
+// Internal helper that supports `mark_all_limit` operations.
+fn mark_all_limit() -> i64 {
+    std::env::var("NOTIFICATION_MARK_ALL_LIMIT")
+        .ok()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .unwrap_or(1000)
 }
 
 #[derive(Debug, Clone)]

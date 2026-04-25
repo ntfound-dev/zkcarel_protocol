@@ -23,6 +23,75 @@
       }
     ],
     "paths": {
+      "@/lib/api": [
+        "./lib/api/index.ts"
+      ],
+      "@/lib/ai-parser": [
+        "./lib/ai/ai-parser.ts"
+      ],
+      "@/lib/ai-execution-source": [
+        "./lib/ai/ai-execution-source.ts"
+      ],
+      "@/lib/error-utils": [
+        "./lib/system/error-utils.ts"
+      ],
+      "@/lib/errors": [
+        "./lib/system/errors.ts"
+      ],
+      "@/lib/events": [
+        "./lib/system/events.ts"
+      ],
+      "@/lib/utils": [
+        "./lib/system/utils.ts"
+      ],
+      "@/lib/featured-config": [
+        "./lib/featured/featured-config.ts"
+      ],
+      "@/lib/limit-utils": [
+        "./lib/limit/limit-utils.ts"
+      ],
+      "@/lib/nav-config": [
+        "./lib/navigation/nav-config.ts"
+      ],
+      "@/lib/navigation-utils": [
+        "./lib/navigation/navigation-utils.ts"
+      ],
+      "@/lib/network-config": [
+        "./lib/network/network-config.ts"
+      ],
+      "@/lib/onchain-trade": [
+        "./lib/onchain/onchain-trade.ts"
+      ],
+      "@/lib/portfolio-utils": [
+        "./lib/portfolio/portfolio-utils.ts"
+      ],
+      "@/lib/price-config": [
+        "./lib/price/price-config.ts"
+      ],
+      "@/lib/price-utils": [
+        "./lib/price/price-utils.ts"
+      ],
+      "@/lib/privacy-relayer": [
+        "./lib/privacy/privacy-relayer.ts"
+      ],
+      "@/lib/referral-config": [
+        "./lib/referral/referral-config.ts"
+      ],
+      "@/lib/rewards-config": [
+        "./lib/rewards/rewards-config.ts"
+      ],
+      "@/lib/token-config": [
+        "./lib/trade/token-config.ts"
+      ],
+      "@/lib/trading-types": [
+        "./lib/trade/trading-types.ts"
+      ],
+      "@/lib/trading-utils": [
+        "./lib/trade/trading-utils.ts"
+      ],
+      "@/lib/wallet-provider-config": [
+        "./lib/wallet/wallet-provider-config.ts"
+      ],
       "@/*": [
         "./*"
       ]

@@ -333,15 +333,22 @@ impl MerkleGenerator {
     pub async fn save_merkle_root(&self, epoch: i64, root: Felt) -> Result<()> {
         let root_hex = root.to_fixed_hex_string();
 
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO merkle_roots (epoch, root, created_at)
              VALUES ($1, $2, NOW())
-             ON CONFLICT (epoch) DO UPDATE SET root = $2",
+             ON CONFLICT (epoch) DO NOTHING",
         )
         .bind(epoch)
         .bind(&root_hex)
         .execute(self.db.pool())
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(crate::error::AppError::BadRequest(format!(
+                "Merkle root for epoch {} already exists",
+                epoch
+            )));
+        }
 
         tracing::info!("Merkle root saved for epoch {}: {}", epoch, root_hex);
         Ok(())

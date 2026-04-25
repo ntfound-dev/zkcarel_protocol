@@ -5,7 +5,7 @@
 Focus: basic eligibility and track alignment.
 
 Track alignment in this repository:
-- Bitcoin track: BTC-related bridge and private BTC roadmap under `bridge` and `private_btc_swap` modules.
+- Bitcoin track: BTC-related bridge roadmap under `bridge` module.
 - Privacy track: ZK payload flow (`nullifier`, `commitment`, proof/public inputs), relayer path, and private executor.
 - Open innovation track: integrated FE/BE/SC execution system with AI-assisted flow and loyalty module.
 
@@ -180,7 +180,7 @@ Private stake `WBTC` (tier `$50`, executed amount `0.000725 WBTC`):
 - Hide note deposit (user wallet, `approve` + `deposit_fixed_v3`, `USDT` denom `0xa`, amount `10 USDT`): https://sepolia.voyager.online/tx/0x792cc7e0d939597600e407f0f1632963d37b720661b625dd285bb47d6369184
 - Hide private limit order execution (relayer, `submit_private_limit` + `execute_private_limit_with_payout`, `USDT -> WBTC`): https://sepolia.voyager.online/tx/0x221d9deeca00ef656133f13562091d82507081d5299a9bfbe2ff48010260f50
 - Hide note deposit (user wallet, `approve` + `deposit_fixed_v3`, `WBTC`): https://sepolia.voyager.online/tx/0x5bfd33ad05b4ddc4ed2e1c974577b11e9487aaf7592d282cb6851ed12db0d8e
-- Hide private stake execution (relayer, `submit_private_stake` + `execute_private_stake_with_payout`, stake `WBTC` via `StakingBTC`): https://sepolia.voyager.online/tx/0x47abb39188bd05331da1cf9024bcf8be29107eae2317c2f6dcd03b1903125ed
+- Hide private stake execution (relayer, `submit_private_stake` + `execute_private_stake_with_payout`, stake `WBTC` via `WBTCStaking`): https://sepolia.voyager.online/tx/0x47abb39188bd05331da1cf9024bcf8be29107eae2317c2f6dcd03b1903125ed
 - Hide note withdrawal (user wallet, `private_exit_v3`, `USDC` amount `10`): https://sepolia.voyager.online/tx/0x5bb254cc480a12525331bc911a2365efc0966f681fb7f8faa9e1068ddaf928d
 - Hide note withdrawal (user wallet, `private_exit_v3`, `USDT` amount `10`): https://sepolia.voyager.online/tx/0xa9acb749f708346360beea84f8d35eacee3aa3bed1e7da10259f0c9d00032f
 - Hide note withdrawal (user wallet, `private_exit_v3`, `USDT` amount `10`): https://sepolia.voyager.online/tx/0x45a918b757ce55b470097bb32f00b1436164294e0c303c9d2a6ac4d94047e7d
@@ -194,7 +194,7 @@ Analysis (what these prove on-chain):
 - Target contracts (called by the executor during private execution):
   - `SwapAggregator`: `0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28`
   - `LimitOrderBook`: `0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a`
-  - `StakingBTC`: `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8`
+  - `WBTCStaking`: `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8`
 - Private swap (`CAREL -> USDC`) evidence:
   - `0x1cae...bcd`: user signs `approve(token=CAREL, spender=executor)` then `deposit_fixed_v3(token=CAREL, denom_id=0xa, note_commitment=...)`; internal `transfer_from` moves the fixed note amount into the executor.
   - `0x61f4...6fe`: relayer signs `submit_private_swap(root=0x11, nullifier, proof)` then `execute_private_swap_with_payout(target=SwapAggregator, approval_token=CAREL, payout_token=USDC, min_payout=...)`; token transfers show `USDC` ends at the user via the executor.
@@ -204,7 +204,7 @@ Analysis (what these prove on-chain):
   - `min_payout=0` and Voyager showing `0 WBTC` transferred is consistent with a placed order that does not fill immediately (order creation rather than swap-like payout).
 - Private stake (stake `WBTC`) evidence:
   - `0x5bfd...0d8e`: user signs `approve(token=WBTC, spender=executor)` then `deposit_fixed_v3(token=WBTC, denom_id=..., note_commitment=...)`.
-  - `0x47ab...25ed`: relayer signs `submit_private_stake(...)` then `execute_private_stake_with_payout(target=StakingBTC, approval_token=WBTC)`; transfers show `WBTC` moved into the staking contract.
+  - `0x47ab...25ed`: relayer signs `submit_private_stake(...)` then `execute_private_stake_with_payout(target=WBTCStaking, approval_token=WBTC)`; transfers show `WBTC` moved into the staking contract.
 - Private exit (note withdrawal) evidence:
   - `0x5bb2...928d`, `0xa9ac...032f`, `0x45a9...7e7d`: user signs `private_exit_v3(root=0x11, nullifier, proof, token, amount, recipient=user)`.
   - These tx are signed by the user wallet (no relayer) and transfer the specified token amount from the executor back to the user, proving user-controlled withdrawal.

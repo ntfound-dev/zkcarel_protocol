@@ -5,14 +5,26 @@ use crate::{
         NFT_TIER_4_DISCOUNT, NFT_TIER_5_DISCOUNT, NFT_TIER_6_DISCOUNT,
     },
     db::NftDiscountStateUpsert,
-    error::Result,
+    error::{AppError, Result},
     models::ApiResponse,
-    services::onchain::{felt_to_u128, parse_felt, u256_from_felts, OnchainReader},
+    services::{
+        invoke_parser::parse_execute_calls,
+        onchain::{felt_to_u128, parse_felt, u256_from_felts_u128, OnchainReader},
+    },
 };
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Json,
+};
 use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use starknet_core::types::{Felt, FunctionCall};
+use starknet_core::types::{
+    ExecutionResult, Felt, FunctionCall, InvokeTransaction, Transaction as StarknetTransaction,
+    TransactionFinalityStatus,
+};
 use starknet_core::utils::{get_selector_from_name, get_storage_var_address};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -136,6 +148,25 @@ async fn invalidate_cached_owned_nfts(contract: &str, user: &str) {
 pub struct MintRequest {
     pub tier: i32,
     pub onchain_tx_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MintStatusResponse {
+    pub status: String,
+    pub tx_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nft: Option<Nft>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct NftMintRecord {
+    user_address: String,
+    status: String,
+    nft_tier: Option<i16>,
 }
 
 // Internal helper that supports `points_cost_for_tier` operations.
@@ -322,6 +353,203 @@ fn normalize_onchain_tx_hash(
     Ok(Some(raw.to_ascii_lowercase()))
 }
 
+// Internal helper that fetches data for `fetch_nft_mint_record`.
+async fn fetch_nft_mint_record(state: &AppState, tx_hash: &str) -> Result<Option<NftMintRecord>> {
+    let record = sqlx::query_as::<_, NftMintRecord>(
+        "SELECT user_address, status, nft_tier
+         FROM transactions
+         WHERE tx_hash = $1 AND tx_type = 'nft_mint'",
+    )
+    .bind(tx_hash)
+    .fetch_optional(state.db.pool())
+    .await?;
+    Ok(record)
+}
+
+// Internal helper that supports `insert_nft_mint_pending` operations.
+async fn insert_nft_mint_pending(
+    state: &AppState,
+    tx_hash: &str,
+    user_address: &str,
+    tier: i32,
+) -> Result<()> {
+    let tier_value: i16 = tier
+        .try_into()
+        .map_err(|_| AppError::BadRequest("Invalid NFT tier".to_string()))?;
+    sqlx::query(
+        r#"
+        INSERT INTO transactions
+            (tx_hash, block_number, user_address, tx_type,
+             token_in, token_out, amount_in, amount_out,
+             usd_value, fee_paid, points_earned, timestamp,
+             processed, status, nft_tier)
+        VALUES ($1, 0, $2, 'nft_mint',
+                NULL, NULL, NULL, NULL,
+                NULL, NULL, $3, NOW(),
+                true, 'pending', $4)
+        ON CONFLICT (tx_hash) DO NOTHING
+        "#,
+    )
+    .bind(tx_hash)
+    .bind(user_address)
+    .bind(Decimal::ZERO)
+    .bind(tier_value)
+    .execute(state.db.pool())
+    .await?;
+    Ok(())
+}
+
+// Internal helper that supports `update_nft_mint_status` operations.
+async fn update_nft_mint_status(
+    state: &AppState,
+    tx_hash: &str,
+    status: &str,
+    block_number: Option<i64>,
+    only_if_pending: bool,
+) -> Result<bool> {
+    let query = if only_if_pending {
+        "UPDATE transactions
+         SET status = $2,
+             block_number = COALESCE($3, block_number)
+         WHERE tx_hash = $1 AND tx_type = 'nft_mint' AND status = 'pending'"
+    } else {
+        "UPDATE transactions
+         SET status = $2,
+             block_number = COALESCE($3, block_number)
+         WHERE tx_hash = $1 AND tx_type = 'nft_mint'"
+    };
+    let result = sqlx::query(query)
+        .bind(tx_hash)
+        .bind(status)
+        .bind(block_number)
+        .execute(state.db.pool())
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+// Internal helper that fetches data for `resolve_allowed_starknet_senders_async`.
+async fn resolve_allowed_starknet_senders_async(
+    state: &AppState,
+    auth_subject: &str,
+) -> Result<Vec<Felt>> {
+    let mut out: Vec<Felt> = Vec::new();
+    if let Ok(subject_felt) = parse_felt(auth_subject) {
+        out.push(subject_felt);
+    }
+
+    if let Ok(linked_wallets) = state.db.list_wallet_addresses(auth_subject).await {
+        for wallet in linked_wallets {
+            if !wallet.chain.eq_ignore_ascii_case("starknet") {
+                continue;
+            }
+            if let Ok(felt) = parse_felt(wallet.wallet_address.trim()) {
+                if !out.contains(&felt) {
+                    out.push(felt);
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        return Err(AppError::BadRequest(
+            "No Starknet sender resolved for NFT mint verification".to_string(),
+        ));
+    }
+    Ok(out)
+}
+
+// Internal helper that supports `verify_mint_nft_invoke_payload` operations.
+fn verify_mint_nft_invoke_payload(
+    tx: &StarknetTransaction,
+    allowed_senders: &[Felt],
+    discount_contract: Felt,
+    expected_tier: i32,
+) -> Result<()> {
+    let invoke = match tx {
+        StarknetTransaction::Invoke(invoke) => invoke,
+        _ => {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash must be an INVOKE transaction".to_string(),
+            ))
+        }
+    };
+
+    let mint_selector = get_selector_from_name("mint_nft")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+
+    let (sender, calldata) = match invoke {
+        InvokeTransaction::V1(tx) => (tx.sender_address, tx.calldata.as_slice()),
+        InvokeTransaction::V3(tx) => (tx.sender_address, tx.calldata.as_slice()),
+        InvokeTransaction::V0(_) => {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash uses unsupported INVOKE v0".to_string(),
+            ))
+        }
+    };
+
+    if !allowed_senders.contains(&sender) {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash sender does not match authenticated Starknet user".to_string(),
+        ));
+    }
+
+    let calls = parse_execute_calls(calldata)?;
+    let expected_tier_felt = Felt::from(expected_tier as u64);
+    for call in calls {
+        if call.to != discount_contract || call.selector != mint_selector {
+            continue;
+        }
+        if call.calldata.is_empty() {
+            continue;
+        }
+        if call.calldata[0] == expected_tier_felt {
+            return Ok(());
+        }
+    }
+
+    Err(AppError::BadRequest(
+        "onchain_tx_hash must include mint_nft(tier) call to discount contract".to_string(),
+    ))
+}
+
+#[derive(Debug)]
+enum MintReceiptStatus {
+    Pending,
+    Confirmed(i64),
+    Failed(String),
+}
+
+// Internal helper that fetches data for `check_mint_receipt_status`.
+async fn check_mint_receipt_status(state: &AppState, tx_hash: &str) -> Result<MintReceiptStatus> {
+    let reader = OnchainReader::from_config(&state.config)?;
+    let tx_hash_felt = parse_felt(tx_hash)?;
+    match reader.get_transaction_receipt(&tx_hash_felt).await {
+        Ok(receipt) => {
+            if let ExecutionResult::Reverted { reason } = receipt.receipt.execution_result() {
+                return Ok(MintReceiptStatus::Failed(reason.to_string()));
+            }
+            if matches!(
+                receipt.receipt.finality_status(),
+                TransactionFinalityStatus::PreConfirmed
+            ) {
+                return Ok(MintReceiptStatus::Pending);
+            }
+            Ok(MintReceiptStatus::Confirmed(
+                receipt.block.block_number() as i64
+            ))
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let lower = message.to_ascii_lowercase();
+            if lower.contains("not found") || looks_like_transient_rpc_error(&message) {
+                Ok(MintReceiptStatus::Pending)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
 // Internal helper that supports `looks_like_transient_rpc_error` operations.
 fn looks_like_transient_rpc_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
@@ -360,7 +588,7 @@ async fn read_discount_state_onchain(
         return Ok((false, 0.0));
     }
     let active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
-    let discount_u128 = u256_from_felts(&result[1], &result[2]).unwrap_or(0);
+    let discount_u128 = u256_from_felts_u128(&result[1], &result[2]).unwrap_or(0);
     Ok((active, discount_u128 as f64))
 }
 
@@ -407,9 +635,9 @@ async fn read_nft_info_onchain(
     }
 
     let tier = felt_to_u128(&result[0]).unwrap_or(0) as i32;
-    let discount_rate = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
-    let max_usage = u256_from_felts(&result[3], &result[4]).unwrap_or(0);
-    let used_in_period = u256_from_felts(&result[5], &result[6]).unwrap_or(0);
+    let discount_rate = u256_from_felts_u128(&result[1], &result[2]).unwrap_or(0) as f64;
+    let max_usage = u256_from_felts_u128(&result[3], &result[4]).unwrap_or(0);
+    let used_in_period = u256_from_felts_u128(&result[5], &result[6]).unwrap_or(0);
     let _last_reset = felt_to_u128(&result[8]).unwrap_or(0) as i64;
 
     Ok(OnchainNftState {
@@ -490,15 +718,13 @@ pub async fn mint_nft(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<MintRequest>,
-) -> Result<Json<ApiResponse<Nft>>> {
+) -> Result<impl IntoResponse> {
     let user_address = require_starknet_user(&headers, &state).await?;
     if !(1..=5).contains(&req.tier) {
         return Err(crate::error::AppError::BadRequest(
             "Invalid tier".to_string(),
         ));
     }
-    let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
-    let _ = discount_contract_or_error(&state)?;
     let onchain_tx_hash = normalize_onchain_tx_hash(req.onchain_tx_hash.as_deref())?;
     let tx_hash = onchain_tx_hash.ok_or_else(|| {
         crate::error::AppError::BadRequest(
@@ -506,43 +732,205 @@ pub async fn mint_nft(
         )
     })?;
 
-    let cost_points = points_cost_for_tier(req.tier);
-    if cost_points > 0 {
-        if let Err(err) = state
-            .db
-            .consume_points(
-                &user_address,
-                current_epoch,
-                rust_decimal::Decimal::from_i64(cost_points).unwrap(),
-            )
-            .await
-        {
-            tracing::warn!(
-                "NFT minted on-chain but failed to consume off-chain points: user={}, tier={}, error={}",
-                user_address,
-                req.tier,
-                err
-            );
+    if let Some(record) = fetch_nft_mint_record(&state, &tx_hash).await? {
+        if !record.user_address.eq_ignore_ascii_case(&user_address) {
+            return Err(AppError::BadRequest(
+                "onchain_tx_hash is associated with a different user".to_string(),
+            ));
+        }
+        let tier = record.nft_tier.map(|value| value as i32).or(Some(req.tier));
+        let status = record.status.to_ascii_lowercase();
+        if status == "confirmed" {
+            let nft = tier.map(|value| Nft {
+                token_id: format!("NFT_{}", tx_hash.trim_start_matches("0x")),
+                tier: value,
+                discount: discount_for_tier(value),
+                expiry: 0,
+                used: false,
+                max_usage: None,
+                used_in_period: None,
+                remaining_usage: None,
+            });
+            let response = MintStatusResponse {
+                status: "confirmed".to_string(),
+                tx_hash: tx_hash.clone(),
+                tier,
+                nft,
+                message: None,
+            };
+            return Ok((StatusCode::OK, Json(ApiResponse::success(response))));
+        }
+        if status == "failed" {
+            let response = MintStatusResponse {
+                status: "failed".to_string(),
+                tx_hash: tx_hash.clone(),
+                tier,
+                nft: None,
+                message: Some("Mint transaction failed on-chain".to_string()),
+            };
+            return Ok((StatusCode::OK, Json(ApiResponse::success(response))));
+        }
+        let response = MintStatusResponse {
+            status: "pending".to_string(),
+            tx_hash: tx_hash.clone(),
+            tier,
+            nft: None,
+            message: Some("Transaction pending confirmation".to_string()),
+        };
+        return Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(response))));
+    }
+
+    let contract = discount_contract_or_error(&state)?;
+    let allowed_senders = resolve_allowed_starknet_senders_async(&state, &user_address).await?;
+    let reader = OnchainReader::from_config(&state.config)?;
+    let tx_hash_felt = parse_felt(&tx_hash)?;
+    let contract_felt = parse_felt(contract)?;
+    let tx = reader.get_transaction(&tx_hash_felt).await?;
+    verify_mint_nft_invoke_payload(&tx, &allowed_senders, contract_felt, req.tier)?;
+
+    insert_nft_mint_pending(&state, &tx_hash, &user_address, req.tier).await?;
+
+    let response = MintStatusResponse {
+        status: "pending".to_string(),
+        tx_hash,
+        tier: Some(req.tier),
+        nft: None,
+        message: Some("Transaction pending confirmation".to_string()),
+    };
+    Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(response))))
+}
+
+/// GET /api/v1/nft/status/:tx_hash
+pub async fn get_mint_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tx_hash_raw): Path<String>,
+) -> Result<impl IntoResponse> {
+    let user_address = require_starknet_user(&headers, &state).await?;
+    let tx_hash = normalize_onchain_tx_hash(Some(&tx_hash_raw))?
+        .ok_or_else(|| AppError::BadRequest("Invalid tx_hash".to_string()))?;
+
+    let Some(record) = fetch_nft_mint_record(&state, &tx_hash).await? else {
+        return Err(AppError::NotFound(
+            "NFT mint transaction not found".to_string(),
+        ));
+    };
+    if !record.user_address.eq_ignore_ascii_case(&user_address) {
+        return Err(AppError::BadRequest(
+            "onchain_tx_hash is associated with a different user".to_string(),
+        ));
+    }
+
+    let tier = record.nft_tier.map(|value| value as i32);
+    let status = record.status.to_ascii_lowercase();
+    if status == "confirmed" {
+        let nft = tier.map(|value| Nft {
+            token_id: format!("NFT_{}", tx_hash.trim_start_matches("0x")),
+            tier: value,
+            discount: discount_for_tier(value),
+            expiry: 0,
+            used: false,
+            max_usage: None,
+            used_in_period: None,
+            remaining_usage: None,
+        });
+        let response = MintStatusResponse {
+            status: "confirmed".to_string(),
+            tx_hash,
+            tier,
+            nft,
+            message: None,
+        };
+        return Ok((StatusCode::OK, Json(ApiResponse::success(response))));
+    }
+
+    if status == "failed" {
+        let response = MintStatusResponse {
+            status: "failed".to_string(),
+            tx_hash,
+            tier,
+            nft: None,
+            message: Some("Mint transaction failed on-chain".to_string()),
+        };
+        return Ok((StatusCode::OK, Json(ApiResponse::success(response))));
+    }
+
+    match check_mint_receipt_status(&state, &tx_hash).await? {
+        MintReceiptStatus::Pending => {
+            let response = MintStatusResponse {
+                status: "pending".to_string(),
+                tx_hash,
+                tier,
+                nft: None,
+                message: Some("Transaction pending confirmation".to_string()),
+            };
+            Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(response))))
+        }
+        MintReceiptStatus::Failed(reason) => {
+            let _ = update_nft_mint_status(&state, &tx_hash, "failed", None, true).await?;
+            let response = MintStatusResponse {
+                status: "failed".to_string(),
+                tx_hash,
+                tier,
+                nft: None,
+                message: Some(format!("Mint transaction reverted: {}", reason)),
+            };
+            Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+        }
+        MintReceiptStatus::Confirmed(block_number) => {
+            let updated =
+                update_nft_mint_status(&state, &tx_hash, "confirmed", Some(block_number), true)
+                    .await?;
+            if let Some(tier_value) = tier {
+                if updated {
+                    let cost_points = points_cost_for_tier(tier_value);
+                    if cost_points > 0 {
+                        let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
+                        if let Err(err) = state
+                            .db
+                            .consume_points(
+                                &user_address,
+                                current_epoch,
+                                rust_decimal::Decimal::from_i64(cost_points).unwrap(),
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                "NFT confirmed but failed to consume off-chain points: user={}, tier={}, error={}",
+                                user_address,
+                                tier_value,
+                                err
+                            );
+                        }
+                    }
+                }
+            }
+
+            if let Some(contract) = discount_contract(&state) {
+                invalidate_cached_owned_nfts(contract, &user_address).await;
+            }
+
+            let nft = tier.map(|value| Nft {
+                token_id: format!("NFT_{}", tx_hash.trim_start_matches("0x")),
+                tier: value,
+                discount: discount_for_tier(value),
+                expiry: 0,
+                used: false,
+                max_usage: None,
+                used_in_period: None,
+                remaining_usage: None,
+            });
+
+            let response = MintStatusResponse {
+                status: "confirmed".to_string(),
+                tx_hash,
+                tier,
+                nft,
+                message: None,
+            };
+            Ok((StatusCode::OK, Json(ApiResponse::success(response))))
         }
     }
-
-    let discount = discount_for_tier(req.tier);
-    let nft = Nft {
-        token_id: format!("NFT_{}", tx_hash.trim_start_matches("0x")),
-        tier: req.tier,
-        discount,
-        expiry: 0,
-        used: false,
-        max_usage: None,
-        used_in_period: None,
-        remaining_usage: None,
-    };
-
-    if let Some(contract) = discount_contract(&state) {
-        invalidate_cached_owned_nfts(contract, &user_address).await;
-    }
-
-    Ok(Json(ApiResponse::success(nft)))
 }
 
 /// GET /api/v1/nft/owned

@@ -1,3 +1,4 @@
+use crate::db::Database;
 use dotenv::dotenv;
 use reqwest::Client;
 use serde::Deserialize;
@@ -10,36 +11,39 @@ use starknet::{
     providers::jsonrpc::{HttpTransport, JsonRpcClient},
     signers::{LocalWallet, SigningKey},
 };
-use std::{
-    collections::{HashMap, HashSet},
-    env,
-    time::Duration,
-};
+use std::{collections::HashMap, env, time::Duration};
 use tokio::time;
 use tracing::{error, info, warn};
 use url::Url;
+use zeroize::Zeroizing;
 
 const BTC_VAULT_ADDRESS: &str = "tb1qreplace_with_your_vault_address";
 const COINGECKO_API: &str =
     "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd";
-const MEMPOOL_TESTNET_API_BASE: &str = "https://mempool.space/testnet/api/address";
+const MEMPOOL_DEFAULT_API_BASE: &str = "https://mempool.space/testnet/api";
+const MEMPOOL_PAGE_SIZE: usize = 25;
+const MEMPOOL_MAX_PAGES_DEFAULT: usize = 4;
+const BTC_PRICE_TIMEOUT_SECS: u64 = 10;
 
 const POLL_INTERVAL_SECS: u64 = 30;
 const MIN_USD_THRESHOLD: f64 = 100.0;
 const POINTS_PER_USD: f64 = 25.0;
 const POINT_DECIMALS_FACTOR: f64 = 1_000_000_000_000_000_000.0; // 1e18
+const BTC_CONFIRMATIONS_DEFAULT: u64 = 12;
 
 #[derive(Debug, Clone)]
 struct BridgeWatcherConfig {
     btc_vault_address: String,
-    coingecko_api: String,
+    btc_price_api_urls: Vec<String>,
+    mempool_api_base: String,
     point_token_address: String,
     starknet_rpc_url: String,
     starknet_chain_id: String,
-    admin_private_key: String,
+    admin_private_key: Zeroizing<String>,
     admin_account_address: String,
     default_starknet_recipient: Option<String>,
     btc_to_starknet_map: HashMap<String, String>,
+    mempool_max_pages: usize,
 }
 
 impl BridgeWatcherConfig {
@@ -53,8 +57,12 @@ impl BridgeWatcherConfig {
             );
         }
 
-        let coingecko_api =
-            env::var("BTC_PRICE_API_URL").unwrap_or_else(|_| COINGECKO_API.to_string());
+        let btc_price_api_urls = parse_url_list(
+            &env::var("BTC_PRICE_API_URLS").unwrap_or_default(),
+            env::var("BTC_PRICE_API_URL").unwrap_or_else(|_| COINGECKO_API.to_string()),
+        );
+        let mempool_api_base =
+            env::var("MEMPOOL_API_BASE").unwrap_or_else(|_| MEMPOOL_DEFAULT_API_BASE.to_string());
         let point_token_address = env::var("POINT_TOKEN_ADDRESS")
             .or_else(|_| env::var("POINT_TOKEN_CONTRACT_ADDRESS"))
             .or_else(|_| env::var("POINT_STORAGE_ADDRESS"))
@@ -71,7 +79,8 @@ impl BridgeWatcherConfig {
             .or_else(|_| env::var("BACKEND_PRIVATE_KEY"))
             .map_err(|_| {
                 anyhow::anyhow!("Missing BRIDGE_ADMIN_PRIVATE_KEY (or BACKEND_PRIVATE_KEY) in env.")
-            })?;
+            })
+            .map(Zeroizing::new)?;
         let admin_account_address = env::var("BRIDGE_ADMIN_ACCOUNT_ADDRESS")
             .or_else(|_| env::var("BACKEND_ACCOUNT_ADDRESS"))
             .map_err(|_| {
@@ -85,10 +94,16 @@ impl BridgeWatcherConfig {
             .map(|v| v.trim().to_string());
         let btc_to_starknet_map =
             parse_btc_to_starknet_map(&env::var("BTC_TO_STARKNET_MAP").unwrap_or_default());
+        let mempool_max_pages = env::var("MEMPOOL_TX_PAGES")
+            .ok()
+            .and_then(|raw| raw.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(MEMPOOL_MAX_PAGES_DEFAULT);
 
         Ok(Self {
             btc_vault_address,
-            coingecko_api,
+            btc_price_api_urls,
+            mempool_api_base,
             point_token_address,
             starknet_rpc_url,
             starknet_chain_id,
@@ -96,6 +111,7 @@ impl BridgeWatcherConfig {
             admin_account_address,
             default_starknet_recipient,
             btc_to_starknet_map,
+            mempool_max_pages,
         })
     }
 }
@@ -112,7 +128,7 @@ impl StarknetPointMinter {
             .map_err(|e| anyhow::anyhow!("Invalid STARKNET_RPC_URL: {e}"))?;
         let provider = JsonRpcClient::new(HttpTransport::new(rpc_url));
 
-        let private_key = parse_felt(&config.admin_private_key)?;
+        let private_key = parse_felt(config.admin_private_key.as_str())?;
         let account_address = parse_felt(&config.admin_account_address)?;
         let chain_id = parse_chain_id(&config.starknet_chain_id)?;
 
@@ -168,7 +184,7 @@ struct BtcPricePayload {
     usd: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct MempoolTx {
     txid: String,
     status: MempoolTxStatus,
@@ -178,22 +194,24 @@ struct MempoolTx {
     vout: Vec<MempoolVout>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct MempoolTxStatus {
     confirmed: bool,
+    #[serde(default)]
+    block_height: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct MempoolVin {
     prevout: Option<MempoolPrevout>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct MempoolPrevout {
     scriptpubkey_address: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct MempoolVout {
     value: u64,
     scriptpubkey_address: Option<String>,
@@ -213,7 +231,7 @@ struct MempoolVout {
 /// - `STARKNET_CHAIN_ID` (default `SN_SEPOLIA`)
 /// - `BTC_TO_STARKNET_MAP` JSON object (`{"tb1...":"0x..."}`)
 /// - `DEFAULT_STARKNET_RECIPIENT` fallback Starknet recipient
-pub async fn start_bridge_watcher() {
+pub async fn start_bridge_watcher(db: Database) {
     dotenv().ok();
 
     let config = match BridgeWatcherConfig::from_env() {
@@ -232,8 +250,16 @@ pub async fn start_bridge_watcher() {
         }
     };
 
-    let client = Client::new();
-    let mut processed_txids: HashSet<String> = HashSet::new();
+    let client = match Client::builder()
+        .timeout(Duration::from_secs(BTC_PRICE_TIMEOUT_SECS))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            error!("Bridge watcher HTTP client init error: {err}");
+            return;
+        }
+    };
     let mut ticker = time::interval(Duration::from_secs(POLL_INTERVAL_SECS));
     ticker.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
@@ -244,7 +270,7 @@ pub async fn start_bridge_watcher() {
 
     loop {
         ticker.tick().await;
-        if let Err(err) = process_once(&client, &config, &minter, &mut processed_txids).await {
+        if let Err(err) = process_once(&client, &config, &minter, &db).await {
             error!("Bridge watcher tick failed: {err}");
         }
     }
@@ -255,23 +281,45 @@ async fn process_once(
     client: &Client,
     config: &BridgeWatcherConfig,
     minter: &StarknetPointMinter,
-    processed_txids: &mut HashSet<String>,
+    db: &Database,
 ) -> anyhow::Result<()> {
     // Step A: Get BTC/USD price
-    let btc_price_usd = fetch_btc_price_usd(client, &config.coingecko_api).await?;
+    let btc_price_usd = fetch_btc_price_usd(client, &config.btc_price_api_urls).await?;
 
     // Step B: Get tx history for vault
-    let txs = fetch_vault_txs(client, &config.btc_vault_address).await?;
+    let txs = fetch_vault_txs(
+        client,
+        &config.mempool_api_base,
+        &config.btc_vault_address,
+        config.mempool_max_pages,
+    )
+    .await?;
+    let tip_height = fetch_tip_height(client, &config.mempool_api_base).await?;
+    let min_confirmations = env::var("BTC_MIN_CONFIRMATIONS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(BTC_CONFIRMATIONS_DEFAULT);
 
     // Step C + D: Process confirmed txs, threshold decision, mint points
     for tx in txs {
         if !tx.status.confirmed {
             continue;
         }
-        if processed_txids.contains(&tx.txid) {
+        let confirmations = match tx.status.block_height {
+            Some(height) if tip_height >= height => tip_height - height + 1,
+            Some(_) => 0,
+            None => {
+                warn!(
+                    "Skipping tx {}: missing block height for confirmations",
+                    tx.txid
+                );
+                continue;
+            }
+        };
+        if confirmations < min_confirmations {
             continue;
         }
-
         let sats_amount = received_sats_for_vault(&tx, &config.btc_vault_address);
         if sats_amount == 0 {
             continue;
@@ -287,7 +335,6 @@ async fn process_once(
                         "Skipped tx {}: point amount overflow/non-finite for usd={:.8}",
                         tx.txid, usd_val
                     );
-                    processed_txids.insert(tx.txid);
                     continue;
                 }
             };
@@ -299,13 +346,43 @@ async fn process_once(
             );
 
             if let Some(recipient_address) = recipient {
-                let mint_tx_hash = minter
+                let sats_i64 = i64::try_from(sats_amount).map_err(|_| {
+                    anyhow::anyhow!("sats amount overflow for tx {}: {}", tx.txid, sats_amount)
+                })?;
+                let Some(mint_id) = db
+                    .reserve_btc_bridge_mint(
+                        &tx.txid,
+                        &config.btc_vault_address,
+                        sats_i64,
+                        usd_val,
+                        point_amount,
+                        &recipient_address,
+                    )
+                    .await?
+                else {
+                    info!("Skipped tx {}: already processed", tx.txid);
+                    continue;
+                };
+
+                match minter
                     .mint_points(&recipient_address, point_amount_wei)
-                    .await?;
-                info!(
-                    "Success: Deposit ${:.2}. Minted {:.6} Points. txid={} mint_tx={}",
-                    usd_val, point_amount, tx.txid, mint_tx_hash
-                );
+                    .await
+                {
+                    Ok(mint_tx_hash) => {
+                        db.finalize_btc_bridge_mint(mint_id, &mint_tx_hash.to_string())
+                            .await?;
+                        info!(
+                            "Success: Deposit ${:.2}. Minted {:.6} Points. txid={} mint_tx={}",
+                            usd_val, point_amount, tx.txid, mint_tx_hash
+                        );
+                    }
+                    Err(err) => {
+                        let _ = db
+                            .mark_btc_bridge_mint_failed(mint_id, &err.to_string())
+                            .await;
+                        warn!("Failed to mint for tx {}: {}", tx.txid, err);
+                    }
+                }
             } else {
                 warn!(
                     "Skipped tx {}: no Starknet recipient mapping. Set BTC_TO_STARKNET_MAP or DEFAULT_STARKNET_RECIPIENT.",
@@ -314,19 +391,36 @@ async fn process_once(
             }
         } else {
             info!(
-                "Ignored: Deposit ${:.2} is below the $50 threshold. Deposit below threshold. txid={}",
-                usd_val, tx.txid
+                "Ignored: Deposit ${:.2} is below the ${} threshold. txid={}",
+                usd_val, MIN_USD_THRESHOLD, tx.txid
             );
         }
-
-        processed_txids.insert(tx.txid);
     }
 
     Ok(())
 }
 
 // Internal helper that fetches data for `fetch_btc_price_usd`.
-async fn fetch_btc_price_usd(client: &Client, api_url: &str) -> anyhow::Result<f64> {
+async fn fetch_btc_price_usd(client: &Client, api_urls: &[String]) -> anyhow::Result<f64> {
+    let mut last_error = None;
+    for api_url in api_urls
+        .iter()
+        .map(|value| value.trim())
+        .filter(|v| !v.is_empty())
+    {
+        match fetch_btc_price_usd_once(client, api_url).await {
+            Ok(price) => return Ok(price),
+            Err(err) => {
+                warn!("BTC price fetch failed for {}: {}", api_url, err);
+                last_error = Some(err);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("BTC price API list is empty")))
+}
+
+// Internal helper that fetches data for `fetch_btc_price_usd_once`.
+async fn fetch_btc_price_usd_once(client: &Client, api_url: &str) -> anyhow::Result<f64> {
     let response = client
         .get(api_url)
         .send()
@@ -344,22 +438,76 @@ async fn fetch_btc_price_usd(client: &Client, api_url: &str) -> anyhow::Result<f
 }
 
 // Internal helper that fetches data for `fetch_vault_txs`.
-async fn fetch_vault_txs(client: &Client, vault_address: &str) -> anyhow::Result<Vec<MempoolTx>> {
-    let url = format!("{}/{}/txs", MEMPOOL_TESTNET_API_BASE, vault_address);
+async fn fetch_vault_txs(
+    client: &Client,
+    mempool_api_base: &str,
+    vault_address: &str,
+    max_pages: usize,
+) -> anyhow::Result<Vec<MempoolTx>> {
+    let base = mempool_api_base.trim_end_matches('/');
+    let mut txs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor: Option<String> = None;
+
+    for _ in 0..max_pages {
+        let url = if let Some(ref last_txid) = cursor {
+            format!("{}/address/{}/txs/chain/{}", base, vault_address, last_txid)
+        } else {
+            format!("{}/address/{}/txs", base, vault_address)
+        };
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fetch vault txs: {e}"))?
+            .error_for_status()
+            .map_err(|e| anyhow::anyhow!("Mempool endpoint returned error status: {e}"))?;
+
+        let page: Vec<MempoolTx> = response
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("Invalid mempool tx payload: {e}"))?;
+
+        if page.is_empty() {
+            break;
+        }
+
+        for tx in &page {
+            if seen.insert(tx.txid.clone()) {
+                txs.push(tx.clone());
+            }
+        }
+
+        if page.len() < MEMPOOL_PAGE_SIZE {
+            break;
+        }
+        cursor = page.last().map(|tx| tx.txid.clone());
+    }
+
+    Ok(txs)
+}
+
+// Internal helper that fetches data for `fetch_tip_height`.
+async fn fetch_tip_height(client: &Client, mempool_api_base: &str) -> anyhow::Result<u64> {
+    let base = mempool_api_base.trim_end_matches('/');
+    let url = format!("{}/blocks/tip/height", base);
     let response = client
         .get(url)
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to fetch vault txs: {e}"))?
+        .map_err(|e| anyhow::anyhow!("Failed to fetch BTC tip height: {e}"))?
         .error_for_status()
-        .map_err(|e| anyhow::anyhow!("Mempool endpoint returned error status: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("BTC tip endpoint returned error status: {e}"))?;
 
-    let txs: Vec<MempoolTx> = response
-        .json()
+    let text = response
+        .text()
         .await
-        .map_err(|e| anyhow::anyhow!("Invalid mempool tx payload: {e}"))?;
-
-    Ok(txs)
+        .map_err(|e| anyhow::anyhow!("BTC tip read error: {e}"))?;
+    let height = text
+        .trim()
+        .parse::<u64>()
+        .map_err(|e| anyhow::anyhow!("BTC tip parse error: {e}"))?;
+    Ok(height)
 }
 
 // Internal helper that supports `received_sats_for_vault` operations.
@@ -426,6 +574,20 @@ fn parse_btc_to_starknet_map(raw: &str) -> HashMap<String, String> {
             HashMap::new()
         }
     }
+}
+
+// Internal helper that parses or transforms values for `parse_url_list`.
+fn parse_url_list(raw: &str, fallback: String) -> Vec<String> {
+    let mut urls: Vec<String> = raw
+        .split([',', ';', ' ', '\n', '\r'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect();
+    if urls.is_empty() {
+        urls.push(fallback);
+    }
+    urls
 }
 
 // Internal helper that supports `points_to_wei` operations.

@@ -1,15 +1,34 @@
 use crate::error::Result;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use starknet_core::utils::get_selector_from_name;
+use std::{
+    env,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use tokio::time::{sleep, Duration};
+
+static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+const DEFAULT_RPC_TIMEOUT_MS: u64 = 8_000;
+const DEFAULT_RPC_CONNECT_TIMEOUT_MS: u64 = 3_000;
+
+// Internal helper that supports `env_timeout_ms` operations.
+fn env_timeout_ms(key: &str, default_ms: u64) -> u64 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default_ms)
+}
 
 // Internal helper that supports `rpc_request` operations.
 fn rpc_request(method: &str, params: serde_json::Value) -> serde_json::Value {
+    let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     serde_json::json!({
         "jsonrpc": "2.0",
         "method": method,
         "params": params,
-        "id": 1
+        "id": id
     })
 }
 
@@ -95,6 +114,17 @@ fn is_transient_rpc_failure(message: &str) -> bool {
         || lower.contains("error decoding response body")
 }
 
+// Internal helper that decides when to retry/fallback across providers.
+fn should_retry_rpc_failure(method: &str, message: &str) -> bool {
+    if is_transient_rpc_failure(message) {
+        return true;
+    }
+    matches!(
+        method,
+        "starknet_call" | "starknet_getTransactionReceipt" | "starknet_getEvents"
+    )
+}
+
 // Internal helper that supports `retry_backoff_delay` operations.
 fn retry_backoff_delay(attempt: usize) -> Duration {
     let exponent = attempt.min(5) as u32;
@@ -154,10 +184,17 @@ impl StarknetClient {
         } else {
             sanitized
         };
-        Self {
-            rpc_urls,
-            client: reqwest::Client::new(),
-        }
+        let timeout_ms = env_timeout_ms("STARKNET_RPC_TIMEOUT_MS", DEFAULT_RPC_TIMEOUT_MS);
+        let connect_timeout_ms = env_timeout_ms(
+            "STARKNET_RPC_CONNECT_TIMEOUT_MS",
+            DEFAULT_RPC_CONNECT_TIMEOUT_MS,
+        );
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .connect_timeout(Duration::from_millis(connect_timeout_ms))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self { rpc_urls, client }
     }
 
     // Internal helper that supports `rpc_call` operations.
@@ -174,7 +211,9 @@ impl StarknetClient {
                     Ok(response) => response,
                     Err(error) => {
                         last_error = format!("{} request failed on {}: {}", method, rpc_url, error);
-                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                        if attempt < RPC_MAX_RETRIES
+                            && should_retry_rpc_failure(method, &last_error)
+                        {
                             sleep(retry_backoff_delay(attempt)).await;
                             continue;
                         }
@@ -188,7 +227,9 @@ impl StarknetClient {
                     Err(error) => {
                         last_error =
                             format!("{} response read failed on {}: {}", method, rpc_url, error);
-                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                        if attempt < RPC_MAX_RETRIES
+                            && should_retry_rpc_failure(method, &last_error)
+                        {
                             sleep(retry_backoff_delay(attempt)).await;
                             continue;
                         }
@@ -204,7 +245,7 @@ impl StarknetClient {
                         rpc_url,
                         preview_rpc_body(&body)
                     );
-                    if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                    if attempt < RPC_MAX_RETRIES && should_retry_rpc_failure(method, &last_error) {
                         sleep(retry_backoff_delay(attempt)).await;
                         continue;
                     }
@@ -221,7 +262,9 @@ impl StarknetClient {
                             error,
                             preview_rpc_body(&body)
                         );
-                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                        if attempt < RPC_MAX_RETRIES
+                            && should_retry_rpc_failure(method, &last_error)
+                        {
                             sleep(retry_backoff_delay(attempt)).await;
                             continue;
                         }
@@ -234,7 +277,7 @@ impl StarknetClient {
                         "{} RPC error {} on {}: {}",
                         method, error.code, rpc_url, error.message
                     );
-                    if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                    if attempt < RPC_MAX_RETRIES && should_retry_rpc_failure(method, &last_error) {
                         sleep(retry_backoff_delay(attempt)).await;
                         continue;
                     }
@@ -251,14 +294,15 @@ impl StarknetClient {
                     rpc_url,
                     preview_rpc_body(&body)
                 );
-                if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                if attempt < RPC_MAX_RETRIES && should_retry_rpc_failure(method, &last_error) {
                     sleep(retry_backoff_delay(attempt)).await;
                     continue;
                 }
                 break;
             }
 
-            if rpc_index + 1 < self.rpc_urls.len() && is_transient_rpc_failure(&last_error) {
+            if rpc_index + 1 < self.rpc_urls.len() && should_retry_rpc_failure(method, &last_error)
+            {
                 tracing::warn!(
                     "{} failed on RPC {}. Falling back to next provider. err={}",
                     method,
@@ -318,7 +362,9 @@ impl StarknetClient {
                             "starknet_call batch request failed on {}: {}",
                             rpc_url, error
                         );
-                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                        if attempt < RPC_MAX_RETRIES
+                            && should_retry_rpc_failure("starknet_call", &last_error)
+                        {
                             sleep(retry_backoff_delay(attempt)).await;
                             continue;
                         }
@@ -334,7 +380,9 @@ impl StarknetClient {
                             "starknet_call batch response read failed on {}: {}",
                             rpc_url, error
                         );
-                        if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                        if attempt < RPC_MAX_RETRIES
+                            && should_retry_rpc_failure("starknet_call", &last_error)
+                        {
                             sleep(retry_backoff_delay(attempt)).await;
                             continue;
                         }
@@ -349,7 +397,9 @@ impl StarknetClient {
                         rpc_url,
                         preview_rpc_body(&body)
                     );
-                    if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                    if attempt < RPC_MAX_RETRIES
+                        && should_retry_rpc_failure("starknet_call", &last_error)
+                    {
                         sleep(retry_backoff_delay(attempt)).await;
                         continue;
                     }
@@ -366,7 +416,9 @@ impl StarknetClient {
                                 error,
                                 preview_rpc_body(&body)
                             );
-                            if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                            if attempt < RPC_MAX_RETRIES
+                                && should_retry_rpc_failure("starknet_call", &last_error)
+                            {
                                 sleep(retry_backoff_delay(attempt)).await;
                                 continue;
                             }
@@ -398,14 +450,18 @@ impl StarknetClient {
                 if batch_ok && out.len() == calls.len() {
                     return Ok(out);
                 }
-                if attempt < RPC_MAX_RETRIES && is_transient_rpc_failure(&last_error) {
+                if attempt < RPC_MAX_RETRIES
+                    && should_retry_rpc_failure("starknet_call", &last_error)
+                {
                     sleep(retry_backoff_delay(attempt)).await;
                     continue;
                 }
                 break;
             }
 
-            if rpc_index + 1 < self.rpc_urls.len() && is_transient_rpc_failure(&last_error) {
+            if rpc_index + 1 < self.rpc_urls.len()
+                && should_retry_rpc_failure("starknet_call", &last_error)
+            {
                 tracing::warn!(
                     "starknet_call batch failed on RPC {}. Falling back to next provider. err={}",
                     rpc_url,
@@ -434,6 +490,12 @@ impl StarknetClient {
         .await
     }
 
+    /// Get latest block number
+    pub async fn block_number(&self) -> Result<u64> {
+        self.rpc_call("starknet_blockNumber", serde_json::json!([]))
+            .await
+    }
+
     /// Get transaction receipt
     pub async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<TransactionReceipt> {
         self.rpc_call(
@@ -449,6 +511,18 @@ impl StarknetClient {
         contract_address: Option<&str>,
         from_block: u64,
         to_block: u64,
+    ) -> Result<Vec<Event>> {
+        self.get_events_with_keys(contract_address, from_block, to_block, None)
+            .await
+    }
+
+    /// Get events for a contract filtered by keys (optional).
+    pub async fn get_events_with_keys(
+        &self,
+        contract_address: Option<&str>,
+        from_block: u64,
+        to_block: u64,
+        keys: Option<Vec<Vec<String>>>,
     ) -> Result<Vec<Event>> {
         let mut all_events = Vec::new();
         let mut continuation_token: Option<String> = None;
@@ -466,6 +540,9 @@ impl StarknetClient {
             filter.insert("chunk_size".to_string(), serde_json::json!(200));
             if let Some(address) = contract_address {
                 filter.insert("address".to_string(), serde_json::json!(address));
+            }
+            if let Some(keys) = keys.as_ref() {
+                filter.insert("keys".to_string(), serde_json::json!(keys));
             }
             if let Some(token) = continuation_token.as_ref() {
                 filter.insert("continuation_token".to_string(), serde_json::json!(token));
@@ -564,6 +641,8 @@ pub struct ContractBatchCall {
 pub struct Block {
     pub block_number: u64,
     pub block_hash: String,
+    #[serde(default)]
+    pub parent_hash: Option<String>,
     pub timestamp: u64,
     pub transactions: Vec<Transaction>,
 }
@@ -578,7 +657,15 @@ pub struct Transaction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionReceipt {
     pub transaction_hash: String,
-    pub status: String,
+    #[serde(default)]
+    pub block_number: Option<u64>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default, rename = "execution_status")]
+    pub execution_status: Option<String>,
+    #[serde(default, rename = "finality_status")]
+    pub finality_status: Option<String>,
+    #[serde(default)]
     pub events: Vec<Event>,
 }
 
@@ -612,7 +699,7 @@ mod tests {
             req.get("method").and_then(|v| v.as_str()),
             Some("starknet_blockNumber")
         );
-        assert_eq!(req.get("id").and_then(|v| v.as_i64()), Some(1));
+        assert!(req.get("id").and_then(|v| v.as_i64()).unwrap_or(0) >= 1);
     }
 
     #[test]

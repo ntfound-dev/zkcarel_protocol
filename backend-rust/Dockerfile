@@ -8,28 +8,24 @@ COPY backend-rust/Cargo.toml backend-rust/Cargo.lock ./
 COPY backend-rust/src ./src
 COPY backend-rust/migrations ./migrations
 COPY backend-rust/scripts ./scripts
-COPY backend-rust/garaga-real-prover ./garaga-real-prover
 RUN cargo build --release --bin carel-backend
+RUN cargo build --release --bin garaga_auto_prover
+RUN cargo build --release --bin filecoin_synapse
 
-# Build the Garaga real prover binary used by Hide Mode.
-RUN cargo build --manifest-path garaga-real-prover/Cargo.toml --release
-
-FROM debian:bookworm-slim
+FROM node:20-bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libssl3 python3 python3-pip bash redis-tools \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 python3 python3-pip bash redis-tools curl \
     && pip3 install --break-system-packages --no-cache-dir uv \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /app/backend-rust/target/release/carel-backend /usr/local/bin/carel-backend
+COPY --from=builder /app/backend-rust/target/release/garaga_auto_prover /usr/local/bin/garaga_auto_prover
+COPY --from=builder /app/backend-rust/target/release/filecoin_synapse /usr/local/bin/filecoin_synapse
+COPY backend-rust/scripts/package.json ./scripts/package.json
+RUN cd /app/scripts && npm install --omit=dev
 COPY backend-rust/scripts ./scripts
-COPY backend-rust/garaga-real-prover ./garaga-real-prover
-RUN mkdir -p /app/garaga-real-prover/target/release
-COPY --from=builder /app/backend-rust/garaga-real-prover/target/release/garaga-real-prover /app/garaga-real-prover/target/release/garaga-real-prover
-COPY backend-rust/garaga_proving_key.bin ./garaga_proving_key.bin
-COPY backend-rust/garaga_vk.json ./garaga_vk.json
-COPY backend-rust/garaga_proof.json ./garaga_proof.json
-COPY backend-rust/garaga_public_inputs.json ./garaga_public_inputs.json
+COPY backend-rust/garaga_honk_vk ./garaga_honk_vk
 
 ENV RUST_LOG=info
 ENV PORT=8080

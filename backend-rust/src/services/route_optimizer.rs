@@ -1,4 +1,5 @@
 use crate::{
+    bridge_amounts::format_units_as_token_amount,
     config::Config,
     constants::{BRIDGE_ATOMIQ, BRIDGE_GARDEN, BRIDGE_LAYERSWAP, BRIDGE_STARKGATE},
     error::{AppError, Result},
@@ -25,10 +26,18 @@ fn bridge_providers_for(from: &str, to: &str) -> Vec<String> {
     match (from, to) {
         ("ethereum", "bitcoin") => vec![BRIDGE_GARDEN.to_string()],
         ("bitcoin", "ethereum") => vec![BRIDGE_GARDEN.to_string()],
-        ("bitcoin", "starknet") => vec![BRIDGE_GARDEN.to_string()],
-        ("starknet", "bitcoin") => vec![BRIDGE_GARDEN.to_string()],
-        ("ethereum", "starknet") => vec![BRIDGE_GARDEN.to_string()],
-        ("starknet", "ethereum") => vec![BRIDGE_GARDEN.to_string()],
+        ("bitcoin", "starknet") => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
+        ("starknet", "bitcoin") => vec![BRIDGE_GARDEN.to_string(), BRIDGE_ATOMIQ.to_string()],
+        ("ethereum", "starknet") => vec![
+            BRIDGE_GARDEN.to_string(),
+            BRIDGE_LAYERSWAP.to_string(),
+            BRIDGE_STARKGATE.to_string(),
+        ],
+        ("starknet", "ethereum") => vec![
+            BRIDGE_GARDEN.to_string(),
+            BRIDGE_LAYERSWAP.to_string(),
+            BRIDGE_STARKGATE.to_string(),
+        ],
         _ => vec![],
     }
 }
@@ -125,6 +134,19 @@ fn bridge_force_garden_enabled() -> bool {
         .unwrap_or(false)
 }
 
+// Internal helper that supports `starkgate_enabled` operations.
+fn starkgate_enabled() -> bool {
+    for key in ["BRIDGE_STARKGATE_ENABLED", "STARKGATE_ENABLED"] {
+        if let Ok(value) = std::env::var(key) {
+            let normalized = value.trim().to_ascii_lowercase();
+            if matches!(normalized.as_str(), "1" | "true" | "yes" | "on") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 // Internal helper that supports `apply_bridge_provider_mode` operations.
 fn apply_bridge_provider_mode(mut providers: Vec<String>, force_garden: bool) -> Vec<String> {
     if force_garden && providers.iter().any(|provider| provider == BRIDGE_GARDEN) {
@@ -134,18 +156,31 @@ fn apply_bridge_provider_mode(mut providers: Vec<String>, force_garden: bool) ->
 }
 
 // Internal helper that supports `bridge_score` operations.
-fn bridge_score(route: &BridgeRoute, is_testnet: bool) -> f64 {
-    let output_score = route.amount_out / route.amount_in;
-    let time_score = 1.0 / (route.estimated_time_minutes as f64 / 10.0);
+fn bridge_score(route: &BridgeRoute, is_testnet: bool) -> u128 {
+    const SCORE_SCALE: u128 = 1_000_000;
+    if route.amount_in_units == 0 {
+        return 0;
+    }
+    let output_score = route
+        .amount_out_units
+        .saturating_mul(SCORE_SCALE)
+        .saturating_div(route.amount_in_units);
+    let time_minutes = route.estimated_time_minutes.max(1) as u128;
+    let time_score = SCORE_SCALE.saturating_mul(10).saturating_div(time_minutes);
     let reliability_score = match route.provider.as_str() {
-        BRIDGE_STARKGATE => 1.0,
-        BRIDGE_LAYERSWAP => 0.95,
-        BRIDGE_GARDEN => 0.93,
-        _ => 0.9,
+        BRIDGE_STARKGATE => SCORE_SCALE,
+        BRIDGE_LAYERSWAP => SCORE_SCALE.saturating_mul(95).saturating_div(100),
+        BRIDGE_GARDEN => SCORE_SCALE.saturating_mul(93).saturating_div(100),
+        _ => SCORE_SCALE.saturating_mul(90).saturating_div(100),
     };
-    let env_factor = if is_testnet { 0.98 } else { 1.0 };
-    let score = output_score * 0.5 + time_score * 0.3 + reliability_score * 0.2;
-    score * env_factor
+    let mut score = output_score.saturating_mul(50).saturating_div(100);
+    score = score.saturating_add(time_score.saturating_mul(30).saturating_div(100));
+    score = score.saturating_add(reliability_score.saturating_mul(20).saturating_div(100));
+    if is_testnet {
+        score.saturating_mul(98).saturating_div(100)
+    } else {
+        score
+    }
 }
 
 // Internal helper that supports `compact_error_message` operations.
@@ -157,34 +192,6 @@ fn compact_error_message(raw: &str) -> String {
         }
     }
     collapsed
-}
-
-// Internal helper that supports `bridge_token_decimals` operations.
-fn bridge_token_decimals(token: &str) -> u32 {
-    match normalize_token_symbol(token).as_str() {
-        "BTC" | "WBTC" => 8,
-        "USDT" | "USDC" => 6,
-        _ => 18,
-    }
-}
-
-// Internal helper that supports `format_base_units_as_token_amount` operations.
-fn format_base_units_as_token_amount(units: u128, token: &str) -> String {
-    let decimals = bridge_token_decimals(token);
-    if decimals == 0 {
-        return units.to_string();
-    }
-    let scale = 10u128.pow(decimals);
-    let whole = units / scale;
-    let frac = units % scale;
-    if frac == 0 {
-        return whole.to_string();
-    }
-    let mut frac_text = format!("{:0width$}", frac, width = decimals as usize);
-    while frac_text.ends_with('0') {
-        frac_text.pop();
-    }
-    format!("{}.{}", whole, frac_text)
 }
 
 // Internal helper that supports `parse_garden_amount_range` operations.
@@ -245,9 +252,9 @@ fn humanize_bridge_provider_error(
                     symbol,
                     from_chain,
                     to_chain,
-                    format_base_units_as_token_amount(min_units, from_token),
+                    format_units_as_token_amount(min_units, from_token),
                     symbol,
-                    format_base_units_as_token_amount(max_units, from_token),
+                    format_units_as_token_amount(max_units, from_token),
                     symbol
                 );
             }
@@ -367,8 +374,9 @@ impl RouteOptimizer {
         to_chain: &str,
         token: &str,
         to_token: Option<&str>,
-        amount: f64,
+        amount_units: u128,
     ) -> Result<BridgeRoute> {
+        // TODO(tech-debt): add multi-hop routing when non-direct pairs go live.
         let from_chain_normalized = normalize_chain(from_chain);
         let to_chain_normalized = normalize_chain(to_chain);
         let expected_providers = bridge_providers_for(&from_chain_normalized, &to_chain_normalized);
@@ -425,7 +433,7 @@ impl RouteOptimizer {
         }
 
         let mut best_route: Option<BridgeRoute> = None;
-        let mut best_score = 0.0;
+        let mut best_score: u128 = 0;
         let mut provider_errors: Vec<String> = Vec::new();
 
         for provider in providers {
@@ -436,7 +444,7 @@ impl RouteOptimizer {
                     &to_chain_normalized,
                     token,
                     to_token,
-                    amount,
+                    amount_units,
                 )
                 .await
             {
@@ -455,7 +463,7 @@ impl RouteOptimizer {
                         from_chain_normalized,
                         to_chain_normalized,
                         token,
-                        amount,
+                        format_units_as_token_amount(amount_units, token),
                         err
                     );
                     provider_errors.push(humanize_bridge_provider_error(
@@ -509,7 +517,7 @@ impl RouteOptimizer {
                 is_active_config_value(&self.config.garden_api_url)
                     && has_non_empty(self.config.garden_api_key.as_ref())
             }
-            BRIDGE_STARKGATE => true,
+            BRIDGE_STARKGATE => starkgate_enabled(),
             _ => false,
         }
     }
@@ -522,7 +530,7 @@ impl RouteOptimizer {
         to_chain: &str,
         token: &str,
         to_token: Option<&str>,
-        amount: f64,
+        amount_units: u128,
     ) -> Result<BridgeRoute> {
         if provider == BRIDGE_GARDEN && !garden_supports_route(from_chain, to_chain) {
             return Err(crate::error::AppError::BadRequest(format!(
@@ -538,14 +546,15 @@ impl RouteOptimizer {
                     self.config.layerswap_api_url.clone(),
                 );
                 let quote = client
-                    .get_quote(from_chain, to_chain, token, amount)
+                    .get_quote(from_chain, to_chain, token, amount_units)
                     .await?;
                 BridgeRoute {
                     provider: provider.to_string(),
-                    token: token.to_string(),
-                    amount_in: quote.amount_in,
-                    amount_out: quote.amount_out,
-                    fee: quote.fee,
+                    from_token: quote.from_token,
+                    to_token: quote.to_token,
+                    amount_in_units: quote.amount_in_units,
+                    amount_out_units: quote.amount_out_units,
+                    fee_units: quote.fee_units,
                     estimated_time_minutes: quote.estimated_time_minutes,
                 }
             }
@@ -555,18 +564,24 @@ impl RouteOptimizer {
                     self.config.atomiq_api_url.clone(),
                 );
                 let quote = client
-                    .get_quote(from_chain, to_chain, token, amount)
+                    .get_quote(from_chain, to_chain, token, amount_units)
                     .await?;
                 BridgeRoute {
                     provider: provider.to_string(),
-                    token: token.to_string(),
-                    amount_in: quote.amount_in,
-                    amount_out: quote.amount_out,
-                    fee: quote.fee,
+                    from_token: quote.from_token,
+                    to_token: quote.to_token,
+                    amount_in_units: quote.amount_in_units,
+                    amount_out_units: quote.amount_out_units,
+                    fee_units: quote.fee_units,
                     estimated_time_minutes: quote.estimated_time_minutes,
                 }
             }
             BRIDGE_STARKGATE => {
+                if !starkgate_enabled() {
+                    return Err(crate::error::AppError::BadRequest(
+                        "StarkGate bridge is not enabled".to_string(),
+                    ));
+                }
                 let token_normalized = normalize_token_symbol(token);
                 let supports_pair = (from_chain == "ethereum" && to_chain == "starknet")
                     || (from_chain == "starknet" && to_chain == "ethereum");
@@ -579,14 +594,16 @@ impl RouteOptimizer {
                     )));
                 }
                 // Mock implementation for StarkGate
-                let fee_percent = 0.3;
+                let fee_bps: u128 = 30;
+                let fee_units = amount_units.saturating_mul(fee_bps).saturating_div(10_000);
                 BridgeRoute {
                     provider: provider.to_string(),
-                    token: token.to_string(),
-                    amount_in: amount,
-                    amount_out: amount * (1.0 - fee_percent / 100.0),
-                    fee: amount * (fee_percent / 100.0),
-                    estimated_time_minutes: 10,
+                    from_token: token.to_string(),
+                    to_token: token.to_string(),
+                    amount_in_units: amount_units,
+                    amount_out_units: amount_units.saturating_sub(fee_units),
+                    fee_units,
+                    estimated_time_minutes: 12 * 60,
                 }
             }
             BRIDGE_GARDEN => {
@@ -608,27 +625,23 @@ impl RouteOptimizer {
                     )));
                 }
                 let quote = client
-                    .get_quote(from_chain, to_chain, token, &to_token, amount)
+                    .get_quote(from_chain, to_chain, token, &to_token, amount_units)
                     .await?;
                 BridgeRoute {
                     provider: provider.to_string(),
-                    token: token.to_string(),
-                    amount_in: quote.amount_in,
-                    amount_out: quote.amount_out,
-                    fee: quote.fee,
+                    from_token: quote.from_token,
+                    to_token: quote.to_token,
+                    amount_in_units: quote.amount_in_units,
+                    amount_out_units: quote.amount_out_units,
+                    fee_units: quote.fee_units,
                     estimated_time_minutes: quote.estimated_time_minutes,
                 }
             }
             _ => {
-                let fee_percent = 0.5;
-                BridgeRoute {
-                    provider: provider.to_string(),
-                    token: token.to_string(),
-                    amount_in: amount,
-                    amount_out: amount * (1.0 - fee_percent / 100.0),
-                    fee: amount * (fee_percent / 100.0),
-                    estimated_time_minutes: 20,
-                }
+                return Err(crate::error::AppError::BadRequest(format!(
+                    "Unknown bridge provider '{}'",
+                    provider
+                )))
             }
         };
 
@@ -638,19 +651,19 @@ impl RouteOptimizer {
             from_chain,
             to_chain,
             token,
-            route.amount_in,
-            route.amount_out
+            format_units_as_token_amount(route.amount_in_units, &route.from_token),
+            format_units_as_token_amount(route.amount_out_units, &route.to_token)
         );
 
         Ok(route)
     }
 
     // Internal helper that supports `calculate_bridge_score` operations.
-    fn calculate_bridge_score(&self, route: &BridgeRoute) -> f64 {
+    fn calculate_bridge_score(&self, route: &BridgeRoute) -> u128 {
         let score = bridge_score(route, self.config.is_testnet());
         tracing::debug!(
             "Bridge score token={} provider={} score={}",
-            route.token,
+            route.from_token,
             route.provider,
             score
         );
@@ -661,10 +674,11 @@ impl RouteOptimizer {
 #[derive(Debug, Clone)]
 pub struct BridgeRoute {
     pub provider: String,
-    pub token: String,
-    pub amount_in: f64,
-    pub amount_out: f64,
-    pub fee: f64,
+    pub from_token: String,
+    pub to_token: String,
+    pub amount_in_units: u128,
+    pub amount_out_units: u128,
+    pub fee_units: u128,
     pub estimated_time_minutes: u32,
 }
 
@@ -675,10 +689,10 @@ mod tests {
     #[test]
     // Internal helper that supports `bridge_providers_for_bitcoin_to_starknet` operations.
     fn bridge_providers_for_bitcoin_to_starknet() {
-        // BTC native -> Starknet dikunci ke Garden agar sesuai order lifecycle API Garden.
+        // BTC native -> Starknet memprioritaskan Garden, dengan Atomiq sebagai fallback.
         let providers = bridge_providers_for("bitcoin", "starknet");
         assert!(providers.contains(&BRIDGE_GARDEN.to_string()));
-        assert_eq!(providers.len(), 1);
+        assert!(providers.contains(&BRIDGE_ATOMIQ.to_string()));
     }
 
     #[test]
@@ -694,7 +708,8 @@ mod tests {
     fn bridge_providers_for_ethereum_to_starknet_prefers_garden() {
         let providers = bridge_providers_for("ethereum", "starknet");
         assert_eq!(providers.first().map(String::as_str), Some(BRIDGE_GARDEN));
-        assert_eq!(providers.len(), 1);
+        assert!(providers.contains(&BRIDGE_LAYERSWAP.to_string()));
+        assert!(providers.contains(&BRIDGE_STARKGATE.to_string()));
     }
 
     #[test]
@@ -710,7 +725,7 @@ mod tests {
     fn bridge_providers_for_starknet_to_bitcoin_prefers_garden() {
         let providers = bridge_providers_for("starknet", "bitcoin");
         assert_eq!(providers.first().map(String::as_str), Some(BRIDGE_GARDEN));
-        assert_eq!(providers.len(), 1);
+        assert!(providers.contains(&BRIDGE_ATOMIQ.to_string()));
     }
 
     #[test]
@@ -775,10 +790,11 @@ mod tests {
         // Memastikan skor berkurang di testnet
         let route = BridgeRoute {
             provider: BRIDGE_STARKGATE.to_string(),
-            token: "ETH".to_string(),
-            amount_in: 100.0,
-            amount_out: 99.0,
-            fee: 1.0,
+            from_token: "ETH".to_string(),
+            to_token: "ETH".to_string(),
+            amount_in_units: 1000,
+            amount_out_units: 990,
+            fee_units: 10,
             estimated_time_minutes: 10,
         };
         let main_score = bridge_score(&route, false);

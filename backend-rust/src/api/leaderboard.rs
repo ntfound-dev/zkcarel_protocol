@@ -152,12 +152,95 @@ pub struct UserRankResponse {
 }
 
 // Internal helper that supports `compute_percentile` operations.
-fn compute_percentile(rank: i64, total_users: i64) -> f64 {
+pub(crate) fn compute_percentile(rank: i64, total_users: i64) -> f64 {
     if total_users <= 0 {
         return 0.0;
     }
     let safe_rank = rank.clamp(1, total_users);
     (1.0 - (safe_rank as f64 / total_users as f64)) * 100.0
+}
+
+// Internal helper that fetches data for `fetch_points_rank_for_epoch`.
+async fn fetch_points_rank_for_epoch(
+    pool: &sqlx::PgPool,
+    epoch: i64,
+    canonical_address: &str,
+) -> Result<(i64, i64)> {
+    let rank_result: RankResult = sqlx::query_as(
+        r#"
+        WITH all_identities AS (
+            SELECT address as identity
+            FROM users
+            UNION
+            SELECT COALESCE(uw.user_address, p.user_address) as identity
+            FROM points p
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+            WHERE p.epoch = $1
+        ),
+        aggregated_points AS (
+            SELECT
+                COALESCE(uw.user_address, p.user_address) as identity,
+                COALESCE(SUM(p.total_points), 0) as total_points
+            FROM points p
+            LEFT JOIN user_wallet_addresses uw
+              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+            WHERE p.epoch = $1
+            GROUP BY COALESCE(uw.user_address, p.user_address)
+        ),
+        identity_points AS (
+            SELECT
+                ai.identity,
+                COALESCE(ap.total_points, 0) as total_points
+            FROM all_identities ai
+            LEFT JOIN aggregated_points ap
+              ON LOWER(ap.identity) = LOWER(ai.identity)
+        )
+        SELECT COUNT(*) + 1 as rank
+        FROM identity_points
+        WHERE total_points > COALESCE(
+              (
+                  SELECT ip.total_points
+                  FROM identity_points ip
+                  WHERE LOWER(ip.identity) = LOWER($2)
+                  LIMIT 1
+              ),
+              0
+          )
+        "#,
+    )
+    .bind(epoch)
+    .bind(canonical_address)
+    .fetch_one(pool)
+    .await?;
+
+    let total_users_res: CountResult = sqlx::query_as(
+        r#"
+            WITH all_identities AS (
+                SELECT address as identity
+                FROM users
+                UNION
+                SELECT COALESCE(uw.user_address, p.user_address) as identity
+                FROM points p
+                LEFT JOIN user_wallet_addresses uw
+                  ON LOWER(uw.wallet_address) = LOWER(p.user_address)
+                WHERE p.epoch = $1
+            )
+            SELECT COUNT(*) as count
+            FROM all_identities
+            "#,
+    )
+    .bind(epoch)
+    .fetch_one(pool)
+    .await?;
+
+    let total_users = if total_users_res.count == 0 {
+        1
+    } else {
+        total_users_res.count
+    };
+
+    Ok((rank_result.rank, total_users))
 }
 
 // Internal helper that parses or transforms values for `normalize_scope_addresses`.
@@ -262,83 +345,12 @@ pub async fn get_user_rank(
     .fetch_one(state.db.pool())
     .await?;
 
-    let rank_result: RankResult = sqlx::query_as(
-        r#"
-        WITH all_identities AS (
-            SELECT address as identity
-            FROM users
-            UNION
-            SELECT COALESCE(uw.user_address, p.user_address) as identity
-            FROM points p
-            LEFT JOIN user_wallet_addresses uw
-              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
-            WHERE p.epoch = $1
-        ),
-        aggregated_points AS (
-            SELECT
-                COALESCE(uw.user_address, p.user_address) as identity,
-                COALESCE(SUM(p.total_points), 0) as total_points
-            FROM points p
-            LEFT JOIN user_wallet_addresses uw
-              ON LOWER(uw.wallet_address) = LOWER(p.user_address)
-            WHERE p.epoch = $1
-            GROUP BY COALESCE(uw.user_address, p.user_address)
-        ),
-        identity_points AS (
-            SELECT
-                ai.identity,
-                COALESCE(ap.total_points, 0) as total_points
-            FROM all_identities ai
-            LEFT JOIN aggregated_points ap
-              ON LOWER(ap.identity) = LOWER(ai.identity)
-        )
-        SELECT COUNT(*) + 1 as rank
-        FROM identity_points
-        WHERE total_points > COALESCE(
-              (
-                  SELECT ip.total_points
-                  FROM identity_points ip
-                  WHERE LOWER(ip.identity) = LOWER($2)
-                  LIMIT 1
-              ),
-              0
-          )
-        "#,
-    )
-    .bind(current_epoch)
-    .bind(&canonical_address)
-    .fetch_one(state.db.pool())
-    .await?;
-
-    let total_users_res: CountResult = sqlx::query_as(
-        r#"
-            WITH all_identities AS (
-                SELECT address as identity
-                FROM users
-                UNION
-                SELECT COALESCE(uw.user_address, p.user_address) as identity
-                FROM points p
-                LEFT JOIN user_wallet_addresses uw
-                  ON LOWER(uw.wallet_address) = LOWER(p.user_address)
-                WHERE p.epoch = $1
-            )
-            SELECT COUNT(*) as count
-            FROM all_identities
-            "#,
-    )
-    .bind(current_epoch)
-    .fetch_one(state.db.pool())
-    .await?;
-
-    let total_users = if total_users_res.count == 0 {
-        1
-    } else {
-        total_users_res.count
-    };
-    let percentile = compute_percentile(rank_result.rank, total_users);
+    let (rank, total_users) =
+        fetch_points_rank_for_epoch(state.db.pool(), current_epoch, &canonical_address).await?;
+    let percentile = compute_percentile(rank, total_users);
 
     Ok(Json(ApiResponse::success(UserRankResponse {
-        rank: rank_result.rank,
+        rank,
         total_users,
         percentile,
         value: user_total,
@@ -398,7 +410,7 @@ pub async fn get_user_categories(
 
     let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS;
 
-    let (user_points_total, points_rank, points_total): (f64, RankResult, CountResult) = tokio::try_join!(
+    let (user_points_total, points_rank_total): (f64, (i64, i64)) = tokio::try_join!(
         async {
             let value: f64 = sqlx::query_scalar::<_, f64>(
                 "SELECT COALESCE(SUM(total_points), 0)::FLOAT
@@ -412,78 +424,10 @@ pub async fn get_user_categories(
             Ok::<f64, crate::error::AppError>(value)
         },
         async {
-            let rank: RankResult = sqlx::query_as(
-                r#"
-                    WITH all_identities AS (
-                        SELECT address as identity
-                        FROM users
-                        UNION
-                        SELECT COALESCE(uw.user_address, p.user_address) as identity
-                        FROM points p
-                        LEFT JOIN user_wallet_addresses uw
-                          ON LOWER(uw.wallet_address) = LOWER(p.user_address)
-                        WHERE p.epoch = $1
-                    ),
-                    aggregated_points AS (
-                        SELECT
-                            COALESCE(uw.user_address, p.user_address) as identity,
-                            COALESCE(SUM(p.total_points), 0) as total_points
-                        FROM points p
-                        LEFT JOIN user_wallet_addresses uw
-                          ON LOWER(uw.wallet_address) = LOWER(p.user_address)
-                        WHERE p.epoch = $1
-                        GROUP BY COALESCE(uw.user_address, p.user_address)
-                    ),
-                    identity_points AS (
-                        SELECT
-                            ai.identity,
-                            COALESCE(ap.total_points, 0) as total_points
-                        FROM all_identities ai
-                        LEFT JOIN aggregated_points ap
-                          ON LOWER(ap.identity) = LOWER(ai.identity)
-                    )
-                    SELECT COUNT(*) + 1 as rank
-                    FROM identity_points
-                    WHERE total_points > COALESCE(
-                          (
-                              SELECT ip.total_points
-                              FROM identity_points ip
-                              WHERE LOWER(ip.identity) = LOWER($2)
-                              LIMIT 1
-                          ),
-                          0
-                      )
-                    "#,
-            )
-            .bind(current_epoch)
-            .bind(&canonical_address)
-            .fetch_one(state.db.pool())
-            .await?;
-            Ok::<RankResult, crate::error::AppError>(rank)
-        },
-        async {
-            let total: CountResult = sqlx::query_as(
-                r#"
-                    WITH all_identities AS (
-                        SELECT address as identity
-                        FROM users
-                        UNION
-                        SELECT COALESCE(uw.user_address, p.user_address) as identity
-                        FROM points p
-                        LEFT JOIN user_wallet_addresses uw
-                          ON LOWER(uw.wallet_address) = LOWER(p.user_address)
-                        WHERE p.epoch = $1
-                    )
-                    SELECT COUNT(*) as count
-                    FROM all_identities
-                    "#,
-            )
-            .bind(current_epoch)
-            .fetch_one(state.db.pool())
-            .await?;
-            Ok::<CountResult, crate::error::AppError>(total)
+            fetch_points_rank_for_epoch(state.db.pool(), current_epoch, &canonical_address).await
         }
     )?;
+    let (points_rank, points_total) = points_rank_total;
 
     let (volume_value, volume_rank, volume_total): (f64, RankResult, CountResult) = tokio::try_join!(
         async {
@@ -631,9 +575,9 @@ pub async fn get_user_categories(
     let categories = vec![
         UserRankCategory {
             category: "points".to_string(),
-            rank: points_rank.rank,
-            total_users: points_total.count,
-            percentile: compute_percentile(points_rank.rank, points_total.count),
+            rank: points_rank,
+            total_users: points_total,
+            percentile: compute_percentile(points_rank, points_total),
             value: user_points_total,
         },
         UserRankCategory {

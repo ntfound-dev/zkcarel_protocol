@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use rust_decimal::prelude::ToPrimitive; // Penting untuk f64 conversion
+use rust_decimal::Decimal;
 use sqlx::Row; // Penting untuk .get()
 use starknet_core::types::{Call, Felt};
 use starknet_core::utils::get_selector_from_name;
@@ -24,8 +25,12 @@ fn is_order_expired(
 }
 
 // Internal helper that checks conditions for `should_execute_price`.
-fn should_execute_price(current_price: f64, target_price: f64) -> bool {
-    current_price <= target_price * 1.005
+fn should_execute_price(current_price: Decimal, target_price: Decimal) -> bool {
+    if current_price <= Decimal::ZERO || target_price <= Decimal::ZERO {
+        return false;
+    }
+    let tolerance = Decimal::new(1005, 3); // 1.005
+    current_price <= target_price * tolerance
 }
 
 // Internal helper that checks conditions for `is_unauthorized_keeper_error`.
@@ -157,15 +162,20 @@ impl LimitOrderExecutor {
             .get_current_price(&order.from_token, &order.to_token)
             .await?;
 
-        // Konversi Decimal ke f64 dengan ToPrimitive
-        let target_price_f64 = order.price.to_f64().unwrap_or(0.0);
-
-        Ok(should_execute_price(current_price, target_price_f64))
+        Ok(should_execute_price(current_price, order.price))
     }
 
     // Internal helper that fetches data for `get_current_price`.
-    async fn get_current_price(&self, _from_token: &str, _to_token: &str) -> Result<f64> {
-        Ok(65000.0)
+    async fn get_current_price(&self, from_token: &str, to_token: &str) -> Result<Decimal> {
+        let from_price_usd = self.latest_price_usd(from_token).await?;
+        let to_price_usd = self.latest_price_usd(to_token).await?;
+        if to_price_usd <= 0.0 {
+            return Err(crate::error::AppError::BadRequest(
+                "Price unavailable for target token".to_string(),
+            ));
+        }
+        let ratio = from_price_usd / to_price_usd;
+        Ok(Decimal::from_f64_retain(ratio).unwrap_or(Decimal::ZERO))
     }
 
     // Internal helper that supports `latest_price_usd` operations.
@@ -226,6 +236,7 @@ impl LimitOrderExecutor {
             usd_value: Some(rust_decimal::Decimal::from_f64_retain(usd_value).unwrap_or_default()),
             fee_paid: None,
             points_earned: Some(rust_decimal::Decimal::ZERO),
+            is_private: false,
             timestamp: chrono::Utc::now(),
             processed: false,
         };
@@ -342,6 +353,7 @@ pub struct ExecutorStats {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+    use rust_decimal::prelude::FromPrimitive;
 
     #[test]
     // Internal helper that checks conditions for `is_order_expired_detects_past`.
@@ -356,8 +368,11 @@ mod tests {
     // Internal helper that checks conditions for `should_execute_price_allows_small_slippage`.
     fn should_execute_price_allows_small_slippage() {
         // Memastikan toleransi 0.5% diterapkan
-        assert!(should_execute_price(100.0, 100.0));
-        assert!(should_execute_price(100.4, 100.0));
-        assert!(!should_execute_price(101.0, 100.0));
+        let base = Decimal::from_f64(100.0).unwrap();
+        let within = Decimal::from_f64(100.4).unwrap();
+        let above = Decimal::from_f64(101.0).unwrap();
+        assert!(should_execute_price(base, base));
+        assert!(should_execute_price(within, base));
+        assert!(!should_execute_price(above, base));
     }
 }

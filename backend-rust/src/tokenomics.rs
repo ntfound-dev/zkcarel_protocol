@@ -1,5 +1,6 @@
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
+use tracing::warn;
 
 pub const BPS_DENOM: i64 = 10_000;
 pub const CAREL_TOTAL_SUPPLY: i64 = 1_000_000_000;
@@ -22,17 +23,7 @@ pub enum RewardsDistributionMode {
 }
 
 impl RewardsDistributionMode {
-    /// Handles `as_str` logic.
-    ///
-    /// # Arguments
-    /// * Uses function parameters as validated input and runtime context.
-    ///
-    /// # Returns
-    /// * `Ok(...)` when processing succeeds.
-    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
-    ///
-    /// # Notes
-    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    /// Identifier for storage/analytics.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::EarlyTestnet => "early_testnet",
@@ -40,17 +31,7 @@ impl RewardsDistributionMode {
         }
     }
 
-    /// Handles `label` logic.
-    ///
-    /// # Arguments
-    /// * Uses function parameters as validated input and runtime context.
-    ///
-    /// # Returns
-    /// * `Ok(...)` when processing succeeds.
-    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
-    ///
-    /// # Notes
-    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    /// Human-readable label for UI.
     pub fn label(self) -> &'static str {
         match self {
             Self::EarlyTestnet => "Early testnet pool (3% token supply)",
@@ -59,17 +40,7 @@ impl RewardsDistributionMode {
     }
 }
 
-/// Handles `distribution_mode_for_environment` logic.
-///
-/// # Arguments
-/// * Uses function parameters as validated input and runtime context.
-///
-/// # Returns
-/// * `Ok(...)` when processing succeeds.
-/// * `Err(AppError)` when validation, authorization, or integration checks fail.
-///
-/// # Notes
-/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+/// Resolve distribution mode from environment string.
 pub fn distribution_mode_for_environment(environment: &str) -> RewardsDistributionMode {
     let env = environment.trim().to_ascii_lowercase();
     if env.contains("mainnet") || env == "prod" || env == "production" {
@@ -79,17 +50,7 @@ pub fn distribution_mode_for_environment(environment: &str) -> RewardsDistributi
     }
 }
 
-/// Handles `rewards_distribution_pool_carel` logic.
-///
-/// # Arguments
-/// * Uses function parameters as validated input and runtime context.
-///
-/// # Returns
-/// * `Ok(...)` when processing succeeds.
-/// * `Err(AppError)` when validation, authorization, or integration checks fail.
-///
-/// # Notes
-/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+/// Total CAREL in distribution pool for the mode.
 pub fn rewards_distribution_pool_carel(mode: RewardsDistributionMode) -> Decimal {
     match mode {
         RewardsDistributionMode::EarlyTestnet => {
@@ -104,49 +65,25 @@ pub fn rewards_distribution_pool_carel(mode: RewardsDistributionMode) -> Decimal
     }
 }
 
-/// Handles `rewards_distribution_pool_for_environment` logic.
-///
-/// # Arguments
-/// * Uses function parameters as validated input and runtime context.
-///
-/// # Returns
-/// * `Ok(...)` when processing succeeds.
-/// * `Err(AppError)` when validation, authorization, or integration checks fail.
-///
-/// # Notes
-/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+/// Convenience wrapper for pool size by environment string.
 pub fn rewards_distribution_pool_for_environment(environment: &str) -> Decimal {
     rewards_distribution_pool_carel(distribution_mode_for_environment(environment))
 }
 
-/// Runs `claim_fee_multiplier` and handles related side effects.
-///
-/// # Arguments
-/// * Uses function parameters as validated input and runtime context.
-///
-/// # Returns
-/// * `Ok(...)` when processing succeeds.
-/// * `Err(AppError)` when validation, authorization, or integration checks fail.
-///
-/// # Notes
-/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+/// Multiplier after claim fee deduction.
 pub fn claim_fee_multiplier() -> Decimal {
+    if CLAIM_FEE_BPS < 0 || CLAIM_FEE_BPS > BPS_DENOM {
+        warn!(
+            "CLAIM_FEE_BPS out of range: {} (expected 0..={})",
+            CLAIM_FEE_BPS, BPS_DENOM
+        );
+    }
     let numerator = Decimal::from_i64(BPS_DENOM - CLAIM_FEE_BPS).unwrap_or(Decimal::ZERO);
     let denominator = Decimal::from_i64(BPS_DENOM).unwrap_or(Decimal::ONE);
     numerator / denominator
 }
 
-/// Handles `bps_to_percent` logic.
-///
-/// # Arguments
-/// * Uses function parameters as validated input and runtime context.
-///
-/// # Returns
-/// * `Ok(...)` when processing succeeds.
-/// * `Err(AppError)` when validation, authorization, or integration checks fail.
-///
-/// # Notes
-/// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+/// Convert basis points to percent.
 pub fn bps_to_percent(bps: i64) -> f64 {
     (bps as f64) / 100.0
 }

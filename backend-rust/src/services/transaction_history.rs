@@ -12,18 +12,41 @@ fn csv_header() -> &'static str {
 }
 
 // Internal helper that parses or transforms values for `format_csv_row`.
+fn escape_csv_field(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    let mut safe = value.to_string();
+    let first = safe.chars().next().unwrap_or(' ');
+    if matches!(first, '=' | '+' | '-' | '@' | '\t') {
+        safe = format!("'{}", safe);
+    }
+    if safe.contains(',') || safe.contains('"') || safe.contains('\n') || safe.contains('\r') {
+        safe = safe.replace('"', "\"\"");
+        return format!("\"{}\"", safe);
+    }
+    safe
+}
+
+// Internal helper that parses or transforms values for `format_csv_row`.
 fn format_csv_row(tx: &Transaction) -> String {
+    let timestamp = tx.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+    let amount_in = tx.amount_in.map(|v| v.to_string()).unwrap_or_default();
+    let amount_out = tx.amount_out.map(|v| v.to_string()).unwrap_or_default();
+    let usd_value = tx.usd_value.map(|v| v.to_string()).unwrap_or_default();
+    let fee_paid = tx.fee_paid.map(|v| v.to_string()).unwrap_or_default();
+    let points_earned = tx.points_earned.map(|v| v.to_string()).unwrap_or_default();
     format!(
         "{},{},{},{},{},{},{},{},{}\n",
-        tx.timestamp.format("%Y-%m-%d %H:%M:%S"),
-        tx.tx_type,
-        tx.token_in.clone().unwrap_or_default(),
-        tx.token_out.clone().unwrap_or_default(),
-        tx.amount_in.map(|v| v.to_string()).unwrap_or_default(),
-        tx.amount_out.map(|v| v.to_string()).unwrap_or_default(),
-        tx.usd_value.map(|v| v.to_string()).unwrap_or_default(),
-        tx.fee_paid.map(|v| v.to_string()).unwrap_or_default(),
-        tx.points_earned.map(|v| v.to_string()).unwrap_or_default(),
+        escape_csv_field(&timestamp),
+        escape_csv_field(&tx.tx_type),
+        escape_csv_field(&tx.token_in.clone().unwrap_or_default()),
+        escape_csv_field(&tx.token_out.clone().unwrap_or_default()),
+        escape_csv_field(&amount_in),
+        escape_csv_field(&amount_out),
+        escape_csv_field(&usd_value),
+        escape_csv_field(&fee_paid),
+        escape_csv_field(&points_earned),
     )
 }
 
@@ -110,7 +133,13 @@ impl TransactionHistoryService {
         let mut param_count = 2;
 
         if tx_type.is_some() {
-            query.push_str(&format!(" AND tx_type = ${}", param_count));
+            query.push_str(&format!(
+                " AND (CASE WHEN COALESCE(is_private, false)
+                    THEN CONCAT('private_', tx_type)
+                    ELSE tx_type
+                END) = ${}",
+                param_count
+            ));
             param_count += 1;
         }
         if from_date.is_some() {
@@ -159,6 +188,111 @@ impl TransactionHistoryService {
         })
     }
 
+    /// Get user transaction history with cursor-based pagination.
+    pub async fn get_user_history_cursor(
+        &self,
+        user_addresses: &[String],
+        tx_type: Option<String>,
+        from_date: Option<DateTime<Utc>>,
+        to_date: Option<DateTime<Utc>>,
+        cursor: Option<(DateTime<Utc>, String)>,
+        limit: i32,
+    ) -> Result<(Vec<Transaction>, Option<(DateTime<Utc>, String)>)> {
+        let normalized_addresses = normalize_scope_addresses(user_addresses);
+        if normalized_addresses.is_empty() {
+            return Err(AppError::BadRequest(
+                "No wallet address available for transaction history".to_string(),
+            ));
+        }
+
+        let mut query = String::from(
+            "SELECT
+                tx_hash,
+                block_number,
+                user_address,
+                CASE
+                    WHEN COALESCE(is_private, false)
+                        THEN CONCAT('private_', tx_type)
+                    ELSE tx_type
+                END AS tx_type,
+                token_in,
+                token_out,
+                amount_in,
+                amount_out,
+                usd_value,
+                fee_paid,
+                points_earned,
+                timestamp,
+                CASE
+                    WHEN block_number > 0 THEN true
+                    ELSE processed
+                END AS processed
+             FROM transactions
+             WHERE LOWER(user_address) = ANY($1)",
+        );
+        let mut param_count = 2;
+
+        if tx_type.is_some() {
+            query.push_str(&format!(
+                " AND (CASE WHEN COALESCE(is_private, false)
+                    THEN CONCAT('private_', tx_type)
+                    ELSE tx_type
+                END) = ${}",
+                param_count
+            ));
+            param_count += 1;
+        }
+        if from_date.is_some() {
+            query.push_str(&format!(" AND timestamp >= ${}", param_count));
+            param_count += 1;
+        }
+        if to_date.is_some() {
+            query.push_str(&format!(" AND timestamp <= ${}", param_count));
+            param_count += 1;
+        }
+        if cursor.is_some() {
+            query.push_str(&format!(
+                " AND (timestamp < ${} OR (timestamp = ${} AND tx_hash < ${}))",
+                param_count,
+                param_count,
+                param_count + 1
+            ));
+            param_count += 2;
+        }
+
+        query.push_str(" ORDER BY timestamp DESC, tx_hash DESC");
+        query.push_str(&format!(" LIMIT ${}", param_count));
+
+        let mut query_builder = sqlx::query_as::<_, Transaction>(&query);
+        query_builder = query_builder.bind(normalized_addresses);
+
+        if let Some(ref t) = tx_type {
+            query_builder = query_builder.bind(t);
+        }
+        if let Some(ref fd) = from_date {
+            query_builder = query_builder.bind(fd);
+        }
+        if let Some(ref td) = to_date {
+            query_builder = query_builder.bind(td);
+        }
+        if let Some((cursor_ts, cursor_hash)) = cursor {
+            query_builder = query_builder.bind(cursor_ts);
+            query_builder = query_builder.bind(cursor_hash);
+        }
+        query_builder = query_builder.bind(limit as i64);
+
+        let transactions = query_builder.fetch_all(self.db.pool()).await?;
+        let next_cursor = if transactions.len() == limit as usize {
+            transactions
+                .last()
+                .map(|tx| (tx.timestamp, tx.tx_hash.clone()))
+        } else {
+            None
+        };
+
+        Ok((transactions, next_cursor))
+    }
+
     // Internal helper that fetches data for `get_total_count`.
     async fn get_total_count(
         &self,
@@ -177,7 +311,13 @@ impl TransactionHistoryService {
         let mut param_count = 2;
 
         if tx_type.is_some() {
-            query.push_str(&format!(" AND tx_type = ${}", param_count));
+            query.push_str(&format!(
+                " AND (CASE WHEN COALESCE(is_private, false)
+                    THEN CONCAT('private_', tx_type)
+                    ELSE tx_type
+                END) = ${}",
+                param_count
+            ));
             param_count += 1;
         }
         if from_date.is_some() {
@@ -401,6 +541,7 @@ mod tests {
             usd_value: None,
             fee_paid: None,
             points_earned: None,
+            is_private: false,
             timestamp: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
             processed: false,
         };

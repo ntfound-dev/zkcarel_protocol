@@ -118,8 +118,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_address: String)
     let state_clone = state.clone();
     let owner_address = user_address.clone();
     let mut send_task = tokio::spawn(async move {
+        let mut interval_secs = 10_u64;
+        let mut error_backoff = 0_u32;
+
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
 
             // Get user's active orders
             let orders = match state_clone
@@ -127,8 +130,25 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_address: String)
                 .get_active_orders_for_owner(&owner_address)
                 .await
             {
-                Ok(orders) => orders,
-                Err(_) => continue,
+                Ok(orders) => {
+                    error_backoff = 0;
+                    if orders.is_empty() {
+                        interval_secs = (interval_secs + 5).min(30);
+                    } else {
+                        interval_secs = 10;
+                    }
+                    orders
+                }
+                Err(err) => {
+                    error_backoff = (error_backoff + 1).min(6);
+                    interval_secs = (10_u64.saturating_mul(1_u64 << error_backoff)).min(60);
+                    tracing::warn!(
+                        "orders websocket failed to fetch active orders for {}: {}",
+                        owner_address,
+                        err
+                    );
+                    continue;
+                }
             };
 
             // Send updates for each order

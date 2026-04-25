@@ -1,4 +1,8 @@
-use crate::error::Result;
+use crate::{
+    bridge_amounts::{float_from_units_lossy, units_from_float_lossy},
+    error::Result,
+    integrations::bridge::BridgeQuote,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
@@ -42,14 +46,15 @@ impl LayerSwapClient {
         from_chain: &str,
         to_chain: &str,
         token: &str,
-        amount: f64,
-    ) -> Result<LayerSwapQuote> {
+        amount_units: u128,
+    ) -> Result<BridgeQuote> {
         if self.api_url.trim().is_empty() {
             return Err(crate::error::AppError::ExternalAPI(
                 "LayerSwap API is not configured".to_string(),
             ));
         }
 
+        let amount = float_from_units_lossy(amount_units, token);
         let source_network = map_layerswap_network(from_chain);
         let destination_network = map_layerswap_network(to_chain);
         let source_asset = map_layerswap_asset(token);
@@ -136,13 +141,15 @@ impl LayerSwapClient {
         .unwrap_or(900);
         let estimated_time_minutes = ((estimated_time_seconds as f64) / 60.0).ceil() as u32;
 
-        Ok(LayerSwapQuote {
-            from_chain: from_chain.to_string(),
-            to_chain: to_chain.to_string(),
-            token: token.to_string(),
-            amount_in: amount,
-            amount_out,
-            fee,
+        let amount_out_units = units_from_float_lossy(amount_out, token).unwrap_or(amount_units);
+        let fee_units = units_from_float_lossy(fee, token).unwrap_or(0);
+
+        Ok(BridgeQuote {
+            from_token: token.to_string(),
+            to_token: token.to_string(),
+            amount_in_units: amount_units,
+            amount_out_units,
+            fee_units,
             estimated_time_minutes: estimated_time_minutes.max(1),
         })
     }

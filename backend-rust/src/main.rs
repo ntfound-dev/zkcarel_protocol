@@ -1,6 +1,6 @@
 use axum::http::HeaderValue;
 use axum::{
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use std::net::SocketAddr;
@@ -10,6 +10,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use url::Url;
 
 mod api;
+mod bridge_amounts;
 mod bridge_worker;
 mod config;
 mod constants;
@@ -19,6 +20,7 @@ mod error;
 mod indexer;
 mod integrations;
 mod models;
+mod openapi;
 mod services;
 mod tokenomics;
 mod utils;
@@ -41,6 +43,9 @@ fn install_rustls_crypto_provider() -> anyhow::Result<()> {
 
 // Internal helper that supports `spawn_auto_garaga_warmup` operations.
 fn spawn_auto_garaga_warmup(config: &Config) {
+    if env_truthy("GARAGA_SKIP_WARMUP") || env_truthy("GARAGA_DISABLE_WARMUP") {
+        return;
+    }
     let Some(cmd) = config
         .privacy_auto_garaga_prover_cmd
         .as_deref()
@@ -50,21 +55,50 @@ fn spawn_auto_garaga_warmup(config: &Config) {
         return;
     };
 
-    // Only warm up bundled script flow to avoid mutating custom external prover commands.
-    if !cmd.contains("garaga_auto_prover.py") {
+    // Only warm up bundled auto prover flow to avoid mutating custom external commands.
+    if cmd.contains(".py") {
+        return;
+    }
+    if !cmd.contains("garaga_auto_prover") {
         return;
     }
 
-    let warmup_cmd = format!("{cmd} --warmup");
+    let (binary, mut args) = match parse_exec_command(cmd) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!("Garaga warmup command parse failed: {}", err);
+            return;
+        }
+    };
+    args.push("--warmup".to_string());
     tokio::spawn(async move {
         tracing::info!("Starting Garaga calldata warmup...");
-        let child = match tokio::process::Command::new("sh")
-            .arg("-lc")
-            .arg(&warmup_cmd)
+        let mut command = tokio::process::Command::new(&binary);
+        command
+            .args(args)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
+            .stderr(std::process::Stdio::piped());
+
+        if let Ok(value) = std::env::var("GARAGA_WARMUP_VK_PATH") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                command.env("GARAGA_VK_PATH", trimmed);
+            }
+        }
+        if let Ok(value) = std::env::var("GARAGA_WARMUP_PROOF_PATH") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                command.env("GARAGA_PROOF_PATH", trimmed);
+            }
+        }
+        if let Ok(value) = std::env::var("GARAGA_WARMUP_PUBLIC_INPUTS_PATH") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                command.env("GARAGA_PUBLIC_INPUTS_PATH", trimmed);
+            }
+        }
+
+        let child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {
                 tracing::warn!("Garaga warmup spawn failed: {}", err);
@@ -89,6 +123,84 @@ fn spawn_auto_garaga_warmup(config: &Config) {
             }
         }
     });
+}
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn parse_exec_command(cmd: &str) -> anyhow::Result<(String, Vec<String>)> {
+    let trimmed = cmd.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Command is not configured");
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut chars = trimmed.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while let Some(ch) = chars.next() {
+        if in_single {
+            if ch == '\'' {
+                in_single = false;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        if in_double {
+            match ch {
+                '"' => in_double = false,
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                }
+                _ => current.push(ch),
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => in_single = true,
+            '"' => in_double = true,
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            ch if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    parts.push(current);
+                    current = String::new();
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if in_single || in_double {
+        anyhow::bail!("Command has unclosed quote");
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    if parts.is_empty() {
+        anyhow::bail!("Command is not configured");
+    }
+    let binary = parts.remove(0);
+    Ok((binary, parts))
 }
 
 fn normalize_redis_url(raw_url: &str) -> anyhow::Result<String> {
@@ -143,6 +255,31 @@ fn redact_redis_url(raw_url: &str) -> String {
     format!("{}://<redacted>@{host}{port}", parsed.scheme())
 }
 
+fn redis_startup_guidance(raw_url: &str) -> String {
+    let Ok(normalized) = normalize_redis_url(raw_url) else {
+        return "Check REDIS_URL and make sure it points to a reachable Redis instance."
+            .to_string();
+    };
+    let Ok(parsed) = Url::parse(&normalized) else {
+        return "Check REDIS_URL and make sure it points to a reachable Redis instance."
+            .to_string();
+    };
+
+    let host = parsed.host_str().unwrap_or("<unknown>");
+    let port = parsed.port_or_known_default().unwrap_or(6379);
+    let host_lower = host.to_ascii_lowercase();
+
+    if matches!(host_lower.as_str(), "localhost" | "127.0.0.1" | "::1") {
+        return format!(
+            "Local Redis at {host}:{port} is not reachable. Start a local Redis service (for example `redis-server --daemonize yes`) or set REDIS_URL to a running instance."
+        );
+    }
+
+    format!(
+        "Verify REDIS_URL for {host}:{port}, including credentials, TLS scheme (`redis://` vs `rediss://`), and network reachability."
+    )
+}
+
 fn redis_url_candidates(raw_url: &str) -> anyhow::Result<Vec<String>> {
     let normalized = normalize_redis_url(raw_url)?;
     let mut candidates = vec![normalized.clone()];
@@ -163,10 +300,18 @@ fn redis_url_candidates(raw_url: &str) -> anyhow::Result<Vec<String>> {
 async fn init_redis_connection_manager(
     raw_url: &str,
 ) -> anyhow::Result<redis::aio::ConnectionManager> {
+    const REDIS_STARTUP_CONNECT_TIMEOUT_SECS: u64 = 10;
+    const REDIS_STARTUP_RESPONSE_TIMEOUT_SECS: u64 = 5;
+    const REDIS_STARTUP_ATTEMPT_TIMEOUT_SECS: u64 = 12;
+    const REDIS_STARTUP_RETRIES: usize = 2;
+    const REDIS_STARTUP_RETRY_MIN_DELAY_MS: u64 = 200;
+    const REDIS_STARTUP_RETRY_MAX_DELAY_MS: u64 = 500;
+
     let mut errors = Vec::new();
 
     for candidate in redis_url_candidates(raw_url)? {
         let redacted = redact_redis_url(&candidate);
+        tracing::info!("Attempting Redis connection via {}", redacted);
         let redis = match redis::Client::open(candidate.clone()) {
             Ok(client) => client,
             Err(err) => {
@@ -176,31 +321,51 @@ async fn init_redis_connection_manager(
         };
 
         let redis_manager_config = redis::aio::ConnectionManagerConfig::new()
-            .set_connection_timeout(Some(Duration::from_secs(10)))
-            .set_response_timeout(Some(Duration::from_secs(5)))
-            .set_number_of_retries(10)
-            .set_min_delay(Duration::from_millis(200))
-            .set_max_delay(Duration::from_secs(3));
+            // Keep startup retries light so a missing Redis surfaces quickly in local dev.
+            .set_connection_timeout(Some(Duration::from_secs(
+                REDIS_STARTUP_CONNECT_TIMEOUT_SECS,
+            )))
+            .set_response_timeout(Some(Duration::from_secs(
+                REDIS_STARTUP_RESPONSE_TIMEOUT_SECS,
+            )))
+            .set_number_of_retries(REDIS_STARTUP_RETRIES)
+            .set_min_delay(Duration::from_millis(REDIS_STARTUP_RETRY_MIN_DELAY_MS))
+            .set_max_delay(Duration::from_millis(REDIS_STARTUP_RETRY_MAX_DELAY_MS));
 
-        match redis::aio::ConnectionManager::new_with_config(redis, redis_manager_config).await {
-            Ok(manager) => {
+        match tokio::time::timeout(
+            Duration::from_secs(REDIS_STARTUP_ATTEMPT_TIMEOUT_SECS),
+            redis::aio::ConnectionManager::new_with_config(redis, redis_manager_config),
+        )
+        .await
+        {
+            Ok(Ok(manager)) => {
                 tracing::info!("Redis connection manager initialized via {}", redacted);
                 return Ok(manager);
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 tracing::warn!("Redis connection attempt failed for {}: {}", redacted, err);
                 errors.push(format!("{redacted}: {err}"));
+            }
+            Err(_) => {
+                let err =
+                    format!("{redacted}: timed out after {REDIS_STARTUP_ATTEMPT_TIMEOUT_SECS}s");
+                tracing::warn!("Redis connection attempt failed for {}: {}", redacted, err);
+                errors.push(err);
             }
         }
     }
 
+    let guidance = redis_startup_guidance(raw_url);
     anyhow::bail!(
-        "failed to initialize Redis connection manager (check REDIS_URL, TLS, and network latency): {}",
+        "failed to initialize Redis connection manager. {guidance} Details: {}",
         errors.join(" | ")
     );
 }
 
 async fn run() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    let manifest_env = format!("{}/.env", env!("CARGO_MANIFEST_DIR"));
+    let _ = dotenvy::from_filename(manifest_env);
     // Initialize tracing
     tracing_subscriber::registry()
         .with(
@@ -280,10 +445,12 @@ async fn run() -> anyhow::Result<()> {
     // Initialize Redis
     eprintln!("Startup stage: initializing Redis connection manager");
     tracing::info!("Initializing Redis connection manager...");
-    let redis_manager =
-        tokio::time::timeout(Duration::from_secs(30), init_redis_connection_manager(&config.redis_url))
-            .await
-            .context("timed out initializing Redis connection manager")??;
+    let redis_manager = tokio::time::timeout(
+        Duration::from_secs(30),
+        init_redis_connection_manager(&config.redis_url),
+    )
+    .await
+    .context("timed out initializing Redis connection manager")??;
 
     // Masukkan manager ke AppState
     let app_state = api::AppState {
@@ -310,8 +477,8 @@ async fn run() -> anyhow::Result<()> {
         .unwrap_or(false);
     if enable_bridge_watcher {
         tracing::info!("Starting BTC bridge watcher...");
-        tokio::spawn(async {
-            bridge_worker::start_bridge_watcher().await;
+        tokio::spawn(async move {
+            bridge_worker::start_bridge_watcher(db.clone()).await;
         });
     }
 
@@ -347,7 +514,16 @@ fn build_router(state: api::AppState) -> Router {
     // CORS configuration
     let cors = cors_from_config(&state.config);
 
-    Router::new()
+    let mut router = Router::new();
+    if state.config.api_docs_enabled {
+        router = router
+            // API Docs
+            .route("/", get(openapi::docs_home))
+            .route("/openapi.json", get(openapi::openapi_json))
+            .route("/docs", get(openapi::swagger_ui))
+            .route("/redoc", get(openapi::redoc_ui));
+    }
+    router
         // Health check
         .route("/health", get(api::health::health_check))
         // Authentication
@@ -440,12 +616,20 @@ fn build_router(state: api::AppState) -> Router {
             post(api::wallet::link_wallet_address),
         )
         .route(
+            "/api/v1/wallet/unlink",
+            delete(api::wallet::unlink_wallet_address),
+        )
+        .route(
             "/api/v1/wallet/linked",
             get(api::wallet::get_linked_wallets),
         )
         .route(
             "/api/v1/portfolio/analytics",
             get(api::analytics::get_analytics),
+        )
+        .route(
+            "/api/v1/analytics/system-health",
+            get(api::analytics::get_system_health),
         )
         // Leaderboard
         .route(
@@ -481,6 +665,10 @@ fn build_router(state: api::AppState) -> Router {
         )
         // NFT
         .route("/api/v1/nft/mint", post(api::nft::mint_nft))
+        .route(
+            "/api/v1/nft/status/{tx_hash}",
+            get(api::nft::get_mint_status),
+        )
         .route("/api/v1/nft/owned", get(api::nft::get_owned_nfts))
         // Referral
         .route("/api/v1/referral/code", get(api::referral::get_code))
@@ -509,57 +697,20 @@ fn build_router(state: api::AppState) -> Router {
             post(api::privacy::prepare_private_exit),
         )
         .route(
+            "/api/v1/privacy/noir-inputs",
+            post(api::privacy::resolve_noir_inputs),
+        )
+        .route(
+            "/api/v1/privacy/note",
+            post(api::privacy::create_private_note),
+        )
+        .route(
             "/api/v1/privacy/fixed-amount",
             post(api::privacy::get_private_fixed_amount),
         )
         .route(
             "/api/v1/privacy/relayer-execute",
             post(api::privacy::relay_private_execution),
-        )
-        // Private BTC swap
-        .route(
-            "/api/v1/private-btc-swap/initiate",
-            post(api::private_btc_swap::initiate_private_btc_swap),
-        )
-        .route(
-            "/api/v1/private-btc-swap/finalize",
-            post(api::private_btc_swap::finalize_private_btc_swap),
-        )
-        .route(
-            "/api/v1/private-btc-swap/nullifier/{nullifier}",
-            get(api::private_btc_swap::is_nullifier_used),
-        )
-        // Dark pool
-        .route(
-            "/api/v1/dark-pool/order",
-            post(api::dark_pool::submit_order),
-        )
-        .route("/api/v1/dark-pool/match", post(api::dark_pool::match_order))
-        .route(
-            "/api/v1/dark-pool/nullifier/{nullifier}",
-            get(api::dark_pool::is_nullifier_used),
-        )
-        // Private payments
-        .route(
-            "/api/v1/private-payments/submit",
-            post(api::private_payments::submit_private_payment),
-        )
-        .route(
-            "/api/v1/private-payments/finalize",
-            post(api::private_payments::finalize_private_payment),
-        )
-        .route(
-            "/api/v1/private-payments/nullifier/{nullifier}",
-            get(api::private_payments::is_nullifier_used),
-        )
-        // Anonymous credentials
-        .route(
-            "/api/v1/credentials/submit",
-            post(api::anonymous_credentials::submit_credential_proof),
-        )
-        .route(
-            "/api/v1/credentials/nullifier/{nullifier}",
-            get(api::anonymous_credentials::is_nullifier_used),
         )
         // Faucet (Testnet)
         .route("/api/v1/faucet/claim", post(api::faucet::claim_tokens))
@@ -591,6 +742,10 @@ fn build_router(state: api::AppState) -> Router {
         .route(
             "/api/v1/transactions/history",
             get(api::transactions::get_history),
+        )
+        .route(
+            "/api/v1/transactions/history-cursor",
+            get(api::transactions::get_history_cursor),
         )
         .route(
             "/api/v1/transactions/{tx_hash}",
@@ -633,6 +788,9 @@ fn build_router(state: api::AppState) -> Router {
         )
         .route("/api/v1/ai/execute", post(api::ai::execute_command))
         .route("/api/v1/ai/pending", get(api::ai::get_pending_actions))
+        .route("/api/v1/ai/plan/prepare", post(api::ai_plan::prepare_plan))
+        .route("/api/v1/ai/plan/approve", post(api::ai_plan::approve_plan))
+        .route("/api/v1/ai/plan/status", get(api::ai_plan::get_plan_status))
         // DeFi Futures (Battleship with Garaga payload flow)
         .route(
             "/api/v1/battleship/create",
@@ -664,10 +822,35 @@ fn build_router(state: api::AppState) -> Router {
         .with_state(state)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redis_startup_guidance_for_local_url_mentions_local_bootstrap() {
+        let guidance = redis_startup_guidance("redis://127.0.0.1:6379");
+        assert!(guidance.contains("redis-server --daemonize yes"));
+        assert!(guidance.contains("127.0.0.1:6379"));
+    }
+
+    #[test]
+    fn redis_startup_guidance_for_remote_url_mentions_tls_checks() {
+        let guidance = redis_startup_guidance("redis://cache.example.com:6379");
+        assert!(guidance.contains("cache.example.com:6379"));
+        assert!(guidance.contains("redis://` vs `rediss://"));
+    }
+}
+
 // Internal helper that supports `cors_from_config` operations.
 fn cors_from_config(config: &Config) -> CorsLayer {
     let raw = config.cors_allowed_origins.trim();
+    let env = config.environment.trim().to_ascii_lowercase();
+    let is_production = matches!(env.as_str(), "production" | "prod" | "mainnet");
+
     if raw.is_empty() || raw == "*" {
+        if is_production {
+            panic!("CORS_ALLOWED_ORIGINS must be set to an explicit domain list in production");
+        }
         return CorsLayer::very_permissive();
     }
 
@@ -675,10 +858,14 @@ fn cors_from_config(config: &Config) -> CorsLayer {
         .split(',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
+        .filter(|s| *s != "*")
         .filter_map(|s| s.parse::<HeaderValue>().ok())
         .collect();
 
     if allowed.is_empty() {
+        if is_production {
+            panic!("CORS_ALLOWED_ORIGINS must contain at least one valid origin in production");
+        }
         tracing::warn!("No valid CORS origins parsed; falling back to permissive");
         return CorsLayer::very_permissive();
     }

@@ -5,8 +5,8 @@ pub const TOKEN_CAREL: &str = "0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2
 pub const TOKEN_BTC: &str = "0x496bef3ed20371382fbe0ca6a5a64252c5c848f9f1f0cccf8110fc4def912d5";
 pub const TOKEN_ETH: &str = "0x0000000000000000000000000000000000000003";
 pub const TOKEN_STRK: &str = "0x04718f5a0Fc34cC1AF16A1cdee98fFB20C31f5cD61D6Ab07201858f4287c938D";
-pub const TOKEN_USDT: &str = "0x030fcbfd1f83fb2d697ad8bdd52e1d55a700b876bed1f4507875539581ed53e5";
-pub const TOKEN_USDC: &str = "0x0179cc8cb5ea0b143e17d649e8ad60d80c45c8132c4cf162d57eaf8297f529d8";
+pub const TOKEN_USDT: &str = "0x07439bce89f5559b3f6aa1793291c5bb20c03adf5bac57debe4d7209c2cb053b";
+pub const TOKEN_USDC: &str = "0x05a26f9680c5dc0c36dcf1670d7f51f24ba0080d15fedb7396d23a77bf5c1924";
 
 // Points configuration
 pub const POINTS_PER_USD_SWAP: f64 = 10.0;
@@ -80,10 +80,6 @@ pub const FAUCET_AMOUNT_STRK: f64 = 10.0;
 pub const FAUCET_AMOUNT_CAREL: f64 = 25.0;
 pub const FAUCET_AMOUNT_USDT: f64 = 25.0;
 pub const FAUCET_AMOUNT_USDC: f64 = 25.0;
-
-// Rate limits
-pub const RATE_LIMIT_REQUESTS_PER_MINUTE: u32 = 60;
-pub const RATE_LIMIT_REQUESTS_PER_HOUR: u32 = 1000;
 
 // Gas configuration
 pub const GAS_PRICE_SLOW: f64 = 0.001;

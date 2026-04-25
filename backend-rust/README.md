@@ -14,11 +14,10 @@ This README is backend-only and covers API modules, relayer flow, workers, runti
 - [Run Local](#run-local)
 - [Runtime Profile](#runtime-profile)
 - [Environment Variables](#environment-variables)
-- [V3 Migration Profile](#v3-migration-profile)
+- [V4 Baseline Profile](#v4-baseline-profile)
 - [Environment Audit Split](#environment-audit-split)
 - [Signer Semantics](#signer-semantics)
 - [AI Production Guardrails](#ai-production-guardrails)
-- [Planned Shadow Bridge V4 (Not Yet Delivered)](#planned-shadow-bridge-v4-not-yet-delivered)
 - [Deployment Notes](#deployment-notes)
 - [Current Constraints](#current-constraints)
 - [Development Plan](#development-plan)
@@ -86,13 +85,13 @@ Problem:
 - In normal mode, the user wallet directly calls swap/limit/stake targets, so the wallet becomes linkable to trading behavior on-chain.
 
 What hide mode **does**:
-- Uses a note model (`deposit_fixed_v3` -> `submit_private_*` -> `execute_private_*_with_payout` / `private_exit_v3`) so later spends use a `nullifier` + ZK proof instead of revealing which `note_commitment` was deposited.
+- Uses a note model (`deposit_fixed_v4` -> `execute_private_*_v4` / `private_exit_v3`) so later spends use a `nullifier` + ZK proof instead of revealing which `note_commitment` was deposited.
 - Shifts the on-chain `tx.from` for execution to the backend relayer account (the user wallet is not the sender that interacts with DEX/LOB/staking targets).
-- Enforces **proof-bound execution**: the verifier output includes an `action_hash`/`exit_hash` and a `recipient`, and `ShieldedPoolV3` recomputes the hash on-chain to prevent relayer parameter tampering.
+- Enforces **proof-bound execution**: the verifier output includes an `action_hash`/`exit_hash` and a `recipient`, and `ShieldedPoolV4` recomputes the hash on-chain to prevent relayer parameter tampering.
 
 What hide mode **does not** do (important):
 - Starknet calldata and ERC20 transfers are public. Explorers will still show token addresses, amounts, routes, and transfers for `execute_private_*_with_payout`.
-- Deposits (`deposit_fixed_v3`) and exits (`private_exit_v3`) are still user-signed on-chain calls; depositor/recipient addresses and denomination tiers remain observable.
+- Deposits (`deposit_fixed_v4`) and exits (`private_exit_v3`) are still user-signed on-chain calls; depositor/recipient addresses and denomination tiers remain observable.
 - Hide mode is therefore not “full anonymous trading”; it is primarily *note unlinkability* (commitment vs nullifier) plus *integrity* (proof-bound execution).
 
 Role of Garaga in this backend:
@@ -103,7 +102,7 @@ Role of Garaga in this backend:
 Main modules under `src/api/`:
 - `auth`, `wallet`, `profile`, `admin`
 - `swap`, `stake`, `limit_order`, `bridge`, `market`
-- `privacy`, `onchain_privacy`, `private_btc_swap`, `private_payments`, `anonymous_credentials`, `dark_pool`
+- `privacy`, `onchain_privacy`, `private_payments`, `anonymous_credentials`, `dark_pool`
 - `rewards`, `nft`, `leaderboard`, `referral`, `analytics`, `transactions`, `deposit`, `faucet`
 - `ai`, `battleship`, `social`, `notifications`, `charts`, `webhooks`, `health`
 
@@ -189,8 +188,8 @@ Minimum required groups:
   - `PRIVACY_INTERMEDIARY_ADDRESS`
   - `HIDE_BALANCE_RELAYER_POOL_ENABLED=true`
   - `HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true`
-  - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
-  - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
+  - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4`
+  - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v4`
   - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
   - `HIDE_BALANCE_MIN_NOTE_AGE_SECS=3600`
   - `HIDE_BALANCE_MAX_USES_PER_DAY=3`
@@ -203,16 +202,16 @@ Recommended optional keys:
 - `GARDEN_APP_ID`
 - `AI_LEVEL3_BRIDGE_ENABLED=false` (default; keep bridge on AI Level 2 for current public provider flow)
 
-## V3 Migration Profile
+## V4 Baseline Profile
 Active hide-mode baseline in backend runtime:
-- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
-- `HIDE_BALANCE_POOL_VERSION_DEFAULT=v3`
+- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4`
+- `HIDE_BALANCE_POOL_VERSION_DEFAULT=v4`
 - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
 
 Operational notes:
-- New notes should be routed to V3.
+- New notes should be routed to V4.
 - V2 stays deployed for legacy note redemption during migration window.
-- FE payloads should include V3-compatible fields (`note_version=v3`, `root`, `nullifier`, `proof`, `public_inputs`).
+- FE payloads should include V4-compatible fields (`note_version=v4`, `root`, `nullifier`, `proof`, `public_inputs`).
 
 ## Environment Audit Split
 Audit of `backend-rust/.env` (runtime usage):
@@ -223,7 +222,7 @@ Audit of `backend-rust/.env` (runtime usage):
 - `LIMIT_ORDER_BOOK_ADDRESS`
 - `STAKING_CAREL_ADDRESS`
 - `STAKING_STABLECOIN_ADDRESS`
-- `STAKING_BTC_ADDRESS`
+- `STAKING_WBTC_ADDRESS`
 - `DISCOUNT_SOULBOUND_ADDRESS`
 - `AI_EXECUTOR_ADDRESS`
 - `ZK_PRIVACY_ROUTER_ADDRESS`
@@ -234,7 +233,6 @@ Audit of `backend-rust/.env` (runtime usage):
 - `PRICE_ORACLE_ADDRESS`
 
 ### 2) Backend-only optional keys
-- `PRIVATE_BTC_SWAP_ADDRESS`
 - `DARK_POOL_ADDRESS`
 - `PRIVATE_PAYMENTS_ADDRESS`
 - `ANONYMOUS_CREDENTIALS_ADDRESS`
@@ -272,22 +270,6 @@ When `ENVIRONMENT=production|prod|mainnet`, backend enforces fail-fast checks:
 - `AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION` must be `false`.
 - Default verifier mode is `account`.
 - If using legacy allowlist mode in production, explicit risk flags are required.
-
-## Planned Shadow Bridge V4 (Not Yet Delivered)
-Planned backend stream (roadmap only, not shipped yet):
-- Private BTC-native to wBTC route in hide mode.
-- Denomination-tier quote path to reduce amount-correlation.
-- Multi-stage order state machine (`created` -> `source_seen` -> `source_finalized` -> `zk_verifying` -> destination states).
-- Referral and loyalty hooks at post-redeem stage.
-- Retry queue + DLQ + auto-refund operational controls.
-
-Planned endpoint surface for this stream:
-- `GET /api/v1/bridge/quote`
-- `POST /api/v1/bridge/execute`
-- `GET /api/v1/bridge/status/:order_id`
-- `POST /api/v1/referral/generate`
-- `POST /api/v1/referral/validate`
-- `GET /api/v1/referral/stats/:code`
 
 ## Deployment Notes
 Run migrations before deployment:

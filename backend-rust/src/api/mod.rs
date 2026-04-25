@@ -3,13 +3,12 @@
 // Re-export your API endpoint modules here (sesuaikan kalau ada/tdk ada)
 pub mod admin;
 pub mod ai;
+pub mod ai_plan;
 pub mod analytics;
-pub mod anonymous_credentials;
 pub mod auth;
 pub mod battleship;
 pub mod bridge;
 pub mod charts;
-pub mod dark_pool;
 pub mod deposit;
 pub mod faucet;
 pub mod garden;
@@ -22,8 +21,6 @@ pub mod notifications;
 pub mod onchain_privacy;
 pub mod portfolio;
 pub mod privacy;
-pub mod private_btc_swap;
-pub mod private_payments;
 pub mod profile;
 pub mod referral;
 pub mod rewards;

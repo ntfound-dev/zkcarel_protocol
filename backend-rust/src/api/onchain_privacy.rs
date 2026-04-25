@@ -1,15 +1,20 @@
 use super::AppState;
 use crate::{
+    api::privacy::ensure_public_inputs_bind_root_nullifier,
     crypto::hash,
     error::{AppError, Result},
     services::{
+        invoke_parser::parse_execute_calls,
         onchain::{felt_to_u128, parse_felt, OnchainReader},
         privacy_verifier::{parse_privacy_verifier_kind, resolve_privacy_router_for_verifier},
     },
 };
 use serde::Deserialize;
 use starknet_core::{
-    types::{ExecutionResult, Felt, InvokeTransaction, Transaction, TransactionFinalityStatus},
+    types::{
+        ExecutionResult, Felt, FunctionCall, InvokeTransaction, Transaction,
+        TransactionFinalityStatus,
+    },
     utils::get_selector_from_name,
 };
 use tokio::time::{sleep, Duration};
@@ -24,7 +29,7 @@ pub enum HideBalanceFlow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HideExecutorKind {
     PrivateActionExecutorV1,
-    ShieldedPoolV2,
+    ShieldedPoolV4,
 }
 
 // Internal helper that supports `hide_executor_kind` operations.
@@ -33,8 +38,8 @@ fn hide_executor_kind() -> HideExecutorKind {
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    if matches!(raw.as_str(), "shielded_pool_v2" | "shielded-v2" | "v2") {
-        HideExecutorKind::ShieldedPoolV2
+    if matches!(raw.as_str(), "shielded_pool_v4" | "shielded-v4" | "v4") {
+        HideExecutorKind::ShieldedPoolV4
     } else {
         HideExecutorKind::PrivateActionExecutorV1
     }
@@ -43,17 +48,12 @@ fn hide_executor_kind() -> HideExecutorKind {
 #[derive(Debug, Deserialize, Clone)]
 pub struct PrivacyVerificationPayload {
     pub verifier: Option<String>,
+    pub note_version: Option<String>,
+    pub root: Option<String>,
     pub nullifier: Option<String>,
     pub commitment: Option<String>,
     pub proof: Option<Vec<String>>,
     pub public_inputs: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone)]
-struct ParsedExecuteCall {
-    to: Felt,
-    selector: Felt,
-    calldata: Vec<Felt>,
 }
 
 /// Checks conditions for `should_run_privacy_verification`.
@@ -104,66 +104,6 @@ pub fn normalize_onchain_tx_hash(tx_hash: Option<&str>) -> Result<Option<String>
     Ok(Some(raw.to_ascii_lowercase()))
 }
 
-// Internal helper that checks conditions for `is_dummy_garaga_payload`.
-fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
-    if proof.len() != 1 || public_inputs.len() != 1 {
-        return false;
-    }
-    proof[0].trim().eq_ignore_ascii_case("0x1")
-        && public_inputs[0].trim().eq_ignore_ascii_case("0x1")
-}
-
-// Internal helper that fetches data for `resolve_privacy_inputs`.
-fn resolve_privacy_inputs(
-    seed: &str,
-    payload: Option<&PrivacyVerificationPayload>,
-) -> Result<(String, String, Vec<String>, Vec<String>)> {
-    let payload = payload.ok_or_else(|| {
-        AppError::BadRequest("privacy payload is required when hide_balance=true".to_string())
-    })?;
-
-    let nullifier = payload
-        .nullifier
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| seed.to_string());
-    let commitment = payload
-        .commitment
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| hash::hash_string(&format!("commitment:{seed}")));
-    let proof = payload
-        .proof
-        .clone()
-        .filter(|items| !items.is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "privacy.proof must be provided and non-empty when hide_balance=true".to_string(),
-            )
-        })?;
-    let public_inputs = payload
-        .public_inputs
-        .clone()
-        .filter(|items| !items.is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "privacy.public_inputs must be provided and non-empty when hide_balance=true"
-                    .to_string(),
-            )
-        })?;
-    if is_dummy_garaga_payload(&proof, &public_inputs) {
-        return Err(AppError::BadRequest(
-            "privacy.proof/public_inputs dummy payload (0x1) is not allowed; submit a real Garaga proof"
-                .to_string(),
-        ));
-    }
-    Ok((nullifier, commitment, proof, public_inputs))
-}
-
 // Internal helper that supports `felt_to_usize` operations.
 fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     let raw = felt_to_u128(value).map_err(|_| {
@@ -178,122 +118,147 @@ fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
     })
 }
 
-// Internal helper that parses or transforms values for `parse_execute_calls_offset`.
-fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if calldata.is_empty() {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: empty calldata".to_string(),
-        ));
+// Internal helper that checks conditions for `is_dummy_garaga_payload`.
+fn is_dummy_garaga_payload(proof: &[String], public_inputs: &[String]) -> bool {
+    if proof.len() != 1 || public_inputs.len() != 1 {
+        return false;
     }
+    proof[0].trim().eq_ignore_ascii_case("0x1")
+        && public_inputs[0].trim().eq_ignore_ascii_case("0x1")
+}
 
-    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
-    let header_start = 1usize;
-    let header_width = 4usize;
-    let headers_end = header_start
-        .checked_add(calls_len.checked_mul(header_width).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: calls_len overflow".to_string())
-        })?)
-        .ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string())
-        })?;
+fn is_dummy_garaga_proof_only(proof: &[String]) -> bool {
+    proof.len() == 1 && proof[0].trim().eq_ignore_ascii_case("0x1")
+}
 
-    if calldata.len() <= headers_end {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: missing calldata length".to_string(),
-        ));
+struct ResolvedPrivacyInputs {
+    root: Option<String>,
+    nullifier: String,
+    commitment: Option<String>,
+    proof: Vec<String>,
+    public_inputs: Vec<String>,
+}
+
+impl ResolvedPrivacyInputs {
+    fn uses_root(&self) -> bool {
+        self.root.is_some()
     }
+}
 
-    let flattened_len = felt_to_usize(&calldata[headers_end], "flattened_len")?;
-    let flattened_start = headers_end + 1;
-    let flattened_end = flattened_start.checked_add(flattened_len).ok_or_else(|| {
-        AppError::BadRequest("Invalid invoke calldata: flattened overflow".to_string())
+// Internal helper that fetches data for `resolve_privacy_inputs`.
+fn resolve_privacy_inputs(
+    seed: &str,
+    payload: Option<&PrivacyVerificationPayload>,
+) -> Result<ResolvedPrivacyInputs> {
+    let payload = payload.ok_or_else(|| {
+        AppError::BadRequest("privacy payload is required when hide_balance=true".to_string())
     })?;
 
-    if calldata.len() < flattened_end {
+    let note_version = payload
+        .note_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+    let wants_root = note_version
+        .as_deref()
+        .map(|value| value == "v3" || value == "v4")
+        .unwrap_or(false)
+        || payload
+            .root
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some();
+    let nullifier = payload
+        .nullifier
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            if wants_root {
+                String::new()
+            } else {
+                seed.to_string()
+            }
+        });
+    if wants_root && nullifier.is_empty() {
         return Err(AppError::BadRequest(
-            "Invalid invoke calldata: flattened segment out of bounds".to_string(),
+            "privacy.nullifier is required for Hide Balance V4".to_string(),
+        ));
+    }
+    let proof = payload
+        .proof
+        .clone()
+        .filter(|items| !items.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "privacy.proof must be provided and non-empty when hide_balance=true".to_string(),
+            )
+        })?;
+    let public_inputs = payload
+        .public_inputs
+        .clone()
+        .filter(|items| !items.is_empty())
+        .unwrap_or_default();
+
+    if is_dummy_garaga_proof_only(&proof)
+        || (!public_inputs.is_empty() && is_dummy_garaga_payload(&proof, &public_inputs))
+    {
+        return Err(AppError::BadRequest(
+            "privacy.proof/public_inputs dummy payload (0x1) is not allowed; submit a real Garaga proof"
+                .to_string(),
         ));
     }
 
-    let flattened = &calldata[flattened_start..flattened_end];
-    let mut calls = Vec::with_capacity(calls_len);
-
-    for idx in 0..calls_len {
-        let offset = header_start + idx * header_width;
-        let to = calldata[offset];
-        let selector = calldata[offset + 1];
-        let data_offset = felt_to_usize(&calldata[offset + 2], "data_offset")?;
-        let data_len = felt_to_usize(&calldata[offset + 3], "data_len")?;
-        let data_end = data_offset.checked_add(data_len).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: data segment overflow".to_string())
-        })?;
-        if data_end > flattened.len() {
+    if wants_root {
+        let root = payload
+            .root
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest("privacy.root is required for Hide Balance V4".to_string())
+            })?
+            .to_string();
+        if !public_inputs.is_empty() {
+            ensure_public_inputs_bind_root_nullifier(
+                &root,
+                &nullifier,
+                &public_inputs,
+                "privacy payload",
+            )?;
+        }
+        Ok(ResolvedPrivacyInputs {
+            root: Some(root),
+            nullifier,
+            commitment: None,
+            proof,
+            public_inputs,
+        })
+    } else {
+        let commitment = payload
+            .commitment
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| hash::hash_string(&format!("commitment:{seed}")));
+        if public_inputs.is_empty() {
             return Err(AppError::BadRequest(
-                "Invalid invoke calldata: call segment out of bounds".to_string(),
+                "privacy.public_inputs must be provided and non-empty when hide_balance=true"
+                    .to_string(),
             ));
         }
-
-        calls.push(ParsedExecuteCall {
-            to,
-            selector,
-            calldata: flattened[data_offset..data_end].to_vec(),
-        });
+        Ok(ResolvedPrivacyInputs {
+            root: None,
+            nullifier,
+            commitment: Some(commitment),
+            proof,
+            public_inputs,
+        })
     }
-
-    Ok(calls)
-}
-
-// Internal helper that parses or transforms values for `parse_execute_calls_inline`.
-fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if calldata.is_empty() {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: empty calldata".to_string(),
-        ));
-    }
-    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
-    let mut cursor = 1usize;
-    let mut calls = Vec::with_capacity(calls_len);
-
-    for _ in 0..calls_len {
-        let header_end = cursor.checked_add(3).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: malformed call header".to_string())
-        })?;
-        if calldata.len() < header_end {
-            return Err(AppError::BadRequest(
-                "Invalid invoke calldata: missing inline call header".to_string(),
-            ));
-        }
-
-        let to = calldata[cursor];
-        let selector = calldata[cursor + 1];
-        let data_len = felt_to_usize(&calldata[cursor + 2], "data_len")?;
-        let data_start = cursor + 3;
-        let data_end = data_start.checked_add(data_len).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: inline data overflow".to_string())
-        })?;
-        if data_end > calldata.len() {
-            return Err(AppError::BadRequest(
-                "Invalid invoke calldata: inline data out of bounds".to_string(),
-            ));
-        }
-
-        calls.push(ParsedExecuteCall {
-            to,
-            selector,
-            calldata: calldata[data_start..data_end].to_vec(),
-        });
-        cursor = data_end;
-    }
-
-    Ok(calls)
-}
-
-// Internal helper that parses or transforms values for `parse_execute_calls`.
-fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if let Ok(calls) = parse_execute_calls_offset(calldata) {
-        return Ok(calls);
-    }
-    parse_execute_calls_inline(calldata)
 }
 
 // Internal helper that supports `extract_invoke_sender_and_calldata` operations.
@@ -381,6 +346,7 @@ struct HideBalanceCallExpectation<'a> {
     flow: Option<HideBalanceFlow>,
     expected_nullifier: Felt,
     expected_commitment: Felt,
+    expected_root: Option<Felt>,
     expected_proof: &'a [Felt],
     expected_public_inputs: &'a [Felt],
 }
@@ -389,6 +355,7 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
     tx: &Transaction,
     expected: &HideBalanceCallExpectation<'_>,
 ) -> Result<()> {
+    let uses_root = expected.expected_root.is_some();
     let submit_selector = get_selector_from_name("submit_private_action")
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
     let (_, calldata) = extract_invoke_sender_and_calldata(tx)?;
@@ -399,30 +366,32 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
         ))
     })?;
 
-    let v1_matched = calls
-        .into_iter()
-        .find(|call| call.to == expected.expected_router && call.selector == submit_selector)
-        .map(|matched| {
-            let mut expected_calldata = Vec::with_capacity(
-                4 + expected.expected_proof.len() + expected.expected_public_inputs.len(),
-            );
-            expected_calldata.push(expected.expected_nullifier);
-            expected_calldata.push(expected.expected_commitment);
-            expected_calldata.push(Felt::from(expected.expected_proof.len() as u64));
-            expected_calldata.extend_from_slice(expected.expected_proof);
-            expected_calldata.push(Felt::from(expected.expected_public_inputs.len() as u64));
-            expected_calldata.extend_from_slice(expected.expected_public_inputs);
-            matched.calldata == expected_calldata
-        })
-        .unwrap_or(false);
+    if !uses_root {
+        let v1_matched = calls
+            .iter()
+            .find(|call| call.to == expected.expected_router && call.selector == submit_selector)
+            .map(|matched| {
+                let mut expected_calldata = Vec::with_capacity(
+                    4 + expected.expected_proof.len() + expected.expected_public_inputs.len(),
+                );
+                expected_calldata.push(expected.expected_nullifier);
+                expected_calldata.push(expected.expected_commitment);
+                expected_calldata.push(Felt::from(expected.expected_proof.len() as u64));
+                expected_calldata.extend_from_slice(expected.expected_proof);
+                expected_calldata.push(Felt::from(expected.expected_public_inputs.len() as u64));
+                expected_calldata.extend_from_slice(expected.expected_public_inputs);
+                matched.calldata == expected_calldata
+            })
+            .unwrap_or(false);
 
-    if v1_matched {
-        return Ok(());
+        if v1_matched {
+            return Ok(());
+        }
     }
 
     let Some(private_executor) = expected.expected_private_executor else {
         return Err(AppError::BadRequest(
-            "onchain_tx_hash does not include submit_private_action call to configured privacy router"
+            "onchain_tx_hash does not include submit call to configured privacy router/executor"
                 .to_string(),
         ));
     };
@@ -434,20 +403,35 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
     };
 
     let executor_kind = hide_executor_kind();
-    let submit_selector_name = match executor_kind {
-        HideExecutorKind::PrivateActionExecutorV1 => "submit_private_intent",
-        HideExecutorKind::ShieldedPoolV2 => "submit_private_action",
+    let submit_selector_name = if uses_root {
+        match flow {
+            HideBalanceFlow::Swap => "submit_private_swap",
+            HideBalanceFlow::Limit => "submit_private_limit",
+            HideBalanceFlow::Stake => "submit_private_stake",
+        }
+    } else {
+        match executor_kind {
+            HideExecutorKind::PrivateActionExecutorV1 => "submit_private_intent",
+            HideExecutorKind::ShieldedPoolV4 => {
+                return Err(AppError::BadRequest(
+                    "Hide Balance V4 requires privacy.root-bound payload".to_string(),
+                ));
+            }
+        }
     };
     let submit_private_selector = get_selector_from_name(submit_selector_name)
         .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
     let execute_entrypoints: &[&str] = match (executor_kind, flow) {
-        (HideExecutorKind::ShieldedPoolV2, HideBalanceFlow::Swap) => {
-            &["execute_private_swap_with_payout"]
-        }
+        (HideExecutorKind::ShieldedPoolV4, HideBalanceFlow::Swap) => &["execute_private_swap_v4"],
         (HideExecutorKind::PrivateActionExecutorV1, HideBalanceFlow::Swap) => {
             &["execute_private_swap_with_payout", "execute_private_swap"]
         }
+        (HideExecutorKind::ShieldedPoolV4, HideBalanceFlow::Limit) => &["execute_private_limit_v4"],
         (_, HideBalanceFlow::Limit) => &["execute_private_limit_order"],
+        (HideExecutorKind::ShieldedPoolV4, HideBalanceFlow::Stake) => &[
+            "execute_private_stake_internal_v4",
+            "execute_private_stake_external_v4",
+        ],
         (_, HideBalanceFlow::Stake) => &["execute_private_stake"],
     };
     let execute_private_selectors: Vec<Felt> = execute_entrypoints
@@ -473,26 +457,46 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
             ))
         })?;
 
-    let submit_mismatch_err = match executor_kind {
-        HideExecutorKind::PrivateActionExecutorV1 => {
-            "onchain_tx_hash submit_private_intent payload does not match submitted Hide Balance proof payload"
-                .to_string()
-        }
-        HideExecutorKind::ShieldedPoolV2 => {
-            "onchain_tx_hash submit_private_action payload does not match submitted Hide Balance proof payload"
-                .to_string()
+    let submit_mismatch_err = if uses_root {
+        "onchain_tx_hash submit payload does not match submitted Hide Balance V4 proof payload"
+            .to_string()
+    } else {
+        match executor_kind {
+            HideExecutorKind::PrivateActionExecutorV1 => {
+                "onchain_tx_hash submit_private_intent payload does not match submitted Hide Balance proof payload"
+                    .to_string()
+            }
+            HideExecutorKind::ShieldedPoolV4 => {
+                "onchain_tx_hash submit payload does not match submitted Hide Balance proof payload"
+                    .to_string()
+            }
         }
     };
 
-    let mut expected_submit = Vec::with_capacity(
-        4 + expected.expected_proof.len() + expected.expected_public_inputs.len(),
-    );
-    expected_submit.push(expected.expected_nullifier);
-    expected_submit.push(expected.expected_commitment);
-    expected_submit.push(Felt::from(expected.expected_proof.len() as u64));
-    expected_submit.extend_from_slice(expected.expected_proof);
-    expected_submit.push(Felt::from(expected.expected_public_inputs.len() as u64));
-    expected_submit.extend_from_slice(expected.expected_public_inputs);
+    let expected_submit = if uses_root {
+        let root = expected.expected_root.ok_or_else(|| {
+            AppError::BadRequest(
+                "Hide Balance V4 requires privacy.root-bound submit calldata".to_string(),
+            )
+        })?;
+        let mut expected_calldata = Vec::with_capacity(3 + expected.expected_proof.len());
+        expected_calldata.push(root);
+        expected_calldata.push(expected.expected_nullifier);
+        expected_calldata.push(Felt::from(expected.expected_proof.len() as u64));
+        expected_calldata.extend_from_slice(expected.expected_proof);
+        expected_calldata
+    } else {
+        let mut expected_calldata = Vec::with_capacity(
+            4 + expected.expected_proof.len() + expected.expected_public_inputs.len(),
+        );
+        expected_calldata.push(expected.expected_nullifier);
+        expected_calldata.push(expected.expected_commitment);
+        expected_calldata.push(Felt::from(expected.expected_proof.len() as u64));
+        expected_calldata.extend_from_slice(expected.expected_proof);
+        expected_calldata.push(Felt::from(expected.expected_public_inputs.len() as u64));
+        expected_calldata.extend_from_slice(expected.expected_public_inputs);
+        expected_calldata
+    };
 
     if submit_call.calldata != expected_submit {
         return Err(AppError::BadRequest(submit_mismatch_err));
@@ -510,11 +514,18 @@ fn verify_hide_balance_privacy_call_in_invoke_payload(
             ))
         })?;
 
-    if execute_call.calldata.is_empty() || execute_call.calldata[0] != expected.expected_commitment
-    {
-        return Err(AppError::BadRequest(
-            "onchain_tx_hash private executor action does not bind the same commitment".to_string(),
-        ));
+    let expected_binding = if uses_root {
+        expected.expected_nullifier
+    } else {
+        expected.expected_commitment
+    };
+    if execute_call.calldata.is_empty() || execute_call.calldata[0] != expected_binding {
+        let message = if uses_root {
+            "onchain_tx_hash private executor action does not bind the same nullifier"
+        } else {
+            "onchain_tx_hash private executor action does not bind the same commitment"
+        };
+        return Err(AppError::BadRequest(message.to_string()));
     }
 
     Ok(())
@@ -735,17 +746,28 @@ pub async fn verify_onchain_hide_balance_invoke_tx(
     let verifier = parse_privacy_verifier_kind(payload.and_then(|p| p.verifier.as_deref()))?;
     let router = resolve_privacy_router_for_verifier(&state.config, verifier)?;
     let expected_router = parse_felt(&router)?;
-    let (nullifier, commitment, proof, public_inputs) = resolve_privacy_inputs(tx_hash, payload)?;
+    let resolved_inputs = resolve_privacy_inputs(tx_hash, payload)?;
     let allowed_senders =
         resolve_allowed_senders(state, auth_subject, resolved_starknet_user).await?;
 
-    let expected_nullifier = parse_felt(&nullifier)?;
-    let expected_commitment = parse_felt(&commitment)?;
-    let expected_proof: Vec<Felt> = proof
+    let expected_nullifier = parse_felt(&resolved_inputs.nullifier)?;
+    let expected_commitment = if let Some(commitment) = resolved_inputs.commitment.as_deref() {
+        parse_felt(commitment)?
+    } else {
+        Felt::ZERO
+    };
+    let expected_root = resolved_inputs
+        .root
+        .as_deref()
+        .map(parse_felt)
+        .transpose()?;
+    let expected_proof: Vec<Felt> = resolved_inputs
+        .proof
         .iter()
         .map(|value| parse_felt(value))
         .collect::<Result<Vec<_>>>()?;
-    let expected_public_inputs: Vec<Felt> = public_inputs
+    let expected_public_inputs: Vec<Felt> = resolved_inputs
+        .public_inputs
         .iter()
         .map(|value| parse_felt(value))
         .collect::<Result<Vec<_>>>()?;
@@ -769,16 +791,20 @@ pub async fn verify_onchain_hide_balance_invoke_tx(
             }
         };
 
-        let matched_intermediary = if let Some(intermediary) = expected_intermediary {
-            verify_hide_balance_privacy_call_via_intermediary(
-                &tx,
-                intermediary,
-                &allowed_senders,
-                expected_nullifier,
-                expected_commitment,
-                &expected_proof,
-                &expected_public_inputs,
-            )?
+        let matched_intermediary = if !resolved_inputs.uses_root() {
+            if let Some(intermediary) = expected_intermediary {
+                verify_hide_balance_privacy_call_via_intermediary(
+                    &tx,
+                    intermediary,
+                    &allowed_senders,
+                    expected_nullifier,
+                    expected_commitment,
+                    &expected_proof,
+                    &expected_public_inputs,
+                )?
+            } else {
+                false
+            }
         } else {
             false
         };
@@ -791,6 +817,7 @@ pub async fn verify_onchain_hide_balance_invoke_tx(
                 flow,
                 expected_nullifier,
                 expected_commitment,
+                expected_root,
                 expected_proof: &expected_proof,
                 expected_public_inputs: &expected_public_inputs,
             };
@@ -833,4 +860,51 @@ pub async fn verify_onchain_hide_balance_invoke_tx(
         "onchain_tx_hash not found/confirmed on Starknet RPC: {}",
         last_rpc_error
     )))
+}
+
+/// Ensures the provided nullifier has not been used on-chain before relayer execution.
+pub async fn ensure_nullifier_unused(
+    state: &AppState,
+    executor: Felt,
+    nullifier: &str,
+    context: &str,
+) -> Result<()> {
+    let trimmed = nullifier.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "{} requires non-empty nullifier",
+            context
+        )));
+    }
+    let nullifier_felt = parse_felt(trimmed)?;
+    let selector = get_selector_from_name("is_nullifier_used")
+        .map_err(|e| AppError::Internal(format!("Selector error: {}", e)))?;
+    let reader = OnchainReader::from_config(&state.config)?;
+    let response = reader
+        .call(FunctionCall {
+            contract_address: executor,
+            entry_point_selector: selector,
+            calldata: vec![nullifier_felt],
+        })
+        .await;
+
+    match response {
+        Ok(values) => {
+            let used = values
+                .first()
+                .map(|value| *value != Felt::ZERO)
+                .unwrap_or(false);
+            if used {
+                return Err(AppError::BadRequest(format!(
+                    "Nullifier already used for {}",
+                    context
+                )));
+            }
+            Ok(())
+        }
+        Err(err) => Err(AppError::BadRequest(format!(
+            "Nullifier check failed for {}: {}",
+            context, err
+        ))),
+    }
 }

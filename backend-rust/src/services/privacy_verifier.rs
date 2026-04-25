@@ -88,6 +88,39 @@ pub fn resolve_privacy_router_for_verifier(
     )))
 }
 
+/// Lightweight local proof verification guard to prevent relayer gas drains.
+///
+/// NOTE: This is a policy gate. Real cryptographic verification must be implemented
+/// before mainnet. In testnet/dev, mock verification can be allowed explicitly.
+pub fn verify_proof(
+    config: &Config,
+    kind: PrivacyVerifierKind,
+    proof: &[String],
+    public_inputs: &[String],
+) -> Result<()> {
+    if proof.is_empty() || public_inputs.is_empty() {
+        return Err(AppError::BadRequest(
+            "privacy.proof/public_inputs cannot be empty".to_string(),
+        ));
+    }
+
+    let mode = std::env::var("PRIVACY_VERIFIER_MODE")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if mode == "mock" || mode == "off" {
+        return Ok(());
+    }
+    if config.is_testnet() {
+        return Ok(());
+    }
+
+    Err(AppError::BadRequest(format!(
+        "Local privacy verifier for '{}' is not configured. Set PRIVACY_VERIFIER_MODE=mock for testnet or implement real verification before mainnet.",
+        kind.as_str()
+    )))
+}
+
 // Performs lightweight sanity checks for router addresses before using them in chain calls.
 fn is_valid_router_address(address: &str) -> bool {
     !address.is_empty() && address.starts_with("0x") && !address.starts_with("0x0000")

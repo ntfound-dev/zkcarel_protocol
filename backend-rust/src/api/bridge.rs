@@ -3,18 +3,20 @@ use axum::{
     http::HeaderMap,
     Json,
 };
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::services::onchain::{
-    felt_to_u128, parse_felt, u256_from_felts, OnchainInvoker, OnchainReader,
+    felt_to_u128, parse_felt, u256_from_felts_u128, OnchainInvoker, OnchainReader,
 };
 use crate::services::privacy_verifier::{
     parse_privacy_verifier_kind, resolve_privacy_router_for_verifier, PrivacyVerifierKind,
 };
 use crate::{
+    bridge_amounts::{float_from_units_lossy, format_units_for_ui, parse_amount_to_units},
     constants::{
         token_address_for, BRIDGE_ATOMIQ, BRIDGE_GARDEN, BRIDGE_LAYERSWAP, BRIDGE_STARKGATE,
         EPOCH_DURATION_SECONDS, POINTS_MIN_USD_BRIDGE_BTC, POINTS_MIN_USD_BRIDGE_BTC_TESTNET,
@@ -30,6 +32,8 @@ use crate::{
         GardenStarknetTransaction, LayerSwapClient, LayerSwapQuote,
     },
     models::{ApiResponse, BridgeQuoteRequest, BridgeQuoteResponse, LinkedWalletAddress},
+    services::ai_plan::ensure_plan_active_for_user,
+    services::filecoin::FilecoinService,
     services::nft_discount::consume_nft_usage,
     services::price_guard::{
         fallback_price_for, first_sane_price, sanitize_points_usd_base, sanitize_usd_notional,
@@ -48,6 +52,8 @@ pub struct PrivacyVerificationPayload {
     pub verifier: Option<String>,
     pub nullifier: Option<String>,
     pub commitment: Option<String>,
+    pub note_ciphertext: Option<String>,
+    pub note_cid: Option<String>,
     pub proof: Option<Vec<String>>,
     pub public_inputs: Option<Vec<String>>,
 }
@@ -65,6 +71,7 @@ pub struct ExecuteBridgeRequest {
     pub existing_bridge_id: Option<String>,
     pub xverse_user_id: Option<String>,
     pub onchain_tx_hash: Option<String>,
+    pub plan_id: Option<String>,
     pub mode: Option<String>,
     pub hide_balance: Option<bool>,
     pub privacy: Option<PrivacyVerificationPayload>,
@@ -87,6 +94,8 @@ pub struct ExecuteBridgeResponse {
     pub ai_level_points_bonus_percent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy_tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_cid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deposit_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +131,7 @@ const ONCHAIN_DISCOUNT_TIMEOUT_MS: u64 = 2_500;
 const NFT_DISCOUNT_CACHE_TTL_SECS: u64 = 300;
 const NFT_DISCOUNT_CACHE_STALE_SECS: u64 = 1_800;
 const NFT_DISCOUNT_CACHE_MAX_ENTRIES: usize = 100_000;
+const NFT_DISCOUNT_REDIS_PREFIX: &str = "bridge:nft_discount:v1";
 const BRIDGE_MEV_FEE_RATE: f64 = 0.01;
 const BRIDGE_AI_LEVEL_2_POINTS_BONUS_PERCENT: f64 = 20.0;
 const BRIDGE_AI_LEVEL_3_POINTS_BONUS_PERCENT: f64 = 40.0;
@@ -197,13 +207,43 @@ async fn cache_nft_discount(key: &str, discount: f64) {
     }
 }
 
+// Internal helper that supports `nft_discount_redis_key` operations in the bridge flow.
+fn nft_discount_redis_key(cache_key: &str) -> String {
+    format!("{}:{}", NFT_DISCOUNT_REDIS_PREFIX, cache_key)
+}
+
+// Internal helper that fetches data for `get_cached_nft_discount_redis` in the bridge flow.
+async fn get_cached_nft_discount_redis(state: &AppState, cache_key: &str) -> Option<f64> {
+    let redis_key = nft_discount_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = conn.get(redis_key).await.ok()?;
+    raw.and_then(|value| value.parse::<f64>().ok())
+}
+
+// Internal helper that supports `cache_nft_discount_redis` operations in the bridge flow.
+async fn cache_nft_discount_redis(state: &AppState, cache_key: &str, discount: f64) {
+    let redis_key = nft_discount_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let _: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(redis_key, discount.to_string(), NFT_DISCOUNT_CACHE_TTL_SECS)
+        .await;
+}
+
+// Internal helper that supports `invalidate_cached_nft_discount_redis` operations in the bridge flow.
+async fn invalidate_cached_nft_discount_redis(state: &AppState, cache_key: &str) {
+    let redis_key = nft_discount_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let _: std::result::Result<usize, redis::RedisError> = conn.del(redis_key).await;
+}
+
 // Internal helper that supports `invalidate_cached_nft_discount` operations in the bridge flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
-async fn invalidate_cached_nft_discount(contract: &str, user: &str) {
+async fn invalidate_cached_nft_discount(state: &AppState, contract: &str, user: &str) {
     let key = nft_discount_cache_key(contract, user);
     let cache = nft_discount_cache();
     let mut guard = cache.write().await;
     guard.remove(&key);
+    invalidate_cached_nft_discount_redis(state, &key).await;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -258,9 +298,9 @@ async fn read_nft_usage_snapshot(
     }
 
     let tier = felt_to_u128(&info[0]).unwrap_or(0) as i32;
-    let discount = u256_from_felts(&info[1], &info[2]).unwrap_or(0) as f64;
-    let max_usage = u256_from_felts(&info[3], &info[4]).unwrap_or(0);
-    let used_in_period = u256_from_felts(&info[5], &info[6]).unwrap_or(0);
+    let discount = u256_from_felts_u128(&info[1], &info[2]).unwrap_or(0) as f64;
+    let max_usage = u256_from_felts_u128(&info[3], &info[4]).unwrap_or(0);
+    let used_in_period = u256_from_felts_u128(&info[5], &info[6]).unwrap_or(0);
     Ok(Some(NftUsageSnapshot {
         tier: tier.max(0),
         discount_percent: discount.clamp(0.0, 100.0),
@@ -350,6 +390,10 @@ async fn cached_nft_discount_from_local_state(state: &AppState, user_address: &s
     {
         return cached.max(0.0);
     }
+    if let Some(redis_cached) = get_cached_nft_discount_redis(state, &cache_key).await {
+        cache_nft_discount(&cache_key, redis_cached).await;
+        return redis_cached.max(0.0);
+    }
 
     let period_epoch = current_nft_period_epoch();
     match state
@@ -373,6 +417,7 @@ async fn cached_nft_discount_from_local_state(state: &AppState, user_address: &s
                 0.0
             };
             cache_nft_discount(&cache_key, discount).await;
+            cache_nft_discount_redis(state, &cache_key, discount).await;
             discount
         }
         Ok(None) => 0.0,
@@ -478,7 +523,7 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
     }
 
     let chain_active = felt_to_u128(&result[0]).unwrap_or(0) > 0;
-    let chain_discount = u256_from_felts(&result[1], &result[2]).unwrap_or(0) as f64;
+    let chain_discount = u256_from_felts_u128(&result[1], &result[2]).unwrap_or(0) as f64;
 
     let usage_snapshot = match timeout(
         Duration::from_millis(ONCHAIN_DISCOUNT_TIMEOUT_MS),
@@ -554,6 +599,7 @@ async fn refresh_nft_discount_for_submit(state: &AppState, user_address: &str) -
     };
 
     cache_nft_discount(&cache_key, resolved_discount).await;
+    cache_nft_discount_redis(state, &cache_key, resolved_discount).await;
     resolved_discount
 }
 
@@ -585,7 +631,7 @@ async fn record_nft_discount_usage_after_submit(state: &AppState, user_address: 
             );
         }
     }
-    invalidate_cached_nft_discount(contract, user_address).await;
+    invalidate_cached_nft_discount(state, contract, user_address).await;
 }
 
 // Internal helper that supports `latest_price_usd` operations in the bridge flow.
@@ -627,10 +673,6 @@ fn normalize_bridge_onchain_tx_hash(
     let from_chain_normalized = from_chain.trim().to_ascii_lowercase();
     let raw = if let Some(value) = tx_hash.map(str::trim).filter(|v| !v.is_empty()) {
         value.to_string()
-    } else if from_chain_normalized == "bitcoin" || from_chain_normalized == "btc" {
-        // Garden-style BTC flow creates order first, then user deposits to generated address.
-        // Keep internal tx_hash field non-empty for DB correlation even before real BTC txid exists.
-        return Ok(hex::encode(rand::random::<[u8; 32]>()));
     } else {
         return Err(crate::error::AppError::BadRequest(
             "Bridge requires onchain_tx_hash from user-signed transaction".to_string(),
@@ -1139,10 +1181,7 @@ pub async fn get_bridge_quote(
         ));
     }
 
-    let amount: f64 = req
-        .amount
-        .parse()
-        .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
+    let amount_units = parse_amount_to_units(&req.amount, &req.token)?;
 
     if token_address_for(&req.token).is_none() {
         return Err(crate::error::AppError::InvalidToken);
@@ -1154,21 +1193,21 @@ pub async fn get_bridge_quote(
             &req.to_chain,
             &req.token,
             req.to_token.as_deref(),
-            amount,
+            amount_units,
         )
         .await?;
 
     let provider = best_route.provider.as_str();
-    let bridge_fee = best_route.fee;
-    let estimated_receive = best_route.amount_out;
+    let bridge_fee = format_units_for_ui(best_route.fee_units, &req.token);
+    let estimated_receive = format_units_for_ui(best_route.amount_out_units, &best_route.to_token);
     let estimated_time = estimate_time(provider);
 
     let response = BridgeQuoteResponse {
         from_chain: req.from_chain,
         to_chain: req.to_chain,
         amount: req.amount,
-        estimated_receive: estimated_receive.to_string(),
-        fee: bridge_fee.to_string(),
+        estimated_receive,
+        fee: bridge_fee,
         estimated_time: estimated_time.to_string(),
         bridge_provider: provider.to_string(),
     };
@@ -1188,6 +1227,10 @@ pub async fn execute_bridge(
         .list_wallet_addresses(&user_address)
         .await
         .unwrap_or_default();
+    if let Some(plan_id) = req.plan_id.as_deref() {
+        let plan_user = require_starknet_user(&headers, &state).await?;
+        ensure_plan_active_for_user(&state.config, plan_id, &plan_user).await?;
+    }
 
     let discount_usage_user = match require_starknet_user(&headers, &state).await {
         Ok(starknet_user) => Some(starknet_user),
@@ -1277,10 +1320,8 @@ pub async fn execute_bridge(
         }
     }
 
-    let amount: f64 = req
-        .amount
-        .parse()
-        .map_err(|_| crate::error::AppError::BadRequest("Invalid amount".to_string()))?;
+    let amount_units = parse_amount_to_units(&req.amount, &req.token)?;
+    let amount = float_from_units_lossy(amount_units, &req.token);
 
     if token_address_for(&req.token).is_none() {
         return Err(crate::error::AppError::InvalidToken);
@@ -1300,12 +1341,17 @@ pub async fn execute_bridge(
             &req.to_chain,
             &req.token,
             req.to_token.as_deref(),
-            amount,
+            amount_units,
         )
         .await?;
+    let from_token = best_route.from_token.clone();
+    let to_token = best_route.to_token.clone();
     let is_garden_provider = best_route.provider.as_str() == BRIDGE_GARDEN;
-    let is_garden_user_signed_source = is_garden_provider
-        && (from_chain_normalized == "ethereum" || from_chain_normalized == "starknet");
+    let is_garden_order_flow = is_garden_provider
+        && (from_chain_normalized == "ethereum"
+            || from_chain_normalized == "starknet"
+            || from_chain_normalized == "bitcoin"
+            || from_chain_normalized == "btc");
 
     let applied_nft_discount_percent = if let Some(discount_user) = discount_usage_user.as_deref() {
         refresh_nft_discount_for_submit(&state, discount_user).await
@@ -1313,7 +1359,8 @@ pub async fn execute_bridge(
         0.0
     };
     let mev_fee = mev_fee_for_mode(req.mode.as_deref(), amount);
-    let route_fee_with_mev = best_route.fee + mev_fee;
+    let bridge_fee = float_from_units_lossy(best_route.fee_units, &from_token);
+    let route_fee_with_mev = bridge_fee + mev_fee;
     let effective_bridge_fee =
         route_fee_with_mev * (1.0 - (applied_nft_discount_percent.clamp(0.0, 100.0) / 100.0));
     if applied_nft_discount_percent > 0.0 || mev_fee > 0.0 {
@@ -1322,24 +1369,20 @@ pub async fn execute_bridge(
             user_address,
             req.mode.as_deref().unwrap_or("transparent"),
             applied_nft_discount_percent,
-            best_route.fee,
+            bridge_fee,
             mev_fee,
             effective_bridge_fee
         );
     }
 
-    let estimated_receive = if let Some(raw) = req.estimated_out_amount.as_deref() {
-        raw.parse::<f64>().unwrap_or(best_route.amount_out)
+    let estimated_receive_units = if let Some(raw) = req.estimated_out_amount.as_deref() {
+        parse_amount_to_units(raw, &to_token)
+            .ok()
+            .unwrap_or(best_route.amount_out_units)
     } else {
-        best_route.amount_out
+        best_route.amount_out_units
     };
-    let to_token = req
-        .to_token
-        .as_deref()
-        .unwrap_or(req.token.as_str())
-        .trim()
-        .to_ascii_uppercase();
-    let from_token = req.token.trim().to_ascii_uppercase();
+    let estimated_receive = float_from_units_lossy(estimated_receive_units, &to_token);
     let user_ai_level = match state.db.get_user_ai_level(&user_address).await {
         Ok(level) => level,
         Err(err) => {
@@ -1366,7 +1409,7 @@ pub async fn execute_bridge(
         ));
     }
 
-    if is_garden_user_signed_source
+    if is_garden_order_flow
         && req
             .onchain_tx_hash
             .as_deref()
@@ -1394,13 +1437,18 @@ pub async fn execute_bridge(
         let submission = client
             .execute_bridge(&quote, &source_owner, &recipient)
             .await?;
+        let status = if from_chain_normalized == "bitcoin" || from_chain_normalized == "btc" {
+            "awaiting_deposit"
+        } else {
+            "awaiting_source_signature"
+        };
         let response = ExecuteBridgeResponse {
             bridge_id: submission.order_id,
-            status: "awaiting_source_signature".to_string(),
+            status: status.to_string(),
             from_chain: req.from_chain,
             to_chain: req.to_chain,
             amount: req.amount,
-            estimated_receive: estimated_receive.to_string(),
+            estimated_receive: format_units_for_ui(estimated_receive_units, &to_token),
             estimated_time: estimate_time(best_route.provider.as_str()).to_string(),
             fee_before_discount: route_fee_with_mev.to_string(),
             fee_discount_saved: (route_fee_with_mev - effective_bridge_fee)
@@ -1411,6 +1459,7 @@ pub async fn execute_bridge(
             points_pending: true,
             ai_level_points_bonus_percent: ai_level_points_bonus_percent.to_string(),
             privacy_tx_hash: None,
+            note_cid: None,
             deposit_address: submission.deposit_address,
             deposit_amount: submission.deposit_amount,
             evm_approval_transaction: submission.evm_approval_transaction,
@@ -1428,7 +1477,7 @@ pub async fn execute_bridge(
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
 
     // Keep DB tx_hash within varchar(66), while exposing a human-friendly bridge_id.
-    let mut bridge_id = if is_garden_user_signed_source {
+    let mut bridge_id = if is_garden_order_flow {
         let existing = req
             .existing_bridge_id
             .as_deref()
@@ -1452,10 +1501,30 @@ pub async fn execute_bridge(
     let mut garden_starknet_initiate_transaction: Option<GardenStarknetTransaction> = None;
     let mut privacy_verification_tx: Option<String> = None;
     let privacy_payload = req.privacy.as_ref();
+    let mut note_cid = privacy_payload.and_then(|payload| payload.note_cid.clone());
     if should_hide {
         let verifier =
             parse_privacy_verifier_kind(privacy_payload.and_then(|p| p.verifier.as_deref()))?;
         let privacy_seed = privacy_seed_from_tx_hash(&tx_hash);
+        if note_cid.is_none() {
+            if let Some(note_ciphertext) = privacy_payload
+                .and_then(|payload| payload.note_ciphertext.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let commitment = privacy_payload
+                    .and_then(|payload| payload.commitment.as_deref())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| hash::hash_string(&format!("commitment:{privacy_seed}")));
+                let filecoin = FilecoinService::from_config(&state.config)?;
+                let uploaded_cid = filecoin
+                    .upload_encrypted_note(note_ciphertext, &commitment)
+                    .await?;
+                note_cid = Some(uploaded_cid);
+            }
+        }
         let privacy_tx =
             verify_private_trade_with_verifier(&state, &privacy_seed, privacy_payload, verifier)
                 .await
@@ -1499,6 +1568,7 @@ pub async fn execute_bridge(
         usd_value: Some(rust_decimal::Decimal::from_f64_retain(volume_usd).unwrap()),
         fee_paid: Some(rust_decimal::Decimal::from_f64_retain(effective_bridge_fee).unwrap()),
         points_earned: Some(rust_decimal::Decimal::ZERO),
+        is_private: should_hide,
         timestamp: chrono::Utc::now(),
         processed: false,
     };
@@ -1521,7 +1591,7 @@ pub async fn execute_bridge(
             }
         } else if let Some(contract) = discount_contract_address(&state) {
             // Keep in-memory cache aligned with latest submit-time chain validation.
-            invalidate_cached_nft_discount(contract, discount_user).await;
+            invalidate_cached_nft_discount(&state, contract, discount_user).await;
         }
     }
 
@@ -1551,7 +1621,7 @@ pub async fn execute_bridge(
             from_chain: req.from_chain,
             to_chain: req.to_chain,
             amount: req.amount,
-            estimated_receive: estimated_receive.to_string(),
+            estimated_receive: format_units_for_ui(estimated_receive_units, &to_token),
             estimated_time: estimate_time(response_provider).to_string(),
             fee_before_discount: route_fee_with_mev.to_string(),
             fee_discount_saved: (route_fee_with_mev - effective_bridge_fee)
@@ -1562,6 +1632,7 @@ pub async fn execute_bridge(
             points_pending: true,
             ai_level_points_bonus_percent: ai_level_points_bonus_percent.to_string(),
             privacy_tx_hash: privacy_verification_tx.clone(),
+            note_cid: note_cid.clone(),
             deposit_address: None,
             deposit_amount: None,
             evm_approval_transaction: None,
@@ -1592,7 +1663,7 @@ pub async fn execute_bridge(
         let quote = LayerSwapQuote {
             from_chain: req.from_chain.clone(),
             to_chain: req.to_chain.clone(),
-            token: req.token.clone(),
+            token: from_token.clone(),
             amount_in: amount,
             amount_out: estimated_receive,
             fee: effective_bridge_fee,
@@ -1607,7 +1678,7 @@ pub async fn execute_bridge(
         let quote = AtomiqQuote {
             from_chain: req.from_chain.clone(),
             to_chain: req.to_chain.clone(),
-            token: req.token.clone(),
+            token: from_token.clone(),
             amount_in: amount,
             amount_out: estimated_receive,
             fee: effective_bridge_fee,
@@ -1615,7 +1686,7 @@ pub async fn execute_bridge(
         };
         bridge_id = client.execute_bridge(&quote, &recipient).await?;
     } else if best_route.provider.as_str() == BRIDGE_GARDEN {
-        if is_garden_user_signed_source {
+        if is_garden_order_flow {
             tracing::info!(
                 "Using existing Garden order for finalize step: order_id={} source_chain={}",
                 bridge_id,
@@ -1670,7 +1741,7 @@ pub async fn execute_bridge(
         from_chain: req.from_chain,
         to_chain: req.to_chain,
         amount: req.amount,
-        estimated_receive: estimated_receive.to_string(),
+        estimated_receive: format_units_for_ui(estimated_receive_units, &to_token),
         estimated_time: estimate_time(best_route.provider.as_str()).to_string(),
         fee_before_discount: route_fee_with_mev.to_string(),
         fee_discount_saved: (route_fee_with_mev - effective_bridge_fee)
@@ -1681,6 +1752,7 @@ pub async fn execute_bridge(
         points_pending: true,
         ai_level_points_bonus_percent: ai_level_points_bonus_percent.to_string(),
         privacy_tx_hash: privacy_verification_tx.clone(),
+        note_cid: note_cid.clone(),
         deposit_address: garden_deposit_address,
         deposit_amount: garden_deposit_amount,
         evm_approval_transaction: garden_evm_approval_transaction,
@@ -1849,10 +1921,14 @@ mod tests {
     // Internal helper that parses or transforms values for `normalize_bridge_hash_allows_missing_btc_hash` in the bridge flow.
     // Keeps validation, normalization, and intent-binding logic centralized.
     fn normalize_bridge_hash_allows_missing_btc_hash() {
-        let normalized = normalize_bridge_onchain_tx_hash(None, "bitcoin")
-            .expect("missing btc hash should generate internal correlation id");
-        assert_eq!(normalized.len(), 64);
-        assert!(normalized.chars().all(|c| c.is_ascii_hexdigit()));
+        let err = normalize_bridge_onchain_tx_hash(None, "bitcoin")
+            .expect_err("missing btc hash should be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("onchain_tx_hash"),
+            "unexpected error message: {}",
+            message
+        );
     }
 
     #[test]

@@ -239,7 +239,7 @@
   <text x="1260" y="465" text-anchor="middle" font-size="10" fill="#c09010" opacity="0.9">points / reward sink</text>
   <text x="1260" y="483" text-anchor="middle" font-size="10" fill="#806010" opacity="0.9">stake / unstake</text>
   <text x="1260" y="501" text-anchor="middle" font-size="10" fill="#806010" opacity="0.9">claim_rewards()</text>
-  <text x="1260" y="520" text-anchor="middle" font-size="9" fill="#504010" font-style="italic">staking_btc.cairo</text>
+  <text x="1260" y="520" text-anchor="middle" font-size="9" fill="#504010" font-style="italic">staking_wbtc.cairo</text>
 
   <!-- ══════════════════════════════════ -->
   <!-- PANEL 5: USERS + PRIVACY ROUTER    -->

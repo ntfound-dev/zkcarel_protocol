@@ -44,6 +44,12 @@ pub struct LinkWalletAddressRequest {
     pub provider: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UnlinkWalletAddressRequest {
+    pub chain: String,
+    pub address: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct LinkWalletAddressResponse {
     pub user_address: String,
@@ -487,7 +493,7 @@ pub async fn get_onchain_balances(
             evm_address.as_deref(),
             state.config.token_strk_l1_address.as_deref(),
         ) {
-            (Some(evm_addr), Some(token)) => {
+            (Some(evm_addr), Some(token)) if is_valid_evm_address(token) => {
                 fetch_optional_balance_with_timeout(
                     "wallet evm STRK",
                     fetch_evm_erc20_balance(&state.config, evm_addr, token),
@@ -610,6 +616,7 @@ pub async fn get_onchain_balances(
         wbtc = prefer_portfolio_onchain_fallback("WBTC", wbtc, fallback_for("WBTC"));
 
         let portfolio_balance_fallback = get_cached_portfolio_balance_amounts_for_scope(
+            &state,
             &user_address,
             &portfolio_scope_addresses,
         )
@@ -708,6 +715,12 @@ pub async fn link_wallet_address(
     Json(req): Json<LinkWalletAddressRequest>,
 ) -> Result<Json<ApiResponse<LinkWalletAddressResponse>>> {
     let user_address = require_user(&headers, &state).await?;
+    if state.db.is_wallet_link_locked(&user_address).await? {
+        return Err(AppError::BadRequest(
+            "Wallet addresses are locked for this account because points, volume, or referrals have already been recorded."
+                .to_string(),
+        ));
+    }
     let chain = normalize_wallet_chain(&req.chain)
         .ok_or_else(|| AppError::BadRequest("Unsupported wallet chain".to_string()))?;
     let wallet_address = req.address.trim();
@@ -733,6 +746,55 @@ pub async fn link_wallet_address(
         chain: chain.to_string(),
         address: wallet_address.to_string(),
     })))
+}
+
+/// DELETE /api/v1/wallet/unlink
+pub async fn unlink_wallet_address(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<UnlinkWalletAddressRequest>,
+) -> Result<Json<ApiResponse<String>>> {
+    let user_address = require_user(&headers, &state).await?;
+    if state.db.is_wallet_link_locked(&user_address).await? {
+        return Err(AppError::BadRequest(
+            "Wallet addresses are locked for this account because points, volume, or referrals have already been recorded."
+                .to_string(),
+        ));
+    }
+    let chain = normalize_wallet_chain(&req.chain)
+        .ok_or_else(|| AppError::BadRequest("Unsupported wallet chain".to_string()))?;
+    let wallet_address = req.address.trim();
+    if wallet_address.is_empty() {
+        return Err(AppError::BadRequest(
+            "Wallet address is required".to_string(),
+        ));
+    }
+    validate_link_wallet_address(chain, wallet_address)?;
+
+    let auth_normalized = normalize_wallet_address_for_compare(chain, &user_address);
+    let target_normalized = normalize_wallet_address_for_compare(chain, wallet_address);
+    if !auth_normalized.is_empty() && auth_normalized == target_normalized {
+        return Err(AppError::BadRequest(
+            "Cannot unlink the wallet currently used for authentication. Reconnect with another wallet first.".to_string(),
+        ));
+    }
+
+    let linked_wallets = state.db.list_wallet_addresses(&user_address).await?;
+    if linked_wallets.len() <= 1 {
+        return Err(AppError::BadRequest(
+            "Cannot unlink the last primary wallet".to_string(),
+        ));
+    }
+
+    let removed = state
+        .db
+        .delete_wallet_address(&user_address, chain, wallet_address)
+        .await?;
+    if !removed {
+        return Err(AppError::NotFound("Wallet not linked".to_string()));
+    }
+
+    Ok(Json(ApiResponse::success("Wallet unlinked".to_string())))
 }
 
 /// GET /api/v1/wallet/linked
@@ -766,8 +828,28 @@ fn normalize_wallet_chain(chain: &str) -> Option<&'static str> {
     }
 }
 
+// Internal helper that supports `normalize_wallet_address_for_compare` operations.
+fn normalize_wallet_address_for_compare(chain: &str, wallet_address: &str) -> String {
+    let trimmed = wallet_address.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    match chain {
+        "bitcoin" => trimmed.to_ascii_lowercase(),
+        "starknet" => normalize_felt_hex(trimmed),
+        _ => {
+            let lower = trimmed.to_ascii_lowercase();
+            if let Some(stripped) = lower.strip_prefix("0x") {
+                format!("0x{}", stripped)
+            } else {
+                lower
+            }
+        }
+    }
+}
+
 // Internal helper that checks conditions for `is_valid_evm_address`.
-fn is_valid_evm_address(value: &str) -> bool {
+pub(crate) fn is_valid_evm_address(value: &str) -> bool {
     let normalized = value.trim();
     normalized.starts_with("0x")
         && normalized.len() == 42
@@ -1001,7 +1083,7 @@ pub(crate) async fn fetch_starknet_erc20_balance(
         Some(value) => value,
         None => fetch_starknet_decimals(config, token).await.unwrap_or(18),
     };
-    Ok(Some(scale_u128(raw, decimals)))
+    Ok(Some(scale_u256(raw, decimals)))
 }
 
 /// Fetches data for `fetch_starknet_erc20_balances_batch`.
@@ -1075,7 +1157,7 @@ pub(crate) async fn fetch_starknet_erc20_balances_batch(
                     _ => 18,
                 }
             });
-            out.insert(symbol.clone(), Some(scale_u128(raw, decimals)));
+            out.insert(symbol.clone(), Some(scale_u256(raw, decimals)));
         } else {
             out.insert(symbol.clone(), None);
         }
@@ -1227,7 +1309,7 @@ pub(crate) async fn fetch_btc_balance(config: &Config, address: &str) -> Result<
     let xverse_api_key = config.xverse_api_key.clone();
     let blockstream_enabled = env_flag("BTC_BALANCE_ENABLE_BLOCKSTREAM_TESTNET", false);
 
-    let source_priority = if config.is_testnet() {
+    let candidates = if config.is_testnet() {
         let (
             unisat_testnet4,
             unisat_testnet,
@@ -1295,11 +1377,27 @@ pub(crate) async fn fetch_btc_balance(config: &Config, address: &str) -> Result<
         vec![("unisat_mainnet", unisat_mainnet), ("xverse", xverse)]
     };
 
-    for (source, candidate) in source_priority {
+    let mut selected: Option<(f64, usize, &str)> = None;
+    for (priority, (source, candidate)) in candidates.iter().enumerate() {
         if let Some(balance) = candidate {
-            tracing::debug!("BTC balance resolved from {} for {}", source, address);
-            return Ok(Some(balance));
+            let balance = *balance;
+            let should_replace = match selected {
+                None => true,
+                Some((best_balance, best_priority, _)) => {
+                    let better_balance = balance > best_balance + 1e-9;
+                    let same_balance = (balance - best_balance).abs() <= 1e-9;
+                    better_balance || (same_balance && priority < best_priority)
+                }
+            };
+            if should_replace {
+                selected = Some((balance, priority, *source));
+            }
         }
+    }
+
+    if let Some((balance, _priority, source)) = selected {
+        tracing::debug!("BTC balance resolved from {} for {}", source, address);
+        return Ok(Some(balance));
     }
 
     tracing::debug!("BTC balance unavailable from all sources for {}", address);
@@ -1450,17 +1548,23 @@ fn env_flag(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
-// Internal helper that parses or transforms values for `scale_u128`.
-fn scale_u128(value: u128, decimals: u8) -> f64 {
-    let base = 10_f64.powi(decimals as i32);
-    (value as f64) / base
-}
-
 // Internal helper that parses or transforms values for `scale_u256`.
 fn scale_u256(value: U256, decimals: u8) -> f64 {
-    let base = 10_f64.powi(decimals as i32);
-    let raw = value.as_u128() as f64;
-    raw / base
+    if decimals == 0 {
+        return value.to_string().parse::<f64>().unwrap_or(0.0);
+    }
+    let raw = value.to_string();
+    let decimals = decimals as usize;
+    let scaled = if raw.len() <= decimals {
+        let mut out = String::from("0.");
+        out.push_str(&"0".repeat(decimals.saturating_sub(raw.len())));
+        out.push_str(&raw);
+        out
+    } else {
+        let split = raw.len() - decimals;
+        format!("{}.{}", &raw[..split], &raw[split..])
+    };
+    scaled.parse::<f64>().unwrap_or(0.0)
 }
 
 ethers::contract::abigen!(

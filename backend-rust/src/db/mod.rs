@@ -23,6 +23,11 @@ pub struct NftDiscountState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct IndexedBlock {
+    pub block_number: i64,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct PriceTickUpsert<'a> {
     pub token: &'a str,
@@ -57,8 +62,12 @@ mod tests {
             host: "0.0.0.0".to_string(),
             port: 3000,
             environment: "development".to_string(),
+            app_base_url: None,
             database_url: database_url.to_string(),
             database_max_connections: 1,
+            database_connect_timeout_secs: 1,
+            database_connect_retries: 1,
+            database_connect_retry_delay_ms: 0,
             redis_url: "redis://localhost:6379".to_string(),
             point_calculator_batch_size: 100,
             point_calculator_max_batches_per_tick: 1,
@@ -76,6 +85,9 @@ mod tests {
             referral_system_address: None,
             ai_executor_address: "0x0000000000000000000000000000000000000006".to_string(),
             ai_signature_verifier_address: None,
+            ai_plan_router_address: None,
+            ai_identity_registry_address: None,
+            ai_agent_id: None,
             bridge_aggregator_address: "0x0000000000000000000000000000000000000007".to_string(),
             zk_privacy_router_address: "0x0000000000000000000000000000000000000008".to_string(),
             battleship_garaga_address: None,
@@ -84,11 +96,8 @@ mod tests {
             privacy_auto_garaga_proof_file: None,
             privacy_auto_garaga_public_inputs_file: None,
             privacy_auto_garaga_prover_cmd: None,
+            privacy_auto_garaga_prover_sha256: None,
             privacy_auto_garaga_prover_timeout_ms: 45_000,
-            private_btc_swap_address: "0x0000000000000000000000000000000000000009".to_string(),
-            dark_pool_address: "0x0000000000000000000000000000000000000010".to_string(),
-            private_payments_address: "0x0000000000000000000000000000000000000011".to_string(),
-            anonymous_credentials_address: "0x0000000000000000000000000000000000000012".to_string(),
             token_strk_address: None,
             token_eth_address: None,
             token_btc_address: None,
@@ -118,6 +127,7 @@ mod tests {
             discord_bot_token: None,
             social_tasks_json: None,
             admin_manual_key: None,
+            admin_reset_confirm_key: None,
             dev_wallet_address: None,
             ai_level_burn_address: None,
             layerswap_api_key: None,
@@ -126,11 +136,19 @@ mod tests {
             atomiq_api_url: "".to_string(),
             garden_api_key: None,
             garden_api_url: "".to_string(),
-            sumo_login_api_key: None,
-            sumo_login_api_url: "".to_string(),
             xverse_api_key: None,
             xverse_api_url: "".to_string(),
             privacy_verifier_routers: "".to_string(),
+            filecoin_backend: None,
+            filecoin_pin_api_url: None,
+            filecoin_pin_api_key: None,
+            filecoin_synapse_script: None,
+            filecoin_synapse_private_key: None,
+            filecoin_synapse_rpc_url: None,
+            filecoin_synapse_with_cdn: None,
+            filecoin_synapse_source: None,
+            ipfs_api_url: None,
+            ipfs_api_key: None,
             stripe_secret_key: None,
             moonpay_api_key: None,
             rate_limit_public: 1,
@@ -140,6 +158,7 @@ mod tests {
             ai_rate_limit_level_1_per_window: 20,
             ai_rate_limit_level_2_per_window: 10,
             ai_rate_limit_level_3_per_window: 8,
+            api_docs_enabled: true,
             cors_allowed_origins: "*".to_string(),
             oracle_asset_ids: "".to_string(),
             bridge_provider_ids: "".to_string(),
@@ -206,13 +225,60 @@ impl Database {
     /// # Notes
     /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
     pub async fn new(config: &Config) -> anyhow::Result<Self> {
-        let pool = PgPoolOptions::new()
-            .max_connections(config.database_max_connections)
-            .connect(&config.database_url)
-            .await
-            .context("failed to connect to PostgreSQL using DATABASE_URL")?;
+        let mut last_err: Option<sqlx::Error> = None;
+        let retries = config.database_connect_retries.max(1);
+        for attempt in 1..=retries {
+            let connect_future = PgPoolOptions::new()
+                .max_connections(config.database_max_connections)
+                .connect(&config.database_url);
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(config.database_connect_timeout_secs),
+                connect_future,
+            )
+            .await;
+            match result {
+                Ok(Ok(pool)) => return Ok(Self { pool }),
+                Ok(Err(err)) => {
+                    let err_text = err.to_string();
+                    last_err = Some(err);
+                    if attempt < retries {
+                        let delay = std::time::Duration::from_millis(
+                            config.database_connect_retry_delay_ms,
+                        );
+                        tracing::warn!(
+                            "Database connect attempt {}/{} failed ({}); retrying in {:?}",
+                            attempt,
+                            retries,
+                            err_text,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+                Err(_) => {
+                    last_err = Some(sqlx::Error::PoolTimedOut);
+                    if attempt < retries {
+                        let delay = std::time::Duration::from_millis(
+                            config.database_connect_retry_delay_ms,
+                        );
+                        tracing::warn!(
+                            "Database connect attempt {}/{} timed out; retrying in {:?}",
+                            attempt,
+                            retries,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
 
-        Ok(Self { pool })
+        Err(anyhow::anyhow!(
+            "failed to connect to PostgreSQL using DATABASE_URL: {}",
+            last_err
+                .map(|err| err.to_string())
+                .unwrap_or_else(|| "unknown error".to_string())
+        ))
     }
 
     /// Handles `run_migrations` logic.
@@ -396,115 +462,6 @@ impl Database {
         Ok(applied.clamp(1, 3) as u8)
     }
 
-    /// Updates state for `record_ai_level_upgrade`.
-    ///
-    /// # Arguments
-    /// * Uses function parameters as validated input and runtime context.
-    ///
-    /// # Returns
-    /// * `Ok(...)` when processing succeeds.
-    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
-    ///
-    /// # Notes
-    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
-    pub async fn record_ai_level_upgrade(
-        &self,
-        user_address: &str,
-        previous_level: u8,
-        target_level: u8,
-        payment_carel: rust_decimal::Decimal,
-        onchain_tx_hash: &str,
-        block_number: i64,
-    ) -> Result<()> {
-        ensure_varchar_max("ai_level_upgrades.user_address", user_address, 66)?;
-        ensure_varchar_max("ai_level_upgrades.onchain_tx_hash", onchain_tx_hash, 66)?;
-        if !(1..=3).contains(&previous_level) || !(2..=3).contains(&target_level) {
-            return Err(AppError::BadRequest(
-                "Invalid AI level upgrade payload".to_string(),
-            ));
-        }
-        sqlx::query(
-            "INSERT INTO ai_level_upgrades
-                (user_address, previous_level, target_level, payment_carel, onchain_tx_hash, block_number)
-             VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(user_address)
-        .bind(previous_level as i16)
-        .bind(target_level as i16)
-        .bind(payment_carel)
-        .bind(onchain_tx_hash)
-        .bind(block_number)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    /// Fetches data for `find_user_by_sumo_subject`.
-    ///
-    /// # Arguments
-    /// * Uses function parameters as validated input and runtime context.
-    ///
-    /// # Returns
-    /// * `Ok(...)` when processing succeeds.
-    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
-    ///
-    /// # Notes
-    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
-    pub async fn find_user_by_sumo_subject(&self, sumo_subject: &str) -> Result<Option<String>> {
-        ensure_varchar_max("users.sumo_subject", sumo_subject, 255)?;
-        let row: Option<String> =
-            sqlx::query_scalar("SELECT address FROM users WHERE sumo_subject = $1 LIMIT 1")
-                .bind(sumo_subject)
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(row)
-    }
-
-    /// Updates state for `bind_sumo_subject_once`.
-    ///
-    /// # Arguments
-    /// * Uses function parameters as validated input and runtime context.
-    ///
-    /// # Returns
-    /// * `Ok(...)` when processing succeeds.
-    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
-    ///
-    /// # Notes
-    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
-    pub async fn bind_sumo_subject_once(&self, address: &str, sumo_subject: &str) -> Result<()> {
-        ensure_varchar_max("users.address", address, 66)?;
-        ensure_varchar_max("users.sumo_subject", sumo_subject, 255)?;
-
-        let result = sqlx::query(
-            "UPDATE users
-             SET sumo_subject = $1
-             WHERE address = $2
-               AND (sumo_subject IS NULL OR sumo_subject = $1)",
-        )
-        .bind(sumo_subject)
-        .bind(address)
-        .execute(&self.pool)
-        .await?;
-
-        if result.rows_affected() > 0 {
-            return Ok(());
-        }
-
-        let current: Option<String> =
-            sqlx::query_scalar("SELECT sumo_subject FROM users WHERE address = $1")
-                .bind(address)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        if current.as_deref() == Some(sumo_subject) {
-            return Ok(());
-        }
-
-        Err(AppError::BadRequest(
-            "This account is already bound to another Sumo identity".to_string(),
-        ))
-    }
-
     /// Updates state for `update_last_active`.
     ///
     /// # Arguments
@@ -574,7 +531,7 @@ impl Database {
         let address = sqlx::query_scalar::<_, String>(
             "SELECT address
              FROM users
-             WHERE UPPER(SUBSTRING(address FROM 3 FOR 8)) = $1
+             WHERE RIGHT(UPPER(address), 8) = $1
              ORDER BY created_at ASC
              LIMIT 1",
         )
@@ -828,6 +785,53 @@ impl Database {
         .await?;
         Ok(rows)
     }
+
+    /// Checks whether wallet linking should be locked for the user
+    /// because points/volume/referral have already been recorded.
+    pub async fn is_wallet_link_locked(&self, user_address: &str) -> Result<bool> {
+        ensure_varchar_max("user_wallet_addresses.user_address", user_address, 66)?;
+
+        let locked: Option<i64> = sqlx::query_scalar(
+            r#"
+            WITH scope AS (
+                SELECT LOWER($1) AS addr
+                UNION
+                SELECT LOWER(wallet_address) AS addr
+                FROM user_wallet_addresses
+                WHERE LOWER(user_address) = LOWER($1)
+            ),
+            points_hit AS (
+                SELECT 1::bigint FROM points
+                WHERE LOWER(user_address) IN (SELECT addr FROM scope)
+                LIMIT 1
+            ),
+            tx_hit AS (
+                SELECT 1::bigint FROM transactions
+                WHERE LOWER(user_address) IN (SELECT addr FROM scope)
+                LIMIT 1
+            ),
+            referral_hit AS (
+                SELECT 1::bigint FROM users
+                WHERE LOWER(referrer) = LOWER($1)
+                LIMIT 1
+            )
+            SELECT 1::bigint
+            FROM (
+                SELECT * FROM points_hit
+                UNION ALL
+                SELECT * FROM tx_hit
+                UNION ALL
+                SELECT * FROM referral_hit
+            ) AS hits
+            LIMIT 1
+            "#,
+        )
+        .bind(user_address)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(locked.is_some())
+    }
 }
 
 // ==================== POINTS QUERIES ====================
@@ -947,6 +951,33 @@ impl Database {
         Ok(())
     }
 
+    /// Removes a linked wallet address for a user.
+    pub async fn delete_wallet_address(
+        &self,
+        user_address: &str,
+        chain: &str,
+        wallet_address: &str,
+    ) -> Result<bool> {
+        let chain = normalize_wallet_chain_value(chain);
+        let wallet_address = normalize_wallet_address_value(&chain, wallet_address);
+
+        ensure_varchar_max("user_wallet_addresses.user_address", user_address, 66)?;
+        ensure_varchar_max("user_wallet_addresses.chain", &chain, 16)?;
+        ensure_varchar_max("user_wallet_addresses.wallet_address", &wallet_address, 128)?;
+
+        let result = sqlx::query(
+            "DELETE FROM user_wallet_addresses
+             WHERE user_address = $1 AND chain = $2 AND wallet_address = $3",
+        )
+        .bind(user_address)
+        .bind(&chain)
+        .bind(&wallet_address)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Handles `add_referral_points` logic.
     ///
     /// # Arguments
@@ -1024,18 +1055,8 @@ impl Database {
 
 // ==================== TRANSACTION QUERIES ====================
 impl Database {
-    /// Updates state for `save_transaction`.
-    ///
-    /// # Arguments
-    /// * Uses function parameters as validated input and runtime context.
-    ///
-    /// # Returns
-    /// * `Ok(...)` when processing succeeds.
-    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
-    ///
-    /// # Notes
-    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
-    pub async fn save_transaction(&self, tx: &Transaction) -> Result<()> {
+    // Internal helper that validates inputs for transaction persistence.
+    fn validate_transaction_fields(tx: &Transaction) -> Result<()> {
         ensure_varchar_max("transactions.tx_hash", &tx.tx_hash, 66)?;
         ensure_varchar_max("transactions.user_address", &tx.user_address, 66)?;
         ensure_varchar_max("transactions.tx_type", &tx.tx_type, 20)?;
@@ -1050,6 +1071,22 @@ impl Database {
         if let Some(token_out) = tx.token_out.as_deref() {
             ensure_varchar_max("transactions.token_out", token_out, 66)?;
         }
+        Ok(())
+    }
+
+    /// Updates state for `save_transaction`.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
+    pub async fn save_transaction(&self, tx: &Transaction) -> Result<()> {
+        Self::validate_transaction_fields(tx)?;
 
         let mut db_tx = self.pool.begin().await?;
 
@@ -1099,6 +1136,128 @@ impl Database {
         .execute(&mut *db_tx)
         .await?;
 
+        db_tx.commit().await?;
+        Ok(())
+    }
+
+    /// Inserts a transaction once and fails on duplicate tx_hash.
+    ///
+    /// Returns `true` if the transaction was inserted, `false` if it already exists.
+    pub async fn insert_transaction_once(&self, tx: &Transaction) -> Result<bool> {
+        Self::validate_transaction_fields(tx)?;
+
+        let mut db_tx = self.pool.begin().await?;
+
+        // Ensure FK target exists for indexed on-chain addresses that have not touched auth flows yet.
+        sqlx::query(
+            "INSERT INTO users (address, last_active)
+             VALUES ($1, NOW())
+             ON CONFLICT (address)
+             DO UPDATE SET last_active = NOW()",
+        )
+        .bind(&tx.user_address)
+        .execute(&mut *db_tx)
+        .await?;
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO transactions
+                (tx_hash, block_number, user_address, tx_type,
+                 token_in, token_out, amount_in, amount_out,
+                 usd_value, fee_paid, points_earned, timestamp)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            ON CONFLICT (tx_hash) DO NOTHING
+            "#,
+        )
+        .bind(&tx.tx_hash)
+        .bind(tx.block_number)
+        .bind(&tx.user_address)
+        .bind(&tx.tx_type)
+        .bind(&tx.token_in)
+        .bind(&tx.token_out)
+        .bind(tx.amount_in)
+        .bind(tx.amount_out)
+        .bind(tx.usd_value)
+        .bind(tx.fee_paid)
+        .bind(tx.points_earned)
+        .bind(tx.timestamp)
+        .execute(&mut *db_tx)
+        .await?;
+
+        db_tx.commit().await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Batch insert/update for transactions.
+    ///
+    /// # Arguments
+    /// * Uses function parameters as validated input and runtime context.
+    ///
+    /// # Returns
+    /// * `Ok(...)` when processing succeeds.
+    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
+    ///
+    /// # Notes
+    /// * Uses a single transaction with bulk insert to avoid N+1 overhead.
+    pub async fn save_transactions_batch(&self, txs: &[Transaction]) -> Result<()> {
+        if txs.is_empty() {
+            return Ok(());
+        }
+
+        for tx in txs {
+            Self::validate_transaction_fields(tx)?;
+        }
+
+        let mut db_tx = self.pool.begin().await?;
+
+        let addresses: Vec<String> = txs.iter().map(|tx| tx.user_address.clone()).collect();
+        sqlx::query(
+            "INSERT INTO users (address, last_active)
+             SELECT UNNEST($1::text[]), NOW()
+             ON CONFLICT (address)
+             DO UPDATE SET last_active = NOW()",
+        )
+        .bind(&addresses)
+        .execute(&mut *db_tx)
+        .await?;
+
+        let mut builder = sqlx::QueryBuilder::new(
+            "INSERT INTO transactions
+                (tx_hash, block_number, user_address, tx_type,
+                 token_in, token_out, amount_in, amount_out,
+                 usd_value, fee_paid, points_earned, timestamp) ",
+        );
+
+        builder.push_values(txs, |mut b, tx| {
+            b.push_bind(&tx.tx_hash)
+                .push_bind(tx.block_number)
+                .push_bind(&tx.user_address)
+                .push_bind(&tx.tx_type)
+                .push_bind(&tx.token_in)
+                .push_bind(&tx.token_out)
+                .push_bind(tx.amount_in)
+                .push_bind(tx.amount_out)
+                .push_bind(tx.usd_value)
+                .push_bind(tx.fee_paid)
+                .push_bind(tx.points_earned)
+                .push_bind(tx.timestamp);
+        });
+
+        builder.push(
+            " ON CONFLICT (tx_hash) DO UPDATE
+              SET
+                  block_number = GREATEST(transactions.block_number, EXCLUDED.block_number),
+                  token_in = COALESCE(transactions.token_in, EXCLUDED.token_in),
+                  token_out = COALESCE(transactions.token_out, EXCLUDED.token_out),
+                  amount_in = COALESCE(transactions.amount_in, EXCLUDED.amount_in),
+                  amount_out = COALESCE(transactions.amount_out, EXCLUDED.amount_out),
+                  usd_value = COALESCE(transactions.usd_value, EXCLUDED.usd_value),
+                  fee_paid = COALESCE(transactions.fee_paid, EXCLUDED.fee_paid),
+                  points_earned = COALESCE(transactions.points_earned, EXCLUDED.points_earned),
+                  timestamp = GREATEST(transactions.timestamp, EXCLUDED.timestamp)",
+        );
+
+        builder.build().execute(&mut *db_tx).await?;
         db_tx.commit().await?;
         Ok(())
     }
@@ -1179,6 +1338,79 @@ impl Database {
         .fetch_one(&self.pool)
         .await?;
         Ok(count)
+    }
+
+    /// Fetches the latest indexed block metadata.
+    pub async fn get_latest_indexed_block(&self) -> Result<Option<IndexedBlock>> {
+        let block = sqlx::query_as::<_, IndexedBlock>(
+            "SELECT block_number::bigint AS block_number
+             FROM indexed_blocks
+             ORDER BY block_number DESC
+             LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(block)
+    }
+
+    /// Fetches the stored block hash for a given block number.
+    pub async fn get_indexed_block_hash(&self, block_number: i64) -> Result<Option<String>> {
+        let hash = sqlx::query_scalar::<_, String>(
+            "SELECT block_hash FROM indexed_blocks WHERE block_number = $1",
+        )
+        .bind(block_number)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(hash)
+    }
+
+    /// Inserts or updates indexed block metadata.
+    pub async fn upsert_indexed_block(
+        &self,
+        block_number: i64,
+        block_hash: &str,
+        parent_hash: Option<&str>,
+    ) -> Result<()> {
+        ensure_varchar_max("indexed_blocks.block_hash", block_hash, 66)?;
+        if let Some(parent_hash) = parent_hash {
+            ensure_varchar_max("indexed_blocks.parent_hash", parent_hash, 66)?;
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO indexed_blocks
+                (block_number, block_hash, parent_hash, indexed_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (block_number) DO UPDATE
+            SET block_hash = EXCLUDED.block_hash,
+                parent_hash = EXCLUDED.parent_hash,
+                indexed_at = NOW()
+            "#,
+        )
+        .bind(block_number)
+        .bind(block_hash)
+        .bind(parent_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Rolls back indexed blocks and their transactions starting from the given block number.
+    pub async fn rollback_indexed_blocks_from(&self, from_block: i64) -> Result<u64> {
+        let mut db_tx = self.pool.begin().await?;
+
+        sqlx::query("DELETE FROM transactions WHERE block_number >= $1")
+            .bind(from_block)
+            .execute(&mut *db_tx)
+            .await?;
+
+        let result = sqlx::query("DELETE FROM indexed_blocks WHERE block_number >= $1")
+            .bind(from_block)
+            .execute(&mut *db_tx)
+            .await?;
+
+        db_tx.commit().await?;
+        Ok(result.rows_affected())
     }
 }
 
@@ -1265,7 +1497,7 @@ impl Database {
                 SELECT 1 FROM faucet_claims
                 WHERE user_address = $1
                   AND token = $2
-                  AND claimed_at >= NOW() - make_interval(hours => $3)
+                  AND claimed_at >= NOW() - ($3::double precision * INTERVAL '1 hour')
             )
             "#,
         )
@@ -1278,35 +1510,121 @@ impl Database {
         Ok(!recent_claim)
     }
 
-    /// Handles `record_faucet_claim` logic.
-    ///
-    /// # Arguments
-    /// * Uses function parameters as validated input and runtime context.
-    ///
-    /// # Returns
-    /// * `Ok(...)` when processing succeeds.
-    /// * `Err(AppError)` when validation, authorization, or integration checks fail.
-    ///
-    /// # Notes
-    /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
-    pub async fn record_faucet_claim(
+    /// Attempts to reserve a faucet claim slot to prevent parallel spam.
+    pub async fn reserve_faucet_claim(
         &self,
         address: &str,
         token: &str,
         amount: f64,
-        tx_hash: &str,
-    ) -> Result<()> {
-        // lebih aman: gunakan from_f64 dan handle Option di caller jika perlu
+    ) -> Result<Option<i64>> {
         let amount_dec = rust_decimal::Decimal::from_f64_retain(amount);
 
-        sqlx::query(
+        let row = sqlx::query(
             "INSERT INTO faucet_claims (user_address, token, amount, tx_hash)
-             VALUES ($1, $2, $3, $4)",
+             VALUES ($1, $2, $3, '')
+             ON CONFLICT DO NOTHING
+             RETURNING id::bigint as id",
         )
         .bind(address)
         .bind(token)
         .bind(amount_dec)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.get::<i64, _>("id")))
+    }
+
+    /// Finalizes a pending faucet claim with the transaction hash.
+    pub async fn finalize_faucet_claim(&self, claim_id: i64, tx_hash: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE faucet_claims
+             SET tx_hash = $2
+             WHERE id = $1",
+        )
+        .bind(claim_id)
         .bind(tx_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Releases a pending faucet claim reservation.
+    pub async fn release_faucet_claim(&self, claim_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM faucet_claims WHERE id = $1")
+            .bind(claim_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+// ==================== BRIDGE QUERIES ====================
+impl Database {
+    /// Reserves a BTC bridge mint record to prevent duplicate mints.
+    pub async fn reserve_btc_bridge_mint(
+        &self,
+        btc_txid: &str,
+        vault_address: &str,
+        btc_sats: i64,
+        usd_value: f64,
+        points_amount: f64,
+        recipient: &str,
+    ) -> Result<Option<i64>> {
+        ensure_varchar_max("bridge_btc_mints.btc_txid", btc_txid, 100)?;
+        ensure_varchar_max("bridge_btc_mints.vault_address", vault_address, 128)?;
+        ensure_varchar_max("bridge_btc_mints.starknet_recipient", recipient, 66)?;
+        if btc_txid.trim().is_empty()
+            || recipient.trim().is_empty()
+            || vault_address.trim().is_empty()
+        {
+            return Err(AppError::BadRequest(
+                "bridge_btc_mints requires txid, vault_address, and recipient".to_string(),
+            ));
+        }
+
+        let usd_dec = rust_decimal::Decimal::from_f64_retain(usd_value).ok_or_else(|| {
+            AppError::BadRequest("bridge_btc_mints.usd_value invalid".to_string())
+        })?;
+        let points_dec =
+            rust_decimal::Decimal::from_f64_retain(points_amount).ok_or_else(|| {
+                AppError::BadRequest("bridge_btc_mints.points_amount invalid".to_string())
+            })?;
+
+        let row = sqlx::query(
+            "INSERT INTO bridge_btc_mints\n                (btc_txid, vault_address, btc_sats, usd_value, points_amount, starknet_recipient)\n             VALUES ($1, $2, $3, $4, $5, $6)\n             ON CONFLICT (btc_txid) DO NOTHING\n             RETURNING id::bigint as id",
+        )
+        .bind(btc_txid)
+        .bind(vault_address)
+        .bind(btc_sats)
+        .bind(usd_dec)
+        .bind(points_dec)
+        .bind(recipient)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.get::<i64, _>("id")))
+    }
+
+    /// Marks a BTC bridge mint as finalized.
+    pub async fn finalize_btc_bridge_mint(&self, mint_id: i64, mint_tx_hash: &str) -> Result<()> {
+        ensure_varchar_max("bridge_btc_mints.mint_tx_hash", mint_tx_hash, 66)?;
+        sqlx::query(
+            "UPDATE bridge_btc_mints\n             SET mint_tx_hash = $2,\n                 status = 'minted',\n                 updated_at = NOW()\n             WHERE id = $1",
+        )
+        .bind(mint_id)
+        .bind(mint_tx_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Marks a BTC bridge mint as failed.
+    pub async fn mark_btc_bridge_mint_failed(&self, mint_id: i64, error: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE bridge_btc_mints\n             SET status = 'failed',\n                 error = $2,\n                 updated_at = NOW()\n             WHERE id = $1",
+        )
+        .bind(mint_id)
+        .bind(error)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1338,7 +1656,7 @@ impl Database {
         let row = sqlx::query(
             "INSERT INTO notifications (user_address, type, title, message, data)
              VALUES ($1,$2,$3,$4,$5)
-             RETURNING id",
+             RETURNING id::BIGINT as id",
         )
         .bind(user)
         .bind(notif_type)
@@ -1371,7 +1689,16 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<Notification>> {
         let notifications = sqlx::query_as::<_, Notification>(
-            "SELECT * FROM notifications
+            "SELECT
+                id::BIGINT as id,
+                user_address,
+                type,
+                title,
+                message,
+                data,
+                read,
+                created_at
+             FROM notifications
              WHERE user_address = $1
              ORDER BY created_at DESC
              LIMIT $2 OFFSET $3",

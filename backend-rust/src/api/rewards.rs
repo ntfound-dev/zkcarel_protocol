@@ -1,4 +1,5 @@
 use axum::{extract::State, http::HeaderMap, Json};
+use redis::AsyncCommands;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::services::onchain::{
-    parse_felt, u256_from_felts, u256_to_felts, OnchainInvoker, OnchainReader,
+    parse_felt, u256_from_felts_u128, u256_to_felts, OnchainInvoker, OnchainReader,
 };
 use crate::services::MerkleGenerator;
 use crate::tokenomics::{
@@ -35,6 +36,8 @@ const ONCHAIN_POINTS_CACHE_MAX_ENTRIES: usize = 100_000;
 const POINTS_RESPONSE_CACHE_TTL_SECS: u64 = 15;
 const POINTS_RESPONSE_CACHE_STALE_SECS: u64 = 180;
 const POINTS_RESPONSE_CACHE_MAX_ENTRIES: usize = 100_000;
+const ONCHAIN_POINTS_REDIS_PREFIX: &str = "rewards:onchain_points:v1";
+const POINTS_RESPONSE_REDIS_PREFIX: &str = "rewards:points_response:v1";
 
 #[derive(Clone, Copy)]
 struct CachedOnchainPoints {
@@ -107,14 +110,82 @@ fn onchain_points_cache_key(contract: &str, epoch: i64, user: &str) -> String {
     )
 }
 
+// Internal helper that supports `onchain_points_redis_key` operations.
+fn onchain_points_redis_key(cache_key: &str) -> String {
+    format!("{}:{}", ONCHAIN_POINTS_REDIS_PREFIX, cache_key)
+}
+
+// Internal helper that supports `points_response_redis_key` operations.
+fn points_response_redis_key(cache_key: &str) -> String {
+    format!("{}:{}", POINTS_RESPONSE_REDIS_PREFIX, cache_key)
+}
+
+// Internal helper that supports `cache_onchain_points_redis` operations.
+async fn cache_onchain_points_redis(state: &AppState, cache_key: &str, points: Option<f64>) {
+    let Ok(payload) = serde_json::to_string(&points) else {
+        return;
+    };
+    let redis_key = onchain_points_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let _: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(redis_key, payload, ONCHAIN_POINTS_CACHE_TTL_SECS)
+        .await;
+}
+
+// Internal helper that fetches data for `get_cached_onchain_points_redis`.
+async fn get_cached_onchain_points_redis(state: &AppState, cache_key: &str) -> Option<Option<f64>> {
+    let redis_key = onchain_points_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = conn.get(redis_key).await.ok()?;
+    raw.and_then(|value| serde_json::from_str(&value).ok())
+}
+
+// Internal helper that supports `cache_points_response_redis` operations.
+async fn cache_points_response_redis(state: &AppState, cache_key: &str, value: &PointsResponse) {
+    let Ok(payload) = serde_json::to_string(value) else {
+        return;
+    };
+    let redis_key = points_response_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let _: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(redis_key, payload, POINTS_RESPONSE_CACHE_TTL_SECS)
+        .await;
+}
+
+// Internal helper that fetches data for `get_cached_points_response_redis`.
+async fn get_cached_points_response_redis(
+    state: &AppState,
+    cache_key: &str,
+) -> Option<PointsResponse> {
+    let redis_key = points_response_redis_key(cache_key);
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = conn.get(redis_key).await.ok()?;
+    raw.and_then(|value| serde_json::from_str(&value).ok())
+}
+
 // Internal helper that fetches data for `get_cached_onchain_points`.
-async fn get_cached_onchain_points(key: &str, max_age: Duration) -> Option<CachedOnchainPoints> {
+async fn get_cached_onchain_points(
+    state: &AppState,
+    key: &str,
+    max_age: Duration,
+) -> Option<CachedOnchainPoints> {
     let cache = onchain_points_cache();
     let guard = cache.read().await;
-    let entry = guard.get(key).copied()?;
-    if entry.fetched_at.elapsed() <= max_age {
-        return Some(entry);
+    if let Some(entry) = guard.get(key).copied() {
+        if entry.fetched_at.elapsed() <= max_age {
+            return Some(entry);
+        }
     }
+    drop(guard);
+
+    if let Some(points) = get_cached_onchain_points_redis(state, key).await {
+        cache_onchain_points(key, points).await;
+        return Some(CachedOnchainPoints {
+            fetched_at: Instant::now(),
+            points,
+        });
+    }
+
     None
 }
 
@@ -150,13 +221,25 @@ fn points_response_cache_key(user_addresses: &[String], epoch: i64) -> String {
 }
 
 // Internal helper that fetches data for `get_cached_points_response`.
-async fn get_cached_points_response(key: &str, max_age: Duration) -> Option<PointsResponse> {
+async fn get_cached_points_response(
+    state: &AppState,
+    key: &str,
+    max_age: Duration,
+) -> Option<PointsResponse> {
     let cache = points_response_cache();
     let guard = cache.read().await;
-    let entry = guard.get(key)?;
-    if entry.fetched_at.elapsed() <= max_age {
-        return Some(entry.value.clone());
+    if let Some(entry) = guard.get(key) {
+        if entry.fetched_at.elapsed() <= max_age {
+            return Some(entry.value.clone());
+        }
     }
+    drop(guard);
+
+    if let Some(redis_cached) = get_cached_points_response_redis(state, key).await {
+        cache_points_response(key, redis_cached.clone()).await;
+        return Some(redis_cached);
+    }
+
     None
 }
 
@@ -177,7 +260,7 @@ async fn cache_points_response(key: &str, value: PointsResponse) {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PointsResponse {
     pub current_epoch: i64,
     pub total_points: f64,
@@ -201,11 +284,12 @@ pub struct PointsResponse {
     pub claim_net_percent: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ClaimResponse {
-    pub tx_hash: String,
+    pub tx_hash: Option<String>,
     pub amount_carel: f64,
     pub points_converted: f64,
+    pub onchain: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -395,7 +479,7 @@ async fn read_onchain_user_points(
             "get_user_points returned malformed payload".to_string(),
         ));
     }
-    u256_from_felts(&result[0], &result[1])
+    u256_from_felts_u128(&result[0], &result[1])
 }
 
 /// GET /api/v1/rewards/points
@@ -407,6 +491,7 @@ pub async fn get_points(
     let current_epoch = chrono::Utc::now().timestamp() / EPOCH_DURATION_SECONDS; // ~30 days
     let cache_key = points_response_cache_key(&user_addresses, current_epoch);
     if let Some(cached) = get_cached_points_response(
+        &state,
         &cache_key,
         Duration::from_secs(POINTS_RESPONSE_CACHE_TTL_SECS),
     )
@@ -418,6 +503,7 @@ pub async fn get_points(
     let fetch_lock = points_response_fetch_lock_for(&cache_key).await;
     let _guard = fetch_lock.lock().await;
     if let Some(cached) = get_cached_points_response(
+        &state,
         &cache_key,
         Duration::from_secs(POINTS_RESPONSE_CACHE_TTL_SECS),
     )
@@ -429,10 +515,12 @@ pub async fn get_points(
     match build_points_response(&state, &headers, &user_addresses, current_epoch).await {
         Ok(response) => {
             cache_points_response(&cache_key, response.clone()).await;
+            cache_points_response_redis(&state, &cache_key, &response).await;
             Ok(Json(ApiResponse::success(response)))
         }
         Err(err) => {
             if let Some(stale) = get_cached_points_response(
+                &state,
                 &cache_key,
                 Duration::from_secs(POINTS_RESPONSE_CACHE_STALE_SECS),
             )
@@ -466,6 +554,7 @@ async fn build_points_response(
         if let Ok(starknet_user) = super::require_starknet_user(headers, state).await {
             let cache_key = onchain_points_cache_key(contract, current_epoch, &starknet_user);
             if let Some(cached) = get_cached_onchain_points(
+                state,
                 &cache_key,
                 Duration::from_secs(ONCHAIN_POINTS_CACHE_TTL_SECS),
             )
@@ -481,11 +570,13 @@ async fn build_points_response(
                     Ok(value) => {
                         let value_f64 = value as f64;
                         cache_onchain_points(&cache_key, Some(value_f64)).await;
+                        cache_onchain_points_redis(state, &cache_key, Some(value_f64)).await;
                         onchain_points = Some(value_f64);
                         onchain_starknet_address = Some(starknet_user);
                     }
                     Err(err) => {
                         if let Some(stale) = get_cached_onchain_points(
+                            state,
                             &cache_key,
                             Duration::from_secs(ONCHAIN_POINTS_CACHE_STALE_SECS),
                         )
@@ -522,6 +613,7 @@ async fn build_points_response(
                             }
                             // Negative-cache transient failures to avoid retry storms.
                             cache_onchain_points(&cache_key, None).await;
+                            cache_onchain_points_redis(state, &cache_key, None).await;
                         }
                     }
                 }
@@ -713,10 +805,7 @@ pub async fn claim_rewards(
     let carel_amount = net_carel_dec.to_f64().unwrap_or(0.0);
     let total_points: f64 = points.total_points.to_string().parse().unwrap_or(0.0);
 
-    let mut tx_hash = format!("0x{}", hex::encode(rand::random::<[u8; 32]>()));
-    let mut carel_amount_out = carel_amount;
-
-    match claim_rewards_onchain(
+    let (tx_hash, carel_amount_out) = match claim_rewards_onchain(
         &state,
         prev_epoch,
         &user_address,
@@ -727,14 +816,16 @@ pub async fn claim_rewards(
     .await
     {
         Ok(Some((onchain_tx, net_amount))) => {
-            tx_hash = onchain_tx;
-            carel_amount_out = net_amount.to_f64().unwrap_or(carel_amount);
+            (onchain_tx, net_amount.to_f64().unwrap_or(carel_amount))
         }
-        Ok(None) => {}
-        Err(err) => {
-            return Err(err);
+        Ok(None) => {
+            return Err(AppError::BadRequest(
+                "On-chain rewards claim is not configured. Finalize epoch and configure snapshot distributor."
+                    .to_string(),
+            ));
         }
-    }
+        Err(err) => return Err(err),
+    };
 
     tracing::info!(
         "Rewards claimed: {} CAREL for {} points (user: {})",
@@ -744,9 +835,10 @@ pub async fn claim_rewards(
     );
 
     let response = ClaimResponse {
-        tx_hash,
+        tx_hash: Some(tx_hash),
         amount_carel: carel_amount_out,
         points_converted: total_points,
+        onchain: true,
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -831,13 +923,11 @@ pub async fn convert_to_carel(
     let carel_amount = carel_amount_dec.to_f64().unwrap_or(0.0);
     let points_converted = points_value.to_f64().unwrap_or(0.0);
 
-    // Execute conversion (mock)
-    let tx_hash = format!("0x{}", hex::encode(rand::random::<[u8; 32]>()));
-
     let response = ClaimResponse {
-        tx_hash,
+        tx_hash: None,
         amount_carel: carel_amount,
         points_converted,
+        onchain: false,
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -862,9 +952,20 @@ async fn claim_rewards_onchain(
     };
 
     let merkle = MerkleGenerator::new(state.db.clone(), state.config.clone());
+    let stored_root = merkle.get_merkle_root(epoch).await.map_err(|_| {
+        AppError::BadRequest(
+            "Merkle root not finalized for this epoch. Run finalize epoch job first.".to_string(),
+        )
+    })?;
     let tree = merkle
         .generate_for_epoch_with_distribution(epoch, total_distribution)
         .await?;
+    if tree.root != stored_root {
+        return Err(AppError::BadRequest(
+            "Merkle root mismatch for this epoch. Recompute and resubmit epoch snapshot."
+                .to_string(),
+        ));
+    }
     let amount_wei = merkle.calculate_reward_amount_wei_with_distribution(
         user_points,
         total_points_epoch,
@@ -878,10 +979,6 @@ async fn claim_rewards_onchain(
         .iter()
         .map(crypto_felt_to_core)
         .collect::<Result<Vec<_>>>()?;
-
-    let root_core = crypto_felt_to_core(&tree.root)?;
-    let submit_call = build_submit_root_call(contract, epoch as u64, root_core)?;
-    let _ = invoker.invoke(submit_call).await?;
 
     let call = build_batch_claim_call(
         contract,
@@ -967,20 +1064,6 @@ fn build_batch_claim_call(
     ];
     calldata.extend_from_slice(proofs);
 
-    Ok(Call {
-        to,
-        selector,
-        calldata,
-    })
-}
-
-// Internal helper that builds inputs for `build_submit_root_call`.
-fn build_submit_root_call(contract: &str, epoch: u64, root: Felt) -> Result<Call> {
-    let to = parse_felt(contract)?;
-    let selector = get_selector_from_name("submit_merkle_root")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-
-    let calldata = vec![Felt::from(epoch as u128), root];
     Ok(Call {
         to,
         selector,

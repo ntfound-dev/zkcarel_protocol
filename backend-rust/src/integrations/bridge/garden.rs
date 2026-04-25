@@ -1,4 +1,6 @@
-use crate::error::Result;
+use crate::{
+    bridge_amounts::format_units_for_ui, error::Result, integrations::bridge::BridgeQuote,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
@@ -43,8 +45,8 @@ impl GardenClient {
         to_chain: &str,
         from_token: &str,
         to_token: &str,
-        amount: f64,
-    ) -> Result<GardenQuote> {
+        amount_units: u128,
+    ) -> Result<BridgeQuote> {
         if self.api_url.trim().is_empty() {
             return Err(crate::error::AppError::ExternalAPI(
                 "Garden API is not configured".to_string(),
@@ -53,7 +55,7 @@ impl GardenClient {
 
         let from_asset = map_garden_asset(from_chain, from_token);
         let to_asset = map_garden_asset(to_chain, to_token);
-        let from_amount_units = to_base_units(amount, garden_decimals(from_token));
+        let from_amount_units = amount_units;
 
         let mut url = Url::parse(&format!("{}/v2/quote", self.api_url.trim_end_matches('/')))
             .map_err(|e| crate::error::AppError::Internal(format!("Invalid Garden URL: {}", e)))?;
@@ -130,18 +132,20 @@ impl GardenClient {
         )
         .unwrap_or(1800);
 
-        let amount_out = from_base_units(destination_amount_units, garden_decimals(to_token));
-        let fee = from_base_units(fee_units, garden_decimals(from_token));
         let estimated_time_minutes = ((estimated_time_seconds as f64) / 60.0).ceil() as u32;
 
-        Ok(GardenQuote {
-            from_chain: from_chain.to_string(),
-            to_chain: to_chain.to_string(),
+        let amount_out_units = if destination_amount_units == 0 {
+            from_amount_units
+        } else {
+            destination_amount_units
+        };
+
+        Ok(BridgeQuote {
             from_token: from_token.to_string(),
             to_token: to_token.to_string(),
-            amount_in: amount,
-            amount_out,
-            fee,
+            amount_in_units: from_amount_units,
+            amount_out_units,
+            fee_units,
             estimated_time_minutes: estimated_time_minutes.max(1),
         })
     }
@@ -878,37 +882,9 @@ fn to_base_units(amount: f64, decimals: u32) -> u128 {
     (amount * scale).round() as u128
 }
 
-// Internal helper that supports `from_base_units` operations.
-fn from_base_units(amount: u128, decimals: u32) -> f64 {
-    if amount == 0 {
-        return 0.0;
-    }
-    let scale = 10_f64.powi(decimals as i32);
-    (amount as f64) / scale
-}
-
 // Internal helper that supports `compact_error_message` operations.
 fn compact_error_message(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-// Internal helper that supports `format_units_as_token_amount` operations.
-fn format_units_as_token_amount(units: u128, token: &str) -> String {
-    let decimals = garden_decimals(token);
-    if decimals == 0 {
-        return units.to_string();
-    }
-    let scale = 10u128.pow(decimals);
-    let whole = units / scale;
-    let frac = units % scale;
-    if frac == 0 {
-        return whole.to_string();
-    }
-    let mut frac_text = format!("{:0width$}", frac, width = decimals as usize);
-    while frac_text.ends_with('0') {
-        frac_text.pop();
-    }
-    format!("{}.{}", whole, frac_text)
 }
 
 // Internal helper that supports `parse_garden_amount_range` operations.
@@ -977,9 +953,9 @@ fn humanize_garden_api_error(
                 to_symbol,
                 from_chain_label,
                 to_chain_label,
-                format_units_as_token_amount(min_units, &from_symbol),
+                format_units_for_ui(min_units, &from_symbol),
                 from_symbol,
-                format_units_as_token_amount(max_units, &from_symbol),
+                format_units_for_ui(max_units, &from_symbol),
                 from_symbol
             );
         }

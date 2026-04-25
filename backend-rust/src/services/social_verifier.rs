@@ -1,5 +1,10 @@
 use crate::services::onchain::{parse_felt, OnchainInvoker};
-use crate::{config::Config, constants::EPOCH_DURATION_SECONDS, db::Database, error::Result};
+use crate::{
+    config::Config,
+    constants::EPOCH_DURATION_SECONDS,
+    db::Database,
+    error::{AppError, Result},
+};
 use rust_decimal::prelude::ToPrimitive;
 use starknet_core::types::Call;
 use starknet_core::utils::get_selector_from_name;
@@ -7,6 +12,34 @@ use starknet_core::utils::get_selector_from_name;
 // Internal helper that supports `proof_is_valid` operations.
 fn proof_is_valid(proof: &str) -> bool {
     proof.len() > 10
+}
+
+// Internal helper that supports `allow_mock_social_verification` operations.
+fn allow_mock_social_verification(config: &Config) -> bool {
+    if config.is_testnet() {
+        return true;
+    }
+    let mode = std::env::var("SOCIAL_VERIFIER_MODE")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    matches!(mode.as_str(), "mock" | "off" | "test" | "dev")
+}
+
+// Internal helper that guards production usage without real provider verification.
+fn ensure_social_verifier_configured(config: &Config) -> Result<()> {
+    if allow_mock_social_verification(config) {
+        return Ok(());
+    }
+    if config.twitter_bearer_token.is_some()
+        || config.telegram_bot_token.is_some()
+        || config.discord_bot_token.is_some()
+    {
+        return Ok(());
+    }
+    Err(AppError::BadRequest(
+        "Social verification is not configured for mainnet. Implement provider verification or set SOCIAL_VERIFIER_MODE=mock for testnet/dev.".to_string(),
+    ))
 }
 
 /// Social Verifier - Verifies social media tasks
@@ -40,62 +73,67 @@ impl SocialVerifier {
     /// Verify Twitter task
     pub async fn verify_twitter(
         &self,
-        user_address: &str,
+        _user_address: &str,
         task: &str,
         proof: &str,
     ) -> Result<bool> {
-        if self.config.twitter_bearer_token.is_none() {
-            tracing::warn!(
-                "Twitter API key not configured; falling back to local proof check for {}",
-                user_address
-            );
+        ensure_social_verifier_configured(&self.config)?;
+        if allow_mock_social_verification(&self.config) {
             return Ok(proof_is_valid(proof));
         }
-        // TODO: Integrate with Twitter API
-        tracing::info!("Verifying Twitter task: {} for {}", task, user_address);
-
-        // Mock verification
-        Ok(proof_is_valid(proof))
+        if self.config.twitter_bearer_token.is_none() {
+            return Err(AppError::BadRequest(
+                "Twitter verification is not configured".to_string(),
+            ));
+        }
+        return Err(AppError::BadRequest(format!(
+            "Twitter verification is not implemented on backend (task={})",
+            task
+        )));
     }
 
     /// Verify Telegram task
     pub async fn verify_telegram(
         &self,
-        user_address: &str,
+        _user_address: &str,
         task: &str,
         proof: &str,
     ) -> Result<bool> {
-        if self.config.telegram_bot_token.is_none() {
-            tracing::warn!(
-                "Telegram bot token not configured; falling back to local proof check for {}",
-                user_address
-            );
+        ensure_social_verifier_configured(&self.config)?;
+        if allow_mock_social_verification(&self.config) {
             return Ok(proof_is_valid(proof));
         }
-        // TODO: Integrate with Telegram Bot API
-        tracing::info!("Verifying Telegram task: {} for {}", task, user_address);
-
-        Ok(proof_is_valid(proof))
+        if self.config.telegram_bot_token.is_none() {
+            return Err(AppError::BadRequest(
+                "Telegram verification is not configured".to_string(),
+            ));
+        }
+        return Err(AppError::BadRequest(format!(
+            "Telegram verification is not implemented on backend (task={})",
+            task
+        )));
     }
 
     /// Verify Discord task
     pub async fn verify_discord(
         &self,
-        user_address: &str,
+        _user_address: &str,
         task: &str,
         proof: &str,
     ) -> Result<bool> {
-        if self.config.discord_bot_token.is_none() {
-            tracing::warn!(
-                "Discord bot token not configured; falling back to local proof check for {}",
-                user_address
-            );
+        ensure_social_verifier_configured(&self.config)?;
+        if allow_mock_social_verification(&self.config) {
             return Ok(proof_is_valid(proof));
         }
-        // TODO: Integrate with Discord API
-        tracing::info!("Verifying Discord task: {} for {}", task, user_address);
-
-        Ok(proof_is_valid(proof))
+        if self.config.discord_bot_token.is_none() {
+            return Err(AppError::BadRequest(
+                "Discord verification is not configured".to_string(),
+            ));
+        }
+        return Err(AppError::BadRequest(format!(
+            "Discord verification is not implemented on backend (task={})",
+            task
+        )));
     }
 
     /// Award social points

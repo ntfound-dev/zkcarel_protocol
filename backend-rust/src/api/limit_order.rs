@@ -10,9 +10,14 @@ use super::privacy::{
     ensure_public_inputs_bind_root_nullifier, ensure_public_inputs_bind_v3_shape,
     generate_auto_garaga_payload, AutoPrivacyPayloadResponse, AutoPrivacyTxContext,
 };
-use super::swap::{parse_decimal_to_u256_parts, token_decimals};
+use super::swap::{
+    parse_decimal_to_u256_parts, payload_from_request as swap_payload_from_request, token_decimals,
+    wait_for_shielded_note_deposit_timestamp,
+};
+use crate::error::Result;
+use crate::services::ai_plan::ensure_plan_active_for_user;
 use crate::services::notification_service::{NotificationService, NotificationType};
-use crate::services::onchain::{felt_to_u128, parse_felt, OnchainReader};
+use crate::services::onchain::{parse_felt, OnchainReader};
 use crate::services::privacy_verifier::parse_privacy_verifier_kind;
 use crate::services::relayer::RelayerService;
 use crate::{
@@ -22,7 +27,6 @@ use crate::{
         POINTS_MIN_USD_LIMIT_ORDER_TESTNET, POINTS_PER_USD_LIMIT_ORDER,
     },
     crypto::hash,
-    error::Result,
     models::{
         user::PrivacyVerificationPayload as ModelPrivacyVerificationPayload, ApiResponse,
         CreateLimitOrderRequest, LimitOrder, PaginatedResponse,
@@ -36,10 +40,11 @@ use crate::{
 use starknet_core::types::{Call, Felt, FunctionCall};
 use starknet_core::utils::get_selector_from_name;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use super::{
     onchain_privacy::{
-        normalize_onchain_tx_hash, should_run_privacy_verification,
+        ensure_nullifier_unused, normalize_onchain_tx_hash, should_run_privacy_verification,
         verify_onchain_hide_balance_invoke_tx, HideBalanceFlow,
         PrivacyVerificationPayload as OnchainPrivacyPayload,
     },
@@ -74,6 +79,7 @@ pub struct ListOrdersQuery {
 #[derive(Debug, Deserialize)]
 pub struct CancelOrderRequest {
     pub onchain_tx_hash: Option<String>,
+    pub plan_id: Option<String>,
     pub hide_balance: Option<bool>,
     pub privacy: Option<ModelPrivacyVerificationPayload>,
 }
@@ -295,6 +301,8 @@ fn map_privacy_payload(
 ) -> Option<OnchainPrivacyPayload> {
     payload.map(|value| OnchainPrivacyPayload {
         verifier: value.verifier.clone(),
+        note_version: value.note_version.clone(),
+        root: value.root.clone(),
         nullifier: value.nullifier.clone(),
         commitment: value.commitment.clone(),
         proof: value.proof.clone(),
@@ -345,93 +353,96 @@ fn env_flag(name: &str, default: bool) -> bool {
 // Internal helper that supports `hide_balance_relayer_pool_enabled` operations in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_balance_relayer_pool_enabled() -> bool {
-    env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", false)
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| env_flag("HIDE_BALANCE_RELAYER_POOL_ENABLED", false))
 }
 
 // Internal helper that supports `hide_balance_limit_order_relayer_pool_enabled` operations in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_balance_limit_order_relayer_pool_enabled() -> bool {
-    hide_balance_relayer_pool_enabled()
-        && env_flag("HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED", false)
-}
-
-fn hide_balance_strict_privacy_mode_enabled() -> bool {
-    env_flag("HIDE_BALANCE_STRICT_PRIVACY_MODE", false)
-}
-
-fn hide_balance_v2_redeem_only_enabled() -> bool {
-    env_flag("HIDE_BALANCE_V2_REDEEM_ONLY", false)
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        hide_balance_relayer_pool_enabled()
+            && env_flag("HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED", false)
+    })
 }
 
 fn hide_balance_min_note_age_secs() -> u64 {
-    std::env::var("HIDE_BALANCE_MIN_NOTE_AGE_SECS")
-        .or_else(|_| std::env::var("NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS"))
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(60)
+    static VALUE: OnceLock<u64> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("HIDE_BALANCE_MIN_NOTE_AGE_SECS")
+            .or_else(|_| std::env::var("NEXT_PUBLIC_HIDE_BALANCE_MIN_NOTE_AGE_SECS"))
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(60)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HideExecutorKind {
     PrivateActionExecutorV1,
-    ShieldedPoolV2,
-    ShieldedPoolV3,
+    ShieldedPoolV4,
 }
 
 // Internal helper that supports `hide_executor_kind` operations in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn hide_executor_kind() -> HideExecutorKind {
-    let raw = std::env::var("HIDE_BALANCE_EXECUTOR_KIND")
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if matches!(raw.as_str(), "shielded_pool_v3" | "shielded-v3" | "v3") {
-        HideExecutorKind::ShieldedPoolV3
-    } else if matches!(raw.as_str(), "shielded_pool_v2" | "shielded-v2" | "v2") {
-        HideExecutorKind::ShieldedPoolV2
-    } else {
-        HideExecutorKind::PrivateActionExecutorV1
-    }
+    static VALUE: OnceLock<HideExecutorKind> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        let raw = std::env::var("HIDE_BALANCE_EXECUTOR_KIND")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if matches!(raw.as_str(), "shielded_pool_v4" | "shielded-v4" | "v4") {
+            HideExecutorKind::ShieldedPoolV4
+        } else {
+            HideExecutorKind::PrivateActionExecutorV1
+        }
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HidePoolVersion {
-    V2,
-    V3,
+    V4,
 }
 
 fn hide_balance_pool_version_default() -> HidePoolVersion {
-    let raw = std::env::var("HIDE_BALANCE_POOL_VERSION_DEFAULT")
-        .unwrap_or_else(|_| "v2".to_string())
-        .trim()
-        .to_ascii_lowercase();
-    if raw == "v3" {
-        HidePoolVersion::V3
-    } else {
-        HidePoolVersion::V2
-    }
+    static VALUE: OnceLock<HidePoolVersion> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        let _ = std::env::var("HIDE_BALANCE_POOL_VERSION_DEFAULT")
+            .unwrap_or_else(|_| "v4".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        HidePoolVersion::V4
+    })
 }
 
-fn resolve_hide_pool_version(payload: Option<&ModelPrivacyVerificationPayload>) -> HidePoolVersion {
+fn resolve_hide_pool_version(
+    payload: Option<&ModelPrivacyVerificationPayload>,
+) -> Result<HidePoolVersion> {
     if let Some(note_version) = payload
         .and_then(|value| value.note_version.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if note_version.eq_ignore_ascii_case("v3") {
-            return HidePoolVersion::V3;
+        if note_version.eq_ignore_ascii_case("v4") {
+            return Ok(HidePoolVersion::V4);
         }
-        if note_version.eq_ignore_ascii_case("v2") {
-            return HidePoolVersion::V2;
-        }
+        return Err(crate::error::AppError::BadRequest(
+            "Hide Balance V4 only. Update note_version to v4.".to_string(),
+        ));
     }
-    hide_balance_pool_version_default()
+    Ok(hide_balance_pool_version_default())
 }
 
 // Internal helper that fetches data for `resolve_private_action_executor_candidates` in the limit-order flow.
 // Keeps validation, normalization, and intent-binding logic centralized.
 fn resolve_private_action_executor_candidates(config: &crate::config::Config) -> Result<Vec<Felt>> {
+    static CACHED: OnceLock<Vec<Felt>> = OnceLock::new();
+    if let Some(cached) = CACHED.get() {
+        return Ok(cached.clone());
+    }
     let mut out: Vec<Felt> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for raw in [
@@ -463,6 +474,7 @@ fn resolve_private_action_executor_candidates(config: &crate::config::Config) ->
         }
     }
     if !out.is_empty() {
+        let _ = CACHED.set(out.clone());
         return Ok(out);
     }
     Err(crate::error::AppError::BadRequest(
@@ -577,17 +589,11 @@ async fn resolve_private_action_executor_felt_for_limit_hide(state: &AppState) -
             "submit_private_intent",
             "execute_private_limit_order",
         ],
-        HideExecutorKind::ShieldedPoolV2 => &[
-            "deposit_fixed_for",
-            "preview_limit_action_hash",
-            "submit_private_action",
-            "execute_private_limit_order",
-        ],
-        HideExecutorKind::ShieldedPoolV3 => &[
-            "deposit_fixed_v3",
+        HideExecutorKind::ShieldedPoolV4 => &[
+            "deposit_fixed_v4",
             "preview_limit_action_hash",
             "submit_private_limit",
-            "execute_private_limit_with_payout",
+            "execute_private_limit_v4",
         ],
     };
 
@@ -630,85 +636,29 @@ async fn resolve_limit_order_action_selector(
     )))
 }
 
-// Internal helper that parses or transforms values for `normalize_hex_items` in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-fn normalize_hex_items(items: &[String]) -> Vec<String> {
-    items
-        .iter()
-        .map(|item| item.trim())
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 // Internal helper that supports `payload_from_request` operations in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
+// Delegates to the shared swap helper so V4 payload normalization stays consistent.
 fn payload_from_request(
     payload: Option<&ModelPrivacyVerificationPayload>,
     verifier: &str,
 ) -> Option<AutoPrivacyPayloadResponse> {
     let payload = payload?;
-    let nullifier = payload.nullifier.as_deref()?.trim();
-    if nullifier.is_empty() {
-        return None;
-    }
-    let commitment = payload
-        .commitment
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("0x0");
-    let proof = normalize_hex_items(payload.proof.as_ref()?);
-    let public_inputs = normalize_hex_items(payload.public_inputs.as_ref()?);
-    if proof.is_empty() || public_inputs.is_empty() {
-        return None;
-    }
-    if proof.len() == 1
-        && public_inputs.len() == 1
-        && proof[0].eq_ignore_ascii_case("0x1")
-        && public_inputs[0].eq_ignore_ascii_case("0x1")
-    {
-        return None;
-    }
-    Some(AutoPrivacyPayloadResponse {
-        verifier: payload
-            .verifier
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(verifier)
-            .to_string(),
-        nullifier: nullifier.to_string(),
-        commitment: commitment.to_string(),
-        executor_address: None,
-        root: payload
-            .root
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        note_version: payload
-            .note_version
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        note_commitment: payload
-            .note_commitment
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        denom_id: payload
-            .denom_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
+    let mapped = super::swap::PrivacyVerificationPayload {
+        verifier: payload.verifier.clone(),
+        note_version: payload.note_version.clone(),
+        root: payload.root.clone(),
+        nullifier: payload.nullifier.clone(),
+        commitment: payload.commitment.clone(),
+        note_commitment: payload.note_commitment.clone(),
+        note_ciphertext: payload.note_ciphertext.clone(),
+        note_cid: payload.note_cid.clone(),
+        noir_inputs: payload.noir_inputs.clone(),
+        denom_id: payload.denom_id.clone(),
         spendable_at_unix: payload.spendable_at_unix,
-        proof,
-        public_inputs,
-    })
+        proof: payload.proof.clone(),
+        public_inputs: payload.public_inputs.clone(),
+    };
+    swap_payload_from_request(Some(&mapped), verifier)
 }
 
 struct LimitActionCallInput<'a> {
@@ -733,23 +683,22 @@ async fn compute_limit_intent_hash_on_executor(
     let reader = OnchainReader::from_config(&state.config)?;
     let selector_name = match hide_executor_kind() {
         HideExecutorKind::PrivateActionExecutorV1 => "preview_limit_intent_hash",
-        HideExecutorKind::ShieldedPoolV2 => "preview_limit_action_hash",
-        HideExecutorKind::ShieldedPoolV3 => "preview_limit_action_hash",
+        HideExecutorKind::ShieldedPoolV4 => "preview_limit_action_hash",
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
     let kind = hide_executor_kind();
     let mut calldata: Vec<Felt> = Vec::with_capacity(12 + input.action_calldata.len());
-    if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
+    if kind == HideExecutorKind::ShieldedPoolV4 {
         calldata.push(input.action_target);
     }
     calldata.push(input.action_selector);
     calldata.push(Felt::from(input.action_calldata.len() as u64));
     calldata.extend_from_slice(input.action_calldata);
-    if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
+    if kind == HideExecutorKind::ShieldedPoolV4 {
         calldata.push(input.approval_token);
     }
-    if kind == HideExecutorKind::ShieldedPoolV3 {
+    if kind == HideExecutorKind::ShieldedPoolV4 {
         calldata.push(input.approval_amount_low);
         calldata.push(input.approval_amount_high);
         calldata.push(input.payout_token);
@@ -781,8 +730,7 @@ fn build_submit_private_intent_call(
     let kind = hide_executor_kind();
     let selector_name = match kind {
         HideExecutorKind::PrivateActionExecutorV1 => "submit_private_intent",
-        HideExecutorKind::ShieldedPoolV2 => "submit_private_action",
-        HideExecutorKind::ShieldedPoolV3 => "submit_private_limit",
+        HideExecutorKind::ShieldedPoolV4 => "submit_private_limit",
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
@@ -791,9 +739,9 @@ fn build_submit_private_intent_call(
         .iter()
         .map(|felt| parse_felt(felt))
         .collect::<Result<Vec<_>>>()?;
-    let calldata = if kind == HideExecutorKind::ShieldedPoolV3 {
+    let calldata = if kind == HideExecutorKind::ShieldedPoolV4 {
         let root = payload.root.as_deref().ok_or_else(|| {
-            crate::error::AppError::BadRequest("Hide Balance V3 requires privacy.root".to_string())
+            crate::error::AppError::BadRequest("Hide Balance V4 requires privacy.root".to_string())
         })?;
         let mut calldata: Vec<Felt> = Vec::with_capacity(3 + proof.len());
         calldata.push(parse_felt(root.trim())?);
@@ -834,118 +782,67 @@ fn build_execute_private_limit_call(
     let kind = hide_executor_kind();
     let selector_name = match kind {
         HideExecutorKind::PrivateActionExecutorV1 => "execute_private_limit_order",
-        HideExecutorKind::ShieldedPoolV2 => "execute_private_limit_order",
-        HideExecutorKind::ShieldedPoolV3 => "execute_private_limit_with_payout",
+        HideExecutorKind::ShieldedPoolV4 => "execute_private_limit_v4",
     };
     let selector = get_selector_from_name(selector_name)
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let mut calldata: Vec<Felt> = Vec::with_capacity(12 + input.action_calldata.len());
-    if kind == HideExecutorKind::ShieldedPoolV3 {
-        calldata.push(parse_felt(payload.nullifier.trim())?);
-    } else {
-        calldata.push(parse_felt(payload.commitment.trim())?);
-    }
-    if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
+    if kind == HideExecutorKind::ShieldedPoolV4 {
+        let root = payload.root.as_deref().ok_or_else(|| {
+            crate::error::AppError::BadRequest("Hide Balance V4 requires privacy.root".to_string())
+        })?;
+        let nullifier = payload.nullifier.trim();
+        if nullifier.is_empty() {
+            return Err(crate::error::AppError::BadRequest(
+                "Hide Balance V4 requires non-empty nullifier".to_string(),
+            ));
+        }
+        let proof: Vec<Felt> = payload
+            .proof
+            .iter()
+            .map(|felt| parse_felt(felt))
+            .collect::<Result<Vec<_>>>()?;
+        let public_inputs: Vec<Felt> = payload
+            .public_inputs
+            .iter()
+            .map(|felt| parse_felt(felt))
+            .collect::<Result<Vec<_>>>()?;
+        let mut calldata: Vec<Felt> = Vec::with_capacity(
+            12 + input.action_calldata.len() + proof.len() + public_inputs.len(),
+        );
+        calldata.push(parse_felt(root.trim())?);
+        calldata.push(parse_felt(nullifier)?);
+        calldata.push(Felt::from(proof.len() as u64));
+        calldata.extend(proof);
+        calldata.push(Felt::from(public_inputs.len() as u64));
+        calldata.extend(public_inputs);
         calldata.push(input.action_target);
-    }
-    calldata.push(input.action_selector);
-    calldata.push(Felt::from(input.action_calldata.len() as u64));
-    calldata.extend_from_slice(input.action_calldata);
-    if kind == HideExecutorKind::ShieldedPoolV2 || kind == HideExecutorKind::ShieldedPoolV3 {
+        calldata.push(input.action_selector);
+        calldata.push(Felt::from(input.action_calldata.len() as u64));
+        calldata.extend_from_slice(input.action_calldata);
         calldata.push(input.approval_token);
-    }
-    if kind == HideExecutorKind::ShieldedPoolV3 {
         calldata.push(input.approval_amount_low);
         calldata.push(input.approval_amount_high);
         calldata.push(input.payout_token);
         calldata.push(input.min_payout_low);
         calldata.push(input.min_payout_high);
+        return Ok(Call {
+            to: executor,
+            selector,
+            calldata,
+        });
     }
+
+    let mut calldata: Vec<Felt> = Vec::with_capacity(6 + input.action_calldata.len());
+    calldata.push(parse_felt(payload.commitment.trim())?);
+    calldata.push(input.action_selector);
+    calldata.push(Felt::from(input.action_calldata.len() as u64));
+    calldata.extend_from_slice(input.action_calldata);
 
     Ok(Call {
         to: executor,
         selector,
         calldata,
     })
-}
-
-// Internal helper that builds inputs for `build_shielded_set_asset_rule_call` in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-fn build_shielded_set_asset_rule_call(
-    executor: Felt,
-    token: Felt,
-    amount_low: Felt,
-    amount_high: Felt,
-) -> Result<Call> {
-    let selector = get_selector_from_name("set_asset_rule")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    Ok(Call {
-        to: executor,
-        selector,
-        calldata: vec![token, amount_low, amount_high],
-    })
-}
-
-// Internal helper that builds inputs for `build_shielded_deposit_fixed_for_call` in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-fn build_shielded_deposit_fixed_for_call(
-    executor: Felt,
-    depositor: Felt,
-    token: Felt,
-    note_commitment: Felt,
-) -> Result<Call> {
-    let selector = get_selector_from_name("deposit_fixed_for")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    Ok(Call {
-        to: executor,
-        selector,
-        calldata: vec![depositor, token, note_commitment],
-    })
-}
-
-// Internal helper that supports `shielded_note_registered` operations in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-async fn shielded_note_registered(
-    state: &AppState,
-    executor: Felt,
-    note_commitment: Felt,
-) -> Result<bool> {
-    let reader = OnchainReader::from_config(&state.config)?;
-    let selector = get_selector_from_name("is_note_registered")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: executor,
-            entry_point_selector: selector,
-            calldata: vec![note_commitment],
-        })
-        .await?;
-    let flag = out.first().copied().unwrap_or(Felt::ZERO);
-    Ok(flag != Felt::ZERO)
-}
-
-async fn shielded_note_deposit_timestamp(
-    state: &AppState,
-    executor: Felt,
-    note_commitment: Felt,
-) -> Result<u64> {
-    let reader = OnchainReader::from_config(&state.config)?;
-    let selector = get_selector_from_name("get_note_deposit_timestamp")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: executor,
-            entry_point_selector: selector,
-            calldata: vec![note_commitment],
-        })
-        .await?;
-    let raw = out.first().copied().unwrap_or(Felt::ZERO);
-    let value = felt_to_u128(&raw).map_err(|_| {
-        crate::error::AppError::BadRequest(
-            "Invalid note timestamp returned by shielded pool".to_string(),
-        )
-    })?;
-    Ok(value as u64)
 }
 
 async fn shielded_current_root(state: &AppState, executor: Felt) -> Result<Felt> {
@@ -962,121 +859,10 @@ async fn shielded_current_root(state: &AppState, executor: Felt) -> Result<Felt>
     let root = out.first().copied().unwrap_or(Felt::ZERO);
     if root == Felt::ZERO {
         return Err(crate::error::AppError::BadRequest(
-            "ShieldedPoolV3 root belum diinisialisasi (get_root=0).".to_string(),
+            "ShieldedPoolV4 root belum diinisialisasi (get_root=0).".to_string(),
         ));
     }
     Ok(root)
-}
-
-// Internal helper that supports `shielded_fixed_amount` operations in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-async fn shielded_fixed_amount(
-    state: &AppState,
-    executor: Felt,
-    token: Felt,
-) -> Result<(Felt, Felt)> {
-    let reader = OnchainReader::from_config(&state.config)?;
-    let selector = get_selector_from_name("fixed_amount")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: executor,
-            entry_point_selector: selector,
-            calldata: vec![token],
-        })
-        .await?;
-    if out.len() < 2 {
-        return Err(crate::error::AppError::BadRequest(
-            "ShieldedPoolV2 fixed_amount returned invalid response".to_string(),
-        ));
-    }
-    Ok((out[0], out[1]))
-}
-
-// Internal helper that supports `u256_is_greater` operations in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-fn u256_is_greater(
-    left_low: Felt,
-    left_high: Felt,
-    right_low: Felt,
-    right_high: Felt,
-    left_label: &str,
-    right_label: &str,
-) -> Result<bool> {
-    let left_low_u128 = felt_to_u128(&left_low).map_err(|_| {
-        crate::error::AppError::BadRequest(format!(
-            "Invalid {} (low) from on-chain response",
-            left_label
-        ))
-    })?;
-    let left_high_u128 = felt_to_u128(&left_high).map_err(|_| {
-        crate::error::AppError::BadRequest(format!(
-            "Invalid {} (high) from on-chain response",
-            left_label
-        ))
-    })?;
-    let right_low_u128 = felt_to_u128(&right_low).map_err(|_| {
-        crate::error::AppError::BadRequest(format!(
-            "Invalid {} (low) from on-chain response",
-            right_label
-        ))
-    })?;
-    let right_high_u128 = felt_to_u128(&right_high).map_err(|_| {
-        crate::error::AppError::BadRequest(format!(
-            "Invalid {} (high) from on-chain response",
-            right_label
-        ))
-    })?;
-    Ok((left_high_u128, left_low_u128) > (right_high_u128, right_low_u128))
-}
-
-// Internal helper that fetches data for `read_erc20_balance_parts` in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-async fn read_erc20_balance_parts(
-    reader: &OnchainReader,
-    token: Felt,
-    owner: Felt,
-) -> Result<(Felt, Felt)> {
-    let selector = get_selector_from_name("balance_of")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: token,
-            entry_point_selector: selector,
-            calldata: vec![owner],
-        })
-        .await?;
-    if out.len() < 2 {
-        return Err(crate::error::AppError::BadRequest(
-            "ERC20 balance_of returned invalid response".to_string(),
-        ));
-    }
-    Ok((out[0], out[1]))
-}
-
-// Internal helper that fetches data for `read_erc20_allowance_parts` in the limit-order flow.
-// Keeps validation, normalization, and intent-binding logic centralized.
-async fn read_erc20_allowance_parts(
-    reader: &OnchainReader,
-    token: Felt,
-    owner: Felt,
-    spender: Felt,
-) -> Result<(Felt, Felt)> {
-    let selector = get_selector_from_name("allowance")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let out = reader
-        .call(FunctionCall {
-            contract_address: token,
-            entry_point_selector: selector,
-            calldata: vec![owner, spender],
-        })
-        .await?;
-    if out.len() < 2 {
-        return Err(crate::error::AppError::BadRequest(
-            "ERC20 allowance returned invalid response".to_string(),
-        ));
-    }
-    Ok((out[0], out[1]))
 }
 
 // Struct bantuan untuk menghitung total
@@ -1093,6 +879,12 @@ pub async fn create_order(
 ) -> Result<Json<ApiResponse<CreateOrderResponse>>> {
     let auth_subject = require_user(&headers, &state).await?;
     let user_address = require_starknet_user(&headers, &state).await?;
+    if let Some(plan_id) = req.plan_id.as_deref() {
+        ensure_plan_active_for_user(&state.config, plan_id, &user_address).await?;
+    }
+    if let Some(plan_id) = req.plan_id.as_deref() {
+        ensure_plan_active_for_user(&state.config, plan_id, &user_address).await?;
+    }
     let _ = state
         .db
         .expire_limit_orders_for_owner(&user_address)
@@ -1140,29 +932,15 @@ pub async fn create_order(
     );
 
     ensure_supported_limit_order_pair(&req.from_token, &req.to_token)?;
-    let strict_privacy_mode = should_hide && hide_balance_strict_privacy_mode_enabled();
     let hide_pool_version = if should_hide {
-        Some(resolve_hide_pool_version(req.privacy.as_ref()))
+        Some(resolve_hide_pool_version(req.privacy.as_ref())?)
     } else {
         None
     };
-    if should_hide {
-        match (hide_executor_kind(), hide_pool_version) {
-            (HideExecutorKind::ShieldedPoolV3, Some(HidePoolVersion::V2)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance config mismatch: executor is V3 but payload/version resolved to V2."
-                        .to_string(),
-                ));
-            }
-            (HideExecutorKind::ShieldedPoolV2, Some(HidePoolVersion::V3))
-            | (HideExecutorKind::PrivateActionExecutorV1, Some(HidePoolVersion::V3)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3."
-                        .to_string(),
-                ));
-            }
-            _ => {}
-        }
+    if should_hide && !matches!(hide_executor_kind(), HideExecutorKind::ShieldedPoolV4) {
+        return Err(crate::error::AppError::BadRequest(
+            "Hide Balance V4 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4.".to_string(),
+        ));
     }
     let expiry_duration = expiry_duration_for(&req.expiry);
     let now = chrono::Utc::now();
@@ -1184,6 +962,8 @@ pub async fn create_order(
         && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt_for_limit_hide(&state).await?;
+        let is_v4 = matches!(hide_pool_version, Some(HidePoolVersion::V4));
+        let note_version_label = if is_v4 { Some("v4".to_string()) } else { None };
         let action_target = resolve_limit_order_target_felt(&state)?;
         let verifier_kind = parse_privacy_verifier_kind(
             req.privacy
@@ -1227,16 +1007,14 @@ pub async fn create_order(
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
         };
-        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
-            tracing::info!(
-                "Ignoring client-provided Hide Balance V3 proof/public_inputs for limit order create; regenerating payload server-side"
-            );
-            None
-        } else {
-            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
-        };
+        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
+            if is_v4 {
+                tracing::info!(
+                    "Reusing client-provided Hide Balance V4 proof/public_inputs for limit order create"
+                );
+            }
             request_payload
         } else {
             let mut tx_context = AutoPrivacyTxContext {
@@ -1247,18 +1025,26 @@ pub async fn create_order(
                 recipient: req.recipient.clone(),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: if hide_pool_version == Some(HidePoolVersion::V3) {
-                    Some("v3".to_string())
-                } else {
-                    None
-                },
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 ..Default::default()
             };
-            if hide_pool_version == Some(HidePoolVersion::V3) {
+            if is_v4 {
                 tx_context.note_commitment = req
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone());
+                tx_context.note_ciphertext = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone());
+                tx_context.note_cid = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone());
                 tx_context.denom_id = req
                     .privacy
                     .as_ref()
@@ -1278,7 +1064,7 @@ pub async fn create_order(
         };
 
         let mut relayer_calls: Vec<Call> = Vec::new();
-        if hide_pool_version == Some(HidePoolVersion::V3) {
+        if is_v4 {
             let note_commitment_raw = payload
                 .note_commitment
                 .as_deref()
@@ -1293,93 +1079,24 @@ pub async fn create_order(
                 })
                 .ok_or_else(|| {
                     crate::error::AppError::BadRequest(
-                        "Hide Balance V3 requires privacy.note_commitment in payload".to_string(),
+                        "Hide Balance V4 requires privacy.note_commitment in payload".to_string(),
                     )
                 })?;
             let note_commitment_felt = parse_felt(note_commitment_raw.trim())?;
-            let deposit_ts =
-                shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
-            if deposit_ts == 0 {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
-                ));
-            }
+            let deposit_ts = wait_for_shielded_note_deposit_timestamp(
+                &state,
+                executor,
+                note_commitment_felt,
+                "limit order create",
+            )
+            .await?;
             payload.spendable_at_unix =
                 Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
-        } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-            let commitment_felt = parse_felt(payload.commitment.trim())?;
-            let user_felt = parse_felt(&user_address)?;
-            let note_registered =
-                shielded_note_registered(&state, executor, commitment_felt).await?;
-            if !note_registered {
-                if hide_balance_v2_redeem_only_enabled() {
-                    return Err(crate::error::AppError::BadRequest(
-                        "Hide Balance V2 is redeem-only. Deposit note baru ke V2 diblok; gunakan V3 untuk note baru."
-                            .to_string(),
-                    ));
-                }
-                if strict_privacy_mode {
-                    return Err(crate::error::AppError::BadRequest(
-                        "Hide Balance strict mode blocks inline deposit+execute in one tx. Pre-fund shielded note first."
-                            .to_string(),
-                    ));
-                }
-                let (fixed_low, fixed_high) =
-                    shielded_fixed_amount(&state, executor, from_token).await?;
-                if fixed_low != amount_low || fixed_high != amount_high {
-                    relayer_calls.push(build_shielded_set_asset_rule_call(
-                        executor,
-                        from_token,
-                        amount_low,
-                        amount_high,
-                    )?);
-                }
-                let reader = OnchainReader::from_config(&state.config)?;
-                let (balance_low, balance_high) =
-                    read_erc20_balance_parts(&reader, from_token, user_felt).await?;
-                if u256_is_greater(
-                    amount_low,
-                    amount_high,
-                    balance_low,
-                    balance_high,
-                    "requested hide deposit",
-                    "user balance",
-                )? {
-                    return Err(crate::error::AppError::BadRequest(format!(
-                        "Shielded note funding failed: insufficient {} balance. Needed {}.",
-                        req.from_token.to_ascii_uppercase(),
-                        req.amount
-                    )));
-                }
-                let (allowance_low, allowance_high) =
-                    read_erc20_allowance_parts(&reader, from_token, user_felt, executor).await?;
-                if u256_is_greater(
-                    amount_low,
-                    amount_high,
-                    allowance_low,
-                    allowance_high,
-                    "requested hide deposit",
-                    "token allowance",
-                )? {
-                    return Err(crate::error::AppError::BadRequest(format!(
-                        "Shielded note funding failed: insufficient allowance. Approve {} {} to executor {} first.",
-                        req.amount,
-                        req.from_token.to_ascii_uppercase(),
-                        format_args!("{executor:#x}")
-                    )));
-                }
-                relayer_calls.push(build_shielded_deposit_fixed_for_call(
-                    executor,
-                    user_felt,
-                    from_token,
-                    commitment_felt,
-                )?);
-            }
         }
 
         let intent_hash =
             compute_limit_intent_hash_on_executor(&state, executor, &limit_input).await?;
-        if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
+        if is_v4 && payload_from_auto {
             let root = shielded_current_root(&state, executor).await?;
             let tx_context = AutoPrivacyTxContext {
                 flow: Some("limit_order".to_string()),
@@ -1389,7 +1106,11 @@ pub async fn create_order(
                 recipient: req.recipient.clone(),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: Some("v3".to_string()),
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 root: Some(format!("{root:#x}")),
                 intent_hash: Some(intent_hash.clone()),
                 action_hash: Some(intent_hash.clone()),
@@ -1402,6 +1123,14 @@ pub async fn create_order(
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone()),
+                note_ciphertext: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone()),
+                note_cid: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone()),
                 denom_id: req
                     .privacy
                     .as_ref()
@@ -1421,11 +1150,11 @@ pub async fn create_order(
             .await?;
         }
         bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
-        if hide_pool_version == Some(HidePoolVersion::V3) {
-            payload.note_version = Some("v3".to_string());
+        if is_v4 {
+            payload.note_version = note_version_label.clone();
             let root = payload.root.as_deref().ok_or_else(|| {
                 crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires privacy.root in prover payload".to_string(),
+                    "Hide Balance V4 requires privacy.root in prover payload".to_string(),
                 )
             })?;
             ensure_public_inputs_bind_root_nullifier(
@@ -1447,11 +1176,26 @@ pub async fn create_order(
             )?;
         }
 
+        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
+            let nullifier = payload.nullifier.trim().to_string();
+            if nullifier.is_empty() {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V4 requires non-empty nullifier".to_string(),
+                ));
+            }
+            ensure_nullifier_unused(&state, executor, &nullifier, "limit order hide").await?;
+        }
+
         let relayer = RelayerService::from_config(&state.config)?;
-        let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call = build_execute_private_limit_call(executor, &payload, &limit_input)?;
-        relayer_calls.push(submit_call);
-        relayer_calls.push(execute_call);
+        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
+            let execute_call = build_execute_private_limit_call(executor, &payload, &limit_input)?;
+            relayer_calls.push(execute_call);
+        } else {
+            let submit_call = build_submit_private_intent_call(executor, &payload)?;
+            relayer_calls.push(submit_call);
+            let execute_call = build_execute_private_limit_call(executor, &payload, &limit_input)?;
+            relayer_calls.push(execute_call);
+        }
         let submitted = relayer.submit_calls(relayer_calls).await?;
         submitted.tx_hash
     } else {
@@ -1614,34 +1358,23 @@ pub async fn cancel_order(
 ) -> Result<Json<ApiResponse<String>>> {
     let auth_subject = require_user(&headers, &state).await?;
     let user_address = require_starknet_user(&headers, &state).await?;
+    if let Some(plan_id) = req.plan_id.as_deref() {
+        ensure_plan_active_for_user(&state.config, plan_id, &user_address).await?;
+    }
     let _ = state
         .db
         .expire_limit_orders_for_owner(&user_address)
         .await?;
     let should_hide = should_run_privacy_verification(req.hide_balance.unwrap_or(false));
-    let strict_privacy_mode = should_hide && hide_balance_strict_privacy_mode_enabled();
     let hide_pool_version = if should_hide {
-        Some(resolve_hide_pool_version(req.privacy.as_ref()))
+        Some(resolve_hide_pool_version(req.privacy.as_ref())?)
     } else {
         None
     };
-    if should_hide {
-        match (hide_executor_kind(), hide_pool_version) {
-            (HideExecutorKind::ShieldedPoolV3, Some(HidePoolVersion::V2)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance config mismatch: executor is V3 but payload/version resolved to V2."
-                        .to_string(),
-                ));
-            }
-            (HideExecutorKind::ShieldedPoolV2, Some(HidePoolVersion::V3))
-            | (HideExecutorKind::PrivateActionExecutorV1, Some(HidePoolVersion::V3)) => {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3."
-                        .to_string(),
-                ));
-            }
-            _ => {}
-        }
+    if should_hide && !matches!(hide_executor_kind(), HideExecutorKind::ShieldedPoolV4) {
+        return Err(crate::error::AppError::BadRequest(
+            "Hide Balance V4 requires HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4.".to_string(),
+        ));
     }
     let order = state
         .db
@@ -1672,6 +1405,8 @@ pub async fn cancel_order(
         && normalized_onchain_tx_hash.is_none();
     let tx_hash = if use_relayer_pool_hide {
         let executor = resolve_private_action_executor_felt_for_limit_hide(&state).await?;
+        let is_v4 = matches!(hide_pool_version, Some(HidePoolVersion::V4));
+        let note_version_label = if is_v4 { Some("v4".to_string()) } else { None };
         let action_target = resolve_limit_order_target_felt(&state)?;
         let verifier_kind = parse_privacy_verifier_kind(
             req.privacy
@@ -1685,7 +1420,7 @@ pub async fn cancel_order(
         )
         .await?;
         let action_calldata = vec![parse_felt(&order_id)?];
-        let approval_token = if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
+        let approval_token = if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
             token_address_for(&order.from_token)
                 .ok_or(crate::error::AppError::InvalidToken)
                 .and_then(parse_felt)?
@@ -1703,34 +1438,40 @@ pub async fn cancel_order(
             min_payout_low: Felt::ZERO,
             min_payout_high: Felt::ZERO,
         };
-        let request_payload = if hide_pool_version == Some(HidePoolVersion::V3) {
-            tracing::info!(
-                "Ignoring client-provided Hide Balance V3 proof/public_inputs for limit order cancel; regenerating payload server-side"
-            );
-            None
-        } else {
-            payload_from_request(req.privacy.as_ref(), verifier_kind.as_str())
-        };
+        let request_payload = payload_from_request(req.privacy.as_ref(), verifier_kind.as_str());
         let payload_from_auto = request_payload.is_none();
         let mut payload = if let Some(request_payload) = request_payload {
+            if is_v4 {
+                tracing::info!(
+                    "Reusing client-provided Hide Balance V4 proof/public_inputs for limit order cancel"
+                );
+            }
             request_payload
         } else {
             let mut tx_context = AutoPrivacyTxContext {
                 flow: Some("limit_order_cancel".to_string()),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: if hide_pool_version == Some(HidePoolVersion::V3) {
-                    Some("v3".to_string())
-                } else {
-                    None
-                },
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 ..Default::default()
             };
-            if hide_pool_version == Some(HidePoolVersion::V3) {
+            if is_v4 {
                 tx_context.note_commitment = req
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone());
+                tx_context.note_ciphertext = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone());
+                tx_context.note_cid = req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone());
                 tx_context.denom_id = req
                     .privacy
                     .as_ref()
@@ -1750,13 +1491,17 @@ pub async fn cancel_order(
         };
         let intent_hash =
             compute_limit_intent_hash_on_executor(&state, executor, &limit_input).await?;
-        if hide_pool_version == Some(HidePoolVersion::V3) && payload_from_auto {
+        if is_v4 && payload_from_auto {
             let root = shielded_current_root(&state, executor).await?;
             let tx_context = AutoPrivacyTxContext {
                 flow: Some("limit_order_cancel".to_string()),
                 from_network: Some("starknet".to_string()),
                 to_network: Some("starknet".to_string()),
-                note_version: Some("v3".to_string()),
+                noir_inputs: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.noir_inputs.clone()),
+                note_version: note_version_label.clone(),
                 root: Some(format!("{root:#x}")),
                 intent_hash: Some(intent_hash.clone()),
                 action_hash: Some(intent_hash.clone()),
@@ -1769,6 +1514,14 @@ pub async fn cancel_order(
                     .privacy
                     .as_ref()
                     .and_then(|value| value.note_commitment.clone()),
+                note_ciphertext: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_ciphertext.clone()),
+                note_cid: req
+                    .privacy
+                    .as_ref()
+                    .and_then(|value| value.note_cid.clone()),
                 denom_id: req
                     .privacy
                     .as_ref()
@@ -1788,11 +1541,11 @@ pub async fn cancel_order(
             .await?;
         }
         bind_intent_hash_into_payload(&mut payload, &intent_hash)?;
-        if hide_pool_version == Some(HidePoolVersion::V3) {
-            payload.note_version = Some("v3".to_string());
+        if is_v4 {
+            payload.note_version = note_version_label.clone();
             let root = payload.root.as_deref().ok_or_else(|| {
                 crate::error::AppError::BadRequest(
-                    "Hide Balance V3 requires privacy.root in prover payload".to_string(),
+                    "Hide Balance V4 requires privacy.root in prover payload".to_string(),
                 )
             })?;
             ensure_public_inputs_bind_root_nullifier(
@@ -1813,8 +1566,18 @@ pub async fn cancel_order(
                 "limit cancel hide payload (bound)",
             )?;
         }
+
+        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
+            let nullifier = payload.nullifier.trim().to_string();
+            if nullifier.is_empty() {
+                return Err(crate::error::AppError::BadRequest(
+                    "Hide Balance V4 requires non-empty nullifier".to_string(),
+                ));
+            }
+            ensure_nullifier_unused(&state, executor, &nullifier, "limit cancel hide").await?;
+        }
         let mut relayer_calls: Vec<Call> = Vec::new();
-        if hide_pool_version == Some(HidePoolVersion::V3) {
+        if is_v4 {
             let note_commitment_raw = payload
                 .note_commitment
                 .as_deref()
@@ -1829,99 +1592,30 @@ pub async fn cancel_order(
                 })
                 .ok_or_else(|| {
                     crate::error::AppError::BadRequest(
-                        "Hide Balance V3 requires privacy.note_commitment in payload".to_string(),
+                        "Hide Balance V4 requires privacy.note_commitment in payload".to_string(),
                     )
                 })?;
             let note_commitment_felt = parse_felt(note_commitment_raw.trim())?;
-            let deposit_ts =
-                shielded_note_deposit_timestamp(&state, executor, note_commitment_felt).await?;
-            if deposit_ts == 0 {
-                return Err(crate::error::AppError::BadRequest(
-                    "Hide Balance V3 note belum terdaftar. Deposit note dulu.".to_string(),
-                ));
-            }
+            let deposit_ts = wait_for_shielded_note_deposit_timestamp(
+                &state,
+                executor,
+                note_commitment_felt,
+                "limit order cancel",
+            )
+            .await?;
             payload.spendable_at_unix =
                 Some(deposit_ts.saturating_add(hide_balance_min_note_age_secs()));
-        } else if hide_executor_kind() == HideExecutorKind::ShieldedPoolV2 {
-            let commitment_felt = parse_felt(payload.commitment.trim())?;
-            let user_felt = parse_felt(&user_address)?;
-            let note_registered =
-                shielded_note_registered(&state, executor, commitment_felt).await?;
-            if !note_registered {
-                if hide_balance_v2_redeem_only_enabled() {
-                    return Err(crate::error::AppError::BadRequest(
-                        "Hide Balance V2 is redeem-only. Deposit note baru ke V2 diblok; gunakan V3 untuk note baru."
-                            .to_string(),
-                    ));
-                }
-                if strict_privacy_mode {
-                    return Err(crate::error::AppError::BadRequest(
-                        "Hide Balance strict mode blocks inline deposit+execute in one tx. Pre-fund shielded note first."
-                            .to_string(),
-                    ));
-                }
-                let (mut note_amount_low, mut note_amount_high) =
-                    shielded_fixed_amount(&state, executor, approval_token).await?;
-                if note_amount_low == Felt::ZERO && note_amount_high == Felt::ZERO {
-                    note_amount_low = Felt::from(1_u8);
-                    note_amount_high = Felt::ZERO;
-                }
-                let (fixed_low, fixed_high) =
-                    shielded_fixed_amount(&state, executor, approval_token).await?;
-                if fixed_low != note_amount_low || fixed_high != note_amount_high {
-                    relayer_calls.push(build_shielded_set_asset_rule_call(
-                        executor,
-                        approval_token,
-                        note_amount_low,
-                        note_amount_high,
-                    )?);
-                }
-                let reader = OnchainReader::from_config(&state.config)?;
-                let (balance_low, balance_high) =
-                    read_erc20_balance_parts(&reader, approval_token, user_felt).await?;
-                if u256_is_greater(
-                    note_amount_low,
-                    note_amount_high,
-                    balance_low,
-                    balance_high,
-                    "requested hide deposit",
-                    "user balance",
-                )? {
-                    return Err(crate::error::AppError::BadRequest(format!(
-                        "Shielded note funding failed: insufficient {} balance for cancel action.",
-                        order.from_token.to_ascii_uppercase()
-                    )));
-                }
-                let (allowance_low, allowance_high) =
-                    read_erc20_allowance_parts(&reader, approval_token, user_felt, executor)
-                        .await?;
-                if u256_is_greater(
-                    note_amount_low,
-                    note_amount_high,
-                    allowance_low,
-                    allowance_high,
-                    "requested hide deposit",
-                    "token allowance",
-                )? {
-                    return Err(crate::error::AppError::BadRequest(format!(
-                        "Shielded note funding failed: insufficient allowance. Approve one-time spending limit for token {} to executor {} first.",
-                        order.from_token.to_ascii_uppercase(),
-                        format_args!("{executor:#x}")
-                    )));
-                }
-                relayer_calls.push(build_shielded_deposit_fixed_for_call(
-                    executor,
-                    user_felt,
-                    approval_token,
-                    commitment_felt,
-                )?);
-            }
         }
         let relayer = RelayerService::from_config(&state.config)?;
-        let submit_call = build_submit_private_intent_call(executor, &payload)?;
-        let execute_call = build_execute_private_limit_call(executor, &payload, &limit_input)?;
-        relayer_calls.push(submit_call);
-        relayer_calls.push(execute_call);
+        if hide_executor_kind() == HideExecutorKind::ShieldedPoolV4 {
+            let execute_call = build_execute_private_limit_call(executor, &payload, &limit_input)?;
+            relayer_calls.push(execute_call);
+        } else {
+            let submit_call = build_submit_private_intent_call(executor, &payload)?;
+            relayer_calls.push(submit_call);
+            let execute_call = build_execute_private_limit_call(executor, &payload, &limit_input)?;
+            relayer_calls.push(execute_call);
+        }
         let submitted = relayer.submit_calls(relayer_calls).await?;
         submitted.tx_hash
     } else {
@@ -1965,6 +1659,21 @@ mod tests {
 
     #[test]
     fn resolve_hide_pool_version_prefers_note_version_field() {
+        let payload_v4 = ModelPrivacyVerificationPayload {
+            verifier: None,
+            note_version: Some("v4".to_string()),
+            root: None,
+            nullifier: None,
+            commitment: None,
+            note_commitment: None,
+            note_ciphertext: None,
+            note_cid: None,
+            noir_inputs: None,
+            denom_id: None,
+            spendable_at_unix: None,
+            proof: None,
+            public_inputs: None,
+        };
         let payload_v3 = ModelPrivacyVerificationPayload {
             verifier: None,
             note_version: Some("v3".to_string()),
@@ -1972,31 +1681,74 @@ mod tests {
             nullifier: None,
             commitment: None,
             note_commitment: None,
+            note_ciphertext: None,
+            note_cid: None,
+            noir_inputs: None,
             denom_id: None,
             spendable_at_unix: None,
             proof: None,
             public_inputs: None,
         };
-        let payload_v2 = ModelPrivacyVerificationPayload {
-            verifier: None,
-            note_version: Some("v2".to_string()),
+        assert!(matches!(
+            resolve_hide_pool_version(Some(&payload_v4)).unwrap(),
+            HidePoolVersion::V4
+        ));
+        assert!(resolve_hide_pool_version(Some(&payload_v3)).is_err());
+    }
+
+    #[test]
+    fn payload_from_request_preserves_v4_metadata() {
+        let payload = ModelPrivacyVerificationPayload {
+            verifier: Some("garaga".to_string()),
+            note_version: Some("v4".to_string()),
+            root: Some("0x123".to_string()),
+            nullifier: Some("0x456".to_string()),
+            commitment: Some("0x789".to_string()),
+            note_commitment: Some("0xabc".to_string()),
+            note_ciphertext: None,
+            note_cid: None,
+            noir_inputs: None,
+            denom_id: Some("10".to_string()),
+            spendable_at_unix: Some(1_777_777_777),
+            proof: Some(vec!["0x1".to_string(), "0x2".to_string()]),
+            public_inputs: Some(vec![
+                "0x123".to_string(),
+                "0x456".to_string(),
+                "0x999".to_string(),
+            ]),
+        };
+        let mapped = payload_from_request(Some(&payload), "garaga").expect("payload must map");
+        assert_eq!(mapped.note_version.as_deref(), Some("v4"));
+        assert_eq!(mapped.root.as_deref(), Some("0x123"));
+        assert_eq!(mapped.note_commitment.as_deref(), Some("0xabc"));
+        assert_eq!(mapped.denom_id.as_deref(), Some("10"));
+        assert_eq!(mapped.spendable_at_unix, Some(1_777_777_777));
+    }
+
+    #[test]
+    fn payload_from_request_infers_v4_root_from_public_inputs() {
+        let payload = ModelPrivacyVerificationPayload {
+            verifier: Some("garaga".to_string()),
+            note_version: Some("v4".to_string()),
             root: None,
-            nullifier: None,
-            commitment: None,
-            note_commitment: None,
-            denom_id: None,
-            spendable_at_unix: None,
-            proof: None,
-            public_inputs: None,
+            nullifier: Some("0x456".to_string()),
+            commitment: Some("0x789".to_string()),
+            note_commitment: Some("0xabc".to_string()),
+            note_ciphertext: None,
+            note_cid: None,
+            noir_inputs: None,
+            denom_id: Some("10".to_string()),
+            spendable_at_unix: Some(1_777_777_777),
+            proof: Some(vec!["0x1".to_string(), "0x2".to_string()]),
+            public_inputs: Some(vec![
+                "0x123".to_string(),
+                "0x456".to_string(),
+                "0x999".to_string(),
+            ]),
         };
-        assert!(matches!(
-            resolve_hide_pool_version(Some(&payload_v3)),
-            HidePoolVersion::V3
-        ));
-        assert!(matches!(
-            resolve_hide_pool_version(Some(&payload_v2)),
-            HidePoolVersion::V2
-        ));
+        let mapped = payload_from_request(Some(&payload), "garaga").expect("payload must map");
+        assert_eq!(mapped.note_version.as_deref(), Some("v4"));
+        assert_eq!(mapped.root.as_deref(), Some("0x123"));
     }
 
     #[test]

@@ -45,7 +45,7 @@ scarb build
 | 11 | `KeeperNetwork` (Limit Order Book) | `owner` |
 | 12 | `StakingCarel` | `carel_token`, `reward_pool` |
 | 13 | `StakingStablecoin` | `pool_admin`, `reward_pool`, `token_list` |
-| 14 | `StakingBTC` | `pool_admin`, `reward_pool`, `wbtc_token` |
+| 14 | `WBTCStaking` | `pool_admin`, `reward_pool`, `wbtc_token` |
 | 15 | `ZkPrivacyRouter` | `admin`, `garaga_adapter` |
 | 16 | `PrivateBTCSwap` | `admin`, `garaga_adapter` |
 | 17 | `DarkPool` | `admin`, `garaga_adapter` |
@@ -54,6 +54,28 @@ scarb build
 | 20 | `BattleshipGaraga` | `admin`, `garaga_adapter`, `timeout_config` |
 | 21 | `ShieldedPoolV2` (MVP default hide executor) | `admin`, `verifier`, `relayer` |
 | 22 | `PrivateActionExecutor` (legacy/compatibility) | `admin`, `verifier`, `relayer`, `swap_target`, `limit_target`, `staking_target` |
+
+## Optional: AI Plan Router (Single-Signature Auto Plan)
+Use this section when enabling single-signature AI plans (ERC‑8004 + AIPlanRouter).
+
+Deploy (order matters):
+1. `ERC8004IdentityRegistry` — constructor: `admin`, `chain_id`
+2. `ERC8004ValidationRegistry` — constructor: `admin`
+3. `ERC8004ReputationRegistry` — constructor: `admin`
+4. `AISignatureVerifier` — constructor: `admin`
+5. `AIPlanRouter` — constructor: `admin`, `ai_executor`, `identity_registry`, `ai_signature_verifier`, `chain_id`
+
+Post-deploy wiring:
+- Register your agent in `ERC8004IdentityRegistry` (keep the returned `agent_id`).
+- Set the agent `operator` to your backend relayer account address.
+- Update backend env:
+  - `AI_PLAN_ROUTER_ADDRESS`
+  - `AI_IDENTITY_REGISTRY_ADDRESS`
+  - `AI_AGENT_ID`
+  - Optional defaults: `AI_PLAN_ACTION_MASK`, `AI_PLAN_MAX_ACTIONS`, `AI_PLAN_EXPIRY_DAYS`
+- Update frontend env:
+  - `NEXT_PUBLIC_AI_PLAN_ROUTER_ADDRESS`
+  - `NEXT_PUBLIC_AI_AGENT_ID`
 
 ## Profile Alignment (Important)
 To avoid runtime/address mismatch during demo:
@@ -135,7 +157,7 @@ Use this JSON template to populate `backend-rust/.env`:
   "LIMIT_ORDER_BOOK_ADDRESS": "0x...",
   "STAKING_CAREL_ADDRESS": "0x...",
   "STAKING_STABLECOIN_ADDRESS": "0x...",
-  "STAKING_BTC_ADDRESS": "0x...",
+  "STAKING_WBTC_ADDRESS": "0x...",
   "AI_EXECUTOR_ADDRESS": "0x...",
   "BRIDGE_AGGREGATOR_ADDRESS": "0x...",
   "STARKNET_SWAP_CONTRACT_ADDRESS": "0x...",
@@ -201,8 +223,8 @@ bash smartcontract/scripts/09_register_staking_tokens.sh
 ```
 
 Notes:
-- Script registers USDC/USDT/STRK on `StakingStablecoin`, registers WBTC on `StakingBTC`, and verifies allowlist status on-chain.
-- For new deployments, `StakingBTC` constructor also receives default WBTC token (`TOKEN_WBTC_ADDRESS` fallback `TOKEN_BTC_ADDRESS`) from `scripts/06_deploy_remaining.sh`.
+- Script registers USDC/USDT/STRK on `StakingStablecoin`, registers WBTC on `WBTCStaking`, and verifies allowlist status on-chain.
+- For new deployments, `WBTCStaking` constructor also receives default WBTC token (`TOKEN_WBTC_ADDRESS` fallback `TOKEN_BTC_ADDRESS`) from `scripts/06_deploy_remaining.sh`.
 
 ## Notes
 | Topic | Detail |

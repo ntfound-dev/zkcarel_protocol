@@ -3,12 +3,14 @@ use crate::{
     error::{AppError, Result},
 };
 use starknet_core::types::{Call, ExecutionResult, Felt, TransactionFinalityStatus};
+use std::time::Instant;
 use tokio::time::{sleep, Duration};
 
 use super::onchain::{OnchainInvoker, OnchainReader};
 
 const DEFAULT_RELAYER_POLL_ATTEMPTS: usize = 20;
 const DEFAULT_RELAYER_POLL_INTERVAL_MS: u64 = 1_500;
+const DEFAULT_RELAYER_POLL_TIMEOUT_SECS: u64 = 300;
 
 pub struct RelayerService {
     invoker: OnchainInvoker,
@@ -55,8 +57,17 @@ impl RelayerService {
 
         let tx_hash_hex = format!("{:#x}", tx_hash);
         let mut last_error = String::new();
+        let timeout_secs = std::env::var("RELAYER_POLL_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_RELAYER_POLL_TIMEOUT_SECS);
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
 
         for attempt in 0..poll_attempts {
+            if Instant::now() >= deadline {
+                break;
+            }
             match self.reader.get_transaction_receipt(&tx_hash).await {
                 Ok(receipt) => {
                     if let ExecutionResult::Reverted { reason } = receipt.receipt.execution_result()
@@ -71,7 +82,7 @@ impl RelayerService {
                         TransactionFinalityStatus::PreConfirmed
                     ) {
                         last_error = "transaction still pre-confirmed".to_string();
-                        if attempt + 1 < poll_attempts {
+                        if attempt + 1 < poll_attempts && Instant::now() < deadline {
                             sleep(Duration::from_millis(poll_interval_ms)).await;
                             continue;
                         }
@@ -84,7 +95,7 @@ impl RelayerService {
                 }
                 Err(err) => {
                     last_error = err.to_string();
-                    if attempt + 1 < poll_attempts {
+                    if attempt + 1 < poll_attempts && Instant::now() < deadline {
                         sleep(Duration::from_millis(poll_interval_ms)).await;
                         continue;
                     }

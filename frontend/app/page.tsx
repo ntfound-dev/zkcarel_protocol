@@ -1,22 +1,24 @@
 "use client"
 
 import * as React from "react"
-import { ThemeProvider } from "@/components/theme-provider"
-import { WalletProvider } from "@/hooks/use-wallet"
-import { NotificationsProvider } from "@/hooks/use-notifications"
-import { GlobalEventHandlers } from "@/components/global-event-handlers"
-import { EnhancedNavigation } from "@/components/enhanced-navigation"
-import { HeroSection } from "@/components/hero-section"
-import { FeaturedCards, type SelectableFeatureId } from "@/components/featured-cards"
-import { TradingInterface } from "@/components/trading-interface"
+import { ThemeProvider } from "@/components/providers/theme-provider"
+import { WalletManager } from "@/components/providers/wallet-manager"
+import { PriceStreamProvider } from "@/components/providers/price-stream-provider"
+import { NotificationsProvider } from "@/hooks/notifications/use-notifications"
+import { GlobalEventHandlers } from "@/components/system/global-event-handlers"
+import { EnhancedNavigation } from "@/components/navigation/enhanced-navigation"
+import { HeroSection } from "@/components/home/hero-section"
+import { FeaturedCards } from "@/components/home/featured-cards"
+import type { SelectableFeatureId } from "@/lib/featured-config"
+import { TradingInterface } from "@/components/trade/trading-interface"
 import { LimitOrder } from "@/components/limit-order"
-import { StakeEarn } from "@/components/stake-earn"
-import { PortfolioDashboard } from "@/components/portfolio-dashboard"
+import { StakeEarn } from "@/components/staking/stake-earn"
+import { PortfolioDashboard } from "@/components/portfolio/portfolio-dashboard"
 import { Leaderboard } from "@/components/leaderboard"
-import { RewardsHub } from "@/components/rewards-hub"
-import { FloatingAIAssistant } from "@/components/floating-ai-assistant"
-import { ParticleBackground } from "@/components/particle-background"
-import { CarelBrandLogo } from "@/components/carel-logo"
+import { RewardsHub } from "@/components/rewards/rewards-hub"
+import { FloatingAIAssistant } from "@/components/ai/floating-ai-assistant"
+import { ParticleBackground } from "@/components/home/particle-background"
+import { CarelBrandLogo } from "@/components/brand/carel-logo"
 
 export default function CarelProtocolApp() {
   const [activeFeature, setActiveFeature] = React.useState<SelectableFeatureId | null>(null)
@@ -85,8 +87,9 @@ export default function CarelProtocolApp() {
 
   return (
     <ThemeProvider defaultTheme="dark">
-      <WalletProvider>
-        <NotificationsProvider>
+      <NotificationsProvider>
+        <WalletManager />
+        <PriceStreamProvider>
           <GlobalEventHandlers />
           <div className="relative min-h-screen">
             {/* Background Effects */}
@@ -177,10 +180,10 @@ export default function CarelProtocolApp() {
             </div>
 
             {/* Floating AI Assistant */}
-            <FloatingAIAssistant />
-          </div>
-        </NotificationsProvider>
-      </WalletProvider>
+          <FloatingAIAssistant />
+        </div>
+        </PriceStreamProvider>
+      </NotificationsProvider>
     </ThemeProvider>
   )
 }

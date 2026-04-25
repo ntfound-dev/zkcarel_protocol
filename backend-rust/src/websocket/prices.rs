@@ -1,16 +1,137 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Query, State,
     },
-    response::Response,
+    http::{header::AUTHORIZATION, HeaderMap},
+    response::{IntoResponse, Response},
 };
 use futures_util::{SinkExt, StreamExt};
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 
-use crate::api::AppState;
+use crate::{
+    api::{auth::extract_user_from_token, AppState},
+    error::AppError,
+};
+
+const PRICE_CACHE_TTL_SECS: u64 = 10;
+const PRICE_REDIS_PREFIX: &str = "price:latest";
+
+#[derive(Clone)]
+struct CachedPrice {
+    fetched_at: Instant,
+    price: f64,
+    change_24h: f64,
+}
+
+static PRICE_CACHE: OnceLock<RwLock<HashMap<String, CachedPrice>>> = OnceLock::new();
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CachedPricePayload {
+    price: f64,
+    change_24h: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct WsAuthQuery {
+    token: Option<String>,
+}
+
+// Internal helper that supports `token_from_headers` operations.
+fn token_from_headers(headers: &HeaderMap) -> Option<String> {
+    let header_value = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    header_value
+        .strip_prefix("Bearer ")
+        .map(|token| token.to_string())
+}
+
+// Internal helper that supports `price_cache` operations.
+fn price_cache() -> &'static RwLock<HashMap<String, CachedPrice>> {
+    PRICE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+// Internal helper that supports `price_redis_key` operations.
+fn price_redis_key(token: &str) -> String {
+    format!("{PRICE_REDIS_PREFIX}:{token}")
+}
+
+// Internal helper that supports `cache_price_redis` operations.
+async fn cache_price_redis(state: &AppState, token: &str, price: f64, change_24h: f64) {
+    let payload = CachedPricePayload { price, change_24h };
+    let Ok(json) = serde_json::to_string(&payload) else {
+        return;
+    };
+    let mut conn = state.redis.clone();
+    let _: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(price_redis_key(token), json, PRICE_CACHE_TTL_SECS)
+        .await;
+}
+
+// Internal helper that supports `get_cached_price_redis` operations.
+async fn get_cached_price_redis(state: &AppState, token: &str) -> Option<(f64, f64)> {
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = conn.get(price_redis_key(token)).await.ok()?;
+    raw.and_then(|value| serde_json::from_str::<CachedPricePayload>(&value).ok())
+        .map(|payload| (payload.price, payload.change_24h))
+}
+
+// Internal helper that supports `get_cached_price` operations.
+async fn get_cached_price(token: &str, ttl: Duration) -> Option<(f64, f64)> {
+    let cache = price_cache();
+    let guard = cache.read().await;
+    guard.get(token).and_then(|entry| {
+        if entry.fetched_at.elapsed() <= ttl {
+            Some((entry.price, entry.change_24h))
+        } else {
+            None
+        }
+    })
+}
+
+// Internal helper that supports `get_cached_price_with_fallback` operations.
+async fn get_cached_price_with_fallback(
+    state: &AppState,
+    token: &str,
+    ttl: Duration,
+) -> Option<(f64, f64)> {
+    if let Some(cached) = get_cached_price(token, ttl).await {
+        return Some(cached);
+    }
+
+    if let Some(cached) = get_cached_price_redis(state, token).await {
+        store_cached_price_local(token, cached.0, cached.1).await;
+        return Some(cached);
+    }
+
+    None
+}
+
+// Internal helper that supports `store_cached_price` operations.
+async fn store_cached_price_local(token: &str, price: f64, change_24h: f64) {
+    let cache = price_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        token.to_string(),
+        CachedPrice {
+            fetched_at: Instant::now(),
+            price,
+            change_24h,
+        },
+    );
+}
+
+// Internal helper that supports `store_cached_price` operations.
+async fn store_cached_price(state: &AppState, token: &str, price: f64, change_24h: f64) {
+    store_cached_price_local(token, price, change_24h).await;
+    cache_price_redis(state, token, price, change_24h).await;
+}
 
 // Internal helper that supports `connected_payload` operations.
 fn connected_payload() -> String {
@@ -39,7 +160,49 @@ struct PriceUpdate {
 }
 
 /// WebSocket handler for real-time price updates
-pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+pub async fn handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WsAuthQuery>,
+) -> Response {
+    let token = token_from_headers(&headers).or(query.token);
+    let token = match token {
+        Some(token) => token,
+        None => return AppError::AuthError("Missing WebSocket token".to_string()).into_response(),
+    };
+
+    let user_address = match extract_user_from_token(&token, &state.config.jwt_secret).await {
+        Ok(address) => address,
+        Err(err) => return err.into_response(),
+    };
+
+    let db = state.db.clone();
+    let user_address_for_touch = user_address.clone();
+    tokio::spawn(async move {
+        match timeout(
+            Duration::from_millis(2500),
+            db.touch_user(&user_address_for_touch),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    "prices websocket touch_user failed for {}: {}",
+                    user_address_for_touch,
+                    err
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "prices websocket touch_user timed out for {}",
+                    user_address_for_touch
+                );
+            }
+        }
+    });
+
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
@@ -139,6 +302,13 @@ async fn latest_price_with_change(
     state: &AppState,
     token: &str,
 ) -> crate::error::Result<(f64, f64)> {
+    if let Some(cached) =
+        get_cached_price_with_fallback(state, token, Duration::from_secs(PRICE_CACHE_TTL_SECS))
+            .await
+    {
+        return Ok(cached);
+    }
+
     let rows: Vec<f64> = sqlx::query_scalar(
         "SELECT close::FLOAT FROM price_history WHERE token = $1 AND interval = $2 ORDER BY timestamp DESC LIMIT 2",
     )
@@ -173,6 +343,7 @@ async fn latest_price_with_change(
         0.0
     };
 
+    store_cached_price(state, token, latest, change).await;
     Ok((latest, change))
 }
 

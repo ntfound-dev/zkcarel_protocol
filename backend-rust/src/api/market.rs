@@ -3,6 +3,10 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 
 use crate::{
     error::Result,
@@ -12,13 +16,54 @@ use crate::{
 
 use super::AppState;
 
-#[derive(Debug, Serialize)]
+const MARKET_DEPTH_CACHE_TTL_SECS: u64 = 30;
+
+#[derive(Clone)]
+struct CachedMarketDepth {
+    fetched_at: Instant,
+    data: MarketDepthResponse,
+}
+
+static MARKET_DEPTH_CACHE: OnceLock<RwLock<HashMap<String, CachedMarketDepth>>> = OnceLock::new();
+
+// Internal helper that supports `market_depth_cache` operations.
+fn market_depth_cache() -> &'static RwLock<HashMap<String, CachedMarketDepth>> {
+    MARKET_DEPTH_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+// Internal helper that supports `get_cached_market_depth` operations.
+async fn get_cached_market_depth(key: &str, ttl: Duration) -> Option<MarketDepthResponse> {
+    let cache = market_depth_cache();
+    let guard = cache.read().await;
+    guard.get(key).and_then(|entry| {
+        if entry.fetched_at.elapsed() <= ttl {
+            Some(entry.data.clone())
+        } else {
+            None
+        }
+    })
+}
+
+// Internal helper that supports `store_cached_market_depth` operations.
+async fn store_cached_market_depth(key: &str, data: MarketDepthResponse) {
+    let cache = market_depth_cache();
+    let mut guard = cache.write().await;
+    guard.insert(
+        key.to_string(),
+        CachedMarketDepth {
+            fetched_at: Instant::now(),
+            data,
+        },
+    );
+}
+
+#[derive(Debug, Serialize, Clone)]
 pub struct OrderBookLevel {
     pub price: f64,
     pub amount: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct MarketDepthResponse {
     pub token: String,
     pub bids: Vec<OrderBookLevel>,
@@ -86,16 +131,23 @@ pub async fn get_market_depth(
     Query(query): Query<MarketDepthQuery>,
 ) -> Result<Json<ApiResponse<MarketDepthResponse>>> {
     let limit = clamp_limit(query.limit);
+    let cache_key = format!("depth:{}:{}", token.to_ascii_uppercase(), limit);
+    if let Some(cached) =
+        get_cached_market_depth(&cache_key, Duration::from_secs(MARKET_DEPTH_CACHE_TTL_SECS)).await
+    {
+        return Ok(Json(ApiResponse::success(cached)));
+    }
     let mid_price = latest_price(&state, token.as_str()).await?;
 
     let (bids, asks) = build_levels(mid_price, limit);
-
-    Ok(Json(ApiResponse::success(MarketDepthResponse {
+    let response = MarketDepthResponse {
         token,
         bids,
         asks,
         updated_at: chrono::Utc::now(),
-    })))
+    };
+    store_cached_market_depth(&cache_key, response.clone()).await;
+    Ok(Json(ApiResponse::success(response)))
 }
 
 #[cfg(test)]

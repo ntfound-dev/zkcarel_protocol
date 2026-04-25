@@ -1,4 +1,5 @@
 use crate::{config::Config, error::Result};
+use ethers::types::U256;
 use starknet_accounts::{Account, ExecutionEncoding, SingleOwnerAccount};
 use starknet_core::types::{
     BlockId, BlockTag, Call, ContractClass, Felt, FunctionCall, Transaction,
@@ -16,7 +17,11 @@ use tokio::time::sleep;
 use url::Url;
 
 pub struct OnchainInvoker {
-    account: SingleOwnerAccount<JsonRpcClient<HttpTransport>, LocalWallet>,
+    provider_urls: Vec<String>,
+    account_address: Felt,
+    private_key: Felt,
+    chain_id: Felt,
+    rr_cursor: AtomicUsize,
 }
 
 pub struct OnchainReader {
@@ -48,6 +53,33 @@ fn env_non_empty(name: &str) -> Option<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+// Internal helper that supports `env_f64` operations.
+fn env_f64(name: &str) -> Option<f64> {
+    env_non_empty(name)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+}
+
+// Internal helper that supports `env_u64` operations.
+fn env_u64(name: &str) -> Option<u64> {
+    env_non_empty(name).and_then(|value| value.parse::<u64>().ok())
+}
+
+// Internal helper that supports `starknet_gas_estimate_multiplier` operations.
+fn starknet_gas_estimate_multiplier() -> Option<f64> {
+    env_f64("STARKNET_GAS_ESTIMATE_MULTIPLIER")
+}
+
+// Internal helper that supports `starknet_gas_price_multiplier` operations.
+fn starknet_gas_price_multiplier() -> Option<f64> {
+    env_f64("STARKNET_GAS_PRICE_MULTIPLIER")
+}
+
+// Internal helper that supports `starknet_gas_tip` operations.
+fn starknet_gas_tip() -> Option<u64> {
+    env_u64("STARKNET_GAS_TIP")
 }
 
 // Internal helper that supports `parse_rpc_url_list` operations.
@@ -105,14 +137,6 @@ fn resolve_wallet_rpc_urls(config: &Config) -> Vec<String> {
         urls = resolve_api_rpc_urls(config);
     }
     dedupe_rpc_urls(urls)
-}
-
-// Internal helper that fetches data for `resolve_api_rpc_url`.
-fn resolve_api_rpc_url(config: &Config) -> String {
-    resolve_api_rpc_urls(config)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| config.starknet_rpc_url.clone())
 }
 
 // Internal helper that supports `configured_max_inflight` operations.
@@ -252,6 +276,71 @@ async fn rpc_record_failure(method: &str, error_text: &str) {
 }
 
 impl OnchainInvoker {
+    // Internal helper that supports `from_rpc_urls` operations.
+    fn from_rpc_urls(
+        rpc_urls: Vec<String>,
+        account_address: Felt,
+        private_key: Felt,
+        chain_id: Felt,
+    ) -> Result<Self> {
+        if rpc_urls.is_empty() {
+            return Err(crate::error::AppError::Internal(
+                "No Starknet wallet RPC URL configured for OnchainInvoker".to_string(),
+            ));
+        }
+        for rpc in &rpc_urls {
+            Url::parse(rpc).map_err(|e| {
+                crate::error::AppError::Internal(format!("Invalid RPC URL '{}': {}", rpc, e))
+            })?;
+        }
+        Ok(Self {
+            provider_urls: rpc_urls,
+            account_address,
+            private_key,
+            chain_id,
+            rr_cursor: AtomicUsize::new(0),
+        })
+    }
+
+    // Internal helper that supports `provider_order` operations.
+    fn provider_order(&self) -> Vec<usize> {
+        let len = self.provider_urls.len();
+        if len <= 1 {
+            return vec![0];
+        }
+        let start = self.rr_cursor.fetch_add(1, Ordering::Relaxed) % len;
+        (0..len).map(|offset| (start + offset) % len).collect()
+    }
+
+    // Internal helper that supports `build_account` operations.
+    fn build_account(
+        &self,
+        provider_index: usize,
+    ) -> Result<SingleOwnerAccount<JsonRpcClient<HttpTransport>, LocalWallet>> {
+        let rpc = self.provider_urls.get(provider_index).ok_or_else(|| {
+            crate::error::AppError::Internal(format!(
+                "Wallet RPC provider index {} is out of range",
+                provider_index
+            ))
+        })?;
+        let rpc_url = Url::parse(rpc)
+            .map_err(|e| crate::error::AppError::Internal(format!("Invalid RPC URL: {}", e)))?;
+        let provider = JsonRpcClient::new(HttpTransport::new(rpc_url));
+        let signer =
+            LocalWallet::from_signing_key(SigningKey::from_secret_scalar(self.private_key));
+        let mut account = SingleOwnerAccount::new(
+            provider,
+            signer,
+            self.account_address,
+            self.chain_id,
+            ExecutionEncoding::New,
+        );
+        // Some public RPC providers don't support "pre_confirmed" yet.
+        // Force latest block tag for nonce/fee simulation compatibility.
+        account.set_block_id(BlockId::Tag(BlockTag::Latest));
+        Ok(account)
+    }
+
     /// Handles `from_config` logic.
     ///
     /// # Arguments
@@ -269,28 +358,16 @@ impl OnchainInvoker {
             return Ok(None);
         };
 
-        let rpc_url = Url::parse(&resolve_api_rpc_url(config))
-            .map_err(|e| crate::error::AppError::Internal(format!("Invalid RPC URL: {}", e)))?;
-        let provider = JsonRpcClient::new(HttpTransport::new(rpc_url));
-
         let private_key = parse_felt(&config.backend_private_key)?;
-        let signer = LocalWallet::from_signing_key(SigningKey::from_secret_scalar(private_key));
-
         let account_address = parse_felt(account_address)?;
         let chain_id = parse_chain_id(&config.starknet_chain_id)?;
-
-        let mut account = SingleOwnerAccount::new(
-            provider,
-            signer,
+        let rpc_urls = resolve_wallet_rpc_urls(config);
+        Ok(Some(Self::from_rpc_urls(
+            rpc_urls,
             account_address,
+            private_key,
             chain_id,
-            ExecutionEncoding::New,
-        );
-        // Some public RPC providers don't support "pre_confirmed" yet.
-        // Force latest block tag for nonce/fee simulation compatibility.
-        account.set_block_id(BlockId::Tag(BlockTag::Latest));
-
-        Ok(Some(Self { account }))
+        )?))
     }
 
     /// Runs `invoke` and handles related side effects.
@@ -307,41 +384,76 @@ impl OnchainInvoker {
     pub async fn invoke(&self, call: Call) -> Result<Felt> {
         let _permit = rpc_preflight("starknet_invoke").await?;
         let _submit_guard = tx_submit_mutex().lock().await;
-        for attempt in 0..=STARKNET_NONCE_RETRY_ATTEMPTS {
-            let response = self
-                .account
-                .execute_v3(vec![call.clone()])
-                .send()
-                .await
-                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-            match response {
-                Ok(result) => {
-                    rpc_record_success().await;
-                    return Ok(result.transaction_hash);
+        let order = self.provider_order();
+        let mut last_error_text: Option<String> = None;
+
+        for (provider_attempt, provider_index) in order.iter().enumerate() {
+            for nonce_attempt in 0..=STARKNET_NONCE_RETRY_ATTEMPTS {
+                let account = self.build_account(*provider_index)?;
+                let mut exec = account.execute_v3(vec![call.clone()]);
+                if let Some(multiplier) = starknet_gas_estimate_multiplier() {
+                    exec = exec.gas_estimate_multiplier(multiplier);
                 }
-                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                    if attempt < STARKNET_NONCE_RETRY_ATTEMPTS && is_invalid_nonce_error(&err_text)
-                    {
-                        tracing::warn!(
-                            "starknet_invoke invalid nonce (attempt {}), retrying in {}ms: {}",
-                            attempt + 1,
-                            STARKNET_NONCE_RETRY_DELAY_MS,
-                            err_text
-                        );
-                        sleep(Duration::from_millis(STARKNET_NONCE_RETRY_DELAY_MS)).await;
-                        continue;
+                if let Some(multiplier) = starknet_gas_price_multiplier() {
+                    exec = exec.gas_price_estimate_multiplier(multiplier);
+                }
+                if let Some(tip) = starknet_gas_tip() {
+                    exec = exec.tip(tip);
+                }
+                let response = exec
+                    .send()
+                    .await
+                    .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+                match response {
+                    Ok(result) => {
+                        rpc_record_success().await;
+                        return Ok(result.transaction_hash);
                     }
-                    rpc_record_failure("starknet_invoke", &err_text).await;
-                    return Err(crate::error::AppError::BlockchainRPC(err_text));
-                }
-                Err(err) => {
-                    return Err(err);
+                    Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                        if nonce_attempt < STARKNET_NONCE_RETRY_ATTEMPTS
+                            && is_invalid_nonce_error(&err_text)
+                        {
+                            tracing::warn!(
+                                "starknet_invoke invalid nonce on provider {} (attempt {}), retrying in {}ms: {}",
+                                provider_index,
+                                nonce_attempt + 1,
+                                STARKNET_NONCE_RETRY_DELAY_MS,
+                                err_text
+                            );
+                            sleep(Duration::from_millis(STARKNET_NONCE_RETRY_DELAY_MS)).await;
+                            continue;
+                        }
+
+                        let provider_url = self
+                            .provider_urls
+                            .get(*provider_index)
+                            .cloned()
+                            .unwrap_or_else(|| "<unknown>".to_string());
+                        last_error_text =
+                            Some(format!("provider {} ({}): {}", provider_index, provider_url, err_text));
+                        let is_transient = looks_like_transient_rpc_error(&err_text);
+                        let has_next_provider = provider_attempt + 1 < order.len();
+                        if has_next_provider && is_transient {
+                            tracing::warn!(
+                                "starknet_invoke failed on provider {} ({}), trying next wallet RPC: {}",
+                                provider_index,
+                                provider_url,
+                                err_text
+                            );
+                            break;
+                        }
+                        rpc_record_failure("starknet_invoke", &err_text).await;
+                        return Err(crate::error::AppError::BlockchainRPC(err_text));
+                    }
+                    Err(err) => return Err(err),
                 }
             }
         }
-        Err(crate::error::AppError::BlockchainRPC(
-            "Failed to submit Starknet invoke after nonce retries".to_string(),
-        ))
+        let error_text = last_error_text.unwrap_or_else(|| {
+            "Failed to submit Starknet invoke after provider and nonce retries".to_string()
+        });
+        rpc_record_failure("starknet_invoke", &error_text).await;
+        Err(crate::error::AppError::BlockchainRPC(error_text))
     }
 
     /// Runs `invoke_many` and handles related side effects.
@@ -363,41 +475,76 @@ impl OnchainInvoker {
         }
         let _permit = rpc_preflight("starknet_invoke_many").await?;
         let _submit_guard = tx_submit_mutex().lock().await;
-        for attempt in 0..=STARKNET_NONCE_RETRY_ATTEMPTS {
-            let response = self
-                .account
-                .execute_v3(calls.clone())
-                .send()
-                .await
-                .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
-            match response {
-                Ok(result) => {
-                    rpc_record_success().await;
-                    return Ok(result.transaction_hash);
+        let order = self.provider_order();
+        let mut last_error_text: Option<String> = None;
+
+        for (provider_attempt, provider_index) in order.iter().enumerate() {
+            for nonce_attempt in 0..=STARKNET_NONCE_RETRY_ATTEMPTS {
+                let account = self.build_account(*provider_index)?;
+                let mut exec = account.execute_v3(calls.clone());
+                if let Some(multiplier) = starknet_gas_estimate_multiplier() {
+                    exec = exec.gas_estimate_multiplier(multiplier);
                 }
-                Err(crate::error::AppError::BlockchainRPC(err_text)) => {
-                    if attempt < STARKNET_NONCE_RETRY_ATTEMPTS && is_invalid_nonce_error(&err_text)
-                    {
-                        tracing::warn!(
-                            "starknet_invoke_many invalid nonce (attempt {}), retrying in {}ms: {}",
-                            attempt + 1,
-                            STARKNET_NONCE_RETRY_DELAY_MS,
-                            err_text
-                        );
-                        sleep(Duration::from_millis(STARKNET_NONCE_RETRY_DELAY_MS)).await;
-                        continue;
+                if let Some(multiplier) = starknet_gas_price_multiplier() {
+                    exec = exec.gas_price_estimate_multiplier(multiplier);
+                }
+                if let Some(tip) = starknet_gas_tip() {
+                    exec = exec.tip(tip);
+                }
+                let response = exec
+                    .send()
+                    .await
+                    .map_err(|e| crate::error::AppError::BlockchainRPC(e.to_string()));
+                match response {
+                    Ok(result) => {
+                        rpc_record_success().await;
+                        return Ok(result.transaction_hash);
                     }
-                    rpc_record_failure("starknet_invoke_many", &err_text).await;
-                    return Err(crate::error::AppError::BlockchainRPC(err_text));
-                }
-                Err(err) => {
-                    return Err(err);
+                    Err(crate::error::AppError::BlockchainRPC(err_text)) => {
+                        if nonce_attempt < STARKNET_NONCE_RETRY_ATTEMPTS
+                            && is_invalid_nonce_error(&err_text)
+                        {
+                            tracing::warn!(
+                                "starknet_invoke_many invalid nonce on provider {} (attempt {}), retrying in {}ms: {}",
+                                provider_index,
+                                nonce_attempt + 1,
+                                STARKNET_NONCE_RETRY_DELAY_MS,
+                                err_text
+                            );
+                            sleep(Duration::from_millis(STARKNET_NONCE_RETRY_DELAY_MS)).await;
+                            continue;
+                        }
+
+                        let provider_url = self
+                            .provider_urls
+                            .get(*provider_index)
+                            .cloned()
+                            .unwrap_or_else(|| "<unknown>".to_string());
+                        last_error_text =
+                            Some(format!("provider {} ({}): {}", provider_index, provider_url, err_text));
+                        let is_transient = looks_like_transient_rpc_error(&err_text);
+                        let has_next_provider = provider_attempt + 1 < order.len();
+                        if has_next_provider && is_transient {
+                            tracing::warn!(
+                                "starknet_invoke_many failed on provider {} ({}), trying next wallet RPC: {}",
+                                provider_index,
+                                provider_url,
+                                err_text
+                            );
+                            break;
+                        }
+                        rpc_record_failure("starknet_invoke_many", &err_text).await;
+                        return Err(crate::error::AppError::BlockchainRPC(err_text));
+                    }
+                    Err(err) => return Err(err),
                 }
             }
         }
-        Err(crate::error::AppError::BlockchainRPC(
-            "Failed to submit Starknet multicall after nonce retries".to_string(),
-        ))
+        let error_text = last_error_text.unwrap_or_else(|| {
+            "Failed to submit Starknet multicall after provider and nonce retries".to_string()
+        });
+        rpc_record_failure("starknet_invoke_many", &error_text).await;
+        Err(crate::error::AppError::BlockchainRPC(error_text))
     }
 }
 
@@ -889,15 +1036,10 @@ pub fn felt_to_u128(value: &Felt) -> Result<u128> {
 ///
 /// # Notes
 /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
-pub fn u256_from_felts(low: &Felt, high: &Felt) -> Result<u128> {
+pub fn u256_from_felts(low: &Felt, high: &Felt) -> Result<U256> {
     let low = felt_to_u128(low)?;
     let high = felt_to_u128(high)?;
-    if high != 0 {
-        return Err(crate::error::AppError::Internal(
-            "u256 value too large".to_string(),
-        ));
-    }
-    Ok(low)
+    Ok((U256::from(high) << 128) + U256::from(low))
 }
 
 /// Handles `u256_to_felts` logic.
@@ -913,4 +1055,20 @@ pub fn u256_from_felts(low: &Felt, high: &Felt) -> Result<u128> {
 /// * May update state, query storage, or invoke relayer/on-chain paths depending on flow.
 pub fn u256_to_felts(value: u128) -> (Felt, Felt) {
     (Felt::from(value), Felt::from(0_u128))
+}
+
+/// Handles `u256_to_u128` logic for callers that expect small values.
+pub fn u256_to_u128(value: U256) -> Result<u128> {
+    if value > U256::from(u128::MAX) {
+        return Err(crate::error::AppError::Internal(
+            "u256 value too large for u128".to_string(),
+        ));
+    }
+    Ok(value.as_u128())
+}
+
+/// Handles `u256_from_felts_u128` logic for callers that expect small values.
+pub fn u256_from_felts_u128(low: &Felt, high: &Felt) -> Result<u128> {
+    let value = u256_from_felts(low, high)?;
+    u256_to_u128(value)
 }

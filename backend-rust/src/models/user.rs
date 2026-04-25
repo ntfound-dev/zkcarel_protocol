@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::FromRow;
 
 // ==================== USER ====================
@@ -59,6 +60,8 @@ pub struct Transaction {
     pub usd_value: Option<Decimal>,
     pub fee_paid: Option<Decimal>,
     pub points_earned: Option<Decimal>,
+    #[sqlx(default)]
+    pub is_private: bool,
     pub timestamp: DateTime<Utc>,
     pub processed: bool,
 }
@@ -184,6 +187,10 @@ pub struct PrivacyVerificationPayload {
     pub nullifier: Option<String>,
     pub commitment: Option<String>,
     pub note_commitment: Option<String>,
+    pub note_ciphertext: Option<String>,
+    pub note_cid: Option<String>,
+    #[serde(default, alias = "noirInputs")]
+    pub noir_inputs: Option<Value>,
     pub denom_id: Option<String>,
     pub spendable_at_unix: Option<u64>,
     pub proof: Option<Vec<String>>,
@@ -200,6 +207,7 @@ pub struct CreateLimitOrderRequest {
     pub recipient: Option<String>,
     pub client_order_id: Option<String>,
     pub onchain_tx_hash: Option<String>,
+    pub plan_id: Option<String>,
     pub hide_balance: Option<bool>,
     pub privacy: Option<PrivacyVerificationPayload>,
 }

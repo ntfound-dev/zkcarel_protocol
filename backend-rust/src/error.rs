@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::Serialize;
 use thiserror::Error;
+use tracing::error;
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -72,16 +73,22 @@ impl IntoResponse for AppError {
     // Internal helper that supports `into_response` operations.
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
-            AppError::Database(ref e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DATABASE_ERROR",
-                e.to_string(),
-            ),
-            AppError::Redis(ref e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "CACHE_ERROR",
-                e.to_string(),
-            ),
+            AppError::Database(ref e) => {
+                error!("Database error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DATABASE_ERROR",
+                    "Internal server error".to_string(),
+                )
+            }
+            AppError::Redis(ref e) => {
+                error!("Redis error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "CACHE_ERROR",
+                    "Internal server error".to_string(),
+                )
+            }
             AppError::AuthError(ref msg) => (StatusCode::UNAUTHORIZED, "AUTH_ERROR", msg.clone()),
             AppError::InvalidSignature => (
                 StatusCode::UNAUTHORIZED,
@@ -121,13 +128,35 @@ impl IntoResponse for AppError {
                 "Not enough liquidity available".to_string(),
             ),
             AppError::ExternalAPI(ref msg) => {
-                (StatusCode::BAD_GATEWAY, "EXTERNAL_API_ERROR", msg.clone())
+                error!("External API error: {}", msg);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "EXTERNAL_API_ERROR",
+                    "Upstream service error".to_string(),
+                )
             }
-            _ => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "INTERNAL_ERROR",
-                self.to_string(),
-            ),
+            AppError::BlockchainRPC(ref msg) => {
+                error!("Blockchain RPC error: {}", msg);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "BLOCKCHAIN_RPC_ERROR",
+                    "Upstream RPC error".to_string(),
+                )
+            }
+            AppError::Internal(ref msg) => {
+                error!("Internal error: {}", msg);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR",
+                    "Internal server error".to_string(),
+                )
+            }
+        };
+
+        let details = match self {
+            AppError::BlockchainRPC(msg) => Some(serde_json::Value::String(msg.clone())),
+            AppError::ExternalAPI(msg) => Some(serde_json::Value::String(msg.clone())),
+            _ => None,
         };
 
         let body = Json(ErrorResponse {
@@ -135,7 +164,7 @@ impl IntoResponse for AppError {
             error: ErrorDetail {
                 code: code.to_string(),
                 message,
-                details: None,
+                details,
             },
         });
 

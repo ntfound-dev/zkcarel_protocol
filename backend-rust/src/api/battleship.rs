@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use redis::AsyncCommands;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use starknet_core::types::{
@@ -14,6 +15,7 @@ use starknet_core::utils::get_selector_from_name;
 use starknet_crypto::poseidon_hash_many;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 
@@ -26,6 +28,7 @@ use crate::{
     error::{AppError, Result},
     models::{ApiResponse, StarknetWalletCall, Transaction},
     services::{
+        invoke_parser::{parse_execute_calls, ParsedExecuteCall},
         onchain::{felt_to_u128, parse_felt, OnchainReader},
         privacy_verifier::parse_privacy_verifier_kind,
     },
@@ -51,6 +54,8 @@ const TX_BATTLE_TIMEOUT_WIN: &str = "battle_tmo_win";
 const STATUS_PLAYING: u64 = 1;
 const STATUS_FINISHED: u64 = 2;
 const BATTLESHIP_ABI_CACHE_TTL_SECS: i64 = 300;
+const BATTLESHIP_REDIS_KEY: &str = "battleship:store:v1";
+const BATTLESHIP_REDIS_TTL_SECS: u64 = 60 * 60 * 24 * 30;
 const REQUIRED_BATTLESHIP_ENTRYPOINTS: [&str; 7] = [
     "create_game",
     "join_game",
@@ -124,7 +129,7 @@ pub struct ClaimTimeoutRequest {
     pub onchain_tx_hash: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ShotRecord {
     pub shooter: String,
     pub x: u8,
@@ -195,7 +200,7 @@ pub struct FireShotResponse {
     pub requires_wallet_signature: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum GameStatus {
     Waiting,
     Playing,
@@ -222,19 +227,19 @@ impl GameStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlayerBoard {
     cells: HashSet<(u8, u8)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PendingShot {
     shooter: String,
     x: u8,
     y: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BattleshipGame {
     game_id: u64,
     creator: String,
@@ -254,16 +259,9 @@ struct BattleshipGame {
     last_action_at: i64,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct BattleshipStore {
     games: HashMap<u64, BattleshipGame>,
-}
-
-#[derive(Debug, Clone)]
-struct ParsedExecuteCall {
-    to: Felt,
-    selector: Felt,
-    calldata: Vec<Felt>,
 }
 
 #[derive(Debug, Clone)]
@@ -280,15 +278,75 @@ struct OnchainGameState {
 
 static BATTLESHIP_STORE: OnceLock<RwLock<BattleshipStore>> = OnceLock::new();
 static BATTLESHIP_ABI_CACHE: OnceLock<RwLock<HashMap<String, i64>>> = OnceLock::new();
+static BATTLESHIP_STORE_LOADED: OnceLock<Mutex<bool>> = OnceLock::new();
 
 // Internal helper that supports `battleship_store` operations.
 fn battleship_store() -> &'static RwLock<BattleshipStore> {
     BATTLESHIP_STORE.get_or_init(|| RwLock::new(BattleshipStore::default()))
 }
 
+// Internal helper that supports `battleship_store_loaded` operations.
+fn battleship_store_loaded() -> &'static Mutex<bool> {
+    BATTLESHIP_STORE_LOADED.get_or_init(|| Mutex::new(false))
+}
+
 // Internal helper that supports `battleship_abi_cache` operations.
 fn battleship_abi_cache() -> &'static RwLock<HashMap<String, i64>> {
     BATTLESHIP_ABI_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+// Internal helper that fetches data for `load_battleship_store_from_redis`.
+async fn load_battleship_store_from_redis(state: &AppState) -> Option<BattleshipStore> {
+    let mut conn = state.redis.clone();
+    let raw: Option<String> = match conn.get(BATTLESHIP_REDIS_KEY).await {
+        Ok(payload) => payload,
+        Err(err) => {
+            tracing::debug!("battleship redis read failed: {}", err);
+            return None;
+        }
+    };
+    let payload = raw?;
+    match serde_json::from_str::<BattleshipStore>(&payload) {
+        Ok(store) => Some(store),
+        Err(err) => {
+            tracing::warn!("battleship redis decode failed: {}", err);
+            None
+        }
+    }
+}
+
+// Internal helper that supports `persist_battleship_store`.
+async fn persist_battleship_store(state: &AppState) {
+    let payload = {
+        let store = battleship_store().read().await;
+        match serde_json::to_string(&*store) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!("battleship redis serialize failed: {}", err);
+                return;
+            }
+        }
+    };
+    let mut conn = state.redis.clone();
+    let write: std::result::Result<(), redis::RedisError> = conn
+        .set_ex(BATTLESHIP_REDIS_KEY, payload, BATTLESHIP_REDIS_TTL_SECS)
+        .await;
+    if let Err(err) = write {
+        tracing::debug!("battleship redis write failed: {}", err);
+    }
+}
+
+// Internal helper that supports `ensure_battleship_store_loaded`.
+async fn ensure_battleship_store_loaded(state: &AppState) {
+    let mut guard = battleship_store_loaded().lock().await;
+    if *guard {
+        return;
+    }
+    if let Some(store) = load_battleship_store_from_redis(state).await {
+        let mut local = battleship_store().write().await;
+        *local = store;
+    }
+    *guard = true;
 }
 
 // Internal helper that supports `now_unix` operations.
@@ -721,6 +779,7 @@ fn parse_or_generate_payload_from_request(
         root: None,
         note_version: None,
         note_commitment: None,
+        note_cid: None,
         denom_id: None,
         spendable_at_unix: None,
         proof,
@@ -1007,124 +1066,6 @@ fn felt_to_usize(value: &Felt, field_name: &str) -> Result<usize> {
             "Invalid invoke calldata: {field_name} exceeds supported size"
         ))
     })
-}
-
-// Internal helper that parses or transforms values for `parse_execute_calls_offset`.
-fn parse_execute_calls_offset(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if calldata.is_empty() {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: empty calldata".to_string(),
-        ));
-    }
-
-    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
-    let header_start = 1usize;
-    let header_width = 4usize;
-    let headers_end = header_start
-        .checked_add(calls_len.checked_mul(header_width).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: calls_len overflow".to_string())
-        })?)
-        .ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: malformed headers".to_string())
-        })?;
-
-    if calldata.len() <= headers_end {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: missing calldata length".to_string(),
-        ));
-    }
-
-    let flattened_len = felt_to_usize(&calldata[headers_end], "flattened_len")?;
-    let flattened_start = headers_end + 1;
-    let flattened_end = flattened_start.checked_add(flattened_len).ok_or_else(|| {
-        AppError::BadRequest("Invalid invoke calldata: flattened overflow".to_string())
-    })?;
-
-    if calldata.len() < flattened_end {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: flattened segment out of bounds".to_string(),
-        ));
-    }
-
-    let flattened = &calldata[flattened_start..flattened_end];
-    let mut calls = Vec::with_capacity(calls_len);
-
-    for idx in 0..calls_len {
-        let offset = header_start + idx * header_width;
-        let to = calldata[offset];
-        let selector = calldata[offset + 1];
-        let data_offset = felt_to_usize(&calldata[offset + 2], "data_offset")?;
-        let data_len = felt_to_usize(&calldata[offset + 3], "data_len")?;
-        let data_end = data_offset.checked_add(data_len).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: data segment overflow".to_string())
-        })?;
-        if data_end > flattened.len() {
-            return Err(AppError::BadRequest(
-                "Invalid invoke calldata: call segment out of bounds".to_string(),
-            ));
-        }
-
-        calls.push(ParsedExecuteCall {
-            to,
-            selector,
-            calldata: flattened[data_offset..data_end].to_vec(),
-        });
-    }
-
-    Ok(calls)
-}
-
-// Internal helper that parses or transforms values for `parse_execute_calls_inline`.
-fn parse_execute_calls_inline(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if calldata.is_empty() {
-        return Err(AppError::BadRequest(
-            "Invalid invoke calldata: empty calldata".to_string(),
-        ));
-    }
-    let calls_len = felt_to_usize(&calldata[0], "calls_len")?;
-    let mut cursor = 1usize;
-    let mut calls = Vec::with_capacity(calls_len);
-
-    for _ in 0..calls_len {
-        let header_end = cursor.checked_add(3).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: malformed call header".to_string())
-        })?;
-        if calldata.len() < header_end {
-            return Err(AppError::BadRequest(
-                "Invalid invoke calldata: missing inline call header".to_string(),
-            ));
-        }
-
-        let to = calldata[cursor];
-        let selector = calldata[cursor + 1];
-        let data_len = felt_to_usize(&calldata[cursor + 2], "data_len")?;
-        let data_start = cursor + 3;
-        let data_end = data_start.checked_add(data_len).ok_or_else(|| {
-            AppError::BadRequest("Invalid invoke calldata: inline data overflow".to_string())
-        })?;
-        if data_end > calldata.len() {
-            return Err(AppError::BadRequest(
-                "Invalid invoke calldata: inline data out of bounds".to_string(),
-            ));
-        }
-
-        calls.push(ParsedExecuteCall {
-            to,
-            selector,
-            calldata: calldata[data_start..data_end].to_vec(),
-        });
-        cursor = data_end;
-    }
-
-    Ok(calls)
-}
-
-// Internal helper that parses or transforms values for `parse_execute_calls`.
-fn parse_execute_calls(calldata: &[Felt]) -> Result<Vec<ParsedExecuteCall>> {
-    if let Ok(calls) = parse_execute_calls_offset(calldata) {
-        return Ok(calls);
-    }
-    parse_execute_calls_inline(calldata)
 }
 
 // Internal helper that supports `extract_invoke_sender_and_calldata` operations.
@@ -1541,6 +1482,7 @@ async fn save_battle_transaction(
         usd_value: Decimal::from_f64_retain(usd_value),
         fee_paid: None,
         points_earned: None,
+        is_private: false,
         timestamp: Utc::now(),
         processed: false,
     };
@@ -1607,6 +1549,7 @@ pub async fn create_game(
     headers: HeaderMap,
     Json(req): Json<CreateGameRequest>,
 ) -> Result<Json<ApiResponse<GameActionResponse>>> {
+    ensure_battleship_store_loaded(&state).await;
     let user = require_starknet_user(&headers, &state).await?;
     let opponent_raw = req.opponent.trim();
     let opponent = if opponent_raw.is_empty() {
@@ -1707,6 +1650,7 @@ pub async fn create_game(
         requires_wallet_signature: false,
     };
 
+    persist_battleship_store(&state).await;
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -1716,6 +1660,7 @@ pub async fn join_game(
     headers: HeaderMap,
     Json(req): Json<JoinGameRequest>,
 ) -> Result<Json<ApiResponse<GameActionResponse>>> {
+    ensure_battleship_store_loaded(&state).await;
     let user = require_starknet_user(&headers, &state).await?;
     let game_id = parse_game_id(&req.game_id)?;
     let fleet = validate_fleet(&req.cells)?;
@@ -1821,6 +1766,7 @@ pub async fn join_game(
         requires_wallet_signature: false,
     };
 
+    persist_battleship_store(&state).await;
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -1849,6 +1795,7 @@ pub async fn fire_shot(
     headers: HeaderMap,
     Json(req): Json<FireShotRequest>,
 ) -> Result<Json<ApiResponse<FireShotResponse>>> {
+    ensure_battleship_store_loaded(&state).await;
     let user = require_starknet_user(&headers, &state).await?;
     let game_id = parse_game_id(&req.game_id)?;
     verify_bounds(req.x, req.y)?;
@@ -1949,6 +1896,7 @@ pub async fn fire_shot(
         requires_wallet_signature: false,
     };
 
+    persist_battleship_store(&state).await;
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -1958,6 +1906,7 @@ pub async fn respond_shot(
     headers: HeaderMap,
     Json(req): Json<RespondShotRequest>,
 ) -> Result<Json<ApiResponse<FireShotResponse>>> {
+    ensure_battleship_store_loaded(&state).await;
     let user = require_starknet_user(&headers, &state).await?;
     let game_id = parse_game_id(&req.game_id)?;
     verify_bounds(req.defend_x, req.defend_y)?;
@@ -2147,6 +2096,7 @@ pub async fn respond_shot(
         requires_wallet_signature: false,
     };
 
+    persist_battleship_store(&state).await;
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -2156,6 +2106,7 @@ pub async fn claim_timeout(
     headers: HeaderMap,
     Json(req): Json<ClaimTimeoutRequest>,
 ) -> Result<Json<ApiResponse<GameActionResponse>>> {
+    ensure_battleship_store_loaded(&state).await;
     let user = require_starknet_user(&headers, &state).await?;
     let game_id = parse_game_id(&req.game_id)?;
     let contract = battleship_contract_address(&state)?;
@@ -2240,6 +2191,7 @@ pub async fn claim_timeout(
         requires_wallet_signature: false,
     };
 
+    persist_battleship_store(&state).await;
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -2249,6 +2201,7 @@ pub async fn get_state(
     headers: HeaderMap,
     Path(game_id): Path<String>,
 ) -> Result<Json<ApiResponse<BattleshipGameStateResponse>>> {
+    ensure_battleship_store_loaded(&state).await;
     let user = require_starknet_user(&headers, &state).await?;
     let game_id_u64 = parse_game_id(&game_id)?;
 
@@ -2261,6 +2214,7 @@ pub async fn get_state(
         .get(&game_id_u64)
         .ok_or_else(|| AppError::BadRequest("Game not found".to_string()))?;
     let response = build_state_response(game, &user)?;
+    persist_battleship_store(&state).await;
     Ok(Json(ApiResponse::success(response)))
 }
 

@@ -9,7 +9,7 @@ This README is frontend-only: UI modules, wallet integration, FE/BE API contract
 - [Frontend Architecture](#frontend-architecture)
 - [Execution Flows](#execution-flows)
 - [Contract Bindings Used by Frontend](#contract-bindings-used-by-frontend)
-- [Hide Mode V3 Requirements](#hide-mode-v3-requirements)
+- [Hide Mode V4 Requirements](#hide-mode-v4-requirements)
 - [Environment Profiles](#environment-profiles)
 - [Build and Test](#build-and-test)
 - [Deployment Docs](#deployment-docs)
@@ -67,6 +67,9 @@ flowchart LR
   W --> CHAIN[Direct execute]
 ```
 
+### 1c) Limit Order Cancel (API)
+Frontend calls `DELETE /api/v1/limit-order/{order_id}` using `cancelLimitOrder` from `frontend/lib/api/index.ts`.
+
 ### 1b) Bridge (Public Route)
 ```mermaid
 flowchart LR
@@ -78,7 +81,7 @@ flowchart LR
   P --> DST[Destination receive]
 ```
 
-### 2) Hide Mode (V3 Baseline)
+### 2) Hide Mode (V4 Baseline)
 ```mermaid
 flowchart LR
   U[User] --> FE[Frontend]
@@ -86,15 +89,15 @@ flowchart LR
   API1 --> FE
   FE --> API2[execute with hide_balance=true]
   API2 --> RELAYER[Backend relayer]
-  RELAYER --> ZK[submit_private_action]
-  ZK --> EXEC[ShieldedPoolV3 executor]
+  RELAYER --> EXEC[execute_private_*_v4]
+  EXEC --> ZK[ShieldedPoolV4 executor]
   EXEC --> CHAIN[Target contract state change]
 ```
 
 Key behavior:
 - User wallet is not the sender of final private execution tx.
 - Relayer account submits the private execution tx.
-- FE must send V3-compatible payload fields through backend APIs.
+- FE must send V4-compatible payload fields through backend APIs.
 - AI bridge commands (`bridge btc ...`, `bridge eth ...`) must use AI Level 2 in current runtime.
 - AI Level 3 remains for Garaga/private execution intents and not for default public bridge flow.
 
@@ -106,16 +109,16 @@ Key behavior:
 | Limit order | `NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS` | Active |
 | Staking CAREL | `NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS` | Active |
 | Staking Stablecoin | `NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS` | Active |
-| Staking WBTC (contract: `StakingBTC`) | `NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS` | Active |
+| Staking WBTC (contract: `WBTCStaking`) | `NEXT_PUBLIC_STARKNET_STAKING_WBTC_ADDRESS` | Active |
 | Loyalty NFT | `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` | Active |
 | ZK router | `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` | Active |
 | Privacy intermediary | `NEXT_PUBLIC_PRIVACY_INTERMEDIARY_ADDRESS` | Active |
 | Private executor | `NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS` | Active |
 | AI executor | `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` | Active |
 
-## Hide Mode V3 Requirements
-Required alignment for V3 runtime:
-- `NEXT_PUBLIC_HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v3`
+## Hide Mode V4 Requirements
+Required alignment for V4 runtime:
+- `NEXT_PUBLIC_HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4`
 - `NEXT_PUBLIC_PRIVATE_ACTION_EXECUTOR_ADDRESS` must match backend `PRIVATE_ACTION_EXECUTOR_ADDRESS`
 - `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` must match backend `ZK_PRIVACY_ROUTER_ADDRESS`
 - `NEXT_PUBLIC_PRIVACY_INTERMEDIARY_ADDRESS` must match backend `PRIVACY_INTERMEDIARY_ADDRESS`
@@ -123,7 +126,7 @@ Required alignment for V3 runtime:
 - `NEXT_PUBLIC_HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true`
 
 Migration note:
-- If local/frontend env still contains `shielded_pool_v2`, update it before V3 demo or production-like testing.
+- Ensure `NEXT_PUBLIC_HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4`. Legacy V2/V3 values are no longer supported.
 
 ## Environment Profiles
 Next.js precedence:
@@ -135,7 +138,7 @@ In this repository:
 
 Recommended workflow:
 1. Keep backend profile (`backend-rust/.env`) as canonical for relayer-driven hide mode.
-2. Mirror the V3-critical vars in frontend env.
+2. Mirror the V4-critical vars in frontend env.
 3. Re-run an end-to-end hide-mode smoke test after env updates.
 
 ### Minimum variables for full MVP runtime
@@ -148,7 +151,7 @@ Recommended workflow:
 | `NEXT_PUBLIC_STARKNET_LIMIT_ORDER_BOOK_ADDRESS` | limit-order execution |
 | `NEXT_PUBLIC_STARKNET_STAKING_CAREL_ADDRESS` | staking (CAREL) |
 | `NEXT_PUBLIC_STARKNET_STAKING_STABLECOIN_ADDRESS` | staking (stablecoin) |
-| `NEXT_PUBLIC_STARKNET_STAKING_BTC_ADDRESS` | staking (WBTC via `StakingBTC` contract) |
+| `NEXT_PUBLIC_STARKNET_STAKING_WBTC_ADDRESS` | staking (WBTC via `WBTCStaking` contract) |
 | `NEXT_PUBLIC_STARKNET_DISCOUNT_SOULBOUND_ADDRESS` | NFT discount module |
 | `NEXT_PUBLIC_STARKNET_AI_EXECUTOR_ADDRESS` | AI on-chain module |
 | `NEXT_PUBLIC_ZK_PRIVACY_ROUTER_ADDRESS` | private action routing |
@@ -193,7 +196,7 @@ Detailed report: `../docs/test_reports.md`.
 - `../docs/deploy_testnet.md`
 
 ## Runtime Addresses (Frontend Profile)
-Expected V3 runtime addresses (must match backend profile for hide mode):
+Expected V4 runtime addresses (must match backend profile for hide mode):
 
 | Contract | Address |
 | --- | --- |
@@ -203,11 +206,11 @@ Expected V3 runtime addresses (must match backend profile for hide mode):
 | AI Executor | `0x00d8ada9eb26d133f9f2656ac1618d8cdf9fcefe6c8e292cf9b7ee580b72a690` |
 | Staking CAREL | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` |
 | Staking Stablecoin | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` |
-| Staking WBTC (contract: `StakingBTC`) | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
+| Staking WBTC (contract: `WBTCStaking`) | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
 | Discount Soulbound | `0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809` |
 | ZK Privacy Router | `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f` |
 | Privacy Intermediary | `0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab` |
-| Private Action Executor (V3) | `0x01f7f3bcdfd94d0b28dd658882bef53787b4e9d40a6aa4ced65440ab76e0e191` |
+| Private Action Executor (V4) | `0x01f7f3bcdfd94d0b28dd658882bef53787b4e9d40a6aa4ced65440ab76e0e191` |
 
 ## Known Constraints
 - Hide-mode reliability depends on backend relayer readiness and valid proof payload.
@@ -215,7 +218,7 @@ Expected V3 runtime addresses (must match backend profile for hide mode):
 - Frontend lint/build gates should be re-validated after env/profile updates.
 
 ## Development Plan
-1. Finalize V3 env parity checks between FE and BE.
+1. Finalize V4 env parity checks between FE and BE.
 2. Add a startup env validator for critical hide-mode keys.
 3. Improve UI observability for relayer/proof status.
 4. Prepare dedicated UX flow for planned Shadow Bridge hide-mode roadmap.
