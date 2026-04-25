@@ -1,0 +1,161 @@
+# Project Overview
+
+CAREL Protocol is a privacy-first DeFi execution layer on Starknet — combining private execution (Hide Mode), autonomous AI trading agents, and a full-featured DEX.
+
+## Key Performance Indicators
+
+These are the growth targets CAREL is tracking through the testnet and seed phases.
+
+### User Metrics
+
+| KPI | Target (6 months) | Target (12 months) |
+|---|---|---|
+| Active wallets | 500 | 2,000 |
+| Monthly active users | 200 | 800 |
+| Registered referrals | 150 | 600 |
+
+### Transaction Metrics
+
+| KPI | Target (6 months) | Target (12 months) |
+|---|---|---|
+| Total on-chain transactions | 5,000 | 25,000 |
+| Hide Mode transactions | 1,000 | 8,000 |
+| AI agent executions | 500 | 3,000 |
+| ZK proofs generated | 1,000 | 8,000 |
+
+### Protocol Metrics
+
+| KPI | Target (6 months) | Target (12 months) |
+|---|---|---|
+| Cumulative swap volume | $50K | $300K |
+| Total value staked | $20K | $100K |
+| Points epochs completed | 3 | 9 |
+| Airdrop claims processed | 100 | 500 |
+
+## User Acquisition Strategy
+
+CAREL's user acquisition focuses on three channels:
+
+### 1. Starknet Community
+
+- Active presence in Starknet Discord, Telegram, and developer forums
+- Co-marketing with Starknet ecosystem projects
+- Participating in Starknet Foundation campaigns and ecosystem events
+- Targeting existing Starknet users who already have wallets and testnet tokens
+
+### 2. Crypto-Native Privacy Users
+
+- Positioning Hide Mode as the primary differentiator for privacy-conscious DeFi users
+- Content marketing around wallet unlinkability — explaining the real-world privacy benefit vs. normal on-chain transactions
+- Targeting users active in privacy-focused communities (ZK, privacy tech)
+
+### 3. Testnet Incentive Programs
+
+- Points system with leaderboard drives repeat engagement
+- Referral system gives users an on-chain incentive to bring others
+- Testnet airdrop campaigns convert passive participants into active traders
+- Discount Soulbound NFT creates a loyalty mechanism that rewards early adopters
+
+### 4. Developer and Builder Channel
+
+- Open-source codebase — developers can review, fork, and build on CAREL contracts
+- ERC-8004 AI executor standard is a novel primitive — potential for third-party integrations
+- Hackathon presence (Starknet ecosystem) generates developer-led word of mouth
+
+## Business Model
+
+CAREL Protocol generates revenue through on-chain fees collected by the `FeeCollector` contract and routed to `Treasury`.
+
+### Protocol Fees
+
+| Fee Type | Rate | Notes |
+|---|---|---|
+| Swap fee | 0.2% | Applied to swap and limit order executions |
+| AI execution — L2 | 5 CAREL | On-chain AI-assisted trade |
+| AI execution — L3 | 10 CAREL | Private AI-assisted trade (Hide Mode + AI) |
+| Airdrop claim fee | 5% | Applied automatically at claim time |
+
+LP fees are separate and flow to liquidity providers, not the protocol treasury.
+
+### Fee Distribution
+
+**Swap fees**: split between LP providers and protocol treasury via `FeeCollector`.
+
+**AI execution fees**:
+- L2: 2 CAREL burned + 3 CAREL to fee recipient
+- L3: 3 CAREL burned + 7 CAREL to fee recipient
+
+**Airdrop claim fee** (5% total):
+- 1.25% → Treasury
+- 1.25% → Development fund
+- 2.5% → Burned
+
+### Revenue Sustainability
+
+Fee parameters are adjustable via on-chain governance (Governance + Timelock contract) after mainnet. The 48-hour timelock minimum enforces community visibility before any parameter change takes effect.
+
+At testnet stage, CAREL does not yet generate real revenue. The business model is validated on-chain but operates on testnet tokens. Mainnet deployment is the prerequisite for real fee collection.
+
+## Project Cost Components
+
+Breakdown of how the Starknet Foundation seed grant ($25,000) is allocated:
+
+| Category | Allocation | Details |
+|---|---|---|
+| Infrastructure | 30% ($7,500) | Railway backend hosting, RPC node access, IPFS/Filecoin storage, proving infrastructure |
+| Smart Contract Development | 25% ($6,250) | V4 verifier redeploy, circuit binding completeness, gas optimization (AI rate-limit, TWAP) |
+| External Security Audit | 20% ($5,000) | Partial funding toward third-party audit of 35 Cairo contracts + FE + BE |
+| Frontend & UX | 15% ($3,750) | UI improvements, Hide Mode UX, AI agent interface, mobile-responsive polish |
+| Marketing & Community | 10% ($2,500) | Testnet campaigns, leaderboard events, content, community management |
+
+### Infrastructure Detail
+
+| Item | Purpose |
+|---|---|
+| Railway Pro (backend) | Rust/Axum relayer + privacy API, persistent uptime |
+| RPC access | Starknet Sepolia node access for indexing and transaction submission |
+| IPFS / Filecoin | NFT metadata storage (Discount Soulbound tiers) |
+| Proving infra | High-memory server for Garaga Honk proving (requires ~16GB per proof) |
+
+The proving infrastructure is the largest single cost driver. Each Garaga Honk (UltraHonk) proof for Hide Mode requires approximately 16GB of RAM. The current Railway deployment uses `GARAGA_ENABLE_NONPROD_PROOF_SHORTCUTS=true` on testnet — real proving will require a dedicated high-memory instance.
+
+## Seed Grant Milestones (3 Months)
+
+The Starknet Foundation Seed Grant covers a 3-month execution window. Milestones focus on technical stabilization and testnet user growth — the prerequisites for the subsequent Growth Grant application.
+
+### Milestone 1 — Technical Stabilization (May 2026)
+
+- Redeploy V4 verifier wrapper with `public_inputs` binding fix active on-chain
+- Deploy dedicated proving infrastructure (real Garaga Honk proofs, not testnet shortcuts)
+- Fix AI execution gas (currently 4.9–5.1M → target 1.5M)
+- Fix TWAP oracle gas (currently 3.4–3.7M → target 100–200K)
+- Update Noir circuits for complete on-chain field binding
+
+### Milestone 2 — Testnet User Growth (June 2026)
+
+- Launch public testnet campaign with referral system + leaderboard incentives
+- Reach 200+ active wallets and 5,000+ on-chain transactions
+- Complete at least 1,000 Hide Mode transactions with real ZK proofs
+- 3 points epochs completed with on-chain Merkle root submissions
+- Airdrop claim flow live and tested end-to-end
+
+### Milestone 3 — Audit Readiness & Growth Grant Preparation (July 2026)
+
+- External security audit scoped and initiated (partial funding from seed)
+- Admin key migration plan to multisig documented and tested on testnet
+- Reach 500+ active wallets
+- Growth Grant application submitted with seed phase metrics as evidence
+- Shadow Bridge (BTC/WBTC cross-chain) integration testnet-ready
+
+## After Seed — Growth Phase
+
+Mainnet deployment, token launch, and liquidity are Growth phase targets — not part of the seed grant scope.
+
+| Growth Phase Target | Notes |
+|---|---|
+| External audit complete | Required before any mainnet deployment |
+| Admin multisig live | Single-key admin replaced before mainnet |
+| Mainnet deployment | Full contract redeploy on Starknet mainnet |
+| CAREL token launch | Token live, fee collection active |
+| Initial liquidity | Protocol-owned liquidity seeded from 10% listing allocation |
+| Governance live | Timelock-enforced parameter changes operational |

@@ -1,0 +1,87 @@
+# AI Agent
+
+CAREL's AI agent lets you execute DeFi actions with natural language. Instead of navigating the UI manually, you describe what you want — the agent handles routing, quoting, and on-chain submission.
+
+## Execution Levels
+
+There are three AI execution levels. Higher levels add more capabilities but cost more.
+
+| Level | Name | What it does | Fee |
+|---|---|---|---|
+| L1 | AI Suggest | Parses your intent, shows a plan — you confirm manually | Free |
+| L2 | AI Execute | Parses and executes on-chain autonomously | 5 CAREL |
+| L3 | AI Private | Executes via Hide Mode — combines AI routing with private execution | 10 CAREL |
+
+## How to Use
+
+1. Open the **AI panel** — floating button, bottom right of the app
+2. Type a command in natural language
+3. The agent shows an execution plan — token, amount, route, estimated fee
+4. Confirm to execute (L2/L3 submit on-chain automatically)
+
+### Example Commands
+
+```
+swap 10 STRK to USDT
+stake 500 CAREL
+limit order sell 100 USDT at 1.05 STRK
+bridge 0.01 ETH to Starknet
+```
+
+## Autonomous Execution (ERC-8004)
+
+CAREL's AI agent implements **ERC-8004** — an on-chain standard for autonomous AI agent execution on Starknet.
+
+The `AIExecutor` contract (`0x00d8ada9eb26d133f9f2656ac1618d8cdf9fcefe6c8e292cf9b7ee580b72a690`) handles:
+
+- Receiving parsed intents from the backend
+- Verifying the AI signature via `AISignatureVerifier`
+- Routing to the appropriate action (swap, stake, limit order)
+- Collecting the execution fee (5 or 10 CAREL)
+
+The agent is **fully autonomous** — it does not require manual transaction signing for L2/L3 execution after initial intent confirmation.
+
+## Fee Breakdown
+
+| Level | Total Fee | Burned | To Protocol |
+|---|---|---|---|
+| L2 | 5 CAREL | 2 CAREL | 3 CAREL |
+| L3 | 10 CAREL | 3 CAREL | 7 CAREL |
+
+Fee parameters are adjustable via governance after mainnet.
+
+## Points Bonus
+
+AI execution earns a bonus on top of standard action points:
+
+| Level | Points bonus |
+|---|---|
+| L2 | +20% on the base action points |
+| L3 | +40% on the base action points |
+
+Example: a 10 STRK swap normally earns 10 pts/USD. At L3, it earns 14 pts/USD.
+
+## L3 — Private AI Execution
+
+L3 combines the AI agent with Hide Mode. The agent parses your intent, routes through the ShieldedPool V4, generates a Garaga Honk proof, and the relayer submits on-chain.
+
+```
+Your command (natural language)
+    │
+    ▼
+AI parses intent → builds Hide Mode payload
+    │
+    ▼
+Backend generates ZK proof
+    │
+    ▼
+Relayer submits → chain shows relayer address, not yours
+```
+
+This is the highest privacy tier available in CAREL — AI-routed and wallet-unlinkable.
+
+## Current Limitations
+
+- L2/L3 fees require CAREL tokens — get testnet CAREL from the faucet in the Rewards tab
+- AI gas usage is currently 4.9–5.1M (target: 1.5M) — optimization in progress
+- L3 shares the same proving constraints as Hide Mode (~16GB RAM per proof)

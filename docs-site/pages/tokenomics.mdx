@@ -1,0 +1,121 @@
+# Tokenomics
+
+CAREL token is the native token of CAREL Protocol. Total supply is hard-capped at **1,000,000,000 CAREL**.
+
+> **Note:** Tokenomics are not live yet and subject to legal review before mainnet. Numbers and mechanisms may change.
+
+## Token Allocation
+
+| Category | Allocation | Notes |
+|---|---|---|
+| Ecosystem | 40% | Monthly distribution over 36 months |
+| Team | 15% | Vesting schedule |
+| Investor | 15% | Vesting schedule |
+| Listing | 10% | Exchange and liquidity |
+| Treasury | 10% | Governance-controlled |
+| Marketing | 7% | Community and growth |
+| Early Access / Testnet | 3% | Testnet campaigns, quests, feedback |
+
+## 3-Year Unlock Projection
+
+| Year | Unlocked (cumulative) | Remaining locked |
+|---|---|---|
+| Year 1 | 437M CAREL | 563M CAREL |
+| Year 2 | 644M CAREL | 356M CAREL |
+| Year 3 | 816M CAREL | 184M CAREL |
+
+## Fee Model
+
+CAREL Protocol collects fees through on-chain contracts. All fees flow through `FeeCollector` → `Treasury`.
+
+### Swap and Limit Order Fees
+
+- Protocol fee: **0.2%** on swap and limit order executions
+- LP share: portion goes to liquidity providers
+- Discounts apply to the protocol fee only — LP fees are not reduced
+
+**Discount formula:**
+```
+protocol_fee_after_discount = protocol_fee × (1 − discount_bps / 10,000)
+```
+
+### Airdrop Claim Fee (On-chain)
+
+When claiming from SnapshotDistributor:
+- **5% claim fee** applied on-chain automatically
+- Split: 1.25% treasury + 1.25% dev + 2.5% burn
+
+### AI Execution Fees (On-chain)
+
+| Level | Fee | Burn | Fee Recipient |
+|---|---|---|---|
+| L2 (AI-assisted on-chain) | 5 CAREL | 2 CAREL | 3 CAREL |
+| L3 (AI-assisted private) | 10 CAREL | 3 CAREL | 7 CAREL |
+
+AI fees are adjustable via governance after mainnet.
+
+## Points System
+
+Points are earned for every on-chain action and tracked by the backend. Epoch totals are submitted on-chain via `PointStorage` and converted to CAREL at distribution.
+
+### Base Rates
+
+| Action | Points per USD |
+|---|---|
+| Swap | 10 pts |
+| Limit Order | 12 pts |
+| ETH Bridge | 15 pts |
+| BTC / WBTC Bridge | 25 pts |
+| Stake | 3 pts |
+
+### Multipliers
+
+| Staked Amount | CAREL multiplier |
+|---|---|
+| ≥ 100 CAREL | 2× |
+| ≥ 1,000 CAREL | 3× |
+| ≥ 10,000 CAREL | 5× |
+| WBTC | 1.5× |
+| LP tokens | 5× |
+| USDT / USDC / STRK | 1× |
+
+### AI Bonus (runtime only)
+
+| Level | Points bonus |
+|---|---|
+| L2 | +20% |
+| L3 | +40% |
+
+### Hide Mode Bonus (by transaction size)
+
+| Hide volume (USDT-equivalent) | Bonus |
+|---|---|
+| ≥ 5 | +5% |
+| ≥ 10 | +10% |
+| ≥ 50 | +20% |
+| ≥ 100 | +30% |
+| ≥ 250 | +50% |
+
+### Points Formula
+
+```
+total_points = (swap + bridge + stake + referral + social) × staking_multiplier × nft_factor
+```
+
+NFT discount soulbound holders get additional fee discounts applied at the protocol fee layer.
+
+## Monthly Airdrop Distribution
+
+Each month, the backend finalizes point totals, generates a Merkle tree, and submits the root on-chain. Users claim proportionally:
+
+```
+reward = monthly_pool × user_points / total_points_epoch
+```
+
+Testnet uses a fixed 3% pool — claims transfer from this pool (no minting inside claim).
+
+Mainnet target: 40% ecosystem pool distributed over 36 months (~11.1M CAREL/month).
+
+## Governance
+
+Fee parameters, burn splits, and distribution schedules are adjustable via on-chain governance (Governance + Timelock) after mainnet. Timelock enforces a minimum 48-hour delay on all parameter changes.

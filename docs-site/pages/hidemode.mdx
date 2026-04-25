@@ -1,0 +1,92 @@
+# Hide Mode
+
+Hide Mode is CAREL's private execution layer. When enabled, your wallet address is not linked to the on-chain transaction — the relayer submits on your behalf, and a ZK proof verifies the execution was correct.
+
+## What It Does
+
+In a normal swap, your wallet signs and sends the transaction directly. Anyone watching the chain sees your wallet address, the tokens you swapped, and the amount.
+
+In Hide Mode:
+
+1. You sign an **intent payload** off-chain (not a transaction)
+2. The CAREL backend generates a **Garaga Honk proof** over your intent
+3. The **relayer** submits the transaction on-chain using its own wallet
+4. The chain sees the relayer's address — not yours
+
+The ZK proof ensures the relayer cannot change your intent (amount, token, recipient) without the proof becoming invalid.
+
+## Supported Actions
+
+| Action | Hide Mode Support |
+|---|---|
+| Swap | Supported |
+| Stake | Supported |
+| Limit Order | Supported |
+| Bridge | Not yet |
+| AI Agent (L3) | Supported — combines AI routing with Hide Mode |
+
+## Flow
+
+```
+Your wallet
+    │
+    │  sign intent payload (off-chain signature)
+    ▼
+CAREL Backend
+    │
+    │  generate Garaga Honk proof (~16GB RAM, ~30–90s)
+    ▼
+ShieldedPool V4
+    │
+    │  verify proof on-chain
+    ▼
+Relayer submits tx → Action executes → Chain shows relayer address
+```
+
+## ZK Proof Details
+
+CAREL uses **Garaga Honk (UltraHonk)** proofs — a Noir-based proving system verified natively on Starknet via Garaga verifier contracts.
+
+Four circuits are deployed:
+
+| Circuit | Verifier Address |
+|---|---|
+| Swap | `0x07eacc8de8fa95db5a184f8bfc071dec967c1b97bb19f88ee7edd44d5ed7fc97` |
+| Limit Order | `0x069e45dc1aff0a06e7e09d4dc2e787169f6552e81f598c1d5d0f9294a8f0ac54` |
+| Stake | `0x06d522a75604addffe5707f8957b8d5670d216da40c08ac9fcd9f84635ce47de` |
+| Shadow BTC | `0x034a9db6d8c5be3ceb1aae14e42a81565027bb4b6ffc6fb714eab5fe1fac4bec` |
+
+Each proof binds: `action_hash`, `recipient`, `chain_id`, `root`, `nullifier`. The on-chain verifier checks these match the submitted transaction — the relayer cannot substitute values.
+
+## Privacy Model
+
+Hide Mode provides **wallet unlinkability** — an observer on-chain cannot connect your wallet to the transaction without access to the off-chain payload.
+
+| What is hidden | What is not hidden |
+|---|---|
+| Your wallet address | Transaction timing |
+| Your intent details (pre-proof) | Fee amount paid |
+| The link between your wallet and the action | Token type and approximate amount (visible in tx) |
+
+Hide Mode reduces wallet linkability. It does not provide full anonymity — timing analysis and transaction graph analysis can still reveal patterns over time.
+
+> For stronger privacy guarantees, on-chain mixing or threshold encryption (outside CAREL's current scope) would be required.
+
+## Hide Mode Points Bonus
+
+Using Hide Mode earns bonus points on top of base rates:
+
+| Transaction size (USDT equivalent) | Bonus |
+|---|---|
+| ≥ 5 | +5% |
+| ≥ 10 | +10% |
+| ≥ 50 | +20% |
+| ≥ 100 | +30% |
+| ≥ 250 | +50% |
+
+## Current Limitations
+
+- Proving requires ~16GB RAM on the backend — if the prover is unavailable, the UI will indicate this
+- Testnet only at this stage
+- V4 verifier patch (public_inputs binding fix) is deployed locally — on-chain redeploy required before production
+- Noir circuits need update to constrain all on-chain fields (open hardening item)

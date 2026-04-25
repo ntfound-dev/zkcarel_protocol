@@ -1,0 +1,68 @@
+# Quick Start
+
+CAREL Protocol is live on Starknet Sepolia testnet. You need a Starknet wallet to get started.
+
+## Step 1 — Get a Starknet Wallet
+
+Install [Argent X](https://www.argent.xyz/argent-x/) or [Braavos](https://braavos.app/) browser extension. Create a new wallet and switch to **Starknet Sepolia** testnet.
+
+## Step 2 — Get Testnet Tokens
+
+You need testnet tokens to pay for transactions.
+
+- **STRK testnet**: use the [Starknet Sepolia Faucet](https://starknet-faucet.vercel.app/)
+- **CAREL testnet tokens**: available from the faucet inside the CAREL app (Rewards → Faucet)
+
+## Step 3 — Connect Your Wallet
+
+Go to [carel-protocol.vercel.app](https://carel-protocol.vercel.app) and click **Connect Wallet**. Select your Starknet wallet. Once connected, your balance will appear in the top bar.
+
+## Step 4 — Make Your First Swap
+
+1. Open the **Trade** tab
+2. Select tokens to swap (e.g. STRK → USDT)
+3. Enter amount
+4. Click **Get Quote**
+5. Review the preview and click **Confirm Swap**
+6. Approve the transaction in your wallet
+
+Your swap will be routed through the Swap Aggregator contract and confirmed on-chain.
+
+## Step 5 — Try Hide Mode
+
+Hide Mode routes your transaction through the CAREL relayer so your wallet address is not linked to the on-chain transaction.
+
+1. On the Trade tab, toggle **Hide Mode** on
+2. Select a supported flow: Swap, Stake, or Limit Order
+3. Enter your details and click **Get Quote**
+4. Sign the intent payload in your wallet (this is not a transaction — it is a signature)
+5. The backend generates a Garaga Honk proof and the relayer submits on-chain
+
+The on-chain transaction will show the relayer's wallet, not yours.
+
+> **Note:** Hide Mode requires the backend prover to be available. If proving is unavailable, the UI will indicate this. Hide Mode is testnet-only at this stage.
+
+## Step 6 — Try the AI Agent
+
+1. Open the **AI** panel (floating button, bottom right)
+2. Type a command: `"swap 10 STRK to USDT"` or `"stake 100 CAREL"`
+3. The AI agent will parse your intent and show an execution plan
+4. Confirm to execute — the agent handles routing and on-chain submission
+
+For L3 (private AI execution), select AI Level 3 in settings. This combines AI routing with Hide Mode.
+
+## Earn Points
+
+Every on-chain action earns points:
+
+| Action | Base rate |
+|---|---|
+| Swap | 10 pts/USD |
+| Limit Order | 12 pts/USD |
+| ETH Bridge | 15 pts/USD |
+| BTC Bridge | 25 pts/USD |
+| Stake | 3 pts/USD |
+
+Points multiply with staking tier (up to 5x for CAREL stakers) and get a bonus in Hide Mode.
+
+Check your points and rank on the **Leaderboard** tab.

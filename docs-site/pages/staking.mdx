@@ -1,0 +1,61 @@
+# Staking
+
+CAREL Protocol has four staking contracts — each accepts a different asset and earns points at different rates. Staking increases your points multiplier, which increases your share of the monthly airdrop.
+
+## Staking Contracts
+
+| Contract | Asset | Address |
+|---|---|---|
+| Staking CAREL | CAREL token | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` |
+| Staking Stablecoin | USDT / USDC / STRK | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` |
+| Staking WBTC | WBTC | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` |
+| Staking LP | LP tokens | Available after CAREL DEX launch |
+
+## Points Multiplier by Staked CAREL
+
+Staking CAREL unlocks a global multiplier applied to all your points:
+
+| Staked CAREL | Multiplier |
+|---|---|
+| < 100 | 1× (no multiplier) |
+| ≥ 100 | 2× |
+| ≥ 1,000 | 3× |
+| ≥ 10,000 | 5× |
+
+The multiplier applies to all actions — swap, bridge, stake, referral — not just the staking action itself.
+
+## Points per Staking Action
+
+Staking earns base points on top of the multiplier:
+
+| Asset | Points |
+|---|---|
+| CAREL | 3 pts/USD staked |
+| Stablecoin (USDT/USDC/STRK) | 3 pts/USD staked × 1× |
+| WBTC | 3 pts/USD staked × 1.5× |
+| LP tokens | 3 pts/USD staked × 5× |
+
+## How to Stake
+
+1. Go to the **Stake** tab in the CAREL app
+2. Select the asset you want to stake
+3. Enter the amount
+4. Click **Stake** and approve the transaction in your wallet
+5. Your staked balance appears immediately — points start accruing in the current epoch
+
+## Unstaking
+
+You can unstake at any time. There is no lock-up period on testnet. Unstaking reduces your multiplier if your remaining balance drops below a tier threshold.
+
+## Why Stake
+
+Staking serves two purposes:
+
+1. **Points multiplier** — higher stake = higher multiplier on all your actions = larger share of the monthly airdrop
+2. **Protocol participation** — staked assets contribute to protocol TVL and signal long-term alignment
+
+At mainnet, staking rewards may include a share of protocol swap fees in addition to points — subject to governance vote.
+
+## Staking and the Discount NFT
+
+The Discount Soulbound NFT gives fee discounts on swaps and limit orders. Staking gives points multiplier. They stack — you can hold a Tier 5 NFT and stake 10,000 CAREL simultaneously for maximum fee reduction and points earning.

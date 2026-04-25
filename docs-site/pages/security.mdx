@@ -1,0 +1,107 @@
+# Security
+
+This page documents the current security posture of CAREL Protocol based on the internal security review completed in March 2026. This is not a third-party audit report.
+
+## Current Status
+
+| Area | Status |
+|---|---|
+| Network | Starknet Sepolia testnet |
+| Smart contract tests | 172/172 passing |
+| Private executor tests | 22/22 passing |
+| Backend tests | 208/208 passing |
+| Internal audit | **Completed** — 35 contracts, FE, and BE reviewed |
+| External audit | **Not completed** — planned for Growth phase |
+| Upgradeability | No proxy path — redeploy + migration model |
+
+## Internal Audit Scope
+
+The internal review covered all three layers of the stack:
+
+### Smart Contracts — 35 Cairo Contracts
+
+Two batches across the full contract surface:
+
+**Batch 1 — Core Protocol (18 contracts)**
+Token, FeeCollector, Treasury, VestingManager, Governance, Timelock, EmergencyPause, Multisig, PriceOracle, TwapOracle, MerkleVerifier, PointStorage, PointToken, ReferralSystem, RewardsEscrow, SnapshotDistributor, Registry, CarelProtocol
+
+**Batch 2 — Trading, Staking, AI, Game (17 contracts)**
+DiscountSoulbound, BattleshipGaraga, DCAOrders, PrivacyIntermediary, Staking (4 variants), PrivacyRouter, PrivateSwap, SwapRouter, SwapAggregator, AIExecutor, AISignatureVerifier, ActionTypes
+
+### Backend — Rust/Axum
+
+Reviewed: relayer execution path, privacy API binding logic, Garaga auto-prover wiring, V4 hide mode payload handling, proof validation flow.
+
+### Frontend — Next.js
+
+Reviewed: wallet connection flow, trade execution path, hide mode payload signing, AI execution integration, user input handling.
+
+## Audit Findings Summary
+
+**Smart contract audit — 25 total findings:**
+
+| Severity | Count |
+|---|---|
+| Critical | 6 |
+| High | 9 |
+| Medium | 6 |
+| Low / Info | 4 |
+
+All Critical and High findings have been addressed in the current codebase. External audit is required before mainnet deployment.
+
+**V4 Hide Mode Audit (March 2026) — additional findings:**
+
+| Severity | Finding | Status |
+|---|---|---|
+| Critical | Verifier wrapper discarded `public_inputs` — ShieldedPoolV4 relied on these for `action_hash`, `recipient`, `chain_id` binding | Patched locally |
+| High | Backend silently overwrote V4 binding fields (`action_hash`, `root`, `nullifier`) after payload generation | Patched locally |
+| High | Proof binding inside Noir circuits incomplete — circuit does not constrain all on-chain fields | Open — requires circuit update |
+
+> Patched findings require on-chain redeploy and rewire to be active in production.
+
+## ShieldedPool V3 — Remediated Issues
+
+Earlier internal review of V3 found and remediated:
+
+- Nullifier no longer exposed in deposit calldata or events
+- Unlimited approval drain path replaced with exact approval flow
+- Zero-hash / short-proof bypass rejected
+- Action and exit hash domain-separated by deployment context
+- Reentrancy protection on submit, execute, and exit paths
+- Cancel/retry no longer leaves permanently stuck pending actions
+- Cross-user replay after cancel blocked by submitter binding
+
+## Open Hardening Items
+
+| Item | Notes |
+|---|---|
+| V4 verifier redeploy | Patched verifier wrapper needs on-chain redeploy to be active |
+| Circuit binding completeness | Noir circuits need update to constrain all on-chain fields |
+| Admin key hardening | Current admin is single key — needs multisig before mainnet |
+| AI rate-limit gas | ~4.9–5.1M gas vs 1.5M target |
+| TWAP gas | ~3.4–3.7M gas vs 100–200K target |
+| External audit | Required before mainnet — planned for Growth phase |
+
+## Security Assumptions (Testnet)
+
+1. Admin and relayer keys are stored securely and rotated under operational policy
+2. Verifier contracts are trusted once configured on testnet
+3. Oracle and bridge provider integrations are treated as partially trusted external dependencies
+4. Off-chain prover and relayer infrastructure is trusted not to leak payload internals
+5. `MockGaragaVerifier` is testnet-only and will not be used on mainnet under any condition
+
+## Known Limitations
+
+| Limitation | Notes |
+|---|---|
+| Hide Mode metadata | Reduces wallet linkability but cannot fully hide timing, fee, or tx graph metadata |
+| Bridge dependency | Depends on external provider uptime (LayerSwap, Garden Finance) |
+| RPC instability | Quote and indexer behavior degrades under provider rate limits |
+| No upgrade path | No proxy — migrations require redeploy plus state movement |
+| Battleship state | Gameplay state is backend-memory based, not fully on-chain |
+
+## What This Means
+
+CAREL has completed a comprehensive internal security review across all three layers. Critical and High findings have been addressed. The project is at testnet stage and is not production-ready. External audit is the primary prerequisite before mainnet deployment.
+
+If you find a security issue, open a private issue on GitHub.

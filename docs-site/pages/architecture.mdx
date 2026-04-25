@@ -1,0 +1,103 @@
+# Architecture
+
+CAREL has three execution modes. Every user action goes through one of them.
+
+## Execution Modes
+
+### Normal Mode
+
+The user connects their Starknet wallet and signs transactions directly. The backend handles quote aggregation, route optimization, and calldata preparation. The user's wallet submits the transaction on-chain.
+
+```
+User Wallet → Backend (quote + calldata) → User signs → Starknet
+```
+
+This is the default mode. All flows — swap, stake, limit order, bridge — are available in Normal Mode.
+
+### Hide Mode
+
+The user's wallet is not the transaction sender on-chain. Instead, the backend relayer submits the transaction after the user signs a private intent payload. A Garaga Honk ZK proof is generated to verify the user's intent was executed correctly.
+
+```
+User Wallet → signs intent payload
+                    ↓
+Backend generates Garaga Honk proof
+                    ↓
+Relayer submits tx on-chain (relayer wallet visible, not user wallet)
+                    ↓
+ShieldedPool V4 verifies proof on-chain
+```
+
+**What Hide Mode protects:** the link between your wallet address and the on-chain transaction.
+
+**What Hide Mode does not hide:** transaction amounts, timing, and the relayer's wallet address. The relayer knows your identity off-chain.
+
+This is a relayer-based privacy model with ZK execution integrity verification — not a trustless cryptographic anonymity system.
+
+Supported flows: swap, stake, limit order.
+
+### AI Mode (ERC-8004 Autonomous Agent)
+
+The user sends a natural language command. The AI agent interprets the command, builds an execution plan, and submits it on-chain through the AIExecutor contract. Three tiers:
+
+| Tier | Behavior |
+|---|---|
+| L1 | Backend-only AI, no on-chain execution |
+| L2 | AI-assisted on-chain execution via AIExecutor |
+| L3 | AI-assisted private execution via relayer + Garaga proof |
+
+The AI agent is autonomous — it determines the execution path without requiring manual approval at each step.
+
+## Stack
+
+| Layer | Technology |
+|---|---|
+| Smart contracts | Cairo 2.x on Starknet |
+| ZK proofs | Garaga Honk (UltraHonk via Barretenberg) |
+| Backend | Rust + Axum |
+| State | PostgreSQL + Redis |
+| Frontend | Next.js 16 |
+| Bridge | Aggregated (LayerSwap, Garden Finance) |
+
+## Full Architecture Diagram
+
+```
+┌─────────────────────────────────────┐
+│ User Layer                          │
+│  Starknet Wallet / EVM Wallet / BTC │
+└─────────────────┬───────────────────┘
+                  │
+┌─────────────────▼───────────────────┐
+│ Frontend (Next.js)                  │
+│  Trading UI / AI panel / Rewards    │
+└─────────────────┬───────────────────┘
+                  │ API / WebSocket
+┌─────────────────▼───────────────────┐
+│ Backend (Rust + Axum)               │
+│  Quote aggregation                  │
+│  Relayer (Hide Mode)                │
+│  Garaga Honk prover                 │
+│  AI plan router                     │
+│  Event indexer                      │
+│  Watcher / bridge orchestration     │
+└─────────────────┬───────────────────┘
+                  │ on-chain calls
+┌─────────────────▼───────────────────┐
+│ Starknet Sepolia                    │
+│  SwapAggregator, LimitOrderBook     │
+│  ShieldedPoolV4 + Honk verifiers    │
+│  AIExecutor (ERC-8004)              │
+│  Staking contracts (3)              │
+│  Rewards: Points, Referral, NFT     │
+└─────────────────────────────────────┘
+```
+
+## Roadmap
+
+Post-testnet roadmap streams:
+
+- **CAREL DEX** — dedicated native liquidity layer and trading infrastructure on Starknet
+- **Shadow Bridge** — hide-mode Bitcoin native to wBTC bridge using ZK-verified lock/mint
+- **Sumo Login** — privacy-preserving authentication integration
+- **Battleship** — on-chain game using Garaga ZK proofs for move verification
+- **Mainnet** — after external audit and reliability baseline confirmed on testnet

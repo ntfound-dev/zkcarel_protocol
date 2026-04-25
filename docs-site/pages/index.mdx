@@ -1,0 +1,41 @@
+# CAREL Protocol
+
+CAREL Protocol is a DeFi execution layer built natively on Starknet. It lets you swap, stake, bridge, and place limit orders — and optionally execute those actions privately, with AI assistance, or both.
+
+## The Problem
+
+Every DeFi transaction on a public blockchain is fully visible: your wallet address, the amount you're trading, the tokens you're moving, and when you did it. Anyone can track your on-chain behavior in real time.
+
+For traders and users who want more control over their financial activity, there is no clean solution today. Privacy applications are separate from trading apps. AI assistants are disconnected from on-chain execution. Everything is siloed.
+
+## What CAREL Does
+
+CAREL brings these layers into one integrated product:
+
+- **Swap and trade** — swap aggregation and limit orders across Starknet liquidity
+- **Stake** — stake CAREL, stablecoins, or WBTC to earn points and multipliers
+- **Bridge** — access cross-chain liquidity via aggregated bridge providers
+- **Hide Mode** — execute DeFi actions through a relayer, so your wallet is not linked to the on-chain transaction
+- **AI Agent** — an autonomous on-chain agent (ERC-8004) that can plan and execute DeFi actions from a single command
+- **Rewards** — on-chain points, NFT fee discounts, referral system, and leaderboard
+
+## Why Starknet
+
+CAREL is built specifically for Starknet — not ported from another chain. The private execution path uses Garaga-generated Honk verifiers deployed as Cairo contracts. The rewards logic, AI executor, and protocol fee collection are all Cairo-native. Starknet's account abstraction and Cairo execution semantics are central to how CAREL works.
+
+## Live Deployment
+
+CAREL is live on Starknet Sepolia testnet.
+
+| Surface | URL |
+|---|---|
+| Frontend | [carel-protocol.vercel.app](https://carel-protocol.vercel.app) |
+| Backend API | [zkcarelprotocol-production.up.railway.app](https://zkcarelprotocol-production.up.railway.app) |
+| Health check | [/health](https://zkcarelprotocol-production.up.railway.app/health) |
+
+## Key Numbers
+
+- **14 contracts** deployed on Starknet Sepolia
+- **402/402 automated tests** passing (208 backend, 172 smart contract, 22 private executor)
+- **3 execution modes**: Normal, Hide, AI
+- **4 Garaga Honk verifiers**: swap, stake, limit order, shadow BTC
