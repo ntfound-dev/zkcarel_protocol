@@ -3,7 +3,7 @@ target/
 .env
 backend-rust/.env
 smartcontract/.env
-smartcontract/starknet/referensi/starknet-contracts-main/
+smartcontract/starknet/referensi/
 dump.rdb
 
 # runtime/cache artifacts
