@@ -1,3 +1,5 @@
+import React from 'react'
+
 export default {
   logo: <strong>CAREL Protocol</strong>,
   project: {
@@ -10,9 +12,7 @@ export default {
   head: (
     <>
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <meta name="description" content="CAREL Protocol documentation — privacy-first DeFi execution layer on Starknet" />
+      <meta name="description" content="CAREL Protocol — privacy-first DeFi execution layer on Starknet" />
     </>
   ),
-  primaryHue: 210,
-  titleSuffix: ' — CAREL Protocol',
 }
