@@ -11,3 +11,34 @@ dump.rdb
 **/__pycache__/
 backend-rust/"/
 backend-rust/\"/
+
+# garaga temp proof outputs
+backend-rust/"/tmp/
+**/garaga_proof.json
+**/garaga_public_inputs.json
+**/garaga_proof_raw.json
+**/garaga_proving_key.bin
+**/garaga_public_inputs_raw.json
+**/garaga_vk.json
+**/garaga_payload.json
+
+# garaga home cache (prover deps + CRS binaries)
+backend-rust/.garaga-home/
+.garaga-home/
+
+# python virtualenv
+.venv-garaga/
+.venv/
+venv/
+
+# OS/editor artifacts
+*.lnk
+.codex
+.DS_Store
+Thumbs.db
+
+# local-only grant docs (do not commit)
+LOCAL_*.md
+
+# noir vendor (embedded git repo — use as submodule if needed)
+smartcontract/starknet/garaga/circuits/noir_bignum_vendor
