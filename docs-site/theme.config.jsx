@@ -11,13 +11,8 @@ export default {
     <>
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <meta name="description" content="CAREL Protocol documentation — privacy-first DeFi execution layer on Starknet" />
-      <title>CAREL Protocol Docs</title>
     </>
   ),
-  useNextSeoProps() {
-    return {
-      titleTemplate: '%s — CAREL Protocol',
-    }
-  },
   primaryHue: 210,
+  titleSuffix: ' — CAREL Protocol',
 }
