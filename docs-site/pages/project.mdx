@@ -102,50 +102,52 @@ Breakdown of how the Starknet Foundation seed grant ($25,000) is allocated:
 
 | Category | Allocation | Details |
 |---|---|---|
-| Infrastructure | 30% ($7,500) | Railway backend hosting, RPC node access, IPFS/Filecoin storage, proving infrastructure |
-| Smart Contract Development | 25% ($6,250) | V4 verifier redeploy, circuit binding completeness, gas optimization (AI rate-limit, TWAP) |
-| External Security Audit | 20% ($5,000) | Partial funding toward third-party audit of 35 Cairo contracts + FE + BE |
-| Frontend & UX | 15% ($3,750) | UI improvements, Hide Mode UX, AI agent interface, mobile-responsive polish |
-| Marketing & Community | 10% ($2,500) | Testnet campaigns, leaderboard events, content, community management |
+| Development Device | 8% ($2,000) | MacBook M5 24GB — local Garaga Honk proof generation and full-stack testing |
+| Infrastructure | 22% ($5,500) | Railway backend hosting, RPC node access, IPFS/Filecoin storage |
+| Technical Development | 30% ($7,500) | V4 verifier redeploy, gas optimization, circuit binding, Sumo Login integration |
+| Feature Completion | 20% ($5,000) | Shadow Bridge testnet, Hide Mode UX polish, AI agent improvements |
+| Community Building | 20% ($5,000) | Discord/Telegram setup, ambassador program, referral campaigns, content |
 
 ### Infrastructure Detail
 
 | Item | Purpose |
 |---|---|
+| MacBook M5 24GB | Local Garaga Honk proving (24GB unified memory sufficient for ~16GB proofs) + development |
 | Railway Pro (backend) | Rust/Axum relayer + privacy API, persistent uptime |
 | RPC access | Starknet Sepolia node access for indexing and transaction submission |
 | IPFS / Filecoin | NFT metadata storage (Discount Soulbound tiers) |
-| Proving infra | High-memory server for Garaga Honk proving (requires ~16GB per proof) |
 
-The proving infrastructure is the largest single cost driver. Each Garaga Honk (UltraHonk) proof for Hide Mode requires approximately 16GB of RAM. The current Railway deployment uses `GARAGA_ENABLE_NONPROD_PROOF_SHORTCUTS=true` on testnet — real proving will require a dedicated high-memory instance.
+The MacBook M5 with 24GB unified memory replaces the need for a dedicated cloud proving server. Apple Silicon's unified memory architecture is efficient enough to run Garaga Honk (UltraHonk) proofs locally, reducing recurring infrastructure costs significantly.
 
 ## Seed Grant Milestones (3 Months)
 
-The Starknet Foundation Seed Grant covers a 3-month execution window. Milestones focus on technical stabilization and testnet user growth — the prerequisites for the subsequent Growth Grant application.
+The Starknet Foundation Seed Grant covers a 3-month execution window. Three sequential phases: infrastructure and technical stabilization, feature completion, then community launch.
 
-### Milestone 1 — Technical Stabilization (May 2026)
+### Milestone 1 — Infrastructure & Technical Stabilization ($10,000 — June 2026)
 
-- Redeploy V4 verifier wrapper with `public_inputs` binding fix active on-chain
-- Deploy dedicated proving infrastructure (real Garaga Honk proofs, not testnet shortcuts)
-- Fix AI execution gas (currently 4.9–5.1M → target 1.5M)
-- Fix TWAP oracle gas (currently 3.4–3.7M → target 100–200K)
-- Update Noir circuits for complete on-chain field binding
+- Development device procured (MacBook M5 24GB) — local proving environment operational
+- V4 Garaga verifier wrapper redeployed on-chain with `public_inputs` binding enforced
+- Real Garaga Honk proofs live for all Hide Mode flows (no testnet shortcuts)
+- AI execution gas reduced from ~5M to ≤2M gas units
+- TWAP oracle gas reduced from ~3.5M to ≤200K gas units
+- Noir circuits updated for complete on-chain field binding
 
-### Milestone 2 — Testnet User Growth (June 2026)
+### Milestone 2 — Feature Completion & Testnet Launch ($8,000 — August 2026)
 
-- Launch public testnet campaign with referral system + leaderboard incentives
-- Reach 200+ active wallets and 5,000+ on-chain transactions
-- Complete at least 1,000 Hide Mode transactions with real ZK proofs
-- 3 points epochs completed with on-chain Merkle root submissions
-- Airdrop claim flow live and tested end-to-end
-
-### Milestone 3 — Audit Readiness & Growth Grant Preparation (July 2026)
-
-- External security audit scoped and initiated (partial funding from seed)
-- Admin key migration plan to multisig documented and tested on testnet
-- Reach 500+ active wallets
-- Growth Grant application submitted with seed phase metrics as evidence
+- Sumo Login integration live on testnet (privacy-preserving authentication)
 - Shadow Bridge (BTC/WBTC cross-chain) integration testnet-ready
+- All protocol flows stable: swap, stake, limit order, bridge, Hide Mode, AI agent
+- Points system and airdrop claim flow publicly accessible
+- 3 complete epoch cycles with on-chain Merkle root submissions
+
+### Milestone 3 — Community Building ($7,000 — October 2026)
+
+- Official Discord and Telegram community launched
+- Ambassador / early adopter program live with structured incentives
+- Referral campaign active — 100+ registered referrals via on-chain referral system
+- 200+ unique wallets with on-chain activity on Starknet Sepolia
+- Bug fixes from community feedback resolved and redeployed
+- Growth Grant application submitted
 
 ## After Seed — Growth Phase
 
