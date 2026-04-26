@@ -1,4 +1,4 @@
-export default {
+const meta = {
   index: 'Introduction',
   quickstart: 'Quick Start',
   architecture: 'Architecture',
@@ -12,3 +12,5 @@ export default {
   project: 'Project & Roadmap',
   faq: 'FAQ',
 }
+
+export default meta
