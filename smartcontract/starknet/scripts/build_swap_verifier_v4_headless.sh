@@ -11,9 +11,9 @@ BUILD_RAYON_THREADS="${BUILD_RAYON_THREADS:-2}"
 ASDF_DIR="${ASDF_DIR:-$HOME/.asdf}"
 
 SRC_SWAP_STAGE="$ROOT/.garaga-stage/swap/swap_verifier_v4"
-SRC_ADAPTER="$ROOT/honk_wrapper_adapter"
+SRC_ADAPTER="$ROOT/cairo"
 DST_SWAP_STAGE="$HOME_BUILD_ROOT/swap_verifier_v4"
-DST_ADAPTER="$HOME_BUILD_ROOT/honk_wrapper_adapter"
+DST_ADAPTER="$HOME_BUILD_ROOT/cairo"
 
 mkdir -p "$HOME_BUILD_ROOT" "$LOG_DIR"
 

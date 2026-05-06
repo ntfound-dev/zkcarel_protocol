@@ -61,45 +61,192 @@ The AI agent is autonomous — it determines the execution path without requirin
 | Frontend | Next.js 16 |
 | Bridge | Aggregated (LayerSwap, Garden Finance) |
 
-## Full Architecture Diagram
+## System Diagram
+
+```mermaid
+flowchart LR
+  subgraph USER["User Layer"]
+    U["User"]
+    SW["Starknet Wallet"]
+    EW["EVM Wallet"]
+    BW["BTC Wallet"]
+  end
+
+  subgraph FE["Frontend Layer (Next.js)"]
+    UI["Trading / AI / Rewards UI"]
+  end
+
+  subgraph BE["Backend Layer (Rust + Axum)"]
+    API["REST + WS API"]
+    REL["Hide Relayer"]
+    WRK["Workers: Indexer/Points/Orders/Price"]
+    PROVER["Garaga Prover Tooling (off-chain)"]
+  end
+
+  subgraph SC["Smart Contract Layer (Starknet)"]
+    SWAP["SwapAggregator"]
+    LOB["LimitOrderBook"]
+    STAKE["Staking Contracts"]
+    ZK["ZkPrivacyRouter (optional path)"]
+    PI["PrivacyIntermediary (optional relay path)"]
+    EXEC["ShieldedPool V4"]
+    NFT["DiscountSoulbound + Points"]
+    AI["AIExecutor"]
+  end
+
+  subgraph EXT["External Networks and Providers"]
+    ETH["Ethereum Sepolia"]
+    BTC["Bitcoin Testnet4"]
+    GARDEN["Garden Finance"]
+  end
+
+  U --> UI
+  SW --> UI
+  EW --> UI
+  BW --> UI
+
+  UI <--> API
+  API --> WRK
+  API --> REL
+  API -->|"Private payload/proof only (no bridge)"| PROVER
+  API --> GARDEN
+
+  UI --> SWAP
+  UI --> LOB
+  UI --> STAKE
+  UI --> NFT
+  UI --> AI
+
+  REL -->|"Default hide path"| EXEC
+  REL -->|"Optional relay_private_execution"| PI
+  PI --> EXEC
+  REL -->|"Optional privacy endpoint path"| ZK
+  ZK --> EXEC
+  EXEC --> SWAP
+  EXEC --> LOB
+  EXEC --> STAKE
+
+  EW --> ETH
+  BW --> BTC
+  GARDEN --> ETH
+  GARDEN --> BTC
+```
+
+## Full System Architecture
 
 ```
-┌─────────────────────────────────────┐
-│ User Layer                          │
-│  Starknet Wallet / EVM Wallet / BTC │
-└─────────────────┬───────────────────┘
-                  │
-┌─────────────────▼───────────────────┐
-│ Frontend (Next.js)                  │
-│  Trading UI / AI panel / Rewards    │
-└─────────────────┬───────────────────┘
-                  │ API / WebSocket
-┌─────────────────▼───────────────────┐
-│ Backend (Rust + Axum)               │
-│  Quote aggregation                  │
-│  Relayer (Hide Mode)                │
-│  Garaga Honk prover                 │
-│  AI plan router                     │
-│  Event indexer                      │
-│  Watcher / bridge orchestration     │
-└─────────────────┬───────────────────┘
-                  │ on-chain calls
-┌─────────────────▼───────────────────┐
-│ Starknet Sepolia                    │
-│  SwapAggregator, LimitOrderBook     │
-│  ShieldedPoolV4 + Honk verifiers    │
-│  AIExecutor (ERC-8004)              │
-│  Staking contracts (3)              │
-│  Rewards: Points, Referral, NFT     │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  USER LAYER                                              │
+│  Starknet Wallet · EVM Wallet · BTC Wallet               │
+└────────────────────────┬─────────────────────────────────┘
+                         │
+┌────────────────────────▼─────────────────────────────────┐
+│  FRONTEND  (Next.js · Vercel)                            │
+│  Trading UI · AI panel · Rewards · Hide Mode UI          │
+└──────┬─────────────────┬────────────────────┬────────────┘
+       │ API / WebSocket │                    │ direct wallet tx
+       │                 │                    │
+┌──────▼─────────────────┴──────┐   ┌─────────▼──────────────────────────┐
+│  BACKEND  (Rust + Axum · Railway)│  │  SMART CONTRACTS  (Starknet Sepolia)│
+│                               │   │                                    │
+│  REST + WebSocket API         │   │  SwapAggregator                    │
+│  Hide Mode Relayer ───────────┼──▶│  LimitOrderBook                    │
+│  Garaga Honk Prover           │   │  ShieldedPool V4 + Honk verifiers  │
+│  AI Plan Router ──────────────┼──▶│  AIExecutor (ERC-8004)             │
+│  Workers:                     │   │  AIPlanRouter                      │
+│    Indexer / Points           │   │  Staking (CAREL · Stable · WBTC)   │
+│    Order watcher              │   │  PointStorage · SnapshotDistributor│
+│    Bridge orchestration ──────┼──▶│  ReferralSystem · DiscountSoulbound│
+│    Price feeds                │   │  PriceOracle (TWAP)                │
+└───────────────────────────────┘   │  ShadowBridgeReceiver              │
+                                    │  CarelMultiFaucet                  │
+┌──────────────────────────────┐    └────────────────────────────────────┘
+│  EXTERNAL                    │
+│  Ethereum Sepolia            │
+│  Bitcoin Testnet4            │
+│  Garden Finance (bridge)     │
+└──────────────────────────────┘
 ```
 
-## Roadmap
+## Action Path Flows
 
-Post-testnet roadmap streams:
+### Swap
 
-- **CAREL DEX** — dedicated native liquidity layer and trading infrastructure on Starknet
-- **Shadow Bridge** — hide-mode Bitcoin native to wBTC bridge using ZK-verified lock/mint
-- **Sumo Login** — privacy-preserving authentication integration
-- **Battleship** — on-chain game using Garaga ZK proofs for move verification
-- **Mainnet** — after external audit and reliability baseline confirmed on testnet
+```
+Normal:
+  Swap action → Backend quote → Wallet sign → SwapAggregator
+
+Hide:
+  Swap action → User deposit note
+                      ↓
+                Mixing window
+                      ↓
+                Backend prep payload
+                      ↓
+                Relayer submit → ShieldedPool V4 → SwapAggregator
+```
+
+### Limit Order
+
+```
+Normal:
+  Limit action → Wallet sign → LimitOrderBook
+
+Hide:
+  Limit action → User deposit note
+                       ↓
+                 Mixing window
+                       ↓
+                 Backend prep payload
+                       ↓
+                 Relayer submit → ShieldedPool V4 → LimitOrderBook
+```
+
+### Staking
+
+```
+Normal:
+  Stake action → Wallet sign → StakingCarel / StakingStablecoin / WBTCStaking
+
+Hide:
+  Stake action → User deposit note
+                      ↓
+                Mixing window
+                      ↓
+                Backend prep payload
+                      ↓
+                Relayer submit → ShieldedPool V4 → Staking contract
+```
+
+### AI Agent
+
+```
+L1:
+  AI command → Backend response (no on-chain execution)
+
+L2 (normal):
+  AI command → AIExecutor setup on-chain
+                     ↓
+               Backend execute → Swap / Limit / Stake / Bridge
+
+L3 (hide):
+  AI command → AIExecutor setup on-chain
+                     ↓
+               User deposit note → Mixing window
+                     ↓
+               Backend execute → Relayer submit → ShieldedPool V4 → Swap / Limit / Stake
+```
+
+### Bridge
+
+```
+Bridge action → Backend quote + pre-check
+                      ↓
+                User signs source-chain tx
+                      ↓
+                Bridge provider settlement
+                      ↓
+                Destination receive
+```
+
+> AI bridge uses Level 2 by default (`AI_LEVEL3_BRIDGE_ENABLED=false`). Level 3 covers swap, stake, and limit order only.

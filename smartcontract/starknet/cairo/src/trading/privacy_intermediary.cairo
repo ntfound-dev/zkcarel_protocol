@@ -1,5 +1,6 @@
 use starknet::ContractAddress;
 
+/// @notice Parameters bundled with a user's signed privacy action.
 #[derive(Drop, Serde, starknet::Store, Copy)]
 pub struct PrivacyParams {
     pub signature_selector: felt252,
@@ -12,9 +13,27 @@ pub struct PrivacyParams {
     pub deadline: u64,
 }
 
+/// @title IPrivacyIntermediary
+/// @notice Relayer-facing API for executing user-signed privacy actions with
+///         on-chain signature verification and nonce replay protection.
 #[starknet::interface]
 pub trait IPrivacyIntermediary<TContractState> {
+    /// @notice Updates the executor contract address.
+    /// @dev Callable only by the contract owner. Emits `ExecutorUpdated`.
+    /// @param executor New executor address (must be non-zero).
     fn set_executor(ref self: TContractState, executor: ContractAddress);
+
+    /// @notice Executes a user-signed privacy action via the configured executor.
+    /// @dev Verifies the deadline, nonce, and user signature before forwarding.
+    ///      Marks the nonce as used to prevent replay.
+    /// @param user User whose signature is being verified.
+    /// @param token Token transferred into the contract.
+    /// @param amount Token amount.
+    /// @param signature ECDSA signature from `user`.
+    /// @param params Privacy action parameters including selectors, nullifier, and nonce.
+    /// @param proof Serialized ZK proof forwarded to the executor.
+    /// @param public_inputs ZK circuit public inputs.
+    /// @param action_calldata Calldata forwarded to the executor's execute entrypoint.
     fn execute(
         ref self: TContractState,
         user: ContractAddress,
@@ -26,9 +45,18 @@ pub trait IPrivacyIntermediary<TContractState> {
         public_inputs: Span<felt252>,
         action_calldata: Span<felt252>,
     );
+
+    /// @notice Returns whether a nonce has been consumed for a user.
+    /// @param user User address.
+    /// @param nonce Nonce to check.
+    /// @return true if the nonce has been used.
     fn is_nonce_used(self: @TContractState, user: ContractAddress, nonce: felt252) -> bool;
 }
 
+/// @title PrivacyIntermediary
+/// @notice Relayer-facing contract for user-signed privacy actions.
+///         Verifies ECDSA signatures, replay-protects nonces, and forwards
+///         submit + execute calls to a configurable executor via syscall.
 #[starknet::contract]
 pub mod PrivacyIntermediary {
     use core::num::traits::Zero;
@@ -47,7 +75,7 @@ pub mod PrivacyIntermediary {
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
 
     #[abi(embed_v0)]
-    impl OwnableImpl = OwnableComponent::OwnableImpl<ContractState>;
+    impl OwnableTwoStepImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
     impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
 
     #[starknet::interface]
@@ -89,6 +117,9 @@ pub mod PrivacyIntermediary {
         pub commitment: felt252,
     }
 
+    /// @notice Initializes the intermediary with an owner and initial executor.
+    /// @param owner Initial contract owner (two-step transfer via OZ OwnableComponent).
+    /// @param executor Initial executor contract address.
     #[constructor]
     fn constructor(ref self: ContractState, owner: ContractAddress, executor: ContractAddress) {
         self.ownable.initializer(owner);
@@ -97,6 +128,7 @@ pub mod PrivacyIntermediary {
 
     #[abi(embed_v0)]
     impl PrivacyIntermediaryImpl of IPrivacyIntermediary<ContractState> {
+        /// @inheritdoc IPrivacyIntermediary
         fn set_executor(ref self: ContractState, executor: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!executor.is_zero(), "Executor required");
@@ -104,6 +136,7 @@ pub mod PrivacyIntermediary {
             self.emit(Event::ExecutorUpdated(ExecutorUpdated { executor }));
         }
 
+        /// @inheritdoc IPrivacyIntermediary
         fn execute(
             ref self: ContractState,
             user: ContractAddress,
@@ -197,6 +230,7 @@ pub mod PrivacyIntermediary {
                 );
         }
 
+        /// @inheritdoc IPrivacyIntermediary
         fn is_nonce_used(self: @ContractState, user: ContractAddress, nonce: felt252) -> bool {
             self.used_nonces.read(self._nonce_key(user, nonce))
         }

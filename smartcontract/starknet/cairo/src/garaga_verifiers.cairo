@@ -1,3 +1,6 @@
+/// @notice Garaga-generated ZK verifier modules for each privacy circuit.
+///         Each sub-module exposes a `verify_proof` entrypoint backed by on-chain
+///         Groth16 / PLONK verification via the Garaga library.
 #[path("garaga_verifiers/swap_verifier/mod.cairo")]
 pub mod swap_verifier;
 #[path("garaga_verifiers/stake_verifier/mod.cairo")]

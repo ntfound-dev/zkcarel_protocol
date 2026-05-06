@@ -64,35 +64,57 @@ CAREL's user acquisition focuses on three channels:
 
 ## Business Model
 
-CAREL Protocol generates revenue through on-chain fees collected by the `FeeCollector` contract and routed to `Treasury`.
+CAREL Protocol generates revenue through on-chain fees collected by the `FeeCollector` contract and routed to `Treasury`. The v6 economic model separates fee types clearly — swap fees go to dev/ops in USDC, AI fees use a hybrid 3-component model, airdrop fees are partially burned.
 
 ### Protocol Fees
 
-| Fee Type | Rate | Notes |
+| Fee Type | Rate | Routing |
 |---|---|---|
-| Swap fee | 0.2% | Applied to swap and limit order executions |
-| AI execution — L2 | 5 CAREL | On-chain AI-assisted trade |
-| AI execution — L3 | 10 CAREL | Private AI-assisted trade (Hide Mode + AI) |
-| Airdrop claim fee | 5% | Applied automatically at claim time |
+| Swap fee | 0.2% | 100% USDC → dev/ops |
+| Bridge fee | 0.4% | 100% USDC → dev/ops |
+| AI execution — L2 | 2 CAREL flat burn + $0.30 in CAREL (TWAP) | See breakdown below |
+| AI execution — L3 | 3 CAREL flat burn + $0.50 in CAREL (TWAP) | See breakdown below |
+| Airdrop claim fee | 5% | 2.5% burn + 1.25% treasury + 1.25% dev |
+| NFT upgrade (CAREL) | Variable | 50% buyback-burned + 50% treasury reserve |
 
 LP fees are separate and flow to liquidity providers, not the protocol treasury.
 
-### Fee Distribution
+### AI Fee Distribution (Hybrid 3-Component Model)
 
-**Swap fees**: split between LP providers and protocol treasury via `FeeCollector`.
+The v6 AI fee is a hybrid of three simultaneous components per transaction:
 
-**AI execution fees**:
-- L2: 2 CAREL burned + 3 CAREL to fee recipient
-- L3: 3 CAREL burned + 7 CAREL to fee recipient
+**① Flat burn** — 2 CAREL (L2) or 3 CAREL (L3) → 100% burned immediately. This guarantees a deflation floor regardless of CAREL price.
+
+**② USD-target revenue** — $0.30 (L2) or $0.50 (L3) worth of CAREL, calculated via TWAP oracle at execution time:
+- 75% → treasury accounting (stable USD value captured)
+- 25% → weekly buyback fund
+
+**③ Buyback-burn epoch** — the 25% buyback fund accumulates weekly, then treasury buys CAREL from the open market and burns it. Burn pressure scales with adoption volume.
+
+### Other Fee Distribution
 
 **Airdrop claim fee** (5% total):
+- 2.5% → Burned
 - 1.25% → Treasury
 - 1.25% → Development fund
-- 2.5% → Burned
+
+### External Revenue Anchors
+
+Beyond on-chain protocol fees, CAREL targets three external revenue streams that reduce circular dependency on internal volume:
+
+| Source | Model | Target |
+|---|---|---|
+| B2B API | Other protocols pay CAREL to access the AI execution layer | Active month 6+ |
+| Treasury yield | 35% USDC reserve deployed to zkLend/Nostra (~4–6% APR passively) | Ongoing at TGE |
+| Cross-chain fee sharing | Revenue from external bridge aggregator traffic | Growth phase |
+
+Estimated combined contribution: 200–500K CAREL/month equivalent without depending on user transaction volume.
 
 ### Revenue Sustainability
 
-Fee parameters are adjustable via on-chain governance (Governance + Timelock contract) after mainnet. The 48-hour timelock minimum enforces community visibility before any parameter change takes effect.
+The v6 treasury holds multi-asset reserves — 35% USDC for operational stability, 35% CAREL for protocol operations, 20% ETH/BTC as a low-correlation hedge, and 10% LP positions for fee income. This gives the protocol 18+ months of operational runway even if CAREL price drops 80%.
+
+Fee parameters are adjustable via on-chain governance (`Governance` + `Timelock`) after mainnet. The 48-hour timelock minimum enforces community visibility before any parameter change takes effect.
 
 At testnet stage, CAREL does not yet generate real revenue. The business model is validated on-chain but operates on testnet tokens. Mainnet deployment is the prerequisite for real fee collection.
 
@@ -121,34 +143,42 @@ The MacBook M5 with 24GB unified memory replaces the need for a dedicated cloud 
 
 ## Seed Grant Milestones (3 Months)
 
-The Starknet Foundation Seed Grant covers a 3-month execution window. Three sequential phases: infrastructure and technical stabilization, feature completion, then community launch.
+The Starknet Foundation Seed Grant covers a 3-month execution window. Three sequential phases: foundation stabilization and security hardening, feature expansion and user acquisition, then scale and mainnet readiness.
 
-### Milestone 1 — Infrastructure & Technical Stabilization ($10,000 — June 2026)
+### Milestone 1 — Foundation & Stabilization ($10,000 — July 2026)
 
-- Development device procured (MacBook M5 24GB) — local proving environment operational
-- V4 Garaga verifier wrapper redeployed on-chain with `public_inputs` binding enforced
-- Real Garaga Honk proofs live for all Hide Mode flows (no testnet shortcuts)
-- AI execution gas reduced from ~5M to ≤2M gas units
-- TWAP oracle gas reduced from ~3.5M to ≤200K gas units
-- Noir circuits updated for complete on-chain field binding
+- MacBook Pro M5 24GB procured — ZK proving workload runs fully locally (required for Garaga Honk proof generation ≥16GB RAM)
+- ShieldedPoolV4 verifier redeployed with `public_inputs` binding fix — live and verifiable on Starknet Sepolia
+- All 4 Noir circuits updated with full on-chain field constraints and private-exit token/amount binding (all AUDIT.md open items closed)
+- AIExecutor gas reduced from ~5M to ≤1.5M — tested and verified on Sepolia
+- TwapOracle gas reduced from ~3.5M to ≤200K — tested and verified on Sepolia
+- Garaga Hide Mode gas optimized — minimum 30% reduction on Honk proof calldata path
+- BTC Light Client PoW validation fully implemented in `btc_light_client.cairo` (TODO stub replaced)
+- Mixing-window constraint moved from UX-only to on-chain enforcement in ShieldedPoolV4
+- Hide Mode UX updated with real-time proof progress indicator, error states, and loading feedback
 
-### Milestone 2 — Protocol Stabilization & Public Testnet ($8,000 — August 2026)
+### Milestone 2 — Growth & Integration ($8,500 — September 2026)
 
-- Shadow Bridge (BTC/WBTC cross-chain) integration live on testnet
-- All protocol flows stable and publicly accessible: swap, stake, limit order, bridge, Hide Mode, AI agent (L1/L2/L3)
-- Points system, leaderboard, and airdrop claim flow end-to-end tested
-- 3 complete epoch cycles with on-chain Merkle root submissions and user claims
-- UI/UX improvements across all flows based on internal testing
-- Public documentation site live and indexed
+- Battleship Noir circuit (board commitment + move proof) and Groth16/BLS12-381 verifier deployed on Sepolia and callable from frontend
+- Sumo Login smart contracts (SumoLoginContract + SumoAccountContract) deployed on Sepolia — OAuth JWT → ZK proof → Starknet smart account flow works end-to-end
+- Sumo Login frontend tab (Google/Discord/Apple) integrated into wallet-connect dialog with OIDC backend handler
+- AI agent interface live: natural language input, toggle L1/L2/L3, semi-autonomous mode, real-time execution plan display
+- Leaderboard and referral UI live — real-time ranking, referral link generator, epoch countdown
+- Battleship game UI fully functional on frontend — interactive board, move input, ZK proof status
+- UI mobile-responsive at 375px viewport for trading, referral, and Sumo Login flows
+- Galxe campaign launched — minimum 1,500 wallet completions achieved
 
-### Milestone 3 — Community Building ($7,000 — October 2026)
+### Milestone 3 — Scale & Mainnet-Ready ($6,500 — November 2026)
 
-- Official Discord and Telegram community launched
-- Ambassador / early adopter program live with structured incentives
-- Referral campaign active — 100+ registered referrals via on-chain referral system
-- 200+ unique wallets with on-chain activity on Starknet Sepolia
-- Bug fixes from community feedback resolved and redeployed
-- Growth Grant application submitted
+- AI agent fully autonomous (ERC-8004 compliant): multi-step execution without per-step approval, live on Sepolia
+- Shadow Bitcoin Bridge: BTC/WBTC lock-mint contract wiring complete with deposit flow, proof status, and claim interface functional on frontend
+- Admin single-key migrated to Multisig + 48h Timelock on Sepolia
+- Backend API hardened for 10K user load — rate limiting, auth middleware, Rust/Axum error handling validated
+- Private executor stable under 10K active wallet simulation (retry logic, queue management, dead-letter handling)
+- Zero critical open bugs — all GitHub issues from testnet community resolved
+- Zealy sprint complete — minimum 800 engaged users
+- Cumulative testnet campaign: 10,000 wallet interactions achieved
+- Protocol in production-candidate state for Starknet mainnet deployment
 
 ## After Seed — Growth Phase
 
@@ -158,9 +188,7 @@ Mainnet deployment, token launch, and the following features are Growth phase ta
 
 | Feature | Description |
 |---|---|
-| Sumo Login | Privacy-preserving authentication — login without exposing wallet identity |
 | Social Media Tasks | On-chain rewards for privacy-related social tasks and content |
-| Battleship Game | On-chain game using Garaga ZK proofs for move verification |
 | CEX Deposit | Direct deposit from centralized exchanges into CAREL protocol |
 | QRIS / Local Bank | Indonesian QRIS and local bank transfer onramp into Starknet |
 | External Audit | Full third-party audit of 35 Cairo contracts, FE, and BE |

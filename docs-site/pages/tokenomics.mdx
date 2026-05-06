@@ -2,29 +2,47 @@
 
 CAREL token is the native token of CAREL Protocol. Total supply is hard-capped at **1,000,000,000 CAREL**.
 
-> **Note:** Tokenomics are not live yet and subject to legal review before mainnet. Numbers and mechanisms may change.
+> **Note:** Tokenomics are not live yet and subject to legal review before mainnet. Numbers and mechanisms may change. This page reflects the v6 economic design — production-ready, stress-tested, honest about trade-offs.
 
 ## Token Allocation
 
 <img src="/carel-tokenomics-3y.svg" alt="CAREL 3-Year Unlock Projection" style={{maxWidth:'100%', margin:'16px 0'}} />
 
-| Category | Allocation | Notes |
-|---|---|---|
-| Ecosystem | 40% | Monthly distribution over 36 months |
-| Team | 15% | Vesting schedule |
-| Investor | 15% | Vesting schedule |
-| Listing | 10% | Exchange and liquidity |
-| Treasury | 10% | Governance-controlled |
-| Marketing | 7% | Community and growth |
-| Early Access / Testnet | 3% | Testnet campaigns, quests, feedback |
+| Category | Allocation | Total | Notes |
+|---|---|---|---|
+| Ecosystem | 40% | 400M | Linear 36 months, ~11.1M/month |
+| Team | 15% | 150M | 12-month cliff, 36-month linear (ends month 48) |
+| Investor | 15% | 150M | 12-month cliff, 24-month linear (ends month 36) |
+| Treasury | 10% | 100M | Governance-controlled, multi-asset managed |
+| Listing | 10% | 100M | TGE — exchange listing and initial liquidity |
+| Marketing | 7% | 70M | 3-month cliff, 6-month linear (ends month 9) |
+| Liquidity | 3% | 30M | TGE — protocol-owned liquidity seed |
+
+Total: 1,000,000,000 CAREL.
+
+## Vesting Schedule (v6)
+
+The v6 redesign enforces alignment: **Team always finishes vesting after Investor**. Investor can exit earlier as a reward for taking early risk; Team commitment is longer because they retain operational control throughout.
+
+| Category | Cliff | Linear | Ends | Monthly release |
+|---|---|---|---|---|
+| Listing | — | TGE | Month 1 | — |
+| Liquidity | — | TGE | Month 1 | — |
+| Marketing | Month 3 | 6 months | Month 9 | ~11.7M |
+| **Investor** | **Month 12** | **24 months** | **Month 36** | **6.25M** |
+| **Team** | **Month 12** | **36 months** | **Month 48** | **4.17M** |
+| Ecosystem | — | 36 months | Month 36 | ~11.1M |
+| Treasury | Managed | — | — | Variable |
+
+**v5 → v6 alignment fix:** In v5, Team ended at month 36 and Investor ended at month 48 — Team had a 5-month window to sell before Investor could unlock. v6 reverses this. Investor ends month 36, Team ends month 48. Cliff dates are identical (month 12) for full market transparency.
 
 ## 3-Year Unlock Projection
 
-| Year | Unlocked (cumulative) | Remaining locked |
+| Year | Cumulative unlocked | Remaining locked |
 |---|---|---|
-| Year 1 | 437M CAREL | 563M CAREL |
-| Year 2 | 644M CAREL | 356M CAREL |
-| Year 3 | 816M CAREL | 184M CAREL |
+| Year 1 | ~437M CAREL | ~563M CAREL |
+| Year 2 | ~644M CAREL | ~356M CAREL |
+| Year 3 | ~816M CAREL | ~184M CAREL |
 
 ## Fee Model
 
@@ -32,29 +50,193 @@ CAREL Protocol collects fees through on-chain contracts. All fees flow through `
 
 ### Swap and Limit Order Fees
 
-- Protocol fee: **0.2%** on swap and limit order executions
-- LP share: portion goes to liquidity providers
-- Discounts apply to the protocol fee only — LP fees are not reduced
+- Protocol fee: **0.2%** on swap and limit order executions — 100% USDC to dev/ops
+- Bridge fee: **0.4%** — 100% USDC to dev/ops
+- LP fees are separate and flow to liquidity providers only
+- NFT discount applies to protocol fee only, not LP fees
 
 **Discount formula:**
 ```
 protocol_fee_after_discount = protocol_fee × (1 − discount_bps / 10,000)
 ```
 
+### AI Execution Fees — Hybrid v6 Model
+
+v5 used a flat burn (5/10 CAREL). v6 replaces this with a **3-component hybrid** that fixes the self-defeating loop: flat burn keeps deflation floors, USD-target keeps user costs stable, buyback-burn scales with adoption.
+
+**Component ① — Flat burn (guaranteed deflation floor)**
+
+| Level | Flat burn |
+|---|---|
+| L2 (AI on-chain) | 2 CAREL → 100% burned |
+| L3 (AI + Hide Mode) | 3 CAREL → 100% burned |
+
+**Component ② — USD-target revenue (stable in USD)**
+
+| Level | USD target | CAREL amount | Routing |
+|---|---|---|---|
+| L2 | $0.30 | Dynamic via TWAP oracle | 75% treasury, 25% buyback fund |
+| L3 | $0.50 | Dynamic via TWAP oracle | 75% treasury, 25% buyback fund |
+
+**Component ③ — Buyback-burn epoch (scales with adoption)**
+
+- 25% of USD-target component accumulates weekly in buyback fund
+- Treasury buys CAREL from market, burns immediately
+- Burn pressure grows proportionally with AI transaction volume
+
+**User cost simulation (L2, 3 price scenarios):**
+
+| CAREL price | Flat burn | USD-target | Total user cost | Burn per tx |
+|---|---|---|---|---|
+| $0.10 | $0.20 (2 CAREL) | $0.30 (3.0 CAREL) | $0.50 | ~2.75 CAREL |
+| $0.50 | $1.00 (2 CAREL) | $0.30 (0.6 CAREL) | $1.30 | ~2.15 CAREL |
+| $1.00 | $2.00 (2 CAREL) | $0.30 (0.3 CAREL) | $2.30 | ~2.075 CAREL |
+
+At low price: more CAREL burned per dollar (flywheel up). At high price: minimum 2 CAREL/tx guaranteed — deflation never collapses to zero. User cost in USD stays roughly stable regardless of CAREL price.
+
+> **Seed phase note:** During months 1–2 (before TWAP oracle is reliable), flat burn is set to 5 CAREL/tx. After TWAP oracle is live (~1 week post-TGE), hybrid fee activates and flat drops to 2/3 CAREL.
+
+AI fee parameters are adjustable via governance after mainnet.
+
 ### Airdrop Claim Fee (On-chain)
 
-When claiming from SnapshotDistributor:
+When claiming from `SnapshotDistributor` or `AirdropVesting`:
 - **5% claim fee** applied on-chain automatically
-- Split: 1.25% treasury + 1.25% dev + 2.5% burn
+- Split: 2.5% burn + 1.25% treasury + 1.25% dev fund
 
-### AI Execution Fees (On-chain)
+## Lock-Up Escrow (v6)
 
-| Level | Fee | Burn | Fee Recipient |
+v5 bonus (2–5% nominal, 1–3 months) was an arbitrage loophole — investors could hedge via OTC and claim free yield. v6 replaces this with a real on-chain escrow contract (`LockupEscrow`) that eliminates the loophole.
+
+| Option | Duration | APR | Source | Early break penalty |
+|---|---|---|---|---|
+| Standard | None | 0% | — | — |
+| Lock-up A | 6 months | 8% APR | Treasury buyback fund | 5% of principal + forfeit all bonus |
+| Lock-up B | 12 months | 12% APR | Treasury buyback fund | 5% of principal + forfeit all bonus |
+
+**Mechanics:**
+- CAREL is locked in escrow SC — cannot transfer, swap, or use as derivative collateral
+- APR accrues linearly and can be claimed mid-period or at end
+- Bonus is paid from treasury buyback fund (USDC → market buy CAREL → pay bonus) — **no new minting**
+- Early unlock deducts 5% from principal (burned) and forfeits all accrued bonus
+
+**Game theory:** v6 lock-up requires a real commitment. Investors who choose lock-up are genuinely bullish — no free arbitrage. Expected opt-in: 20–35% (vs 70–80% in v5 where it was a loophole). Smaller but real.
+
+## Airdrop Recipient Vesting (v6)
+
+v5 had instant airdrop claims — 95% of recipients sold within 7 days, making the ecosystem fund the largest sell-pressure source. v6 adds on-chain recipient vesting via `AirdropVesting` contract to spread the impact.
+
+| Claim amount | Vesting | Notes |
+|---|---|---|
+| < 1,000 CAREL/month | Instant | Small user friendly — no friction |
+| 1,000–10,000 CAREL/month | 7-day linear | Slow farmer protection |
+| 10,000–50,000 CAREL/month | 30-day linear | Medium whale gate |
+| > 50,000 CAREL/month | 90-day linear | Large claims must commit |
+| Staker bypass | Instant | Users staked ≥ 30 days get instant claim regardless of tier |
+
+**Economic effect:** Effective sell pressure from ecosystem fund drops from ~7.7M/month (v5) to ~4–5M/month (v6) — a 35% reduction via vesting spread.
+
+Monthly ecosystem stats at 11.1M/month:
+- Burn fee 2.5%: ~277K CAREL burned per month
+- Effective sell pressure post-vesting: ~4–5M CAREL/month (down from 7.7M)
+
+Merkle root per epoch is set by admin (`set_epoch_root`). Proof is verified on-chain using Pedersen hash before any release.
+
+## Treasury Multi-Asset Strategy (v6)
+
+v5 treasury was 95%+ CAREL — denomination risk. If CAREL price drops 50%, treasury value drops 50% but dev/ops costs in USD stay constant, forcing 2× faster drain. v6 fixes this.
+
+**Target treasury allocation (rebalanced per epoch):**
+
+| Asset | Target | Purpose |
+|---|---|---|
+| USDC / stablecoin | 35% | Dev/ops payroll, audit, infrastructure, marketing — hedge against CAREL price |
+| CAREL | 35% | Buyback-burn, NFT discount fund, staker rewards |
+| ETH / BTC reserve | 20% | Long-term reserve, value preservation, low correlation to CAREL |
+| LP positions (CAREL/USDC, CAREL/ETH) | 10% | Earn fees from protocol volume, deepen own liquidity |
+
+**Auto-convert rule (smart contract level):**
+- Every 5,000+ CAREL inflow to treasury triggers automatic 35% → USDC swap via DEX
+- Max 2% slippage guard — transaction aborts if exceeded
+- Weekly batch fallback if inflow threshold not reached
+- Quarterly governance review for target allocation adjustments
+
+**Result:** Treasury has 18+ months operational runway even if CAREL drops 80%.
+
+**USD-denominated circuit breakers:**
+
+| Treasury USD value | Burn policy |
+|---|---|
+| > $4M USD equivalent | 25% burn — aggressive |
+| $2M–$4M USD equivalent | 15% burn — normal |
+| $800K–$2M USD equivalent | 5% burn — conservative |
+| < $800K USD equivalent | Burn paused + emergency mode |
+
+Thresholds are USD-denominated (not CAREL-amount) to prevent false signals from price drops.
+
+## Burn Architecture — Honest Numbers
+
+v5 claimed ~4.8M CAREL burned/month at 10K AI tx/day. v6 recalculates with the hybrid model:
+
+| AI tx/day | Flat burn/month | Buyback burn (at $0.20) | Claim fee burn | Total burn/month |
+|---|---|---|---|---|
+| 500 | 30K | ~56K | ~277K | ~363K |
+| 2,000 | 120K | ~225K | ~277K | ~622K |
+| 5,000 | 300K | ~562K | ~277K | ~1.14M |
+| 10,000 | 600K | ~1.13M | ~277K | ~2.0M |
+| 25,000 | 1.5M | ~2.81M | ~277K | ~4.6M |
+
+*Assumptions: 70% L2, 30% L3, CAREL price $0.20.*
+
+v5 claimed 4.5M/month at 10K tx/day (100% flat model). v6 honest number: **2.0M/month** at same conditions — lower, but correct.
+
+## Sell Pressure — Honest Math
+
+v5 only counted investor sell pressure. v6 accounts for all four sources:
+
+| Source | Unlock/month | Est. % sold | Effective sell pressure/month |
 |---|---|---|---|
-| L2 (AI-assisted on-chain) | 5 CAREL | 2 CAREL | 3 CAREL |
-| L3 (AI-assisted private) | 10 CAREL | 3 CAREL | 7 CAREL |
+| Investor (50% monthly cap) | 6.25M | 50% | 3.13M |
+| Team (50% monthly cap) | 4.17M | 40% | 1.67M |
+| Ecosystem (airdrop to users) | 11.1M | ~45% (post-vesting) | 5.0M |
+| Marketing tail | ~2M | 30% | 0.6M |
+| Lock-up bonus claimers | ~0.5M | Variable | 0.2M |
+| **Total realistic** | | | **~10.6M/month** |
 
-AI fees are adjustable via governance after mainnet.
+Optimistic scenario (high commit rate, popular lock-up): ~7M/month. Pessimistic (panic sell): ~14M/month.
+
+**Break-even for net deflation** (AI burn + treasury epoch burn combined):
+- 10K AI tx/day → ~2M AI burn + ~1M epoch = ~3M total = covers 28%
+- 25K AI tx/day → ~4.6M AI burn + ~1.5M epoch = ~6.1M total = covers 58%
+- 50K AI tx/day → ~9M AI burn + ~2M epoch = ~11M total = covers 100%+ (net deflationary)
+
+**Honest conclusion:** Net deflationary requires 25K–50K AI tx/day — not 10K like v5 claimed. At medium adoption (5–10K tx/day), supply grows slightly. This is fine — the protocol can succeed without being always-deflationary. What matters is real utility and revenue, not a burn narrative that collapses under stress.
+
+## Stress Test Matrix — Solvency 4×4
+
+Published pre-mainnet as a transparency commitment. This matrix answers: at which adoption × price combinations is CAREL solvent at month 18 (worst-case post-cliff window)?
+
+| Adoption ↓ / Price → | $0.05 | $0.20 | $0.50 | $1.00 |
+|---|---|---|---|---|
+| 500 tx/day | **FAIL** | STRESS | MARGINAL | MARGINAL |
+| 2K tx/day | STRESS | MARGINAL | OK | OK |
+| 5K tx/day | MARGINAL | OK | HEALTHY | HEALTHY |
+| 10K+ tx/day | OK | HEALTHY | HEALTHY | HEALTHY |
+
+**Definitions:**
+- **HEALTHY** — burn > sell pressure 1.5×
+- **OK** — burn covers sell pressure (ratio > 1.0)
+- **MARGINAL** — treasury runway 12+ months but burn < sell pressure
+- **STRESS** — circuit breaker active > 50% of time
+- **FAIL** — treasury depleted before month 24
+
+v5 did not publish this matrix. v6 publishes it before mainnet — investors and users can see exactly which scenarios the system handles and which require fallback execution.
+
+**Emergency response by quadrant:**
+- **FAIL** — pivot strategy, bootstrap fund + emergency campaign
+- **STRESS** — activate all fallbacks: bootstrap fund + emergency campaign + aggressive B2B push
+- **MARGINAL** — sustainable short-term, must exit to OK within 6 months
+- **OK / HEALTHY** — system working as designed, focus on growth
 
 ## Points System
 
@@ -116,8 +298,52 @@ reward = monthly_pool × user_points / total_points_epoch
 
 Testnet uses a fixed 3% pool — claims transfer from this pool (no minting inside claim).
 
-Mainnet target: 40% ecosystem pool distributed over 36 months (~11.1M CAREL/month).
+Mainnet: 40% ecosystem pool over 36 months (~11.1M CAREL/month). Recipient vesting applies at claim time via `AirdropVesting` contract (see Airdrop Recipient Vesting section above).
+
+## NFT Tiers
+
+Five soulbound NFT tiers paid with points from `PointStorage`, providing fee discounts on protocol actions.
+
+| Tier | Name | Points cost | Discount | Max uses | Effective claim fee |
+|---|---|---|---|---|---|
+| 1 | Bronze | Free (min 1 tx) | 5% | 5 | 4.75% |
+| 2 | Silver | 15,000 pts + 10 CAREL | 10% | 7 | 4.50% |
+| 3 | Gold | 50,000 pts + 20 CAREL | 25% | 10 | 3.75% |
+| 4 | Platinum | 150,000 pts + 35 CAREL | 35% | 15 | 3.25% |
+| 5 | Onyx | 500,000 pts + 50 CAREL | 50% | 20 | 2.50% |
+
+Discount applies to: swap fee (0.2%), bridge fee (0.4%), AI execution fee, and airdrop claim fee. **Effective claim fee** = 5% × (1 − NFT discount%). The discount subsidy (fee shortfall) is covered by the treasury discount fund — protocol revenue is never reduced.
+
+CAREL paid for NFT upgrades: 50% buyback-burned, 50% treasury reserve.
+
+## External Revenue Anchors
+
+The protocol is designed to avoid full circular dependency (burn needs volume → volume needs users → users need price incentive → price needs burn). External revenue sources break this loop:
+
+| Source | Description | Target active |
+|---|---|---|
+| B2B API Access | Other protocols pay CAREL to use the AI execution layer | Month 6+ |
+| Treasury yield | 35% USDC allocation deployed to zkLend/Nostra at 4–6% APR | Ongoing |
+| Cross-chain fee sharing | Revenue from external bridge traffic routed through the protocol | Growth phase |
+
+Estimated contribution: 200–500K CAREL/month equivalent in stable revenue without depending on internal volume. This gives the protocol a revenue floor even if on-chain AI transaction volume is below breakeven.
+
+## Health Monitoring Thresholds
+
+Key indicators tracked to detect system stress early:
+
+| Indicator | Green | Amber (action needed) | Red (circuit breaker) |
+|---|---|---|---|
+| Burn:unlock ratio/month | > 1.0 (by month 18) | 0.5–1.0 | < 0.5 for 3 consecutive months |
+| NFT Silver+ % of users | > 15% at month 6 | 10–15% | < 10% |
+| AI tx/day | > 10,000 | 5,000–10,000 | < 1,000 at month 12 |
+| Treasury USD value | > $1.5M at month 12 | $800K–$1.5M | < $800K |
+| Unclaimed airdrop % | < 30% | 30–50% | > 50% (engagement signal) |
+| Investor/team sell volume | < 1M/day post-cliff | 1–2M/day | > 2M/day |
+
+**Amber response:** activate bootstrap fund + 2× points event + aggressive B2B push.  
+**Red response:** governance review mandatory + circuit breaker parameters reviewed.
 
 ## Governance
 
-Fee parameters, burn splits, and distribution schedules are adjustable via on-chain governance (Governance + Timelock) after mainnet. Timelock enforces a minimum 48-hour delay on all parameter changes.
+Fee parameters, burn splits, and distribution schedules are adjustable via on-chain governance (`Governance` + `Timelock`) after mainnet. Timelock enforces a minimum 48-hour delay on all parameter changes. Treasury allocation targets require governance vote for adjustments > 5%.

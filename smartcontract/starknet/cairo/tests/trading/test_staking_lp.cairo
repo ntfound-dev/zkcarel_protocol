@@ -50,8 +50,8 @@ fn setup() -> (ILPStakingDispatcher, ContractAddress, ContractAddress, ContractA
     // 2. Deploy LP Staking
     let staking_class = declare("LPStaking").unwrap().contract_class();
     let mut constructor_args = array![];
-    reward_token.serialize(ref constructor_args);
     owner.serialize(ref constructor_args);
+    reward_token.serialize(ref constructor_args);
     
     let (staking_addr, _) = staking_class.deploy(@constructor_args).unwrap();
     let dispatcher = ILPStakingDispatcher { contract_address: staking_addr };

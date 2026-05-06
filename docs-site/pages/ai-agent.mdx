@@ -9,8 +9,8 @@ There are three AI execution levels. Higher levels add more capabilities but cos
 | Level | Name | What it does | Fee |
 |---|---|---|---|
 | L1 | AI Suggest | Parses your intent, shows a plan — you confirm manually | Free |
-| L2 | AI Execute | Parses and executes on-chain autonomously | 5 CAREL |
-| L3 | AI Private | Executes via Hide Mode — combines AI routing with private execution | 10 CAREL |
+| L2 | AI Execute | Parses and executes on-chain autonomously | 2 CAREL flat + ~$0.30 in CAREL |
+| L3 | AI Private | Executes via Hide Mode — combines AI routing with private execution | 3 CAREL flat + ~$0.50 in CAREL |
 
 ## How to Use
 
@@ -37,16 +37,31 @@ The `AIExecutor` contract (`0x00d8ada9eb26d133f9f2656ac1618d8cdf9fcefe6c8e292cf9
 - Receiving parsed intents from the backend
 - Verifying the AI signature via `AISignatureVerifier`
 - Routing to the appropriate action (swap, stake, limit order)
-- Collecting the execution fee (5 or 10 CAREL)
+- Collecting the execution fee (hybrid: flat burn + USD-target component)
 
 The agent is **fully autonomous** — it does not require manual transaction signing for L2/L3 execution after initial intent confirmation.
 
 ## Fee Breakdown
 
-| Level | Total Fee | Burned | To Protocol |
-|---|---|---|---|
-| L2 | 5 CAREL | 2 CAREL | 3 CAREL |
-| L3 | 10 CAREL | 3 CAREL | 7 CAREL |
+Each AI transaction has three fee components charged simultaneously:
+
+**① Flat burn** — burned immediately, guaranteed deflation floor:
+
+| Level | Flat burn |
+|---|---|
+| L2 | 2 CAREL → 100% burned |
+| L3 | 3 CAREL → 100% burned |
+
+**② USD-target component** — CAREL amount calculated by TWAP oracle at execution time:
+
+| Level | USD target | Routing |
+|---|---|---|
+| L2 | ~$0.30 in CAREL | 75% treasury, 25% weekly buyback fund |
+| L3 | ~$0.50 in CAREL | 75% treasury, 25% weekly buyback fund |
+
+**③ Buyback-burn epoch** — the 25% buyback fund accumulates weekly, then buys CAREL from the market and burns it.
+
+> During seed phase (before TWAP oracle is live), only flat burn applies at a higher rate — 5 CAREL/tx for both L2 and L3.
 
 Fee parameters are adjustable via governance after mainnet.
 

@@ -42,3 +42,6 @@ LOCAL_*.md
 
 # noir vendor (embedded git repo — use as submodule if needed)
 smartcontract/starknet/garaga/circuits/noir_bignum_vendor
+.vercel
+GRANTSEED.md
+plangreenseed.md

@@ -1,36 +1,61 @@
 use starknet::ContractAddress;
 
-// Defines protocol-wide pause controls for incident response.
-// Exposes minimal pause controls to reduce operational risk.
+/// @title IEmergencyPause
+/// @notice Protocol-wide pause coordinator for incident response.
 #[starknet::interface]
 pub trait IEmergencyPause<TContractState> {
-    // Pauses all registered pausable contracts.
+    /// @notice Pauses all registered pausable contracts.
+    /// @dev Callable only by addresses holding GUARDIAN_ROLE.
+    /// @param reason Human-readable reason for the emergency pause.
     fn pause_all(ref self: TContractState, reason: ByteArray);
-    // Unpauses all registered pausable contracts.
+
+    /// @notice Unpauses all registered pausable contracts.
+    /// @dev Callable only by addresses holding DEFAULT_ADMIN_ROLE.
     fn unpause_all(ref self: TContractState);
-    // Returns whether the contract is currently paused.
+
+    /// @notice Returns whether the system is currently paused.
+    /// @return true if paused.
     fn is_paused(self: @TContractState) -> bool;
-    // Registers a contract address to be managed by emergency pause flow (admin only).
+
+    /// @notice Registers a contract address as a pause target.
+    /// @dev Callable only by DEFAULT_ADMIN_ROLE.
+    /// @param address Contract to add to the managed pause list.
     fn add_pausable_contract(ref self: TContractState, address: ContractAddress);
-    // Removes a contract address from emergency pause target list (admin only).
+
+    /// @notice Removes a contract address from the pause target list.
+    /// @dev Callable only by DEFAULT_ADMIN_ROLE.
+    /// @param address Contract to remove from the managed pause list.
     fn remove_pausable_contract(ref self: TContractState, address: ContractAddress);
-    // Returns full list of registered pausable contracts.
+
+    /// @notice Returns the full list of registered pausable contracts.
+    /// @return Array of managed contract addresses.
     fn get_pausable_contracts(self: @TContractState) -> Array<ContractAddress>;
 }
 
-// Minimal pausable interface for external contracts managed by emergency pause.
+/// @notice Minimal pausable interface for externally managed contracts.
 #[starknet::interface]
 pub trait IPausable<TContractState> {
     fn pause(ref self: TContractState);
     fn unpause(ref self: TContractState);
 }
 
-// Hide Mode hooks for emergency-control actions.
+/// @title IEmergencyPausePrivacy
+/// @notice Hide Mode hooks for emergency-control actions through the privacy router.
 #[starknet::interface]
 pub trait IEmergencyPausePrivacy<TContractState> {
-    // Sets privacy router used for Hide Mode actions.
+    /// @notice Sets the privacy router for private emergency actions.
+    /// @dev Callable only by DEFAULT_ADMIN_ROLE. Emits `PrivacyRouterUpdated`.
+    /// @param router New privacy router address (must be non-zero).
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    // Forwards private emergency payload to privacy router.
+
+    /// @notice Forwards a nullifier/commitment-bound emergency payload to the privacy router.
+    /// @dev Nullifiers are replay-protected: each may only be consumed once.
+    /// @param old_root Previous Merkle tree root.
+    /// @param new_root Updated Merkle tree root after commitments.
+    /// @param nullifiers Nullifiers for inputs being spent.
+    /// @param commitments New Merkle commitments.
+    /// @param public_inputs ZK circuit public inputs.
+    /// @param proof Serialized ZK proof.
     fn submit_private_emergency_action(
         ref self: TContractState,
         old_root: felt252,
@@ -42,15 +67,15 @@ pub trait IEmergencyPausePrivacy<TContractState> {
     );
 }
 
-// Centralized pause coordinator for protocol incident response.
-// Uses guardian/admin role split for staged emergency handling.
+/// @title EmergencyPause
+/// @notice Centralized pause coordinator using a guardian/admin role split.
+///         GUARDIAN_ROLE triggers pause; DEFAULT_ADMIN_ROLE restores operation.
 #[starknet::contract]
 pub mod EmergencyPause {
     use starknet::ContractAddress;
     use starknet::storage::*;
     use starknet::get_block_timestamp;
     use core::num::traits::Zero;
-    
     use openzeppelin::access::accesscontrol::AccessControlComponent;
     use openzeppelin::introspection::src5::SRC5Component;
     use crate::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
@@ -72,16 +97,17 @@ pub mod EmergencyPause {
 
     #[storage]
     pub struct Storage {
-        paused: bool,
-        pause_reason: ByteArray,
-        paused_at: u64,
-        pause_duration: u64,
-        contracts_to_pause: Vec<ContractAddress>,
-        privacy_router: ContractAddress,
+        pub paused: bool,
+        pub pause_reason: ByteArray,
+        pub paused_at: u64,
+        pub pause_duration: u64,
+        pub contracts_to_pause: Vec<ContractAddress>,
+        pub privacy_router: ContractAddress,
+        pub used_nullifiers: Map<felt252, bool>,
         #[substorage(v0)]
-        access_control: AccessControlComponent::Storage,
+        pub access_control: AccessControlComponent::Storage,
         #[substorage(v0)]
-        src5: SRC5Component::Storage,
+        pub src5: SRC5Component::Storage,
     }
 
     #[event]
@@ -91,40 +117,52 @@ pub mod EmergencyPause {
         EmergencyUnpaused: EmergencyUnpaused,
         ContractAdded: ContractAdded,
         ContractRemoved: ContractRemoved,
+        PrivacyRouterUpdated: PrivacyRouterUpdated,
         #[flat]
         AccessControlEvent: AccessControlComponent::Event,
         #[flat]
         SRC5Event: SRC5Component::Event,
     }
 
+    /// @notice Emitted when the system is emergency-paused.
     #[derive(Drop, starknet::Event)]
     pub struct EmergencyPaused {
         pub reason: ByteArray,
         pub paused_at: u64,
     }
 
+    /// @notice Emitted when the system is unpaused.
     #[derive(Drop, starknet::Event)]
     pub struct EmergencyUnpaused {
         pub unpaused_at: u64,
         pub duration: u64,
     }
 
+    /// @notice Emitted when a pausable contract is registered.
     #[derive(Drop, starknet::Event)]
     pub struct ContractAdded {
         pub address: ContractAddress,
     }
 
+    /// @notice Emitted when a pausable contract is removed from the managed list.
     #[derive(Drop, starknet::Event)]
     pub struct ContractRemoved {
         pub address: ContractAddress,
     }
 
-    // Initializes access roles and default unpaused state.
-    // admin/guardian: operational roles for unpause and pause workflows.
+    /// @notice Emitted when the privacy router address is updated.
+    #[derive(Drop, starknet::Event)]
+    pub struct PrivacyRouterUpdated {
+        pub router: ContractAddress,
+    }
+
+    /// @notice Initializes access roles and default unpaused state.
+    /// @param admin Address granted DEFAULT_ADMIN_ROLE (can unpause and manage contracts).
+    /// @param guardian Address granted GUARDIAN_ROLE (can trigger emergency pause).
     #[constructor]
     fn constructor(
-        ref self: ContractState, 
-        admin: ContractAddress, 
+        ref self: ContractState,
+        admin: ContractAddress,
         guardian: ContractAddress
     ) {
         self.access_control.initializer();
@@ -135,16 +173,14 @@ pub mod EmergencyPause {
 
     #[abi(embed_v0)]
     pub impl EmergencyPauseImpl of super::IEmergencyPause<ContractState> {
-        // Pauses all registered pausable contracts.
+        /// @inheritdoc IEmergencyPause
         fn pause_all(ref self: ContractState, reason: ByteArray) {
             self.access_control.assert_only_role(GUARDIAN_ROLE);
             assert!(!self.paused.read(), "System already paused");
-
             let now = get_block_timestamp();
             self.paused.write(true);
             self.pause_reason.write(reason.clone());
             self.paused_at.write(now);
-
             let len = self.contracts_to_pause.len();
             let mut i: u64 = 0;
             while i < len {
@@ -153,22 +189,18 @@ pub mod EmergencyPause {
                 dispatcher.pause();
                 i += 1;
             }
-
             self.emit(Event::EmergencyPaused(EmergencyPaused { reason, paused_at: now }));
         }
 
-        // Unpauses all registered pausable contracts.
+        /// @inheritdoc IEmergencyPause
         fn unpause_all(ref self: ContractState) {
             self.access_control.assert_only_role(DEFAULT_ADMIN_ROLE);
             assert!(self.paused.read(), "System not paused");
-
             let now = get_block_timestamp();
             let start_time = self.paused_at.read();
             let duration = now - start_time;
-
             self.paused.write(false);
             self.pause_duration.write(duration);
-
             let len = self.contracts_to_pause.len();
             let mut i: u64 = 0;
             while i < len {
@@ -177,29 +209,26 @@ pub mod EmergencyPause {
                 dispatcher.unpause();
                 i += 1;
             }
-
             self.emit(Event::EmergencyUnpaused(EmergencyUnpaused { unpaused_at: now, duration }));
         }
 
-        // Returns whether the contract is currently paused.
+        /// @inheritdoc IEmergencyPause
         fn is_paused(self: @ContractState) -> bool {
             self.paused.read()
         }
 
-        // Registers a pausable contract target managed by emergency controls.
+        /// @inheritdoc IEmergencyPause
         fn add_pausable_contract(ref self: ContractState, address: ContractAddress) {
             self.access_control.assert_only_role(DEFAULT_ADMIN_ROLE);
             self.contracts_to_pause.push(address);
             self.emit(Event::ContractAdded(ContractAdded { address }));
         }
 
-        // Removes a pausable contract target from emergency controls if present.
+        /// @inheritdoc IEmergencyPause
         fn remove_pausable_contract(ref self: ContractState, address: ContractAddress) {
             self.access_control.assert_only_role(DEFAULT_ADMIN_ROLE);
-            
             let mut found_index: Option<u64> = Option::None;
             let len = self.contracts_to_pause.len();
-            
             let mut i: u64 = 0;
             while i < len {
                 if self.contracts_to_pause.at(i).read() == address {
@@ -208,18 +237,16 @@ pub mod EmergencyPause {
                 }
                 i += 1;
             }
-
             if let Option::Some(index) = found_index {
                 let last_index = self.contracts_to_pause.len() - 1;
                 let last_element = self.contracts_to_pause.at(last_index).read();
                 self.contracts_to_pause.at(index).write(last_element);
-                // Keep felt252 literal in `expect` message for Cairo type compatibility.
                 self.contracts_to_pause.pop().expect('Vec should not be empty');
                 self.emit(Event::ContractRemoved(ContractRemoved { address }));
             }
         }
 
-        // Returns full list of registered pausable contracts.
+        /// @inheritdoc IEmergencyPause
         fn get_pausable_contracts(self: @ContractState) -> Array<ContractAddress> {
             let mut contracts = array![];
             for i in 0..self.contracts_to_pause.len() {
@@ -231,15 +258,15 @@ pub mod EmergencyPause {
 
     #[abi(embed_v0)]
     impl EmergencyPausePrivacyImpl of super::IEmergencyPausePrivacy<ContractState> {
-        // Sets privacy router used for Hide Mode emergency actions.
+        /// @inheritdoc IEmergencyPausePrivacy
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.access_control.assert_only_role(DEFAULT_ADMIN_ROLE);
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
+            self.emit(Event::PrivacyRouterUpdated(PrivacyRouterUpdated { router }));
         }
 
-        // Relays private emergency payload for proof verification and execution.
-        // `nullifiers` prevent replay and `commitments` bind intended emergency action.
+        /// @inheritdoc IEmergencyPausePrivacy
         fn submit_private_emergency_action(
             ref self: ContractState,
             old_root: felt252,
@@ -249,6 +276,15 @@ pub mod EmergencyPause {
             public_inputs: Span<felt252>,
             proof: Span<felt252>
         ) {
+            let total: u64 = nullifiers.len().into();
+            let mut i: u64 = 0;
+            while i < total {
+                let idx: u32 = i.try_into().unwrap();
+                let nf = *nullifiers.at(idx);
+                assert!(!self.used_nullifiers.entry(nf).read(), "Nullifier already used");
+                self.used_nullifiers.entry(nf).write(true);
+                i += 1;
+            };
             let router = self.privacy_router.read();
             assert!(!router.is_zero(), "Privacy router not set");
             let dispatcher = IPrivacyRouterDispatcher { contract_address: router };

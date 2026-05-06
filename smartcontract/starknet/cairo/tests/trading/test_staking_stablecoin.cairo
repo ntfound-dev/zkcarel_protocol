@@ -50,8 +50,8 @@ fn setup() -> (IStakingStablecoinDispatcher, ContractAddress, ContractAddress, C
     // 2. Deploy Staking Contract
     let staking_class = declare("StakingStablecoin").unwrap().contract_class();
     let mut constructor_args = array![];
-    reward_addr.serialize(ref constructor_args);
     owner.serialize(ref constructor_args);
+    reward_addr.serialize(ref constructor_args);
     
     let (staking_addr, _) = staking_class.deploy(@constructor_args).unwrap();
     let dispatcher = IStakingStablecoinDispatcher { contract_address: staking_addr };

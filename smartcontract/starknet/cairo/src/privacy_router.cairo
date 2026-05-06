@@ -1,7 +1,16 @@
-// Minimal privacy router interface used across core/trading modules.
-// Keeps active contracts decoupled from legacy privacy module layout.
+/// @title IPrivacyRouter
+/// @notice Minimal privacy router interface used across core and trading modules.
+///         Keeps active contracts decoupled from the legacy privacy module layout.
 #[starknet::interface]
 pub trait IPrivacyRouter<TContractState> {
+    /// @notice Submits a privacy action to the router for proof verification and state update.
+    /// @param action_type Short felt252 action identifier (see `privacy_action_types.cairo`).
+    /// @param old_root Previous Merkle tree root.
+    /// @param new_root Updated Merkle tree root after commitments.
+    /// @param nullifiers Nullifiers for inputs being spent.
+    /// @param commitments New Merkle commitments.
+    /// @param public_inputs ZK circuit public inputs.
+    /// @param proof Serialized ZK proof.
     fn submit_action(
         ref self: TContractState,
         action_type: felt252,

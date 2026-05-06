@@ -1,5 +1,5 @@
-// Shared action identifiers for privacy routing.
-// Short felt252 literals to keep calldata compact.
+/// @notice Shared action-type identifiers for privacy routing.
+///         Short felt252 literals keep calldata compact and deterministic across modules.
 
 pub const ACTION_ACCESS: felt252 = 'ACCESS';
 pub const ACTION_TOKEN: felt252 = 'TOKEN';

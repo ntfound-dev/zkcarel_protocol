@@ -1,7 +1,6 @@
 use starknet::ContractAddress;
 
-// ShieldedPool V4 privacy router.
-// Routes privacy actions to the ShieldedPoolV4 submit_* entrypoints.
+/// @notice ShieldedPool V4 submit entrypoints used by the privacy router.
 #[starknet::interface]
 pub trait IShieldedPoolV4<TContractState> {
     fn submit_private_swap(
@@ -27,11 +26,18 @@ pub trait IShieldedPoolV4<TContractState> {
     );
 }
 
+/// @title IPrivacyRouterV4
+/// @notice Admin API for the V4 privacy router.
 #[starknet::interface]
 pub trait IPrivacyRouterV4<TContractState> {
+    /// @notice Updates the target shielded pool.
+    /// @dev Callable only by the contract owner. Emits `ShieldedPoolUpdated`.
+    /// @param pool New shielded pool address (must be non-zero).
     fn set_shielded_pool(ref self: TContractState, pool: ContractAddress);
 }
 
+/// @title PrivacyRouterV4
+/// @notice Routes IPrivacyRouter `submit_action` calls to ShieldedPoolV4 submit entrypoints.
 #[starknet::contract]
 pub mod PrivacyRouterV4 {
     use super::{IPrivacyRouterV4, IShieldedPoolV4Dispatcher, IShieldedPoolV4DispatcherTrait};
@@ -47,7 +53,7 @@ pub mod PrivacyRouterV4 {
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
 
     #[abi(embed_v0)]
-    impl OwnableImpl = OwnableComponent::OwnableImpl<ContractState>;
+    impl OwnableTwoStepImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
     impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
 
     #[storage]
@@ -70,6 +76,9 @@ pub mod PrivacyRouterV4 {
         pub pool: ContractAddress,
     }
 
+    /// @notice Initializes the router with an owner and initial shielded pool.
+    /// @param admin Initial contract owner (two-step transfer via OZ OwnableComponent).
+    /// @param pool Initial shielded pool address.
     #[constructor]
     fn constructor(ref self: ContractState, admin: ContractAddress, pool: ContractAddress) {
         self.ownable.initializer(admin);

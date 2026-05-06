@@ -1,35 +1,54 @@
 use starknet::ContractAddress;
 
-// Defines mint/burn and role management for CAREL token.
-// Protocol-controlled minting with a hard supply cap.
+/// @notice Defines mint/burn and role management for CAREL token.
+/// @dev Protocol-controlled minting with a hard supply cap.
 #[starknet::interface]
 pub trait ICarelToken<TContractState> {
-    // Applies mint after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Mints `amount` tokens to `recipient`.
+    /// @param recipient Address receiving the newly minted tokens.
+    /// @param amount Number of tokens to mint (must not exceed supply cap).
     fn mint(ref self: TContractState, recipient: ContractAddress, amount: u256);
-    // Implements burn logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Burns `amount` tokens from the caller's balance.
+    /// @param amount Number of tokens to burn.
     fn burn(ref self: TContractState, amount: u256);
-    // Updates minter configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Grants MINTER_ROLE to `address`.
+    /// @param address Address to be granted the minter role.
     fn set_minter(ref self: TContractState, address: ContractAddress);
-    // Updates burner configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Grants BURNER_ROLE to `address`.
+    /// @param address Address to be granted the burner role.
     fn set_burner(ref self: TContractState, address: ContractAddress);
-    // Returns current voting power for an account.
+
+    /// @notice Returns the current voting power (live balance) for `account`.
+    /// @param account Address whose voting power is queried.
+    /// @return Current token balance used as voting weight.
     fn get_votes(self: @TContractState, account: ContractAddress) -> u256;
-    // Returns historical voting power at a given block.
+
+    /// @notice Returns the historical voting power at a specific block number.
+    /// @param account Address whose historical balance is queried.
+    /// @param block_number Block at which to look up the balance checkpoint.
+    /// @return Balance checkpoint value at or before `block_number`.
     fn get_past_votes(self: @TContractState, account: ContractAddress, block_number: u64) -> u256;
 }
 
-// ZK privacy entrypoints for token actions.
+/// @notice ZK privacy entrypoints for token actions.
 #[starknet::interface]
 pub trait ICarelTokenPrivacy<TContractState> {
-    // Updates privacy router configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Sets the privacy router contract address.
+    /// @dev Only callable by DEFAULT_ADMIN_ROLE. Router must be non-zero.
+    /// @param router Address of the deployed privacy router.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    // Applies submit private token action after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Submits a ZK-proven private token action to the privacy router.
+    /// @dev Replay protection: each nullifier is asserted unused and then marked.
+    /// @param old_root Merkle root before this action.
+    /// @param new_root Merkle root after this action.
+    /// @param nullifiers Span of nullifiers preventing double-spend.
+    /// @param commitments Span of new Pedersen commitments.
+    /// @param public_inputs Public inputs consumed by the ZK verifier.
+    /// @param proof Serialised ZK proof bytes.
     fn submit_private_token_action(
         ref self: TContractState,
         old_root: felt252,
@@ -41,8 +60,8 @@ pub trait ICarelTokenPrivacy<TContractState> {
     );
 }
 
-// ERC20 token with capped supply and role-based mint/burn.
-// Uses OpenZeppelin ERC20 and AccessControl components.
+/// @notice ERC20 token with capped supply and role-based mint/burn.
+/// @dev Uses OpenZeppelin ERC20 and AccessControl components.
 #[starknet::contract]
 pub mod CarelToken {
     use openzeppelin::token::erc20::ERC20Component;
@@ -52,6 +71,7 @@ pub mod CarelToken {
     use starknet::{get_caller_address, get_block_number};
     use starknet::storage::*;
     use core::num::traits::Zero;
+    use core::traits::TryInto;
     use crate::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy_action_types::ACTION_TOKEN;
 
@@ -65,7 +85,7 @@ pub mod CarelToken {
         pub balance: u256,
     }
 
-    // Records balance snapshots after mint/burn/transfer for governance voting.
+    /// @dev Records balance snapshots after mint/burn/transfer for governance voting.
     impl ERC20HooksImpl of ERC20Component::ERC20HooksTrait<ContractState> {
         fn before_update(
             ref self: ERC20Component::ComponentState<ContractState>,
@@ -129,6 +149,7 @@ pub mod CarelToken {
         pub balance_checkpoints: Map<(ContractAddress, u64), BalanceCheckpoint>,
         pub num_checkpoints: Map<ContractAddress, u64>,
         pub privacy_router: ContractAddress,
+        pub used_nullifiers: Map<felt252, bool>,
     }
 
     #[event]
@@ -142,12 +163,10 @@ pub mod CarelToken {
         SRC5Event: SRC5Component::Event,
     }
 
-    // Initializes the CAREL token contract.
-    // Sets name/symbol, admin role, and total supply cap.
-    // `multisig_admin` receives DEFAULT_ADMIN_ROLE at deployment.
+    /// @notice Initializes the CAREL token contract.
+    /// @dev Sets name/symbol, admin role, and total supply cap.
+    /// @param multisig_admin Address that receives DEFAULT_ADMIN_ROLE at deployment.
     #[constructor]
-    // Initializes storage and role configuration during deployment.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, multisig_admin: ContractAddress) {
         let name: ByteArray = "Carel Protocol";
         let symbol: ByteArray = "CAREL";
@@ -161,8 +180,10 @@ pub mod CarelToken {
 
     #[abi(embed_v0)]
     impl CarelTokenImpl of super::ICarelToken<ContractState> {
-        // Applies mint after input validation and commits the resulting state.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Mints `amount` tokens to `recipient`.
+        /// @dev Requires MINTER_ROLE. Reverts if total supply cap would be exceeded.
+        /// @param recipient Address receiving the newly minted tokens.
+        /// @param amount Number of tokens to mint.
         fn mint(ref self: ContractState, recipient: ContractAddress, amount: u256) {
             self.accesscontrol.assert_only_role(MINTER_ROLE);
             let new_total = self.total_minted.read() + amount;
@@ -171,8 +192,9 @@ pub mod CarelToken {
             self.erc20.mint(recipient, amount);
         }
 
-        // Implements burn logic while keeping state transitions deterministic.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Burns `amount` tokens from the caller's balance.
+        /// @dev Requires BURNER_ROLE. Reverts if burn amount exceeds total minted.
+        /// @param amount Number of tokens to burn.
         fn burn(ref self: ContractState, amount: u256) {
             self.accesscontrol.assert_only_role(BURNER_ROLE);
             let caller = get_caller_address();
@@ -182,24 +204,34 @@ pub mod CarelToken {
             self.erc20.burn(caller, amount);
         }
 
-        // Updates minter configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Grants MINTER_ROLE to `address`.
+        /// @dev Requires DEFAULT_ADMIN_ROLE.
+        /// @param address Address to be granted the minter role.
         fn set_minter(ref self: ContractState, address: ContractAddress) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
             self.accesscontrol._grant_role(MINTER_ROLE, address);
         }
 
-        // Updates burner configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Grants BURNER_ROLE to `address`.
+        /// @dev Requires DEFAULT_ADMIN_ROLE.
+        /// @param address Address to be granted the burner role.
         fn set_burner(ref self: ContractState, address: ContractAddress) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
             self.accesscontrol._grant_role(BURNER_ROLE, address);
         }
 
+        /// @notice Returns the current voting power (live balance) for `account`.
+        /// @param account Address whose voting power is queried.
+        /// @return Current ERC20 balance used as voting weight.
         fn get_votes(self: @ContractState, account: ContractAddress) -> u256 {
             self.erc20.balance_of(account)
         }
 
+        /// @notice Returns the historical voting power at a specific block number.
+        /// @dev Performs binary search over on-chain checkpoints.
+        /// @param account Address whose historical balance is queried.
+        /// @param block_number Block at which to look up the balance checkpoint.
+        /// @return Balance checkpoint value at or before `block_number`.
         fn get_past_votes(self: @ContractState, account: ContractAddress, block_number: u64) -> u256 {
             let count = self.num_checkpoints.entry(account).read();
             if count == 0 {
@@ -236,16 +268,23 @@ pub mod CarelToken {
 
     #[abi(embed_v0)]
     impl CarelTokenPrivacyImpl of super::ICarelTokenPrivacy<ContractState> {
-        // Updates privacy router configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Sets the privacy router contract address.
+        /// @dev Only callable by DEFAULT_ADMIN_ROLE. Router must be non-zero.
+        /// @param router Address of the deployed privacy router.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
-        // Applies submit private token action after input validation and commits the resulting state.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Submits a ZK-proven private token action to the privacy router.
+        /// @dev Iterates nullifiers for replay protection before dispatching to router.
+        /// @param old_root Merkle root before this action.
+        /// @param new_root Merkle root after this action.
+        /// @param nullifiers Span of nullifiers preventing double-spend.
+        /// @param commitments Span of new Pedersen commitments.
+        /// @param public_inputs Public inputs consumed by the ZK verifier.
+        /// @param proof Serialised ZK proof bytes.
         fn submit_private_token_action(
             ref self: ContractState,
             old_root: felt252,
@@ -257,6 +296,18 @@ pub mod CarelToken {
         ) {
             let router = self.privacy_router.read();
             assert!(!router.is_zero(), "Privacy router not set");
+
+            // Nullifier replay protection
+            let total: u64 = nullifiers.len().into();
+            let mut i: u64 = 0;
+            while i < total {
+                let idx: u32 = i.try_into().unwrap();
+                let nf = *nullifiers.at(idx);
+                assert!(!self.used_nullifiers.read(nf), "Nullifier already used");
+                self.used_nullifiers.write(nf, true);
+                i += 1;
+            };
+
             let dispatcher = IPrivacyRouterDispatcher { contract_address: router };
             dispatcher.submit_action(
                 ACTION_TOKEN,
@@ -272,6 +323,10 @@ pub mod CarelToken {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        /// @dev Writes or updates a balance checkpoint for `account` at `block_number`.
+        /// @param account Address whose checkpoint is updated.
+        /// @param block_number Block number for the snapshot.
+        /// @param balance Token balance at `block_number`.
         fn _write_checkpoint(
             ref self: ContractState,
             account: ContractAddress,

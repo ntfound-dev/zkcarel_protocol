@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol add backend-rust/scripts/package.json)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol commit -m \"fix: add scripts/package.json for filecoin_synapse.mjs Docker build\")",
+      "Bash(GIT_SEQUENCE_EDITOR=\"sed -i '1s/pick/edit/'\" git -C /mnt/c/Users/frend/zkcare_protocol rebase -i HEAD~2)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol commit --amend -m 'feat: V4 architecture — Honk verifiers, ShieldedPool V4, frontend refactor, autonomous agent *)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol rebase --continue)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol push --force origin main)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol ls-files smartcontract/starknet/referensi/)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol add .gitignore)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol commit -m \"chore: ignore entire smartcontract/starknet/referensi/ folder\")",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol remote get-url origin)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol status --short docs-site/)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol add docs-site/)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol commit -m ' *)",
+      "Bash(git -C /mnt/c/Users/frend/zkcare_protocol pull --rebase origin main)",
+      "Bash(vercel whoami *)",
+      "Bash(vercel --yes)",
+      "Bash(npm install *)",
+      "Bash(wait)",
+      "Bash(python3 -c ' *)",
+      "Bash(scarb build *)"
+    ]
+  }
+}

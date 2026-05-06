@@ -1,8 +1,8 @@
 use starknet::ContractAddress;
 use crate::ai::ai_executor::ActionType;
 
-// AI plan approval + execution router.
-// Uses ERC-8004 identity + single user signature to approve a plan.
+/// @notice Plan approval status lifecycle.
+/// @dev Active → Cancelled (by user or operator) or Active → Expired (on first expired execution).
 #[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
 pub enum PlanStatus {
     #[default]
@@ -11,6 +11,7 @@ pub enum PlanStatus {
     Expired,
 }
 
+/// @notice Stores all metadata for an approved AI execution plan.
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct Plan {
     pub user: ContractAddress,
@@ -25,9 +26,25 @@ pub struct Plan {
     pub status: PlanStatus,
 }
 
+/// @title IAIPlanRouter
+/// @notice Single-signature plan approval and bounded execution router for AI agents.
+/// @dev A plan is approved once with a user signature, then executed N times by the operator
+///      within the permitted action types and expiry window.
 #[starknet::interface]
 pub trait IAIPlanRouter<TContractState> {
-    // Approves a plan with a single user signature and returns plan_id.
+    /// @notice Approves an execution plan with a single user signature and returns the plan ID.
+    /// @dev The plan ID is the Poseidon hash of the message fields; it doubles as a replay-proof
+    ///      nonce since `verify_and_consume` marks it as spent in the signature verifier.
+    ///      Panics if the plan already exists and is Active.
+    /// @param user Address of the user delegating execution.
+    /// @param agent_id ERC-8004 identity ID of the target agent.
+    /// @param plan_hash Application-level hash of the plan description (caller-defined).
+    /// @param action_mask Bitmask of allowed `ActionType` values (see `action_mask_for_type`).
+    /// @param max_actions Maximum number of actions the operator may execute under this plan.
+    /// @param expires_at Unix timestamp after which the plan cannot be used.
+    /// @param nonce User's current sequential nonce from the signature verifier contract.
+    /// @param user_signature SRC-6 account signature over the computed plan message hash.
+    /// @return plan_id Poseidon hash identifying this plan; used in subsequent calls.
     fn approve_plan(
         ref self: TContractState,
         user: ContractAddress,
@@ -39,27 +56,57 @@ pub trait IAIPlanRouter<TContractState> {
         nonce: felt252,
         user_signature: Span<felt252>
     ) -> felt252;
-    // Cancels an active plan.
+
+    /// @notice Cancels an active plan.
+    /// @dev Callable by either the plan's `user` or `operator`.
+    /// @param plan_id The plan identifier to cancel.
     fn cancel_plan(ref self: TContractState, plan_id: felt252);
-    // Submits an AI action bound to an approved plan.
+
+    /// @notice Submits an AI action bound to an approved plan without a per-action user signature.
+    /// @dev Caller must be `plan.operator` (H-1 fix). Plan must be Active and non-expired.
+    ///      If the plan has expired, its status is written to `Expired` before panicking (M-4 fix).
+    ///      Delegates to `AIExecutor::submit_action_from_plan` which enforces rate limits and fees.
+    /// @param plan_id The plan to execute against.
+    /// @param action_type Must be permitted by `plan.action_mask`.
+    /// @param params ABI-encoded action parameters forwarded to the executor.
+    /// @return action_id The executor-assigned action identifier.
     fn submit_action_with_plan(
         ref self: TContractState,
         plan_id: felt252,
         action_type: ActionType,
         params: ByteArray
     ) -> u64;
-    // Returns plan details for a plan id.
+
+    /// @notice Returns the full plan struct for a given plan ID.
+    /// @param plan_id The plan identifier to query.
+    /// @return The `Plan` struct (zero-value user address means not found).
     fn get_plan(self: @TContractState, plan_id: felt252) -> Plan;
 }
 
+/// @title IAIPlanRouterAdmin
+/// @notice Owner-only configuration for the plan router's downstream contract addresses.
 #[starknet::interface]
 pub trait IAIPlanRouterAdmin<TContractState> {
+    /// @notice Sets the executor contract that `submit_action_with_plan` delegates to.
+    /// @param executor Address of the `AIExecutor` contract (must be non-zero).
     fn set_executor(ref self: TContractState, executor: ContractAddress);
+
+    /// @notice Sets the signature verifier used in `approve_plan`.
+    /// @param verifier Address of the `AISignatureVerifier` contract (must be non-zero).
     fn set_signature_verifier(ref self: TContractState, verifier: ContractAddress);
+
+    /// @notice Sets the ERC-8004 identity registry used to look up agent operators.
+    /// @param registry Address of the `ERC8004IdentityRegistry` contract (must be non-zero).
     fn set_identity_registry(ref self: TContractState, registry: ContractAddress);
+
+    /// @notice Updates the chain ID embedded in plan message hashes.
+    /// @param chain_id New chain ID (e.g. SN_MAIN = 0x534e5f4d41494e).
     fn set_chain_id(ref self: TContractState, chain_id: felt252);
 }
 
+/// @title AIPlanRouter
+/// @notice Implements plan-based AI execution with a single up-front user signature.
+/// @dev Uses OZ OwnableComponent for ownership management.
 #[starknet::contract]
 pub mod AIPlanRouter {
     use super::{IAIPlanRouter, IAIPlanRouterAdmin, Plan, PlanStatus};
@@ -69,7 +116,7 @@ pub mod AIPlanRouter {
     use crate::ai::ai_signature_verifier::{
         IAISignatureVerifierDispatcher, IAISignatureVerifierDispatcherTrait
     };
-use crate::ai::erc8004_identity_registry::{
+    use crate::ai::erc8004_identity_registry::{
         IERC8004IdentityRegistryDispatcher, IERC8004IdentityRegistryDispatcherTrait
     };
     use starknet::ContractAddress;
@@ -83,7 +130,7 @@ use crate::ai::erc8004_identity_registry::{
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
 
     #[abi(embed_v0)]
-    impl OwnableImpl = OwnableComponent::OwnableImpl<ContractState>;
+    impl OwnableImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
     impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
 
     #[storage]
@@ -127,6 +174,12 @@ use crate::ai::erc8004_identity_registry::{
         pub action_type: felt252,
     }
 
+    /// @notice Initializes the plan router with all required downstream contract addresses.
+    /// @param admin Initial owner address (receives OwnableTwoStep ownership).
+    /// @param executor Address of the `AIExecutor` contract.
+    /// @param identity_registry Address of the `ERC8004IdentityRegistry` contract.
+    /// @param signature_verifier Address of the `AISignatureVerifier` contract.
+    /// @param chain_id Starknet chain ID embedded in plan message hashes.
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -143,6 +196,10 @@ use crate::ai::erc8004_identity_registry::{
         self.chain_id.write(chain_id);
     }
 
+    /// @notice Returns the bitmask value for a given `ActionType`.
+    /// @dev Swap=1, Bridge=2, Stake=4, ClaimReward=8, MintNFT=16, MultiStep=32, Basic=64.
+    /// @param action_type The action type to convert.
+    /// @return Single-bit u64 mask for the action type.
     fn action_mask_for_type(action_type: ActionType) -> u64 {
         match action_type {
             ActionType::Swap => 1,
@@ -155,6 +212,18 @@ use crate::ai::erc8004_identity_registry::{
         }
     }
 
+    /// @notice Computes the Poseidon plan message hash signed by the user in `approve_plan`.
+    /// @dev Hash inputs: (chain_id, contract, user, agent_id, operator, plan_hash,
+    ///                    action_mask, max_actions, expires_at, nonce).
+    /// @param user User address delegating the plan.
+    /// @param agent_id ERC-8004 agent identity.
+    /// @param operator Agent operator address resolved from the identity registry.
+    /// @param plan_hash Application-level plan descriptor hash.
+    /// @param action_mask Bitmask of permitted action types.
+    /// @param max_actions Cap on the number of executable actions.
+    /// @param expires_at Plan expiry unix timestamp.
+    /// @param nonce User's current sequential nonce.
+    /// @return Poseidon hash over the ten-element field array.
     fn compute_plan_message_hash(
         self: @ContractState,
         user: ContractAddress,
@@ -186,6 +255,10 @@ use crate::ai::erc8004_identity_registry::{
         poseidon_hash_span(fields.span())
     }
 
+    /// @notice Resolves the operator for `agent_id` from the identity registry and verifies the caller.
+    /// @dev Panics if the agent is inactive, has no operator, or the caller is not the operator.
+    /// @param agent_id ERC-8004 agent identity to look up.
+    /// @return operator The verified operator address.
     fn assert_operator(self: @ContractState, agent_id: felt252) -> ContractAddress {
         let registry = IERC8004IdentityRegistryDispatcher { contract_address: self.identity_registry.read() };
         let (meta, _, _, _) = registry.get_agent(agent_id);
@@ -196,8 +269,24 @@ use crate::ai::erc8004_identity_registry::{
         operator
     }
 
+    /// @notice Converts an `ActionType` to its felt252 numeric representation for events.
+    /// @param action_type The action type to convert.
+    /// @return felt252 integer: Swap=0, Bridge=1, Stake=2, ClaimReward=3, MintNFT=4, MultiStep=5, Basic=6.
+    fn action_type_to_felt(action_type: ActionType) -> felt252 {
+        match action_type {
+            ActionType::Swap => 0,
+            ActionType::Bridge => 1,
+            ActionType::Stake => 2,
+            ActionType::ClaimReward => 3,
+            ActionType::MintNFT => 4,
+            ActionType::MultiStep => 5,
+            ActionType::Basic => 6,
+        }
+    }
+
     #[abi(embed_v0)]
     impl AIPlanRouterImpl of IAIPlanRouter<ContractState> {
+        /// @inheritdoc IAIPlanRouter
         fn approve_plan(
             ref self: ContractState,
             user: ContractAddress,
@@ -257,6 +346,7 @@ use crate::ai::erc8004_identity_registry::{
             msg_hash
         }
 
+        /// @inheritdoc IAIPlanRouter
         fn cancel_plan(ref self: ContractState, plan_id: felt252) {
             let mut plan = self.plans.entry(plan_id).read();
             assert!(plan.user != 0.try_into().unwrap(), "Plan not found");
@@ -267,6 +357,7 @@ use crate::ai::erc8004_identity_registry::{
             self.emit(Event::PlanCancelled(PlanCancelled { plan_id }));
         }
 
+        /// @inheritdoc IAIPlanRouter
         fn submit_action_with_plan(
             ref self: ContractState,
             plan_id: felt252,
@@ -276,8 +367,13 @@ use crate::ai::erc8004_identity_registry::{
             let mut plan = self.plans.entry(plan_id).read();
             assert!(plan.user != 0.try_into().unwrap(), "Plan not found");
             assert!(plan.status == PlanStatus::Active, "Plan inactive");
+            assert!(get_caller_address() == plan.operator, "Not plan operator");
             let now = get_block_timestamp();
-            assert!(now < plan.expires_at, "Plan expired");
+            if now >= plan.expires_at {
+                plan.status = PlanStatus::Expired;
+                self.plans.entry(plan_id).write(plan);
+                assert!(false, "Plan expired");
+            }
             let mask = action_mask_for_type(action_type);
             assert!((plan.action_mask & mask) != 0, "Action not allowed");
             assert!(plan.used_actions < plan.max_actions, "Plan exhausted");
@@ -301,6 +397,7 @@ use crate::ai::erc8004_identity_registry::{
             action_id
         }
 
+        /// @inheritdoc IAIPlanRouter
         fn get_plan(self: @ContractState, plan_id: felt252) -> Plan {
             self.plans.entry(plan_id).read()
         }
@@ -308,39 +405,31 @@ use crate::ai::erc8004_identity_registry::{
 
     #[abi(embed_v0)]
     impl AIPlanRouterAdminImpl of IAIPlanRouterAdmin<ContractState> {
+        /// @inheritdoc IAIPlanRouterAdmin
         fn set_executor(ref self: ContractState, executor: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!executor.is_zero(), "Executor required");
             self.executor.write(executor);
         }
 
+        /// @inheritdoc IAIPlanRouterAdmin
         fn set_signature_verifier(ref self: ContractState, verifier: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!verifier.is_zero(), "Verifier required");
             self.signature_verifier.write(verifier);
         }
 
+        /// @inheritdoc IAIPlanRouterAdmin
         fn set_identity_registry(ref self: ContractState, registry: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!registry.is_zero(), "Registry required");
             self.identity_registry.write(registry);
         }
 
+        /// @inheritdoc IAIPlanRouterAdmin
         fn set_chain_id(ref self: ContractState, chain_id: felt252) {
             self.ownable.assert_only_owner();
             self.chain_id.write(chain_id);
-        }
-    }
-
-    fn action_type_to_felt(action_type: ActionType) -> felt252 {
-        match action_type {
-            ActionType::Swap => 0,
-            ActionType::Bridge => 1,
-            ActionType::Stake => 2,
-            ActionType::ClaimReward => 3,
-            ActionType::MintNFT => 4,
-            ActionType::MultiStep => 5,
-            ActionType::Basic => 6,
         }
     }
 }

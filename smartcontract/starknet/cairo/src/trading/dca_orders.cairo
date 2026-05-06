@@ -1,5 +1,6 @@
 use starknet::ContractAddress;
 
+/// @notice On-chain limit order state stored per order ID.
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct LimitOrderState {
     pub owner: ContractAddress,
@@ -14,11 +15,18 @@ pub struct LimitOrderState {
 const BASIS_POINTS: u256 = 10000;
 const PRICE_SCALE: u256 = 100000000;
 
-// Limit order book API for normal (public) order management.
-// Keepers/executors are not modeled here.
+/// @title ILimitOrderBook
+/// @notice On-chain limit order book API for normal (public) order management.
 #[starknet::interface]
 pub trait ILimitOrderBook<TContractState> {
-    // Creates a limit order and stores it as active state.
+    /// @notice Creates a limit order and locks the input tokens.
+    /// @param order_id Unique order identifier.
+    /// @param from_token Token being sold.
+    /// @param to_token Token being bought.
+    /// @param amount Amount of `from_token` to lock.
+    /// @param target_price Oracle price at or below which the order fills.
+    /// @param expiry UNIX timestamp after which the order is expired.
+    /// @return The order ID.
     fn create_limit_order(
         ref self: TContractState,
         order_id: felt252,
@@ -28,62 +36,102 @@ pub trait ILimitOrderBook<TContractState> {
         target_price: u256,
         expiry: u64
     ) -> felt252;
-    // Cancels an active limit order owned by caller.
+
+    /// @notice Cancels an active limit order and refunds the locked tokens.
+    /// @dev Callable only by the order owner.
+    /// @param order_id Order to cancel.
     fn cancel_limit_order(ref self: TContractState, order_id: felt252);
-    // Executes an active limit order and marks it filled.
+
+    /// @notice Executes an active limit order if the oracle price condition is met.
+    /// @dev Callable only by authorized keepers or the contract owner.
+    /// @param order_id Order to execute.
+    /// @param order_value Output amount provided by the executor.
     fn execute_limit_order(ref self: TContractState, order_id: felt252, order_value: u256);
-    // Updates protocol and executor fee configuration.
+
+    /// @notice Updates protocol and executor fee configuration.
+    /// @dev Callable only by the contract owner. Emits `FeeConfigUpdated`.
+    /// @param protocol_fee_bps Protocol fee in basis points.
+    /// @param executor_fee_bps Executor fee in basis points.
+    /// @param fee_recipient Address to receive protocol fees.
     fn set_fee_config(
         ref self: TContractState,
         protocol_fee_bps: u256,
         executor_fee_bps: u256,
         fee_recipient: ContractAddress
     );
-    // Returns current fee configuration.
+
+    /// @notice Returns current fee configuration.
+    /// @return Tuple of (protocol_fee_bps, executor_fee_bps, fee_recipient).
     fn get_fee_config(self: @TContractState) -> (u256, u256, ContractAddress);
-    // Sets oracle address for on-chain price checks.
+
+    /// @notice Sets the oracle address used for price verification.
+    /// @dev Callable only by the contract owner.
+    /// @param oracle Oracle contract address.
     fn set_price_oracle(ref self: TContractState, oracle: ContractAddress);
-    // Sets oracle asset id for a token.
+
+    /// @notice Configures the oracle asset ID for a token.
+    /// @dev Callable only by the contract owner.
+    /// @param token Token address.
+    /// @param asset_id Pragma feed ID.
     fn set_token_asset_id(ref self: TContractState, token: ContractAddress, asset_id: felt252);
-    // Authorizes or revokes a keeper to execute limit orders.
+
+    /// @notice Authorizes or revokes a keeper address.
+    /// @dev Callable only by the contract owner. Emits `KeeperUpdated`.
+    /// @param keeper Keeper address.
+    /// @param authorized true to authorize, false to revoke.
     fn set_authorized_keeper(ref self: TContractState, keeper: ContractAddress, authorized: bool);
 }
 
-// Minimal ERC20 interface for token transfers.
+/// @notice Minimal ERC20 interface for token transfers.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
+    /// @notice Transfers tokens from this contract to `recipient`.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+    /// @notice Transfers tokens from `sender` to `recipient` using allowance.
     fn transfer_from(
         ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256
     ) -> bool;
 }
 
-// On-chain limit order book for normal (public) limit orders.
+/// @title LimitOrderBook
+/// @notice On-chain limit order book with oracle price gating and keeper-based execution.
 #[starknet::contract]
 pub mod LimitOrderBook {
     use starknet::ContractAddress;
     use starknet::{get_caller_address, get_block_timestamp, get_contract_address};
-    // Uses wildcard storage import for storage access traits.
     use starknet::storage::*;
     use super::LimitOrderState;
     use super::BASIS_POINTS;
     use super::PRICE_SCALE;
     use core::traits::TryInto;
     use core::num::traits::Zero;
+    use openzeppelin::access::ownable::OwnableComponent;
+    use openzeppelin::security::reentrancyguard::ReentrancyGuardComponent;
     use crate::utils::price_oracle::{IPriceOracleDispatcher, IPriceOracleDispatcherTrait};
     use super::{IERC20Dispatcher, IERC20DispatcherTrait};
+
+    component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
+    component!(path: ReentrancyGuardComponent, storage: reentrancy_guard, event: ReentrancyGuardEvent);
+
+    #[abi(embed_v0)]
+    impl OwnableTwoStepImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
+    impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
+    impl ReentrancyGuardInternalImpl = ReentrancyGuardComponent::InternalImpl<ContractState>;
 
     #[storage]
     pub struct Storage {
         pub limit_orders: Map<felt252, LimitOrderState>,
         pub limit_order_owner: Map<felt252, ContractAddress>,
-        pub owner: ContractAddress,
         pub protocol_fee_bps: u256,
         pub executor_fee_bps: u256,
         pub fee_recipient: ContractAddress,
         pub price_oracle: ContractAddress,
         pub token_asset_ids: Map<ContractAddress, felt252>,
         pub authorized_keepers: Map<ContractAddress, bool>,
+        #[substorage(v0)]
+        pub ownable: OwnableComponent::Storage,
+        #[substorage(v0)]
+        pub reentrancy_guard: ReentrancyGuardComponent::Storage,
     }
 
     #[event]
@@ -94,20 +142,28 @@ pub mod LimitOrderBook {
         LimitOrderExecuted: LimitOrderExecuted,
         LimitOrderFeesCalculated: LimitOrderFeesCalculated,
         FeeConfigUpdated: FeeConfigUpdated,
+        KeeperUpdated: KeeperUpdated,
+        #[flat]
+        OwnableEvent: OwnableComponent::Event,
+        #[flat]
+        ReentrancyGuardEvent: ReentrancyGuardComponent::Event,
     }
 
+    /// @notice Emitted when a new limit order is created.
     #[derive(Drop, starknet::Event)]
     pub struct LimitOrderCreated {
         pub order_id: felt252,
         pub owner: ContractAddress,
     }
 
+    /// @notice Emitted when a limit order is cancelled and refunded.
     #[derive(Drop, starknet::Event)]
     pub struct LimitOrderCancelled {
         pub order_id: felt252,
         pub owner: ContractAddress,
     }
 
+    /// @notice Emitted when a limit order is filled by a keeper.
     #[derive(Drop, starknet::Event)]
     pub struct LimitOrderExecuted {
         pub order_id: felt252,
@@ -115,6 +171,7 @@ pub mod LimitOrderBook {
         pub order_value: u256,
     }
 
+    /// @notice Emitted when fees are split on order execution.
     #[derive(Drop, starknet::Event)]
     pub struct LimitOrderFeesCalculated {
         pub order_id: felt252,
@@ -125,6 +182,7 @@ pub mod LimitOrderBook {
         pub fee_recipient: ContractAddress,
     }
 
+    /// @notice Emitted when fee configuration is updated.
     #[derive(Drop, starknet::Event)]
     pub struct FeeConfigUpdated {
         pub protocol_fee_bps: u256,
@@ -132,10 +190,18 @@ pub mod LimitOrderBook {
         pub fee_recipient: ContractAddress,
     }
 
-    // Initializes owner authority for the limit order book.
+    /// @notice Emitted when a keeper address is authorized or revoked.
+    #[derive(Drop, starknet::Event)]
+    pub struct KeeperUpdated {
+        pub keeper: ContractAddress,
+        pub authorized: bool,
+    }
+
+    /// @notice Initializes the limit order book with owner authority and zero fees.
+    /// @param owner Initial contract owner (two-step transfer via OZ OwnableComponent).
     #[constructor]
     fn constructor(ref self: ContractState, owner: ContractAddress) {
-        self.owner.write(owner);
+        self.ownable.initializer(owner);
         self.fee_recipient.write(owner);
         self.protocol_fee_bps.write(0);
         self.executor_fee_bps.write(0);
@@ -145,7 +211,7 @@ pub mod LimitOrderBook {
 
     #[abi(embed_v0)]
     impl LimitOrderBookImpl of super::ILimitOrderBook<ContractState> {
-        // Creates a limit order and stores it as active state.
+        /// @inheritdoc ILimitOrderBook
         fn create_limit_order(
             ref self: ContractState,
             order_id: felt252,
@@ -155,17 +221,16 @@ pub mod LimitOrderBook {
             target_price: u256,
             expiry: u64
         ) -> felt252 {
+            self.reentrancy_guard.start();
             let caller = get_caller_address();
             assert!(!caller.is_zero(), "Invalid caller");
             assert!(amount > 0_u256, "Amount required");
             assert!(expiry > get_block_timestamp(), "Expiry must be in future");
             let existing_owner = self.limit_order_owner.entry(order_id).read();
             assert!(existing_owner.is_zero(), "Order already exists");
-
             let from_token_dispatcher = IERC20Dispatcher { contract_address: from_token };
             let locked = from_token_dispatcher.transfer_from(caller, get_contract_address(), amount);
             assert!(locked, "Token transfer_from failed");
-
             let order = LimitOrderState {
                 owner: caller,
                 from_token,
@@ -178,15 +243,16 @@ pub mod LimitOrderBook {
             self.limit_orders.entry(order_id).write(order);
             self.limit_order_owner.entry(order_id).write(caller);
             self.emit(Event::LimitOrderCreated(LimitOrderCreated { order_id, owner: caller }));
+            self.reentrancy_guard.end();
             order_id
         }
 
-        // Cancels an active limit order owned by caller.
+        /// @inheritdoc ILimitOrderBook
         fn cancel_limit_order(ref self: ContractState, order_id: felt252) {
+            self.reentrancy_guard.start();
             let caller = get_caller_address();
             let owner = self.limit_order_owner.entry(order_id).read();
             assert!(owner == caller, "Not order owner");
-
             let mut order = self.limit_orders.entry(order_id).read();
             assert!(order.status == 1_u8, "Order not active");
             order.status = 3_u8;
@@ -195,13 +261,15 @@ pub mod LimitOrderBook {
             let refunded = from_token_dispatcher.transfer(owner, order.amount);
             assert!(refunded, "Refund failed");
             self.emit(Event::LimitOrderCancelled(LimitOrderCancelled { order_id, owner: caller }));
+            self.reentrancy_guard.end();
         }
 
-        // Executes an active limit order and marks it filled.
+        /// @inheritdoc ILimitOrderBook
         fn execute_limit_order(ref self: ContractState, order_id: felt252, order_value: u256) {
+            self.reentrancy_guard.start();
             let caller = get_caller_address();
             assert!(
-                caller == self.owner.read() || self.authorized_keepers.entry(caller).read(),
+                caller == self.ownable.owner() || self.authorized_keepers.entry(caller).read(),
                 "Unauthorized executor"
             );
             let mut order = self.limit_orders.entry(order_id).read();
@@ -260,73 +328,59 @@ pub mod LimitOrderBook {
             assert!(release_ok, "Release transfer failed");
 
             if protocol_fee + executor_fee > 0 {
-                self.emit(
-                    Event::LimitOrderFeesCalculated(
-                        LimitOrderFeesCalculated {
-                            order_id,
-                            executor: caller,
-                            order_value,
-                            protocol_fee,
-                            executor_fee,
-                            fee_recipient: self.fee_recipient.read(),
-                        }
-                    )
-                );
+                self.emit(Event::LimitOrderFeesCalculated(LimitOrderFeesCalculated {
+                    order_id,
+                    executor: caller,
+                    order_value,
+                    protocol_fee,
+                    executor_fee,
+                    fee_recipient: self.fee_recipient.read(),
+                }));
             }
+            self.reentrancy_guard.end();
         }
 
-        // Updates protocol and executor fee configuration.
+        /// @inheritdoc ILimitOrderBook
         fn set_fee_config(
             ref self: ContractState,
             protocol_fee_bps: u256,
             executor_fee_bps: u256,
             fee_recipient: ContractAddress
         ) {
-            let caller = get_caller_address();
-            assert!(caller == self.owner.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             assert!(protocol_fee_bps + executor_fee_bps <= BASIS_POINTS, "Fee too high");
             assert!(!fee_recipient.is_zero(), "Fee recipient required");
             self.protocol_fee_bps.write(protocol_fee_bps);
             self.executor_fee_bps.write(executor_fee_bps);
             self.fee_recipient.write(fee_recipient);
-            self.emit(
-                Event::FeeConfigUpdated(
-                    FeeConfigUpdated { protocol_fee_bps, executor_fee_bps, fee_recipient }
-                )
-            );
+            self.emit(Event::FeeConfigUpdated(FeeConfigUpdated { protocol_fee_bps, executor_fee_bps, fee_recipient }));
         }
 
-        // Returns current fee configuration.
+        /// @inheritdoc ILimitOrderBook
         fn get_fee_config(self: @ContractState) -> (u256, u256, ContractAddress) {
-            (
-                self.protocol_fee_bps.read(),
-                self.executor_fee_bps.read(),
-                self.fee_recipient.read()
-            )
+            (self.protocol_fee_bps.read(), self.executor_fee_bps.read(), self.fee_recipient.read())
         }
 
-        // Sets oracle address for on-chain price checks.
+        /// @inheritdoc ILimitOrderBook
         fn set_price_oracle(ref self: ContractState, oracle: ContractAddress) {
-            let caller = get_caller_address();
-            assert!(caller == self.owner.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             assert!(!oracle.is_zero(), "Oracle required");
             self.price_oracle.write(oracle);
         }
 
-        // Sets oracle asset id for a token.
+        /// @inheritdoc ILimitOrderBook
         fn set_token_asset_id(ref self: ContractState, token: ContractAddress, asset_id: felt252) {
-            let caller = get_caller_address();
-            assert!(caller == self.owner.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             assert!(!token.is_zero(), "Token required");
             self.token_asset_ids.entry(token).write(asset_id);
         }
 
-        // Authorizes or revokes a keeper to execute limit orders.
+        /// @inheritdoc ILimitOrderBook
         fn set_authorized_keeper(ref self: ContractState, keeper: ContractAddress, authorized: bool) {
-            let caller = get_caller_address();
-            assert!(caller == self.owner.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             assert!(!keeper.is_zero(), "Invalid keeper");
             self.authorized_keepers.entry(keeper).write(authorized);
+            self.emit(Event::KeeperUpdated(KeeperUpdated { keeper, authorized }));
         }
     }
 }

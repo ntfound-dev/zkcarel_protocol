@@ -9,7 +9,8 @@ const meta = {
   tokenomics: 'Tokenomics',
   contracts: 'Contract Addresses',
   security: 'Security',
-  project: 'Project & Roadmap',
+  project: 'Project',
+  roadmap: 'Roadmap',
   faq: 'FAQ',
 }
 

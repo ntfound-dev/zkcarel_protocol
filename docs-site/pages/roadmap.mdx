@@ -1,0 +1,66 @@
+# Roadmap
+
+CAREL's current execution window is the Starknet Foundation Seed Grant — 3 milestones over 6 months. Mainnet deployment and token launch follow after the seed period.
+
+## Seed Grant Milestones
+
+### Milestone 1 — Foundation & Stabilization
+**Target: July 2026 · $10,000**
+
+Security hardening and gas optimization across the core execution layer.
+
+- ShieldedPoolV4 verifier redeployed with `public_inputs` binding fix
+- All 4 Noir circuits updated — full on-chain field constraints and private-exit binding (all AUDIT.md items closed)
+- AIExecutor gas: ~5M → ≤1.5M
+- TwapOracle gas: ~3.5M → ≤200K
+- Garaga Hide Mode gas: minimum 30% reduction on Honk proof calldata path
+- BTC Light Client PoW validation implemented (`btc_light_client.cairo` TODO stub replaced)
+- Mixing-window constraint moved from UX-only to on-chain enforcement in ShieldedPoolV4
+- Hide Mode UX: real-time proof progress indicator, error states, loading feedback
+- MacBook Pro M5 24GB procured — local ZK proving environment operational
+
+### Milestone 2 — Growth & Integration
+**Target: September 2026 · $8,500**
+
+Feature expansion and first public user acquisition campaign.
+
+- Battleship Noir circuit (board commitment + move proof) and verifier deployed on Sepolia
+- Sumo Login contracts (SumoLoginContract + SumoAccountContract) live — OAuth JWT → ZK proof → Starknet smart account flow end-to-end
+- Sumo Login frontend tab (Google/Discord/Apple) integrated into wallet-connect dialog
+- AI agent interface live: natural language input, toggle L1/L2/L3, semi-autonomous mode, real-time execution plan
+- Leaderboard and referral UI live — real-time ranking, referral link generator, epoch countdown
+- Battleship game UI functional — interactive board, move input, ZK proof status
+- UI mobile-responsive at 375px viewport
+- Galxe campaign launched — target 1,500 wallet completions
+
+### Milestone 3 — Scale & Mainnet-Ready
+**Target: November 2026 · $6,500**
+
+Full autonomy, scale hardening, and production-candidate state.
+
+- AI agent fully autonomous (ERC-8004): multi-step execution without per-step approval
+- Shadow Bitcoin Bridge: BTC/WBTC lock-mint wiring complete with deposit flow and claim interface
+- Admin single-key migrated to Multisig + 48h Timelock
+- Backend hardened for 10K user load — rate limiting, auth middleware, Rust/Axum error handling
+- Private executor stable under 10K active wallet simulation
+- Zero critical open bugs from testnet community
+- Zealy sprint: target 800 engaged users
+- Cumulative testnet: 10,000 wallet interactions
+- Protocol in production-candidate state for Starknet mainnet deployment
+
+---
+
+## Growth Phase
+
+After seed delivery. Mainnet deployment is the prerequisite for all items below.
+
+| Feature | Description |
+|---|---|
+| Mainnet Deployment | Full contract redeploy on Starknet mainnet |
+| CAREL Token Launch | Token live, fee collection active |
+| Initial Liquidity | Protocol-owned liquidity seeded from 10% listing allocation |
+| Governance Live | Timelock-enforced parameter changes operational |
+| External Audit | Full third-party audit of 35 Cairo contracts, FE, and BE |
+| Social Media Tasks | On-chain rewards for privacy-related social tasks and content |
+| CEX Deposit | Direct deposit from centralized exchanges into CAREL |
+| QRIS / Local Bank | Indonesian QRIS and local bank transfer onramp into Starknet |

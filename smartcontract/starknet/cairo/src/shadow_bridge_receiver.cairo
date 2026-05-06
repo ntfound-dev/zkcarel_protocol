@@ -1,10 +1,15 @@
+/// @title ShadowBridgeReceiver
+/// @notice Forwards bridge-received deposits to the ShieldedPoolV4 `deposit_fixed_v4` entrypoint.
+///         Operator-gated deposit_shadow_note with owner/pause controls.
 #[starknet::contract]
 mod shadow_bridge_receiver {
     use core::num::traits::Zero;
     use starknet::{
         ContractAddress, get_caller_address, get_contract_address,
     };
-    use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
+    use starknet::storage::StoragePointerReadAccess;
+    use starknet::storage::StoragePointerWriteAccess;
+    use openzeppelin::access::ownable::OwnableComponent;
 
     #[starknet::interface]
     trait IERC20<TContractState> {
@@ -27,13 +32,20 @@ mod shadow_bridge_receiver {
         );
     }
 
+    component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
+
+    #[abi(embed_v0)]
+    impl OwnableTwoStepImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
+    impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
+
     #[storage]
     struct Storage {
-        owner: ContractAddress,
         operator: ContractAddress,
         pool: ContractAddress,
         token: ContractAddress,
         paused: bool,
+        #[substorage(v0)]
+        ownable: OwnableComponent::Storage,
     }
 
     #[event]
@@ -45,29 +57,37 @@ mod shadow_bridge_receiver {
         Paused: Paused,
         Unpaused: Unpaused,
         DepositForwarded: DepositForwarded,
+        #[flat]
+        OwnableEvent: OwnableComponent::Event,
     }
 
+    /// @notice Emitted when the operator address is updated.
     #[derive(Drop, starknet::Event)]
     struct OperatorUpdated {
         operator: ContractAddress,
     }
 
+    /// @notice Emitted when the shielded pool address is updated.
     #[derive(Drop, starknet::Event)]
     struct PoolUpdated {
         pool: ContractAddress,
     }
 
+    /// @notice Emitted when the bridge token address is updated.
     #[derive(Drop, starknet::Event)]
     struct TokenUpdated {
         token: ContractAddress,
     }
 
+    /// @notice Emitted when the contract is paused.
     #[derive(Drop, starknet::Event)]
     struct Paused {}
 
+    /// @notice Emitted when the contract is unpaused.
     #[derive(Drop, starknet::Event)]
     struct Unpaused {}
 
+    /// @notice Emitted when a shadow deposit is forwarded to the pool.
     #[derive(Drop, starknet::Event)]
     struct DepositForwarded {
         pool: ContractAddress,
@@ -76,6 +96,11 @@ mod shadow_bridge_receiver {
         note_commitment: felt252,
     }
 
+    /// @notice Initializes the receiver with owner, operator, pool, and token.
+    /// @param owner Initial contract owner (two-step transfer via OZ OwnableComponent).
+    /// @param operator Trusted bridge operator for deposit forwarding.
+    /// @param pool ShieldedPoolV4 contract address.
+    /// @param token Bridge token address.
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -84,48 +109,63 @@ mod shadow_bridge_receiver {
         pool: ContractAddress,
         token: ContractAddress,
     ) {
-        self.owner.write(owner);
+        self.ownable.initializer(owner);
         self.operator.write(operator);
         self.pool.write(pool);
         self.token.write(token);
         self.paused.write(false);
     }
 
+    /// @notice Sets the bridge operator address. Emits `OperatorUpdated`.
+    /// @dev Callable only by the contract owner.
     #[external(v0)]
     fn set_operator(ref self: ContractState, operator: ContractAddress) {
-        assert_owner(@self);
+        self.ownable.assert_only_owner();
         self.operator.write(operator);
         self.emit(Event::OperatorUpdated(OperatorUpdated { operator }));
     }
 
+    /// @notice Sets the shielded pool address. Emits `PoolUpdated`.
+    /// @dev Callable only by the contract owner.
     #[external(v0)]
     fn set_pool(ref self: ContractState, pool: ContractAddress) {
-        assert_owner(@self);
+        self.ownable.assert_only_owner();
         self.pool.write(pool);
         self.emit(Event::PoolUpdated(PoolUpdated { pool }));
     }
 
+    /// @notice Sets the bridge token address. Emits `TokenUpdated`.
+    /// @dev Callable only by the contract owner.
     #[external(v0)]
     fn set_token(ref self: ContractState, token: ContractAddress) {
-        assert_owner(@self);
+        self.ownable.assert_only_owner();
         self.token.write(token);
         self.emit(Event::TokenUpdated(TokenUpdated { token }));
     }
 
+    /// @notice Pauses deposit forwarding. Emits `Paused`.
+    /// @dev Callable only by the contract owner.
     #[external(v0)]
     fn pause(ref self: ContractState) {
-        assert_owner(@self);
+        self.ownable.assert_only_owner();
         self.paused.write(true);
         self.emit(Event::Paused(Paused {}));
     }
 
+    /// @notice Unpauses deposit forwarding. Emits `Unpaused`.
+    /// @dev Callable only by the contract owner.
     #[external(v0)]
     fn unpause(ref self: ContractState) {
-        assert_owner(@self);
+        self.ownable.assert_only_owner();
         self.paused.write(false);
         self.emit(Event::Unpaused(Unpaused {}));
     }
 
+    /// @notice Forwards a bridge shadow deposit to the shielded pool.
+    /// @dev Callable only by the operator or owner. Emits `DepositForwarded`.
+    /// @param denom_id Denomination identifier for the deposit rule.
+    /// @param note_commitment Poseidon commitment of the deposit note.
+    /// @param ipfs_cid IPFS CID of the note metadata.
     #[external(v0)]
     fn deposit_shadow_note(
         ref self: ContractState,
@@ -164,19 +204,20 @@ mod shadow_bridge_receiver {
         }));
     }
 
+    /// @notice Asserts caller is the contract owner via OZ OwnableComponent.
     fn assert_owner(self: @ContractState) {
-        let owner = self.owner.read();
         let caller = get_caller_address();
-        assert!(caller == owner, "Only owner");
+        assert!(caller == self.ownable.owner(), "Only owner");
     }
 
+    /// @notice Asserts caller is the operator or the contract owner.
     fn assert_operator_or_owner(self: @ContractState) {
-        let owner = self.owner.read();
         let operator = self.operator.read();
         let caller = get_caller_address();
-        assert!(caller == owner || caller == operator, "Only operator");
+        assert!(caller == self.ownable.owner() || caller == operator, "Only operator");
     }
 
+    /// @notice Asserts the contract is not paused.
     fn assert_not_paused(self: @ContractState) {
         assert!(!self.paused.read(), "Paused");
     }

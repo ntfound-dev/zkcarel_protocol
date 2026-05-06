@@ -52,7 +52,7 @@ fn setup_staking() -> (IStakingCarelDispatcher, ContractAddress, ContractAddress
     // 2. Deploy StakingCarel
     let staking_class = declare("StakingCarel").unwrap().contract_class();
     let (staking_addr, _) = staking_class
-        .deploy(@array![token_addr.into(), reward_pool.into(), admin.into()])
+        .deploy(@array![admin.into(), token_addr.into(), reward_pool.into()])
         .unwrap();
     let staking = IStakingCarelDispatcher { contract_address: staking_addr };
 

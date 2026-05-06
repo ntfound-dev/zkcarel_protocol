@@ -23,12 +23,17 @@ pub struct VestingSchedule {
     pub is_paused: bool,
 }
 
-// Defines vesting lifecycle entrypoints for token allocations.
-// Supports linear vesting with cliffs and pausing.
+/// @notice Defines vesting lifecycle entrypoints for token allocations.
+/// @dev Supports linear vesting with cliffs and pausing.
 #[starknet::interface]
 pub trait IVestingManager<TContractState> {
-    // Applies create vesting after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Creates a new vesting schedule for `beneficiary`.
+    /// @dev Only callable by owner. Allocation must not exceed the supply cap.
+    /// @param beneficiary Address receiving the vested tokens.
+    /// @param amount Total token amount to vest.
+    /// @param category Tokenomics category for this allocation.
+    /// @param cliff_duration Seconds before any tokens become releasable.
+    /// @param vesting_duration Total vesting period in seconds.
     fn create_vesting(
         ref self: TContractState,
         beneficiary: ContractAddress,
@@ -37,34 +42,55 @@ pub trait IVestingManager<TContractState> {
         cliff_duration: u64,
         vesting_duration: u64
     );
-    // Implements release logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Releases all currently releasable tokens to `beneficiary`.
+    /// @dev Mints tokens via the CAREL token dispatcher.
+    /// @param beneficiary Address whose releasable tokens are minted and sent.
     fn release(ref self: TContractState, beneficiary: ContractAddress);
-    // Implements pause vesting logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Pauses or resumes a vesting schedule.
+    /// @dev Only callable by owner.
+    /// @param beneficiary Address whose schedule is toggled.
+    /// @param paused True to pause; false to resume.
     fn pause_vesting(ref self: TContractState, beneficiary: ContractAddress, paused: bool);
-    // Implements calculate releasable logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Calculates how many tokens are currently releasable for `beneficiary`.
+    /// @param beneficiary Address to query.
+    /// @return Number of tokens available for immediate release.
     fn calculate_releasable(self: @TContractState, beneficiary: ContractAddress) -> u256;
-    // Returns get vesting info from state without mutating storage.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Returns the full vesting schedule for `beneficiary`.
+    /// @param beneficiary Address to query.
+    /// @return The VestingSchedule struct stored for that beneficiary.
     fn get_vesting_info(self: @TContractState, beneficiary: ContractAddress) -> VestingSchedule;
 }
 
-// Administrative entrypoints for tokenomics configuration.
-// Used to set defaults and bootstrap allocations.
+/// @notice Administrative entrypoints for tokenomics configuration.
+/// @dev Used to set defaults and bootstrap allocations.
 #[starknet::interface]
 pub trait IVestingAdmin<TContractState> {
-    // Updates default vesting config configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Overrides the default cliff and vesting duration for a given `category`.
+    /// @dev Only callable by owner.
+    /// @param category Tokenomics category to configure.
+    /// @param cliff_duration New default cliff in seconds.
+    /// @param vesting_duration New default vesting period in seconds.
     fn set_default_vesting_config(
         ref self: TContractState,
         category: VestingCategory,
         cliff_duration: u64,
         vesting_duration: u64
     );
-    // Builds reusable fixture state and returns configured contracts for subsequent calls.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Bootstraps all tokenomics allocations for the seven distribution categories.
+    /// @dev Only callable by owner and only once (guarded by tokenomics_initialized).
+    /// @param investor Address for the investor allocation.
+    /// @param early_access Address for the early-access allocation.
+    /// @param team Address for the team allocation.
+    /// @param marketing Address for the marketing allocation.
+    /// @param listing Address for the listing allocation.
+    /// @param ecosystem Address for the ecosystem allocation.
+    /// @param treasury Address for the treasury allocation.
+    /// @param release_immediate If true, auto-releases immediate categories (zero-duration).
     fn setup_tokenomics(
         ref self: TContractState,
         investor: ContractAddress,
@@ -78,14 +104,21 @@ pub trait IVestingAdmin<TContractState> {
     );
 }
 
-// ZK privacy hooks for vesting actions.
+/// @notice ZK privacy hooks for vesting actions.
 #[starknet::interface]
 pub trait IVestingPrivacy<TContractState> {
-    // Updates privacy router configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Sets the privacy router contract address.
+    /// @dev Only callable by owner.
+    /// @param router Address of the deployed privacy router.
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    // Applies submit private vesting action after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Submits a ZK-proven private vesting action to the privacy router.
+    /// @param old_root Merkle root before this action.
+    /// @param new_root Merkle root after this action.
+    /// @param nullifiers Span of nullifiers preventing double-spend.
+    /// @param commitments Span of new Pedersen commitments.
+    /// @param public_inputs Public inputs consumed by the ZK verifier.
+    /// @param proof Serialised ZK proof bytes.
     fn submit_private_vesting_action(
         ref self: TContractState,
         old_root: felt252,
@@ -97,17 +130,16 @@ pub trait IVestingPrivacy<TContractState> {
     );
 }
 
-// Minimal mint interface used by vesting manager.
-// Keeps vesting contract dependency surface small.
+/// @notice Minimal mint interface used by vesting manager.
+/// @dev Keeps vesting contract dependency surface small.
 #[starknet::interface]
 pub trait ICarelToken<TContractState> {
-    // Applies mint after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Mints `amount` tokens to `recipient`.
     fn mint(ref self: TContractState, recipient: ContractAddress, amount: u256);
 }
 
-// Manages vesting schedules and tokenomics distributions.
-// Mints CAREL via token dispatcher on release.
+/// @notice Manages vesting schedules and tokenomics distributions.
+/// @dev Mints CAREL via token dispatcher on release.
 #[starknet::contract]
 pub mod VestingManager {
     use super::{VestingSchedule, VestingCategory, ICarelTokenDispatcher, ICarelTokenDispatcherTrait};
@@ -117,14 +149,13 @@ pub mod VestingManager {
     use core::num::traits::Zero;
     use crate::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy_action_types::ACTION_VESTING;
-    
-    // Perbaikan path import OpenZeppelin
+
     use openzeppelin::access::ownable::OwnableComponent;
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
 
     #[abi(embed_v0)]
-    impl OwnableImpl = OwnableComponent::OwnableImpl<ContractState>;
+    impl OwnableTwoStepImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
     impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
 
     const ONE_TOKEN: u256 = 1_000_000_000_000_000_000_u256;
@@ -138,8 +169,9 @@ pub mod VestingManager {
     const LISTING_BPS: u256 = 1000; // 10%
     const ECOSYSTEM_BPS: u256 = 4000; // 40%
     const TREASURY_BPS: u256 = 1000; // 10%
-    const ECOSYSTEM_MONTHLY_RELEASE: u256 = 6_000_000_u256 * ONE_TOKEN;
-    const ECOSYSTEM_MONTHS: u64 = 66;
+    // 400M / 36 months = 11,111,111 per month; remainder released at final month
+    const ECOSYSTEM_MONTHLY_RELEASE: u256 = 11_111_111_u256 * ONE_TOKEN;
+    const ECOSYSTEM_MONTHS: u64 = 36;
 
     #[storage]
     pub struct Storage {
@@ -155,8 +187,7 @@ pub mod VestingManager {
         pub ownable: OwnableComponent::Storage,
     }
 
-    // Implements category key logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @dev Maps a VestingCategory variant to a felt252 storage key.
     fn category_key(category: VestingCategory) -> felt252 {
         match category {
             VestingCategory::Investor => 0,
@@ -198,12 +229,12 @@ pub mod VestingManager {
         pub paused: bool
     }
 
-    // Initializes the vesting manager.
-    // Sets admin, token address, and default vesting configs.
-    // `admin` becomes owner, `token` is vesting asset, and `protocol_start` anchors schedules.
+    /// @notice Initializes the vesting manager.
+    /// @dev Sets admin, token address, and default vesting configs per category.
+    /// @param admin Address that becomes owner.
+    /// @param token Address of the CAREL token contract to mint from.
+    /// @param protocol_start Unix timestamp anchoring all vesting schedules.
     #[constructor]
-    // Initializes storage and role configuration during deployment.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(
         ref self: ContractState,
         admin: ContractAddress,
@@ -215,14 +246,13 @@ pub mod VestingManager {
         self.start_time.write(protocol_start);
         self.tokenomics_initialized.write(false);
 
-        // Default vesting config (can be updated by admin)
-        // Investor: 6 months cliff + 18 months linear vesting
-        self.default_cliff.entry(category_key(VestingCategory::Investor)).write(6 * MONTH_SECONDS);
-        self.default_duration.entry(category_key(VestingCategory::Investor)).write(18 * MONTH_SECONDS);
+        // Investor: 12 months cliff + 24 months linear vesting → end month 36
+        self.default_cliff.entry(category_key(VestingCategory::Investor)).write(12 * MONTH_SECONDS);
+        self.default_duration.entry(category_key(VestingCategory::Investor)).write(24 * MONTH_SECONDS);
 
-        // Team: 12 months cliff + 24 months linear vesting
+        // Team: 12 months cliff + 36 months linear vesting → end month 48 (after investor)
         self.default_cliff.entry(category_key(VestingCategory::Tim)).write(12 * MONTH_SECONDS);
-        self.default_duration.entry(category_key(VestingCategory::Tim)).write(24 * MONTH_SECONDS);
+        self.default_duration.entry(category_key(VestingCategory::Tim)).write(36 * MONTH_SECONDS);
 
         // Marketing: 3 months cliff + 6 months linear vesting
         self.default_cliff.entry(category_key(VestingCategory::Marketing)).write(3 * MONTH_SECONDS);
@@ -235,7 +265,7 @@ pub mod VestingManager {
         self.default_duration.entry(category_key(VestingCategory::EarlyAccess)).write(0);
 
         self.default_cliff.entry(category_key(VestingCategory::Ecosystem)).write(0);
-        self.default_duration.entry(category_key(VestingCategory::Ecosystem)).write(66 * MONTH_SECONDS);
+        self.default_duration.entry(category_key(VestingCategory::Ecosystem)).write(36 * MONTH_SECONDS);
 
         self.default_cliff.entry(category_key(VestingCategory::Treasury)).write(0);
         self.default_duration.entry(category_key(VestingCategory::Treasury)).write(0);
@@ -243,8 +273,13 @@ pub mod VestingManager {
 
     #[abi(embed_v0)]
     impl VestingManagerImpl of super::IVestingManager<ContractState> {
-        // Applies create vesting after input validation and commits the resulting state.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Creates a new vesting schedule for `beneficiary`.
+        /// @dev Only callable by owner. Validates duration constraints and cap.
+        /// @param beneficiary Address receiving vested tokens.
+        /// @param amount Total tokens to allocate.
+        /// @param category Tokenomics category.
+        /// @param cliff_duration Seconds before cliff expires.
+        /// @param vesting_duration Total linear vesting period in seconds.
         fn create_vesting(
             ref self: ContractState,
             beneficiary: ContractAddress,
@@ -266,7 +301,7 @@ pub mod VestingManager {
             }
             let next_total = self.total_allocated.read() + amount;
             assert!(next_total <= TOTAL_SUPPLY_CAP, "Allocation exceeds cap");
-            
+
             let schedule = VestingSchedule {
                 total_amount: amount,
                 released_amount: 0,
@@ -280,16 +315,16 @@ pub mod VestingManager {
             self.vesting_schedules.entry(beneficiary).write(schedule);
             self.total_allocated.write(next_total);
 
-            // Perbaikan emisi event: Bungkus struct dalam varian enum
             self.emit(Event::VestingCreated(VestingCreated { beneficiary, amount, category }));
         }
 
-        // Implements release logic while keeping state transitions deterministic.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Releases all currently releasable tokens to `beneficiary`.
+        /// @dev Mints tokens via the CAREL token dispatcher.
+        /// @param beneficiary Address whose releasable tokens are minted and sent.
         fn release(ref self: ContractState, beneficiary: ContractAddress) {
             let mut schedule = self.vesting_schedules.entry(beneficiary).read();
             assert!(!schedule.is_paused, "Vesting is paused");
-            
+
             let releasable = self.calculate_releasable(beneficiary);
             assert!(releasable > 0, "Nothing to release");
 
@@ -302,19 +337,23 @@ pub mod VestingManager {
             self.emit(Event::TokensReleased(TokensReleased { beneficiary, amount: releasable }));
         }
 
-        // Implements pause vesting logic while keeping state transitions deterministic.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Pauses or resumes a vesting schedule.
+        /// @dev Only callable by owner.
+        /// @param beneficiary Address whose schedule is toggled.
+        /// @param paused True to pause; false to resume.
         fn pause_vesting(ref self: ContractState, beneficiary: ContractAddress, paused: bool) {
             self.ownable.assert_only_owner();
             let mut schedule = self.vesting_schedules.entry(beneficiary).read();
             schedule.is_paused = paused;
             self.vesting_schedules.entry(beneficiary).write(schedule);
-            
+
             self.emit(Event::VestingPaused(VestingPaused { beneficiary, paused }));
         }
 
-        // Implements calculate releasable logic while keeping state transitions deterministic.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Calculates how many tokens are currently releasable for `beneficiary`.
+        /// @dev Uses monthly-bucket logic for the Ecosystem category; linear vesting otherwise.
+        /// @param beneficiary Address to query.
+        /// @return Number of tokens available for immediate release.
         fn calculate_releasable(self: @ContractState, beneficiary: ContractAddress) -> u256 {
             let schedule = self.vesting_schedules.entry(beneficiary).read();
             let current_time = get_block_timestamp();
@@ -349,12 +388,13 @@ pub mod VestingManager {
 
             let elapsed = current_time - schedule.start_time;
             let vested = (schedule.total_amount * elapsed.into()) / schedule.vesting_duration.into();
-            
+
             vested - schedule.released_amount
         }
 
-        // Returns get vesting info from state without mutating storage.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Returns the full vesting schedule for `beneficiary`.
+        /// @param beneficiary Address to query.
+        /// @return The VestingSchedule struct stored for that beneficiary.
         fn get_vesting_info(self: @ContractState, beneficiary: ContractAddress) -> VestingSchedule {
             self.vesting_schedules.entry(beneficiary).read()
         }
@@ -362,8 +402,11 @@ pub mod VestingManager {
 
     #[abi(embed_v0)]
     impl VestingAdminImpl of super::IVestingAdmin<ContractState> {
-        // Updates default vesting config configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Overrides the default cliff and vesting duration for a given `category`.
+        /// @dev Only callable by owner.
+        /// @param category Tokenomics category to configure.
+        /// @param cliff_duration New default cliff in seconds.
+        /// @param vesting_duration New default vesting period in seconds.
         fn set_default_vesting_config(
             ref self: ContractState,
             category: VestingCategory,
@@ -376,8 +419,16 @@ pub mod VestingManager {
             self.default_duration.entry(key).write(vesting_duration);
         }
 
-        // Builds reusable fixture state and returns configured contracts for subsequent calls.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Bootstraps all tokenomics allocations for the seven distribution categories.
+        /// @dev Only callable by owner and only once (guarded by tokenomics_initialized).
+        /// @param investor Address for the investor allocation.
+        /// @param early_access Address for the early-access allocation.
+        /// @param team Address for the team allocation.
+        /// @param marketing Address for the marketing allocation.
+        /// @param listing Address for the listing allocation.
+        /// @param ecosystem Address for the ecosystem allocation.
+        /// @param treasury Address for the treasury allocation.
+        /// @param release_immediate If true, auto-releases immediate categories (zero-duration).
         fn setup_tokenomics(
             ref self: ContractState,
             investor: ContractAddress,
@@ -406,7 +457,6 @@ pub mod VestingManager {
                 treasury_amount += TOTAL_SUPPLY_CAP - allocated;
             }
 
-            // Create vesting schedules
             self.create_vesting(
                 investor,
                 investor_amount,
@@ -458,7 +508,6 @@ pub mod VestingManager {
             );
 
             if release_immediate {
-                // Only auto-release categories intended for immediate distribution
                 let early_duration = self.default_duration.entry(category_key(VestingCategory::EarlyAccess)).read();
                 let treasury_duration = self.default_duration.entry(category_key(VestingCategory::Treasury)).read();
 
@@ -472,16 +521,22 @@ pub mod VestingManager {
 
     #[abi(embed_v0)]
     impl VestingPrivacyImpl of super::IVestingPrivacy<ContractState> {
-        // Updates privacy router configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Sets the privacy router contract address.
+        /// @dev Only callable by owner. Router must be non-zero.
+        /// @param router Address of the deployed privacy router.
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
             self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
         }
 
-        // Applies submit private vesting action after input validation and commits the resulting state.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @notice Submits a ZK-proven private vesting action to the privacy router.
+        /// @param old_root Merkle root before this action.
+        /// @param new_root Merkle root after this action.
+        /// @param nullifiers Span of nullifiers preventing double-spend.
+        /// @param commitments Span of new Pedersen commitments.
+        /// @param public_inputs Public inputs consumed by the ZK verifier.
+        /// @param proof Serialised ZK proof bytes.
         fn submit_private_vesting_action(
             ref self: ContractState,
             old_root: felt252,

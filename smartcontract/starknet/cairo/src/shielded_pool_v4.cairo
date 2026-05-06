@@ -1,3 +1,6 @@
+/// @title ShieldedPoolV4
+/// @notice ZK shielded pool with Merkle commitment tree, nullifier-gated withdrawals,
+///         and proof-verified private swap/limit/stake actions.
 #[starknet::contract]
 mod shielded_pool_v4 {
     use core::array::{Array, ArrayTrait, Span};
@@ -13,6 +16,16 @@ mod shielded_pool_v4 {
         StoragePointerWriteAccess,
     };
     use starknet::syscalls::call_contract_syscall;
+    use openzeppelin::access::ownable::OwnableComponent;
+    use openzeppelin::security::reentrancyguard::ReentrancyGuardComponent;
+
+    component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
+    component!(path: ReentrancyGuardComponent, storage: reentrancy_guard, event: ReentrancyGuardEvent);
+
+    #[abi(embed_v0)]
+    impl OwnableTwoStepImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
+    impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
+    impl ReentrancyGuardInternalImpl = ReentrancyGuardComponent::InternalImpl<ContractState>;
 
     #[starknet::interface]
     trait IProofVerifier<TContractState> {
@@ -39,10 +52,8 @@ mod shielded_pool_v4 {
 
     #[storage]
     struct Storage {
-        owner: ContractAddress,
         relayer: ContractAddress,
         paused: bool,
-        reentrancy_lock: bool,
 
         swap_verifier: ContractAddress,
         limit_verifier: ContractAddress,
@@ -66,6 +77,10 @@ mod shielded_pool_v4 {
         pending_action_hash: Map<felt252, felt252>,
         pending_action_root: Map<felt252, felt252>,
         pending_action_kind: Map<felt252, u8>,
+        #[substorage(v0)]
+        ownable: OwnableComponent::Storage,
+        #[substorage(v0)]
+        reentrancy_guard: ReentrancyGuardComponent::Storage,
     }
 
     #[event]
@@ -81,6 +96,10 @@ mod shielded_pool_v4 {
         RelayerUpdated: RelayerUpdated,
         Paused: Paused,
         Unpaused: Unpaused,
+        #[flat]
+        OwnableEvent: OwnableComponent::Event,
+        #[flat]
+        ReentrancyGuardEvent: ReentrancyGuardComponent::Event,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -150,12 +169,14 @@ mod shielded_pool_v4 {
     const ACTION_LIMIT_PAYOUT_V4: felt252 = 'LIMIT_PAYOUT_V4';
     const ACTION_STAKE_PAYOUT_V4: felt252 = 'STAKE_PAYOUT_V4';
 
+    /// @notice Initializes the pool with an owner and optional pre-set Merkle root.
+    /// @param owner Initial contract owner (two-step transfer via OZ OwnableComponent).
+    /// @param initial_root Pre-set Merkle root, or zero to start from the empty-tree root.
     #[constructor]
     fn constructor(ref self: ContractState, owner: ContractAddress, initial_root: felt252) {
-        self.owner.write(owner);
+        self.ownable.initializer(owner);
         self.relayer.write(0.try_into().unwrap());
         self.paused.write(false);
-        self.reentrancy_lock.write(false);
         self.next_leaf_index.write(0);
 
         let mut level: u64 = 0;
@@ -220,6 +241,8 @@ mod shielded_pool_v4 {
         self.paused.read()
     }
 
+    /// @notice Sets the three Groth16 verifier contracts for swap, limit, and stake actions.
+    /// @dev Callable only by the contract owner.
     #[external(v0)]
     fn set_verifiers(
         ref self: ContractState,
@@ -242,6 +265,8 @@ mod shielded_pool_v4 {
         )
     }
 
+    /// @notice Sets the trusted relayer address.
+    /// @dev Callable only by the contract owner. Emits `RelayerUpdated`.
     #[external(v0)]
     fn set_relayer(ref self: ContractState, relayer: ContractAddress) {
         assert_owner(@self);
@@ -250,6 +275,8 @@ mod shielded_pool_v4 {
         self.emit(Event::RelayerUpdated(RelayerUpdated { relayer }));
     }
 
+    /// @notice Pauses the pool. Emits `Paused`.
+    /// @dev Callable only by the contract owner.
     #[external(v0)]
     fn pause(ref self: ContractState) {
         assert_owner(@self);
@@ -257,6 +284,8 @@ mod shielded_pool_v4 {
         self.emit(Event::Paused(Paused {}));
     }
 
+    /// @notice Unpauses the pool. Emits `Unpaused`.
+    /// @dev Callable only by the contract owner.
     #[external(v0)]
     fn unpause(ref self: ContractState) {
         assert_owner(@self);
@@ -264,31 +293,36 @@ mod shielded_pool_v4 {
         self.emit(Event::Unpaused(Unpaused {}));
     }
 
+    /// @notice Asserts caller is the contract owner via OZ OwnableComponent.
     fn assert_owner(self: @ContractState) {
         let caller = get_caller_address();
-        assert!(caller == self.owner.read(), "ONLY_OWNER");
+        assert!(caller == self.ownable.owner(), "ONLY_OWNER");
     }
 
+    /// @notice Asserts the contract is not paused.
     fn assert_not_paused(self: @ContractState) {
         assert!(!self.paused.read(), "PAUSED");
     }
 
+    /// @notice Asserts caller is the relayer or owner.
+    /// @dev If relayer is zero-address, any caller may proceed.
     fn assert_relayer_or_owner(self: @ContractState) {
         let caller = get_caller_address();
         let relayer = self.relayer.read();
         if relayer.is_zero() {
             return;
         }
-        assert!(caller == relayer || caller == self.owner.read(), "ONLY_RELAYER_OR_OWNER");
+        assert!(caller == relayer || caller == self.ownable.owner(), "ONLY_RELAYER_OR_OWNER");
     }
 
+    /// @notice Begins an OZ ReentrancyGuard lock.
     fn enter_reentrancy_guard(ref self: ContractState) {
-        assert!(!self.reentrancy_lock.read(), "REENTRANCY_BLOCKED");
-        self.reentrancy_lock.write(true);
+        self.reentrancy_guard.start();
     }
 
+    /// @notice Ends an OZ ReentrancyGuard lock.
     fn exit_reentrancy_guard(ref self: ContractState) {
-        self.reentrancy_lock.write(false);
+        self.reentrancy_guard.end();
     }
 
     fn hash_pair(left: felt252, right: felt252) -> felt252 {
@@ -705,6 +739,8 @@ mod shielded_pool_v4 {
         exit_reentrancy_guard(ref self);
     }
 
+    /// @notice Configures the fixed deposit amount for a token denomination.
+    /// @dev Callable only by the contract owner. Emits `AssetRuleUpdated`.
     #[external(v0)]
     fn set_asset_rule(
         ref self: ContractState,
@@ -721,6 +757,8 @@ mod shielded_pool_v4 {
         self.emit(Event::AssetRuleUpdated(AssetRuleUpdated { token, denom_id, fixed_amount }));
     }
 
+    /// @notice Deposits a fixed-denomination note into the shielded pool.
+    /// @dev Transfers `fixed_amount` from caller and inserts note into Merkle tree. Emits `DepositFixedV4`.
     #[external(v0)]
     fn deposit_fixed_v4(
         ref self: ContractState,
@@ -759,6 +797,8 @@ mod shielded_pool_v4 {
         }));
     }
 
+    /// @notice Submits a ZK proof for a private swap and records the pending action.
+    /// @dev Verifier must be set; nullifier must be unspent; root must be known.
     #[external(v0)]
     fn submit_private_swap(
         ref self: ContractState,
@@ -781,6 +821,7 @@ mod shielded_pool_v4 {
         write_pending_action(ref self, root, nullifier, action_hash, ACTION_SWAP);
     }
 
+    /// @notice Submits a ZK proof for a private limit order and records the pending action.
     #[external(v0)]
     fn submit_private_limit(
         ref self: ContractState,
@@ -803,6 +844,7 @@ mod shielded_pool_v4 {
         write_pending_action(ref self, root, nullifier, action_hash, ACTION_LIMIT);
     }
 
+    /// @notice Submits a ZK proof for a private stake action and records the pending action.
     #[external(v0)]
     fn submit_private_stake(
         ref self: ContractState,

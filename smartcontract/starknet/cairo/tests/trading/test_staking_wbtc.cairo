@@ -52,8 +52,8 @@ fn setup() -> (IWBTCStakingDispatcher, ContractAddress, ContractAddress, Contrac
     // 2. Deploy BTC Staking
     let staking_class = declare("WBTCStaking").unwrap_syscall().contract_class();
     let mut constructor_args = array![];
-    reward_token.serialize(ref constructor_args);
     owner.serialize(ref constructor_args);
+    reward_token.serialize(ref constructor_args);
     btc_wrapper.serialize(ref constructor_args);
     
     let (staking_addr, _) = staking_class.deploy(@constructor_args).unwrap_syscall();

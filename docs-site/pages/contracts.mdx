@@ -4,45 +4,95 @@ All CAREL Protocol contracts are deployed on **Starknet Sepolia** testnet.
 
 Network: `SN_SEPOLIA`
 
-## Core Trading
+## Core
 
 | Contract | Address | Explorer |
 |---|---|---|
-| Swap Aggregator | `0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28` | [View](https://sepolia.starkscan.co/contract/0x06f3e03be8a82746394c4ad20c6888dd260a69452a50eb3121252fdecacc6d28) |
-| Limit Order Book | `0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a` | [View](https://sepolia.starkscan.co/contract/0x06b189eef1358559681712ff6e9387c2f6d43309e27705d26daff4e3ba1fdf8a) |
-| Bridge Aggregator | `0x047ed770a6945fc51ce3ed32645ed71260fae278421826ee4edabeae32b755d5` | [View](https://sepolia.starkscan.co/contract/0x047ed770a6945fc51ce3ed32645ed71260fae278421826ee4edabeae32b755d5) |
+| CAREL Token | `0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545` | [View](https://sepolia.starkscan.co/contract/0x0517f60f4ec4e1b2b748f0f642dfdcb32c0ddc893f777f2b595a4e4f6df51545) |
+| CAREL Protocol | `0x00074dde1bbefe2b610d851c609edcadde616e650a6b19593e176c2f37118bde` | [View](https://sepolia.starkscan.co/contract/0x00074dde1bbefe2b610d851c609edcadde616e650a6b19593e176c2f37118bde) |
+| Registry | `0x026255c3d3a1efcb047f5914c1dd4af3e67515f451b1742e309e76970da98757` | [View](https://sepolia.starkscan.co/contract/0x026255c3d3a1efcb047f5914c1dd4af3e67515f451b1742e309e76970da98757) |
+| Fee Collector | `0x02883926eda0d3325f4647b356d4b293e41923917b0c5cd39eba644de8bca79f` | [View](https://sepolia.starkscan.co/contract/0x02883926eda0d3325f4647b356d4b293e41923917b0c5cd39eba644de8bca79f) |
+| Multi Faucet | `0x0277964147d63e375e50d3e660a86575221eb89442fa5fbf472d9a2990e0b448` | [View](https://sepolia.starkscan.co/contract/0x0277964147d63e375e50d3e660a86575221eb89442fa5fbf472d9a2990e0b448) |
+
+## Trading
+
+| Contract | Address | Explorer |
+|---|---|---|
+| Swap Aggregator | `0x03a62618aac9871ba9c2588f91b2397c511b74bc2b4eb9848de1e1fd0807f349` | [View](https://sepolia.starkscan.co/contract/0x03a62618aac9871ba9c2588f91b2397c511b74bc2b4eb9848de1e1fd0807f349) |
+| Limit Order Book | `0x002b900401690afde0571675dbf982c5f52b68235cdfe7b04f0f0868ab24a2a8` | [View](https://sepolia.starkscan.co/contract/0x002b900401690afde0571675dbf982c5f52b68235cdfe7b04f0f0868ab24a2a8) |
+
+> Bridge (ETH/BTC) is handled by [Garden Finance](https://garden.finance) — an external aggregator. No CAREL bridge contract on-chain.
 
 ## Staking
 
 | Contract | Address | Explorer |
 |---|---|---|
-| Staking CAREL | `0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb` | [View](https://sepolia.starkscan.co/contract/0x06ed000cdf98b371dbb0b8f6a5aa5b114fb218e3c75a261d7692ceb55825accb) |
-| Staking Stablecoin | `0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff` | [View](https://sepolia.starkscan.co/contract/0x014f58753338f2f470c397a1c7ad1cfdc381a951b314ec2d7c9aec06a73a0aff) |
-| Staking WBTC | `0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8` | [View](https://sepolia.starkscan.co/contract/0x01fa14e91abade76d753d718640a14540032c307832a435f8781d446b288cdf8) |
+| Staking CAREL | `0x07341f7062470231d58e5eb6420b58469391b4756d82d091ab69c30936ca7d46` | [View](https://sepolia.starkscan.co/contract/0x07341f7062470231d58e5eb6420b58469391b4756d82d091ab69c30936ca7d46) |
+| Staking WBTC | `0x00d5611d4cff0a794e475fc6771b88c329c74adb67481fdddfc3f083bd5fa578` | [View](https://sepolia.starkscan.co/contract/0x00d5611d4cff0a794e475fc6771b88c329c74adb67481fdddfc3f083bd5fa578) |
+| Staking LP | `0x0736205a312434216901d31a04ce39dbbe4504e844470e79c2918c0d6a550cab` | [View](https://sepolia.starkscan.co/contract/0x0736205a312434216901d31a04ce39dbbe4504e844470e79c2918c0d6a550cab) |
+| Staking Stablecoin | `0x03be7d988a8b0379915517db9b5d3272714229e1db53d4eb7cc3d551272981c7` | [View](https://sepolia.starkscan.co/contract/0x03be7d988a8b0379915517db9b5d3272714229e1db53d4eb7cc3d551272981c7) |
+| CAREL Stake Vault | `0x023b981788b570e6ca05fc0c821ad1cc9d11ca16dd258a972196ab2f6bfc310e` | [View](https://sepolia.starkscan.co/contract/0x023b981788b570e6ca05fc0c821ad1cc9d11ca16dd258a972196ab2f6bfc310e) |
 
 ## Private Execution (Hide Mode)
 
 | Contract | Address | Explorer |
 |---|---|---|
-| ZK Privacy Router | `0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f` | [View](https://sepolia.starkscan.co/contract/0x0682719dbe8364fc5c772f49ecb63ea2f2cf5aa919b7d5baffb4448bb4438d1f) |
 | ShieldedPool V4 | `0x00897405ab38dfe26ae10fdc8a28599291b29bb09060f667761c03edf578061f` | [View](https://sepolia.starkscan.co/contract/0x00897405ab38dfe26ae10fdc8a28599291b29bb09060f667761c03edf578061f) |
-| Privacy Intermediary | `0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab` | [View](https://sepolia.starkscan.co/contract/0x0246cd17157819eb614e318d468270981d10e6b6e99bcaa7ca4b43d53de810ab) |
-| Private Action Executor | `0x01f7f3bcdfd94d0b28dd658882bef53787b4e9d40a6aa4ced65440ab76e0e191` | [View](https://sepolia.starkscan.co/contract/0x01f7f3bcdfd94d0b28dd658882bef53787b4e9d40a6aa4ced65440ab76e0e191) |
+| Privacy Router V4 | `0x0514361b7584954bada37cdaa923ef172722a74644fccae12c1443ae229b4065` | [View](https://sepolia.starkscan.co/contract/0x0514361b7584954bada37cdaa923ef172722a74644fccae12c1443ae229b4065) |
+| Privacy Intermediary | `0x060c253818ae440583fae490baf688eb0ea5e0d4149da138b0c38d4564e65e2d` | [View](https://sepolia.starkscan.co/contract/0x060c253818ae440583fae490baf688eb0ea5e0d4149da138b0c38d4564e65e2d) |
 
-## AI Execution
+## AI Execution (ERC-8004)
 
 | Contract | Address | Explorer |
 |---|---|---|
-| AI Executor (ERC-8004) | `0x00d8ada9eb26d133f9f2656ac1618d8cdf9fcefe6c8e292cf9b7ee580b72a690` | [View](https://sepolia.starkscan.co/contract/0x00d8ada9eb26d133f9f2656ac1618d8cdf9fcefe6c8e292cf9b7ee580b72a690) |
+| AI Executor | `0x031cc1d55f9e98f8a970b13dd72d09f8104a6875416da2f7bbb37243f9503dbf` | [View](https://sepolia.starkscan.co/contract/0x031cc1d55f9e98f8a970b13dd72d09f8104a6875416da2f7bbb37243f9503dbf) |
+| AI Plan Router | `0x02cdffa746555b68279cf4fafd1ba5da6f2b08058cc5eb4a95fb5dcd03987420` | [View](https://sepolia.starkscan.co/contract/0x02cdffa746555b68279cf4fafd1ba5da6f2b08058cc5eb4a95fb5dcd03987420) |
+| AI Signature Verifier | `0x07cad42fbfdf2cdba25547650beb8aad2b93a653659a52d22a488b64f89ce693` | [View](https://sepolia.starkscan.co/contract/0x07cad42fbfdf2cdba25547650beb8aad2b93a653659a52d22a488b64f89ce693) |
+| ERC8004 Identity Registry | `0x046f1ef83ac7e15418256bd5a753dd9a48bf045ffbd363cf2b3de698a3b83b30` | [View](https://sepolia.starkscan.co/contract/0x046f1ef83ac7e15418256bd5a753dd9a48bf045ffbd363cf2b3de698a3b83b30) |
+| ERC8004 Validation Registry | `0x0550f961e86d4a8b0251106b154b870e9e4377d86566e266811fff3bc5387b8f` | [View](https://sepolia.starkscan.co/contract/0x0550f961e86d4a8b0251106b154b870e9e4377d86566e266811fff3bc5387b8f) |
+| ERC8004 Reputation Registry | `0x06653a19a8dc37105a4f8e6f93d27e74fba762c4e3878dda5e9f6b75b122a413` | [View](https://sepolia.starkscan.co/contract/0x06653a19a8dc37105a4f8e6f93d27e74fba762c4e3878dda5e9f6b75b122a413) |
 
 ## Rewards
 
 | Contract | Address | Explorer |
 |---|---|---|
-| Point Storage | `0x0501e74ab48e605ef81348a087d21c95ea5d43694ee1a60d6ca1e9186be54029` | [View](https://sepolia.starkscan.co/contract/0x0501e74ab48e605ef81348a087d21c95ea5d43694ee1a60d6ca1e9186be54029) |
-| Snapshot Distributor | `0x04fcc58ba819766fe19b8f7a96ed5bd7b7558e8ad62f495815e825d8e8f822dd` | [View](https://sepolia.starkscan.co/contract/0x04fcc58ba819766fe19b8f7a96ed5bd7b7558e8ad62f495815e825d8e8f822dd) |
-| Referral System | `0x040bfc6214d3204c53898c730285d79d6e7cd2cd987e3ecde048b330ed3a2d06` | [View](https://sepolia.starkscan.co/contract/0x040bfc6214d3204c53898c730285d79d6e7cd2cd987e3ecde048b330ed3a2d06) |
-| Discount Soulbound NFT | `0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809` | [View](https://sepolia.starkscan.co/contract/0x05b4c1e3578fd605b44b1950c749f01b2f652b8fd7a77135801d8d31af6fe809) |
+| Point Storage | `0x05d3b87e47d008c48a5058cd2ff10893459c227f6c2b587674435931709c1dd1` | [View](https://sepolia.starkscan.co/contract/0x05d3b87e47d008c48a5058cd2ff10893459c227f6c2b587674435931709c1dd1) |
+| Snapshot Distributor | `0x040d1832545f7daa7e37f224175f8b6fd0984fd60b7d294ba790ec25094ca854` | [View](https://sepolia.starkscan.co/contract/0x040d1832545f7daa7e37f224175f8b6fd0984fd60b7d294ba790ec25094ca854) |
+| Referral System | `0x0106f99977e2961bdde5dc338607da00ba0da98abfd4b0dfcbe9953e7d14964c` | [View](https://sepolia.starkscan.co/contract/0x0106f99977e2961bdde5dc338607da00ba0da98abfd4b0dfcbe9953e7d14964c) |
+| Discount Soulbound NFT | `0x0338ef369a49c73e1840c520540c9bd29322896269f0e089848d32cdd1afa042` | [View](https://sepolia.starkscan.co/contract/0x0338ef369a49c73e1840c520540c9bd29322896269f0e089848d32cdd1afa042) |
+| Rewards Escrow | `0x015291586794e40cea5c8823ff801df94b97121871ce5bfdbf203e304fe324d3` | [View](https://sepolia.starkscan.co/contract/0x015291586794e40cea5c8823ff801df94b97121871ce5bfdbf203e304fe324d3) |
+
+## Tokenomics v6 — Pending Deployment
+
+These contracts implement the v6 economic design and are deployed on Sepolia after the next release cycle.
+
+| Contract | Status | Source |
+|---|---|---|
+| Lockup Escrow | Pending deployment | `src/core/lockup_escrow.cairo` — 6/12-month lock, 8/12% APR, 5% early-break penalty |
+| Airdrop Vesting | Pending deployment | `src/core/airdrop_vesting.cairo` — tiered recipient vesting, Merkle proof, staker bypass |
+
+## Governance
+
+| Contract | Address | Explorer |
+|---|---|---|
+| Timelock | `0x025550a4ee848d0790ddf0368099912ac7a56954e4cd0b7a0f8fed38f5630a37` | [View](https://sepolia.starkscan.co/contract/0x025550a4ee848d0790ddf0368099912ac7a56954e4cd0b7a0f8fed38f5630a37) |
+| Vesting Manager | `0x02e88ee13770817610c4c30f9215760d540cf30a0ae9ba10f0a089db8db76c3c` | [View](https://sepolia.starkscan.co/contract/0x02e88ee13770817610c4c30f9215760d540cf30a0ae9ba10f0a089db8db76c3c) |
+| Multisig | `0x02d907ec1ee622304d3d3ac04a47a03e47f5ce7bee2d2359a4d0cb4941825c32` | [View](https://sepolia.starkscan.co/contract/0x02d907ec1ee622304d3d3ac04a47a03e47f5ce7bee2d2359a4d0cb4941825c32) |
+
+## Oracle
+
+| Contract | Address | Explorer |
+|---|---|---|
+| Price Oracle | `0x075c1746af30d08b9c08c6eb525c22fcb9eaa95adc74aee3d2b94eb7e319065f` | [View](https://sepolia.starkscan.co/contract/0x075c1746af30d08b9c08c6eb525c22fcb9eaa95adc74aee3d2b94eb7e319065f) |
+| TWAP Oracle | `0x02715f1c7e4a4c2129d2a8d31ea6cd51a9569282dcf32d54940fe5daffbe33fc` | [View](https://sepolia.starkscan.co/contract/0x02715f1c7e4a4c2129d2a8d31ea6cd51a9569282dcf32d54940fe5daffbe33fc) |
+| Pragma Oracle | `0x36031daa264c24520b11d93af622c848b2499b66b41d611bac95e13cfca131a` | [View](https://sepolia.starkscan.co/contract/0x36031daa264c24520b11d93af622c848b2499b66b41d611bac95e13cfca131a) |
+
+## BTC Light Client
+
+| Contract | Address | Explorer |
+|---|---|---|
+| BTC Light Client | `0x006a9153d37e3352cdec84646d8f6d51b53fe5ce3b03cb64fcb4bf1531b9328d` | [View](https://sepolia.starkscan.co/contract/0x006a9153d37e3352cdec84646d8f6d51b53fe5ce3b03cb64fcb4bf1531b9328d) |
+| Shadow Bridge Receiver | `0x023a6858cde73047f5fb1baaf87b3249a8eed06b318b56c6289ea67f8457005f` | [View](https://sepolia.starkscan.co/contract/0x023a6858cde73047f5fb1baaf87b3249a8eed06b318b56c6289ea67f8457005f) |
 
 ## Garaga Honk Verifiers (V4)
 

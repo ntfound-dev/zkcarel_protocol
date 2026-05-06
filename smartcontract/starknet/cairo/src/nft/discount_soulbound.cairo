@@ -1,5 +1,6 @@
 use starknet::ContractAddress;
 
+/// @notice On-chain state for a single discount NFT token.
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct DiscountNFT {
     pub tier: u8,
@@ -11,79 +12,116 @@ pub struct DiscountNFT {
 }
 
 impl DiscountNFTDefault of Default<DiscountNFT> {
-    // Implements default logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn default() -> DiscountNFT {
         DiscountNFT {
             tier: 0,
             discount_rate: 0,
             max_usage: 0,
             used_in_period: 0,
-            // Uses TryInto instead of deprecated contract_address_const helper.
             owner: 0.try_into().unwrap(),
             last_reset: 0,
         }
     }
 }
 
-// Minimal interface for point balance and consumption.
-// Used to charge points when minting discount NFTs.
+/// @title IPointStorage
+/// @notice Minimal interface for point balance and consumption.
 #[starknet::interface]
 pub trait IPointStorage<TContractState> {
-    // Returns get user points from state without mutating storage.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Returns the point balance for a user in a given epoch.
+    /// @param epoch The accounting epoch.
+    /// @param user The address to query.
+    /// @return Point balance.
     fn get_user_points(self: @TContractState, epoch: u64, user: ContractAddress) -> u256;
-    // Applies consume points after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Deducts points from a user's balance in a given epoch.
+    /// @param epoch The accounting epoch.
+    /// @param user The address to deduct from.
+    /// @param amount Points to consume.
     fn consume_points(ref self: TContractState, epoch: u64, user: ContractAddress, amount: u256);
 }
 
-// Defines minting and usage for discount NFTs.
-// Soulbound NFTs provide fee discounts with limited uses.
+/// @title IDiscountSoulbound
+/// @notice Minting and usage lifecycle for soulbound discount NFTs.
 #[starknet::interface]
 pub trait IDiscountSoulbound<TContractState> {
-    // Applies mint nft after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Mints a discount NFT for the caller at the given tier.
+    /// @dev Consumes tier cost in points. Maps caller to the new token ID.
+    ///      Multiple mints are allowed; `user_nft` tracks the latest token.
+    /// @param tier Tier index 1–5 (Bronze, Silver, Gold, Platinum, Onyx).
     fn mint_nft(ref self: TContractState, tier: u8);
-    // Implements use discount logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Applies a single discount usage for a user.
+    /// @dev Shorthand for `use_discount_batch(user, 1)`.
+    /// @param user Address whose NFT to consume.
+    /// @return The discount rate applied, or 0 if no active NFT.
     fn use_discount(ref self: TContractState, user: ContractAddress) -> u256;
-    // Implements use discount batch logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Applies multiple discount usages for a user in one call.
+    /// @dev Callable by the user themselves or an authorized caller.
+    ///      Returns 0 without reverting if the NFT is exhausted.
+    /// @param user Address whose NFT to consume.
+    /// @param uses Number of usages to deduct.
+    /// @return The discount rate applied, or 0 if NFT is unavailable or exhausted.
     fn use_discount_batch(ref self: TContractState, user: ContractAddress, uses: u256) -> u256;
-    // Implements recharge nft logic while keeping state transitions deterministic.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Recharges the caller's NFT usage quota for the current epoch.
+    /// @dev Consumes the tier's recharge cost in points. Reverts if cooldown has not passed.
     fn recharge_nft(ref self: TContractState);
-    // Returns get user discount from state without mutating storage.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Returns the active discount rate for a user.
+    /// @param user The address to query.
+    /// @return Discount rate, or 0 if no active NFT.
     fn get_user_discount(self: @TContractState, user: ContractAddress) -> u256;
-    // Returns has active discount from state without mutating storage.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Returns whether a user has an active discount and its rate.
+    /// @param user The address to query.
+    /// @return (active, discount_rate).
     fn has_active_discount(self: @TContractState, user: ContractAddress) -> (bool, u256);
-    // Returns get nft info from state without mutating storage.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Returns the full NFT struct for a given token ID.
+    /// @param token_id The token to query.
+    /// @return The `DiscountNFT` struct.
     fn get_nft_info(self: @TContractState, token_id: u256) -> DiscountNFT;
-    // Authorizes or revokes a caller for discount usage.
+
+    /// @notice Grants or revokes authorization for a caller to consume discounts on behalf of users.
+    /// @dev Callable only by the contract owner.
+    /// @param caller Address to authorize or deauthorize.
+    /// @param authorized true to authorize, false to revoke.
     fn set_authorized_caller(ref self: TContractState, caller: ContractAddress, authorized: bool);
 }
 
-// Metadata interface for soulbound NFT metadata resolution.
+/// @title IDiscountSoulboundMetadata
+/// @notice Metadata resolution for soulbound NFT tokens.
 #[starknet::interface]
 pub trait IDiscountSoulboundMetadata<TContractState> {
-    // Returns the token URI for a given token ID.
+    /// @notice Returns the metadata URI for a given token ID.
+    /// @param token_id The token to query.
+    /// @return Tier URI string.
     fn token_uri(self: @TContractState, token_id: u256) -> ByteArray;
-    // Returns the base URI used for metadata resolution.
+
+    /// @notice Returns the base URI used for metadata resolution.
+    /// @return Base URI string.
     fn get_base_uri(self: @TContractState) -> ByteArray;
 }
 
-// ZK privacy entrypoints for discount NFT actions.
+/// @title IDiscountSoulboundPrivacy
+/// @notice ZK privacy entrypoints for discount NFT actions.
 #[starknet::interface]
 pub trait IDiscountSoulboundPrivacy<TContractState> {
-    // Updates privacy router configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Sets the privacy router address.
+    /// @dev Callable only by the contract owner. Emits `PrivacyRouterUpdated`.
+    /// @param router New privacy router address (must be non-zero).
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    // Applies submit private nft action after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Submits a ZK-proven NFT action to the privacy router.
+    /// @dev Nullifiers are replay-protected: each nullifier may only be consumed once.
+    /// @param old_root Previous Merkle tree root.
+    /// @param new_root Updated Merkle tree root after commitments.
+    /// @param nullifiers Nullifiers for inputs being spent.
+    /// @param commitments New Merkle commitments.
+    /// @param public_inputs ZK circuit public inputs.
+    /// @param proof Serialized ZK proof.
     fn submit_private_nft_action(
         ref self: TContractState,
         old_root: felt252,
@@ -95,24 +133,29 @@ pub trait IDiscountSoulboundPrivacy<TContractState> {
     );
 }
 
-// ERC20-like transfer interface overridden to prevent transfers.
-// Ensures NFTs remain non-transferable.
+/// @title ISoulbound
+/// @notice ERC20-like transfer override — always reverts to enforce non-transferability.
 #[starknet::interface]
 pub trait ISoulbound<TContractState> {
-    // Applies transfer after input validation and commits the resulting state.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256);
 }
 
-// Administrative controls for NFT tiers and epochs.
-// Admin-only updates for configuration.
+/// @title IDiscountSoulboundAdmin
+/// @notice Owner-only administrative controls for NFT tiers and epochs.
 #[starknet::interface]
 pub trait IDiscountSoulboundAdmin<TContractState> {
-    // Updates current epoch configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+    /// @notice Updates the current epoch for point accounting.
+    /// @dev Callable only by the contract owner.
+    /// @param epoch New epoch value.
     fn set_current_epoch(ref self: TContractState, epoch: u64);
-    // Updates tier config configuration after access-control and invariant checks.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
+
+    /// @notice Updates the configuration for a discount tier.
+    /// @dev Callable only by the contract owner.
+    /// @param tier Tier index 1–5.
+    /// @param cost Point cost to mint.
+    /// @param discount Discount rate (percentage).
+    /// @param max_usage Maximum usages per epoch.
+    /// @param recharge_cost Point cost to recharge.
     fn set_tier_config(
         ref self: TContractState,
         tier: u8,
@@ -121,13 +164,19 @@ pub trait IDiscountSoulboundAdmin<TContractState> {
         max_usage: u256,
         recharge_cost: u256
     );
-    // Updates base URI for NFT metadata.
+
+    /// @notice Updates the base URI for NFT metadata resolution.
+    /// @param base_uri New base URI string.
     fn set_base_uri(ref self: TContractState, base_uri: ByteArray);
-    // Updates tier URI for Format 2 metadata mapping.
+
+    /// @notice Sets the metadata URI for a specific tier.
+    /// @param tier Tier index 1–5.
+    /// @param uri Metadata URI for the tier.
     fn set_tier_uri(ref self: TContractState, tier: u8, uri: ByteArray);
 }
 
-// ERC721-compatible transfer entrypoints to explicitly reject transfers.
+/// @title IDiscountSoulboundERC721
+/// @notice ERC721-compatible transfer entrypoints — always revert for soulbound enforcement.
 #[starknet::interface]
 pub trait IDiscountSoulboundERC721<TContractState> {
     fn transfer_from(
@@ -145,8 +194,10 @@ pub trait IDiscountSoulboundERC721<TContractState> {
     );
 }
 
-// Soulbound discount NFTs backed by point spending.
-// NFTs are not burned on usage exhaustion and become inactive until recharge or remint.
+/// @title DiscountSoulbound
+/// @notice Soulbound discount NFTs backed by point spending.
+///         NFTs are not burned on usage exhaustion; they become inactive until recharge or remint.
+///         Tiers: Bronze (1) 5%, Silver (2) 10%, Gold (3) 25%, Platinum (4) 35%, Onyx (5) 50%.
 #[starknet::contract]
 pub mod DiscountSoulbound {
     use starknet::ContractAddress;
@@ -154,9 +205,16 @@ pub mod DiscountSoulbound {
     use starknet::get_block_timestamp;
     use starknet::storage::*;
     use core::num::traits::Zero;
+    use openzeppelin::access::ownable::OwnableComponent;
     use crate::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy_action_types::ACTION_NFT;
     use super::{DiscountNFT, IPointStorageDispatcher, IPointStorageDispatcherTrait};
+
+    component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
+
+    #[abi(embed_v0)]
+    impl OwnableTwoStepImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
+    impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
 
     #[storage]
     pub struct Storage {
@@ -171,10 +229,12 @@ pub mod DiscountSoulbound {
         pub next_token_id: u256,
         pub current_epoch: u64,
         pub last_recharge_epoch: Map<u256, u64>,
-        pub admin: ContractAddress,
         pub authorized_callers: Map<ContractAddress, bool>,
         pub privacy_router: ContractAddress,
         pub base_uri: ByteArray,
+        pub used_nullifiers: Map<felt252, bool>,
+        #[substorage(v0)]
+        pub ownable: OwnableComponent::Storage,
     }
 
     #[event]
@@ -184,67 +244,88 @@ pub mod DiscountSoulbound {
         NFTUsed: NFTUsed,
         NFTDeactivated: NFTDeactivated,
         NFTRecharged: NFTRecharged,
+        AuthorizedCallerUpdated: AuthorizedCallerUpdated,
+        PrivacyRouterUpdated: PrivacyRouterUpdated,
         BaseUriUpdated: BaseUriUpdated,
         TierUriUpdated: TierUriUpdated,
+        #[flat]
+        OwnableEvent: OwnableComponent::Event,
     }
 
+    /// @notice Emitted when a new discount NFT is minted.
     #[derive(Drop, starknet::Event)]
     pub struct NFTMinted {
         pub user: ContractAddress,
         pub token_id: u256,
-        pub tier: u8
+        pub tier: u8,
     }
 
+    /// @notice Emitted when a discount usage is consumed.
     #[derive(Drop, starknet::Event)]
     pub struct NFTUsed {
         pub user: ContractAddress,
         pub token_id: u256,
-        pub remaining_usage: u256
+        pub remaining_usage: u256,
     }
 
+    /// @notice Emitted when an NFT's usage quota is fully exhausted.
     #[derive(Drop, starknet::Event)]
     pub struct NFTDeactivated {
         pub user: ContractAddress,
         pub token_id: u256,
         pub used_in_period: u256,
-        pub max_usage: u256
+        pub max_usage: u256,
     }
 
+    /// @notice Emitted when an NFT is recharged for a new epoch.
     #[derive(Drop, starknet::Event)]
     pub struct NFTRecharged {
         pub user: ContractAddress,
         pub token_id: u256,
         pub tier: u8,
-        pub cost: u256
+        pub cost: u256,
     }
 
+    /// @notice Emitted when an authorized caller is added or removed.
+    #[derive(Drop, starknet::Event)]
+    pub struct AuthorizedCallerUpdated {
+        pub caller: ContractAddress,
+        pub authorized: bool,
+    }
+
+    /// @notice Emitted when the privacy router address is updated.
+    #[derive(Drop, starknet::Event)]
+    pub struct PrivacyRouterUpdated {
+        pub router: ContractAddress,
+    }
+
+    /// @notice Emitted when the base metadata URI is updated.
     #[derive(Drop, starknet::Event)]
     pub struct BaseUriUpdated {
         pub base_uri: ByteArray,
     }
 
+    /// @notice Emitted when a tier-specific metadata URI is updated.
     #[derive(Drop, starknet::Event)]
     pub struct TierUriUpdated {
         pub tier: u8,
         pub uri: ByteArray,
     }
 
-    // Initializes the discount NFT contract.
-    // Sets admin, point storage, and default tier configs.
-    // `point_storage` tracks point balances and `epoch` sets initial accounting period.
+    /// @notice Initializes the contract with default tier configurations.
+    /// @param point_storage Address of the point balance contract.
+    /// @param epoch Initial accounting epoch.
+    /// @dev Deployer becomes the initial owner via OZ OwnableComponent.
     #[constructor]
-    // Initializes storage and role configuration during deployment.
-    // May read/write storage, emit events, and call external contracts depending on runtime branch.
     fn constructor(ref self: ContractState, point_storage: ContractAddress, epoch: u64) {
-        self.admin.write(get_caller_address());
+        self.ownable.initializer(get_caller_address());
         self.point_storage_contract.write(point_storage);
         self.current_epoch.write(epoch);
         self.next_token_id.write(1);
         let empty_uri: ByteArray = "";
         self.base_uri.write(empty_uri);
 
-        // Tier configuration used by discount and usage policies:
-        // Bronze 5% (5 use), Silver 10% (7), Gold 25% (10), Platinum 35% (15), Onyx 50% (20).
+        // Tier configuration: Bronze 5% (5 uses), Silver 10% (7), Gold 25% (10), Platinum 35% (15), Onyx 50% (20).
         self.tier_costs.entry(1).write(5000);
         self.tier_discounts.entry(1).write(5);
         self.tier_max_usage.entry(1).write(5);
@@ -273,18 +354,14 @@ pub mod DiscountSoulbound {
 
     #[abi(embed_v0)]
     impl DiscountSoulboundImpl of super::IDiscountSoulbound<ContractState> {
-        // Applies mint nft after input validation and commits the resulting state.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulbound
         fn mint_nft(ref self: ContractState, tier: u8) {
             let user = get_caller_address();
             assert!(tier >= 1 && tier <= 5, "Tier tidak valid");
 
-            // Unlimited mint allowed: user dapat mint lagi kapan pun selama points cukup.
-            // Mapping user_nft akan menunjuk NFT terakhir yang aktif.
-
             let cost = self.tier_costs.entry(tier).read();
-            let point_dispatcher = IPointStorageDispatcher { 
-                contract_address: self.point_storage_contract.read() 
+            let point_dispatcher = IPointStorageDispatcher {
+                contract_address: self.point_storage_contract.read()
             };
 
             if cost > 0 {
@@ -310,14 +387,12 @@ pub mod DiscountSoulbound {
             self.emit(Event::NFTMinted(NFTMinted { user, token_id, tier }));
         }
 
-        // Implements use discount logic while keeping state transitions deterministic.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulbound
         fn use_discount(ref self: ContractState, user: ContractAddress) -> u256 {
             self.use_discount_batch(user, 1_u256)
         }
 
-        // Implements use discount batch logic while keeping state transitions deterministic.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulbound
         fn use_discount_batch(ref self: ContractState, user: ContractAddress, uses: u256) -> u256 {
             let caller = get_caller_address();
             assert!(
@@ -352,12 +427,10 @@ pub mod DiscountSoulbound {
                     max_usage: nft.max_usage
                 }));
             }
-
             discount
         }
 
-        // Implements recharge nft logic while keeping state transitions deterministic.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulbound
         fn recharge_nft(ref self: ContractState) {
             let user = get_caller_address();
             let token_id = self.user_nft.entry(user).read();
@@ -381,16 +454,10 @@ pub mod DiscountSoulbound {
             self.nfts.entry(token_id).write(nft);
             self.last_recharge_epoch.entry(token_id).write(current_epoch);
 
-            self.emit(Event::NFTRecharged(NFTRecharged {
-                user,
-                token_id,
-                tier: nft.tier,
-                cost
-            }));
+            self.emit(Event::NFTRecharged(NFTRecharged { user, token_id, tier: nft.tier, cost }));
         }
 
-        // Returns get user discount from state without mutating storage.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulbound
         fn get_user_discount(self: @ContractState, user: ContractAddress) -> u256 {
             let token_id = self.user_nft.entry(user).read();
             if token_id == 0 {
@@ -401,8 +468,7 @@ pub mod DiscountSoulbound {
             nft.discount_rate
         }
 
-        // Returns has active discount from state without mutating storage.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulbound
         fn has_active_discount(self: @ContractState, user: ContractAddress) -> (bool, u256) {
             let token_id = self.user_nft.entry(user).read();
             if token_id == 0 {
@@ -414,28 +480,32 @@ pub mod DiscountSoulbound {
             (active, rate)
         }
 
-        // Returns get nft info from state without mutating storage.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulbound
         fn get_nft_info(self: @ContractState, token_id: u256) -> DiscountNFT {
             self.nfts.entry(token_id).read()
         }
 
-        // Authorizes or revokes a caller for discount usage.
-        fn set_authorized_caller(ref self: ContractState, caller: ContractAddress, authorized: bool) {
-            assert!(get_caller_address() == self.admin.read(), "Unauthorized");
+        /// @inheritdoc IDiscountSoulbound
+        fn set_authorized_caller(
+            ref self: ContractState, caller: ContractAddress, authorized: bool
+        ) {
+            self.ownable.assert_only_owner();
             assert!(!caller.is_zero(), "Invalid caller");
             self.authorized_callers.entry(caller).write(authorized);
+            self.emit(Event::AuthorizedCallerUpdated(AuthorizedCallerUpdated { caller, authorized }));
         }
     }
 
     #[abi(embed_v0)]
     impl DiscountSoulboundMetadataImpl of super::IDiscountSoulboundMetadata<ContractState> {
+        /// @inheritdoc IDiscountSoulboundMetadata
         fn token_uri(self: @ContractState, token_id: u256) -> ByteArray {
             let nft = self.nfts.entry(token_id).read();
             assert!(!nft.owner.is_zero(), "Token not found");
             self.tier_uris.entry(nft.tier).read()
         }
 
+        /// @inheritdoc IDiscountSoulboundMetadata
         fn get_base_uri(self: @ContractState) -> ByteArray {
             self.base_uri.read()
         }
@@ -443,15 +513,13 @@ pub mod DiscountSoulbound {
 
     #[abi(embed_v0)]
     impl DiscountSoulboundAdminImpl of super::IDiscountSoulboundAdmin<ContractState> {
-        // Updates current epoch configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulboundAdmin
         fn set_current_epoch(ref self: ContractState, epoch: u64) {
-            assert!(get_caller_address() == self.admin.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             self.current_epoch.write(epoch);
         }
 
-        // Updates tier config configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulboundAdmin
         fn set_tier_config(
             ref self: ContractState,
             tier: u8,
@@ -460,21 +528,23 @@ pub mod DiscountSoulbound {
             max_usage: u256,
             recharge_cost: u256
         ) {
-            assert!(get_caller_address() == self.admin.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             self.tier_costs.entry(tier).write(cost);
             self.tier_discounts.entry(tier).write(discount);
             self.tier_max_usage.entry(tier).write(max_usage);
             self.tier_recharge_costs.entry(tier).write(recharge_cost);
         }
 
+        /// @inheritdoc IDiscountSoulboundAdmin
         fn set_base_uri(ref self: ContractState, base_uri: ByteArray) {
-            assert!(get_caller_address() == self.admin.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             self.base_uri.write(base_uri.clone());
             self.emit(Event::BaseUriUpdated(BaseUriUpdated { base_uri }));
         }
 
+        /// @inheritdoc IDiscountSoulboundAdmin
         fn set_tier_uri(ref self: ContractState, tier: u8, uri: ByteArray) {
-            assert!(get_caller_address() == self.admin.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             assert!(tier >= 1 && tier <= 5, "Tier tidak valid");
             self.tier_uris.entry(tier).write(uri.clone());
             self.emit(Event::TierUriUpdated(TierUriUpdated { tier, uri }));
@@ -483,16 +553,15 @@ pub mod DiscountSoulbound {
 
     #[abi(embed_v0)]
     impl DiscountSoulboundPrivacyImpl of super::IDiscountSoulboundPrivacy<ContractState> {
-        // Updates privacy router configuration after access-control and invariant checks.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulboundPrivacy
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
-            assert!(get_caller_address() == self.admin.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
+            self.emit(Event::PrivacyRouterUpdated(PrivacyRouterUpdated { router }));
         }
 
-        // Applies submit private nft action after input validation and commits the resulting state.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
+        /// @inheritdoc IDiscountSoulboundPrivacy
         fn submit_private_nft_action(
             ref self: ContractState,
             old_root: felt252,
@@ -502,6 +571,15 @@ pub mod DiscountSoulbound {
             public_inputs: Span<felt252>,
             proof: Span<felt252>
         ) {
+            let total: u64 = nullifiers.len().into();
+            let mut i: u64 = 0;
+            while i < total {
+                let idx: u32 = i.try_into().unwrap();
+                let nf = *nullifiers.at(idx);
+                assert!(!self.used_nullifiers.entry(nf).read(), "Nullifier already used");
+                self.used_nullifiers.entry(nf).write(true);
+                i += 1;
+            };
             let router = self.privacy_router.read();
             assert!(!router.is_zero(), "Privacy router not set");
             let dispatcher = IPrivacyRouterDispatcher { contract_address: router };
@@ -519,8 +597,6 @@ pub mod DiscountSoulbound {
 
     #[abi(embed_v0)]
     impl SoulboundTransferImpl of super::ISoulbound<ContractState> {
-        // Applies transfer after input validation and commits the resulting state.
-        // May read/write storage, emit events, and call external contracts depending on runtime branch.
         fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) {
             panic!("SBT: Non-transferable");
         }

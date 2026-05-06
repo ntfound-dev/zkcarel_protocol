@@ -1,6 +1,6 @@
 use starknet::ContractAddress;
 
-// Per-user CAREL staking state including tier and reward accrual checkpoints.
+/// @notice Per-user CAREL staking state including tier and reward accrual checkpoints.
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct Stake {
     pub amount: u256,
@@ -10,50 +10,83 @@ pub struct Stake {
     pub accumulated_rewards: u256,
 }
 
-// Minimal ERC20 interface for staking transfers.
-// Used for staking deposits and reward payouts.
+/// @notice Minimal ERC20 interface for staking deposits and reward payouts.
 #[starknet::interface]
 pub trait IERC20<TContractState> {
-    // Transfers tokens from this contract to `recipient`.
+    /// @notice Transfers tokens from this contract to `recipient`.
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
-    // Transfers tokens from `sender` to `recipient` using allowance.
+    /// @notice Transfers tokens from `sender` to `recipient` using allowance.
     fn transfer_from(
         ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256
     ) -> bool;
-    // Returns token balance for `account`.
+    /// @notice Returns token balance for `account`.
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
 }
 
-// Public staking API for CAREL token positions.
-// Uses tiered APY and a minimum lock period before penalty-free unstake.
+/// @title IStakingCarel
+/// @notice Public staking API for CAREL token positions.
+///         Uses tiered APY and a minimum lock period before penalty-free unstake.
 #[starknet::interface]
 pub trait IStakingCarel<TContractState> {
-    // Stakes assets and updates caller position.
+    /// @notice Stakes CAREL for the caller, compounds pending rewards, and refreshes tier.
+    /// @param amount Amount of CAREL to stake.
     fn stake(ref self: TContractState, amount: u256);
-    // Unstakes assets and updates caller position.
+
+    /// @notice Unstakes CAREL for the caller. Applies 10% penalty during the lock period.
+    /// @param amount Amount of CAREL to unstake.
     fn unstake(ref self: TContractState, amount: u256);
-    // Claims accrued staking rewards.
+
+    /// @notice Claims accrued staking rewards for the caller.
     fn claim_rewards(ref self: TContractState);
-    // Claims rewards for multiple users in one transaction.
+
+    /// @notice Claims rewards for multiple users in one transaction.
+    /// @dev Capped at `MAX_BATCH_CLAIM` users per call.
+    /// @param users Addresses to claim for.
     fn batch_claim_rewards(ref self: TContractState, users: Span<ContractAddress>);
-    // Returns total rewards (stored + pending) for a position.
+
+    /// @notice Returns total rewards (stored + pending) for a position.
+    /// @param user User address.
+    /// @return Total claimable reward amount.
     fn calculate_rewards(self: @TContractState, user: ContractAddress) -> u256;
-    // Returns current staked amount for the user.
+
+    /// @notice Returns current staked amount for the user.
+    /// @param user User address.
+    /// @return Staked token amount.
     fn get_user_stake(self: @TContractState, user: ContractAddress) -> u256;
-    // Returns full stake state for the user.
+
+    /// @notice Returns full stake state for the user.
+    /// @param user User address.
+    /// @return Stake struct.
     fn get_stake_info(self: @TContractState, user: ContractAddress) -> Stake;
-    // Updates reward fee configuration.
+
+    /// @notice Updates reward fee configuration.
+    /// @dev Callable only by the contract owner. Emits `RewardFeeUpdated`.
+    /// @param fee_bps Fee in basis points (max 10000).
+    /// @param fee_recipient Address to receive the fee portion.
     fn set_reward_fee(ref self: TContractState, fee_bps: u256, fee_recipient: ContractAddress);
-    // Returns reward fee configuration.
+
+    /// @notice Returns reward fee configuration.
+    /// @return (fee_bps, fee_recipient).
     fn get_reward_fee(self: @TContractState) -> (u256, ContractAddress);
 }
 
-// Hide Mode hooks for staking actions submitted through the privacy router.
+/// @title IStakingCarelPrivacy
+/// @notice Hide Mode hooks for CAREL staking actions through the privacy router.
 #[starknet::interface]
 pub trait IStakingCarelPrivacy<TContractState> {
-    // Sets the privacy router used for Hide Mode staking actions.
+    /// @notice Sets the privacy router for private staking actions.
+    /// @dev Callable only by the contract owner. Emits `PrivacyRouterUpdated`.
+    /// @param router New privacy router address (must be non-zero).
     fn set_privacy_router(ref self: TContractState, router: ContractAddress);
-    // Forwards nullifier/commitment-bound staking payload to the privacy router.
+
+    /// @notice Forwards a nullifier/commitment-bound staking payload to the privacy router.
+    /// @dev Nullifiers are replay-protected: each may only be consumed once.
+    /// @param old_root Previous Merkle tree root.
+    /// @param new_root Updated Merkle tree root after commitments.
+    /// @param nullifiers Nullifiers for inputs being spent.
+    /// @param commitments New Merkle commitments.
+    /// @param public_inputs ZK circuit public inputs.
+    /// @param proof Serialized ZK proof.
     fn submit_private_staking_action(
         ref self: TContractState,
         old_root: felt252,
@@ -65,8 +98,9 @@ pub trait IStakingCarelPrivacy<TContractState> {
     );
 }
 
-// CAREL staking contract with tier-based APY and early-unstake penalty.
-// Rewards are paid from `reward_pool_address`.
+/// @title StakingCarel
+/// @notice CAREL staking contract with tier-based APY and early-unstake penalty.
+///         Rewards are paid from `reward_pool_address`.
 #[starknet::contract]
 pub mod StakingCarel {
     use starknet::ContractAddress;
@@ -75,6 +109,8 @@ pub mod StakingCarel {
     use starknet::storage::*;
     use core::traits::TryInto;
     use core::num::traits::Zero;
+    use openzeppelin::access::ownable::OwnableComponent;
+    use openzeppelin::security::reentrancyguard::ReentrancyGuardComponent;
     use crate::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy_action_types::ACTION_STAKING;
     use super::{Stake, IStakingCarel, IERC20Dispatcher, IERC20DispatcherTrait};
@@ -85,18 +121,30 @@ pub mod StakingCarel {
     const BASIS_POINTS: u256 = 10000;
     const MAX_BATCH_CLAIM: u64 = 20;
 
+    component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
+    component!(path: ReentrancyGuardComponent, storage: reentrancy_guard, event: ReentrancyGuardEvent);
+
+    #[abi(embed_v0)]
+    impl OwnableTwoStepImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
+    impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
+    impl ReentrancyGuardInternalImpl = ReentrancyGuardComponent::InternalImpl<ContractState>;
+
     #[storage]
     pub struct Storage {
         pub stakes: Map<ContractAddress, Stake>,
         pub total_staked: u256,
         pub token_address: ContractAddress,
         pub reward_pool_address: ContractAddress,
-        pub owner: ContractAddress,
         pub reward_fee_bps: u256,
         pub fee_recipient: ContractAddress,
         pub privacy_router: ContractAddress,
         pub stake_epoch: Map<ContractAddress, u64>,
         pub min_stake_epoch_duration: u64,
+        pub used_nullifiers: Map<felt252, bool>,
+        #[substorage(v0)]
+        pub ownable: OwnableComponent::Storage,
+        #[substorage(v0)]
+        pub reentrancy_guard: ReentrancyGuardComponent::Storage,
     }
 
     #[event]
@@ -106,43 +154,71 @@ pub mod StakingCarel {
         Unstaked: Unstaked,
         RewardsClaimed: RewardsClaimed,
         StakeEpochInvalidated: StakeEpochInvalidated,
+        RewardFeeUpdated: RewardFeeUpdated,
+        PrivacyRouterUpdated: PrivacyRouterUpdated,
+        #[flat]
+        OwnableEvent: OwnableComponent::Event,
+        #[flat]
+        ReentrancyGuardEvent: ReentrancyGuardComponent::Event,
     }
 
+    /// @notice Emitted when tokens are staked.
     #[derive(Drop, starknet::Event)]
     pub struct Staked {
         pub user: ContractAddress,
         pub amount: u256,
-        pub tier: u8
+        pub tier: u8,
     }
 
+    /// @notice Emitted when tokens are unstaked.
     #[derive(Drop, starknet::Event)]
     pub struct Unstaked {
         pub user: ContractAddress,
         pub amount: u256,
-        pub penalty: u256
+        pub penalty: u256,
     }
 
+    /// @notice Emitted when staking rewards are claimed.
     #[derive(Drop, starknet::Event)]
     pub struct RewardsClaimed {
         pub user: ContractAddress,
-        pub amount: u256
+        pub amount: u256,
     }
 
+    /// @notice Emitted when an unstake occurs within the minimum epoch window.
     #[derive(Drop, starknet::Event)]
     pub struct StakeEpochInvalidated {
         pub user: ContractAddress,
-        pub epoch: u64
+        pub epoch: u64,
     }
 
-    // Initializes staking token and reward funding pool dependencies.
+    /// @notice Emitted when the reward fee configuration is updated.
+    #[derive(Drop, starknet::Event)]
+    pub struct RewardFeeUpdated {
+        pub fee_bps: u256,
+        pub fee_recipient: ContractAddress,
+    }
+
+    /// @notice Emitted when the privacy router address is updated.
+    #[derive(Drop, starknet::Event)]
+    pub struct PrivacyRouterUpdated {
+        pub router: ContractAddress,
+    }
+
+    /// @notice Initializes staking token, reward pool, and owner.
+    /// @param owner Initial contract owner (two-step transfer via OZ OwnableComponent).
+    /// @param token CAREL token address used for staking deposits.
+    /// @param reward_pool Address that funds reward payouts.
     #[constructor]
-    // Initializes contract storage during deployment.
     fn constructor(
-        ref self: ContractState, token: ContractAddress, reward_pool: ContractAddress, owner: ContractAddress
+        ref self: ContractState,
+        owner: ContractAddress,
+        token: ContractAddress,
+        reward_pool: ContractAddress,
     ) {
+        self.ownable.initializer(owner);
         self.token_address.write(token);
         self.reward_pool_address.write(reward_pool);
-        self.owner.write(owner);
         self.reward_fee_bps.write(0);
         self.fee_recipient.write(owner);
         self.min_stake_epoch_duration.write(1);
@@ -154,14 +230,14 @@ pub mod StakingCarel {
 
     #[abi(embed_v0)]
     impl StakingCarelImpl of IStakingCarel<ContractState> {
-        // Stakes CAREL for caller, compounds pending rewards, and refreshes tier.
+        /// @inheritdoc IStakingCarel
         fn stake(ref self: ContractState, amount: u256) {
+            self.reentrancy_guard.start();
             let user = get_caller_address();
             let now = get_block_timestamp();
             let token = IERC20Dispatcher { contract_address: self.token_address.read() };
 
             let mut current_stake = self.stakes.entry(user).read();
-            
             if current_stake.amount > 0 {
                 let pending = self._calculate_pending_rewards(@current_stake);
                 current_stake.accumulated_rewards += pending;
@@ -176,21 +252,20 @@ pub mod StakingCarel {
 
             let ok = token.transfer_from(user, starknet::get_contract_address(), amount);
             assert!(ok, "Token transfer failed");
-            
-            // Persist updated position and global total.
             self.stakes.entry(user).write(current_stake);
             self.total_staked.write(self.total_staked.read() + amount);
+            self.reentrancy_guard.end();
 
-            self.emit(Staked { user, amount, tier: current_stake.tier });
+            self.emit(Event::Staked(Staked { user, amount, tier: current_stake.tier }));
         }
 
-        // Unstakes CAREL for caller and applies 10% penalty during lock period.
+        /// @inheritdoc IStakingCarel
         fn unstake(ref self: ContractState, amount: u256) {
+            self.reentrancy_guard.start();
             let user = get_caller_address();
             let now = get_block_timestamp();
             let mut current_stake = self.stakes.entry(user).read();
-            
-            assert!(current_stake.amount >= amount, "Saldo stake tidak cukup");
+            assert!(current_stake.amount >= amount, "Insufficient stake balance");
 
             let pending = self._calculate_pending_rewards(@current_stake);
             current_stake.accumulated_rewards += pending;
@@ -205,12 +280,11 @@ pub mod StakingCarel {
             let current_epoch_val = current_epoch(@self);
             let min_epochs = self.min_stake_epoch_duration.read();
             if current_epoch_val < stake_epoch + min_epochs {
-                self.emit(StakeEpochInvalidated { user, epoch: current_epoch_val });
+                self.emit(Event::StakeEpochInvalidated(StakeEpochInvalidated { user, epoch: current_epoch_val }));
             }
 
             let amount_to_return = amount - penalty;
             current_stake.amount -= amount;
-            
             if current_stake.amount > 0 {
                 current_stake.tier = self._calculate_tier(current_stake.amount);
             } else {
@@ -225,63 +299,65 @@ pub mod StakingCarel {
             assert!(ok, "Token transfer failed");
             if penalty > 0 {
                 let ok_penalty = token.transfer(self.reward_pool_address.read(), penalty);
-                assert!(ok_penalty, "Token transfer failed");
+                assert!(ok_penalty, "Penalty transfer failed");
             }
+            self.reentrancy_guard.end();
 
-            self.emit(Unstaked { user, amount, penalty });
+            self.emit(Event::Unstaked(Unstaked { user, amount, penalty }));
         }
 
-        // Claims caller rewards from reward pool into user wallet.
+        /// @inheritdoc IStakingCarel
         fn claim_rewards(ref self: ContractState) {
+            self.reentrancy_guard.start();
             let user = get_caller_address();
             let now = get_block_timestamp();
-            let amount = _claim_rewards_for_user(ref self, user, now);
-            if amount == 0 {
-                return;
-            }
+            _claim_rewards_for_user(ref self, user, now);
+            self.reentrancy_guard.end();
         }
 
-        // Claims rewards for multiple users, capped by `MAX_BATCH_CLAIM`.
+        /// @inheritdoc IStakingCarel
         fn batch_claim_rewards(ref self: ContractState, users: Span<ContractAddress>) {
+            self.reentrancy_guard.start();
             let now = get_block_timestamp();
             let total: u64 = users.len().into();
             assert!(total <= MAX_BATCH_CLAIM, "Batch too large");
-
             let mut i: u64 = 0;
             while i < total {
                 let idx: u32 = i.try_into().unwrap();
                 let user = *users.at(idx);
-                let _ = _claim_rewards_for_user(ref self, user, now);
+                _claim_rewards_for_user(ref self, user, now);
                 i += 1;
             };
+            self.reentrancy_guard.end();
         }
 
-        // Returns total claimable rewards (stored rewards + current pending).
+        /// @inheritdoc IStakingCarel
         fn calculate_rewards(self: @ContractState, user: ContractAddress) -> u256 {
             let current_stake = self.stakes.entry(user).read();
             current_stake.accumulated_rewards + self._calculate_pending_rewards(@current_stake)
         }
 
-        // Returns current staked amount for the user.
+        /// @inheritdoc IStakingCarel
         fn get_user_stake(self: @ContractState, user: ContractAddress) -> u256 {
             self.stakes.entry(user).read().amount
         }
 
-        // Returns full stake state for the user.
+        /// @inheritdoc IStakingCarel
         fn get_stake_info(self: @ContractState, user: ContractAddress) -> Stake {
             self.stakes.entry(user).read()
         }
 
-        // Updates reward fee configuration.
+        /// @inheritdoc IStakingCarel
         fn set_reward_fee(ref self: ContractState, fee_bps: u256, fee_recipient: ContractAddress) {
-            assert!(get_caller_address() == self.owner.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             assert!(fee_bps <= BASIS_POINTS, "Fee too high");
             assert!(!fee_recipient.is_zero(), "Fee recipient required");
             self.reward_fee_bps.write(fee_bps);
             self.fee_recipient.write(fee_recipient);
+            self.emit(Event::RewardFeeUpdated(RewardFeeUpdated { fee_bps, fee_recipient }));
         }
 
-        // Returns reward fee configuration.
+        /// @inheritdoc IStakingCarel
         fn get_reward_fee(self: @ContractState) -> (u256, ContractAddress) {
             (self.reward_fee_bps.read(), self.fee_recipient.read())
         }
@@ -289,45 +365,41 @@ pub mod StakingCarel {
 
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
-        // Maps staked amount to tier thresholds used by APY schedule.
+        /// Maps staked amount to tier thresholds used by the APY schedule.
         fn _calculate_tier(self: @ContractState, amount: u256) -> u8 {
             let one_carel: u256 = 1000000000000000000;
             if amount >= 10000 * one_carel { return 3; }
             if amount >= 1000 * one_carel { return 2; }
             if amount >= 100 * one_carel { return 1; }
-
             0
         }
 
-        // Computes linear pending rewards since `last_claim_time`.
+        /// Computes linear pending rewards since `last_claim_time`.
         fn _calculate_pending_rewards(self: @ContractState, stake: @Stake) -> u256 {
             if *stake.amount == 0 { return 0; }
-            
             let now = get_block_timestamp();
             let time_diff = now - *stake.last_claim_time;
-            
             let apy_bps: u256 = match *stake.tier {
                 1 => 800,
                 2 => 1200,
                 3 => 1500,
-                _ => 0
+                _ => 0,
             };
-
             (*stake.amount * apy_bps * time_diff.into()) / (BASIS_POINTS * SECONDS_PER_YEAR.into())
         }
     }
 
     #[abi(embed_v0)]
     impl StakingCarelPrivacyImpl of super::IStakingCarelPrivacy<ContractState> {
-        // Sets privacy router for Hide Mode staking; can be configured only once.
+        /// @inheritdoc IStakingCarelPrivacy
         fn set_privacy_router(ref self: ContractState, router: ContractAddress) {
-            assert!(get_caller_address() == self.owner.read(), "Unauthorized");
+            self.ownable.assert_only_owner();
             assert!(!router.is_zero(), "Privacy router required");
             self.privacy_router.write(router);
+            self.emit(Event::PrivacyRouterUpdated(PrivacyRouterUpdated { router }));
         }
 
-        // Forwards private staking payload to privacy router for proof validation.
-        // `nullifiers` prevent replay and `commitments` bind intended state transition.
+        /// @inheritdoc IStakingCarelPrivacy
         fn submit_private_staking_action(
             ref self: ContractState,
             old_root: felt252,
@@ -337,6 +409,15 @@ pub mod StakingCarel {
             public_inputs: Span<felt252>,
             proof: Span<felt252>
         ) {
+            let total: u64 = nullifiers.len().into();
+            let mut i: u64 = 0;
+            while i < total {
+                let idx: u32 = i.try_into().unwrap();
+                let nf = *nullifiers.at(idx);
+                assert!(!self.used_nullifiers.entry(nf).read(), "Nullifier already used");
+                self.used_nullifiers.entry(nf).write(true);
+                i += 1;
+            };
             let router = self.privacy_router.read();
             assert!(!router.is_zero(), "Privacy router not set");
             let dispatcher = IPrivacyRouterDispatcher { contract_address: router };
@@ -352,17 +433,16 @@ pub mod StakingCarel {
         }
     }
 
-    // Internal claim helper reused by single and batch claim paths.
-    // Pulls reward tokens from `reward_pool_address` and resets accrued balance.
+    /// Internal claim helper reused by `claim_rewards` and `batch_claim_rewards`.
+    /// Pulls reward tokens from `reward_pool_address` and resets accrued balance.
     fn _claim_rewards_for_user(
         ref self: ContractState,
         user: ContractAddress,
-        now: u64
+        now: u64,
     ) -> u256 {
         let mut current_stake = self.stakes.entry(user).read();
         let pending = self._calculate_pending_rewards(@current_stake);
         let total_reward = current_stake.accumulated_rewards + pending;
-
         if total_reward == 0 {
             return 0;
         }
@@ -381,12 +461,12 @@ pub mod StakingCarel {
         let token = IERC20Dispatcher { contract_address: self.token_address.read() };
         if fee_amount > 0 {
             let ok_fee = token.transfer_from(self.reward_pool_address.read(), self.fee_recipient.read(), fee_amount);
-            assert!(ok_fee, "Token transfer failed");
+            assert!(ok_fee, "Fee transfer failed");
         }
         let ok = token.transfer_from(self.reward_pool_address.read(), user, net_reward);
-        assert!(ok, "Token transfer failed");
+        assert!(ok, "Reward transfer failed");
 
-        self.emit(RewardsClaimed { user, amount: net_reward });
+        self.emit(Event::RewardsClaimed(RewardsClaimed { user, amount: net_reward }));
         net_reward
     }
 }
