@@ -9,6 +9,7 @@ CAREL's current execution window is the Starknet Foundation Seed Grant — 3 mil
 
 Security hardening and gas optimization across the core execution layer.
 
+**Smart contracts & circuits:**
 - ShieldedPoolV4 verifier redeployed with `public_inputs` binding fix
 - All 4 Noir circuits updated — full on-chain field constraints and private-exit binding (all AUDIT.md items closed)
 - AIExecutor gas: ~5M → ≤1.5M
@@ -16,6 +17,15 @@ Security hardening and gas optimization across the core execution layer.
 - Garaga Hide Mode gas: minimum 30% reduction on Honk proof calldata path
 - BTC Light Client PoW validation implemented (`btc_light_client.cairo` TODO stub replaced)
 - Mixing-window constraint moved from UX-only to on-chain enforcement in ShieldedPoolV4
+
+**Backend full audit (completed 2026-05-06):**
+- Full file-by-file audit of all ~55 `backend-rust/src/` files — auth, privacy, garaga pipeline, indexer, bridge, services
+- 2 critical bugs fixed: expired limit orders permanently locked user funds; referral points double-credited on-chain
+- 1 medium bug fixed: `add_points` vs `submit_points` race condition between social verifier and point calculator
+- 4 bug candidates identified in `bridge_worker` and `merkle_generator` — scheduled for M1 resolution
+- 15 technical-debt items documented with severity and action plan (`AUDIT_BACKEND_RUST.md`)
+
+**Hide Mode UX & tooling:**
 - Hide Mode UX: real-time proof progress indicator, error states, loading feedback
 - MacBook Pro M5 24GB procured — local ZK proving environment operational
 
@@ -64,3 +74,24 @@ After seed delivery. Mainnet deployment is the prerequisite for all items below.
 | Social Media Tasks | On-chain rewards for privacy-related social tasks and content |
 | CEX Deposit | Direct deposit from centralized exchanges into CAREL |
 | QRIS / Local Bank | Indonesian QRIS and local bank transfer onramp into Starknet |
+
+---
+
+## Backend Infrastructure Roadmap
+
+Backend-specific hardening tracked separately from protocol milestones.
+
+**Short term**
+- RPC failover and backpressure handling
+- Relayer-path validation and observability
+- Expand smoke tests for high-impact APIs
+
+**Mid term**
+- Worker isolation from API hot path
+- Bridge-route telemetry and failure classification
+- Nullifier and replay analytics
+
+**Long term**
+- Multi-region runtime hardening
+- Queue-centric execution model for burst traffic
+- Incident runbook and recovery automation

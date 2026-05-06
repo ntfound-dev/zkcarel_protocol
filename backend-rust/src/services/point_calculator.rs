@@ -649,62 +649,6 @@ impl PointCalculator {
             }
         }
 
-        let referee_total_for_referral_sync = if referee_bonus > Decimal::ZERO {
-            new_total + referee_bonus
-        } else {
-            new_total
-        };
-
-        if let Err(err) = self
-            .sync_referral_onchain(epoch, referee_address, referee_total_for_referral_sync)
-            .await
-        {
-            tracing::warn!(
-                "Failed to sync referral onchain: referee={}, epoch={}, error={}",
-                referee_address,
-                epoch,
-                err
-            );
-        }
-
-        Ok(())
-    }
-
-    // Internal helper that supports `sync_referral_onchain` operations.
-    async fn sync_referral_onchain(
-        &self,
-        epoch: i64,
-        referee_address: &str,
-        total_points: Decimal,
-    ) -> Result<()> {
-        let referral_contract = match &self.config.referral_system_address {
-            Some(addr) if !addr.trim().is_empty() => addr,
-            _ => return Ok(()),
-        };
-        let Some(invoker) = &self.onchain else {
-            return Ok(());
-        };
-
-        let points_u128 = total_points.trunc().to_u128().unwrap_or(0);
-        if points_u128 == 0 {
-            return Ok(());
-        }
-
-        let call = build_referral_call(
-            referral_contract,
-            epoch as u64,
-            referee_address,
-            points_u128,
-        )?;
-
-        let tx_hash = invoker.invoke(call).await?;
-        tracing::info!(
-            "Referral points synced onchain: referee={}, epoch={}, tx={}",
-            referee_address,
-            epoch,
-            tx_hash
-        );
-
         Ok(())
     }
 
@@ -750,32 +694,6 @@ impl PointCalculator {
 
         Ok(())
     }
-}
-
-// Internal helper that builds inputs for `build_referral_call`.
-fn build_referral_call(
-    contract: &str,
-    epoch: u64,
-    referee: &str,
-    total_points: u128,
-) -> Result<Call> {
-    let to = parse_felt(contract)?;
-    let selector = get_selector_from_name("record_referee_points")
-        .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
-    let referee_felt = parse_felt(referee)?;
-
-    let calldata = vec![
-        Felt::from(epoch as u128),
-        referee_felt,
-        Felt::from(total_points),
-        Felt::from(0_u128),
-    ];
-
-    Ok(Call {
-        to,
-        selector,
-        calldata,
-    })
 }
 
 // Internal helper that builds inputs for `build_point_storage_submit_points_call`.

@@ -75,6 +75,12 @@ pub trait ILimitOrderBook<TContractState> {
     /// @param asset_id Pragma feed ID.
     fn set_token_asset_id(ref self: TContractState, token: ContractAddress, asset_id: felt252);
 
+    /// @notice Expires an active order whose expiry timestamp has passed and refunds the owner.
+    /// @dev Callable only by authorized keepers or the contract owner.
+    ///      Reverts if the order is not active or has not yet expired.
+    /// @param order_id Order to expire.
+    fn expire_limit_order(ref self: TContractState, order_id: felt252);
+
     /// @notice Authorizes or revokes a keeper address.
     /// @dev Callable only by the contract owner. Emits `KeeperUpdated`.
     /// @param keeper Keeper address.
@@ -139,6 +145,7 @@ pub mod LimitOrderBook {
     pub enum Event {
         LimitOrderCreated: LimitOrderCreated,
         LimitOrderCancelled: LimitOrderCancelled,
+        LimitOrderExpired: LimitOrderExpired,
         LimitOrderExecuted: LimitOrderExecuted,
         LimitOrderFeesCalculated: LimitOrderFeesCalculated,
         FeeConfigUpdated: FeeConfigUpdated,
@@ -159,6 +166,13 @@ pub mod LimitOrderBook {
     /// @notice Emitted when a limit order is cancelled and refunded.
     #[derive(Drop, starknet::Event)]
     pub struct LimitOrderCancelled {
+        pub order_id: felt252,
+        pub owner: ContractAddress,
+    }
+
+    /// @notice Emitted when an expired limit order is swept by a keeper and tokens refunded.
+    #[derive(Drop, starknet::Event)]
+    pub struct LimitOrderExpired {
         pub order_id: felt252,
         pub owner: ContractAddress,
     }
@@ -261,6 +275,28 @@ pub mod LimitOrderBook {
             let refunded = from_token_dispatcher.transfer(owner, order.amount);
             assert!(refunded, "Refund failed");
             self.emit(Event::LimitOrderCancelled(LimitOrderCancelled { order_id, owner: caller }));
+            self.reentrancy_guard.end();
+        }
+
+        /// @inheritdoc ILimitOrderBook
+        fn expire_limit_order(ref self: ContractState, order_id: felt252) {
+            self.reentrancy_guard.start();
+            let caller = get_caller_address();
+            assert!(
+                caller == self.ownable.owner() || self.authorized_keepers.entry(caller).read(),
+                "Unauthorized keeper"
+            );
+            let mut order = self.limit_orders.entry(order_id).read();
+            let owner = self.limit_order_owner.entry(order_id).read();
+            assert!(!owner.is_zero(), "Order not found");
+            assert!(order.status == 1_u8, "Order not active");
+            assert!(get_block_timestamp() >= order.expiry, "Order not yet expired");
+            order.status = 3_u8;
+            self.limit_orders.entry(order_id).write(order);
+            let from_token_dispatcher = IERC20Dispatcher { contract_address: order.from_token };
+            let refunded = from_token_dispatcher.transfer(owner, order.amount);
+            assert!(refunded, "Refund failed");
+            self.emit(Event::LimitOrderExpired(LimitOrderExpired { order_id, owner }));
             self.reentrancy_guard.end();
         }
 

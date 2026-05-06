@@ -162,21 +162,18 @@ impl SocialVerifier {
         .execute(self.db.pool())
         .await?;
 
-        self.sync_points_onchain(epoch as u64, user_address, points_decimal)
-            .await?;
+        self.sync_points_onchain(epoch as u64, user_address).await?;
 
         Ok(())
     }
 
     // Internal helper that supports `sync_points_onchain` operations.
-    async fn sync_points_onchain(
-        &self,
-        epoch: u64,
-        user_address: &str,
-        points: rust_decimal::Decimal,
-    ) -> Result<()> {
+    // Reads the authoritative total from DB and sets it on-chain via submit_points (absolute write),
+    // consistent with point_calculator which also uses submit_points. Using add_points (delta)
+    // here would cause double-counting when point_calculator later overwrites the total.
+    async fn sync_points_onchain(&self, epoch: u64, user_address: &str) -> Result<()> {
         let contract = self.config.point_storage_address.trim();
-        if contract.is_empty() {
+        if contract.is_empty() || contract.starts_with("0x0000") {
             return Ok(());
         }
 
@@ -184,34 +181,43 @@ impl SocialVerifier {
             return Ok(());
         };
 
-        let points_u128 = points.trunc().to_u128().unwrap_or(0);
-        if points_u128 == 0 {
+        let total: rust_decimal::Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(total_points, 0) FROM points WHERE user_address = $1 AND epoch = $2",
+        )
+        .bind(user_address)
+        .bind(epoch as i64)
+        .fetch_optional(self.db.pool())
+        .await?
+        .unwrap_or(rust_decimal::Decimal::ZERO);
+
+        let total_u128 = total.max(rust_decimal::Decimal::ZERO).trunc().to_u128().unwrap_or(0);
+        if total_u128 == 0 {
             return Ok(());
         }
 
-        let call = build_add_points_call(contract, epoch, user_address, points_u128)?;
+        let call = build_submit_points_call(contract, epoch, user_address, total_u128)?;
         let tx_hash = invoker.invoke(call).await?;
         tracing::info!(
-            "Social points synced onchain: user={}, epoch={}, tx={}",
+            "Social points synced onchain: user={}, epoch={}, total={}, tx={}",
             user_address,
             epoch,
+            total_u128,
             tx_hash
         );
         Ok(())
     }
 }
 
-// Internal helper that builds inputs for `build_add_points_call`.
-fn build_add_points_call(contract: &str, epoch: u64, user: &str, points: u128) -> Result<Call> {
+// Internal helper that builds inputs for `build_submit_points_call`.
+fn build_submit_points_call(contract: &str, epoch: u64, user: &str, points: u128) -> Result<Call> {
     let to = parse_felt(contract)?;
-    let selector = get_selector_from_name("add_points")
+    let selector = get_selector_from_name("submit_points")
         .map_err(|e| crate::error::AppError::Internal(format!("Selector error: {}", e)))?;
     let user_felt = parse_felt(user)?;
 
     let calldata = vec![
         starknet_core::types::Felt::from(epoch),
         user_felt,
-        // u256 low/high
         starknet_core::types::Felt::from(points),
         starknet_core::types::Felt::from(0_u128),
     ];

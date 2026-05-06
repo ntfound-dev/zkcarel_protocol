@@ -1,305 +1,344 @@
-# CAREL Backend (Rust + Axum)
+# CAREL Backend — Rust / Axum
 
-Backend service for CAREL Protocol.
-This README is backend-only and covers API modules, relayer flow, workers, runtime profile, deployment notes, and current limits.
+The backend is the off-chain execution layer for CAREL Protocol. It handles trade routing, ZK proof orchestration, on-chain relaying, and the points/rewards pipeline. It is intentionally designed as a thin coordinator — business-critical state lives on-chain; the backend is the oracle bridge that feeds it.
+
+This document covers architecture, the hybrid off-chain/on-chain design rationale, API surface, background workers, and deployment. Internal audit results are in [`AUDIT_BACKEND_RUST.md`](./AUDIT_BACKEND_RUST.md).
+
+---
 
 ## Table of Contents
-- [Scope](#scope)
-- [Repository Structure](#repository-structure)
-- [Runtime Architecture](#runtime-architecture)
-- [Privacy Model (Hide Mode)](#privacy-model-hide-mode)
+
+- [Why a backend exists](#why-a-backend-exists)
+- [Architecture](#architecture)
+- [Service Layer — What Stays Off-Chain and Why](#service-layer--what-stays-off-chain-and-why)
+- [On-Chain Sync Points](#on-chain-sync-points)
 - [API Domains](#api-domains)
 - [Background Workers](#background-workers)
 - [Build and Test](#build-and-test)
 - [Run Local](#run-local)
-- [Runtime Profile](#runtime-profile)
 - [Environment Variables](#environment-variables)
-- [V4 Baseline Profile](#v4-baseline-profile)
-- [Environment Audit Split](#environment-audit-split)
 - [Signer Semantics](#signer-semantics)
+- [Hide Mode (V4)](#hide-mode-v4)
 - [AI Production Guardrails](#ai-production-guardrails)
 - [Deployment Notes](#deployment-notes)
 - [Current Constraints](#current-constraints)
-- [Development Plan](#development-plan)
+- [Open Items (Pre-Mainnet)](#open-items-pre-mainnet)
 
-## Scope
-- Runtime: Rust (`axum`, `tokio`).
-- Storage: PostgreSQL (`sqlx`) and Redis.
-- Networks: Starknet Sepolia, Ethereum Sepolia, Bitcoin testnet (provider dependent).
-- Core responsibilities:
-  - API layer for auth, trading, bridge, privacy, rewards, AI.
-  - Relayer path for hide mode (`swap`, `limit order`, `stake`).
-  - Background workers for indexing, pricing, points, and execution support.
+---
 
-## Repository Structure
-```text
-backend-rust/
-  src/
-    api/                    # HTTP route handlers
-    services/               # Business logic
-    integrations/           # External providers (bridge/social)
-    websocket/              # Realtime channels
-    indexer/                # Block/event indexer
-    models/                 # Domain models
-    db/                     # DB access
-    main.rs                 # App bootstrap
-    config.rs               # Env parsing and runtime config
-  migrations/               # SQL migrations
-  scripts/                  # Prover and smoke-test utilities
-  Cargo.toml                # Rust crate manifest
-  .env.testnet.example      # Example env profile
-  ../docs/test_reports.md   # Consolidated test report
-```
+## Why a backend exists
 
-## Runtime Architecture
+Certain protocol operations cannot or should not run entirely on-chain:
+
+| Operation | Why off-chain |
+|---|---|
+| Point calculation | Needs price feeds, tx history, AI level, cross-epoch data from DB |
+| Wash trading detection | Time-window query across tx history — no on-chain equivalent |
+| Merkle tree generation | Must iterate all users; generate off-chain, post root on-chain |
+| Limit order monitoring | Keeper pattern — backend polls price, triggers on-chain execution |
+| Social verification | Requires external API calls (Twitter, Telegram, Discord) |
+| ZK proof generation | Garaga Honk proof generation is a multi-second CPU job |
+| Bridge routing | Aggregates quotes from LayerSwap, Garden Finance, Atomiq |
+
+Everything that **does** have consensus requirements lives in Cairo smart contracts. The backend's job is to compute, then write the canonical result to chain.
+
+---
+
+## Architecture
+
 ```mermaid
 flowchart LR
     CLIENT["Client / App"] --> API["Axum API Layer"]
 
     API --> AUTH["Auth + JWT"]
-    API --> TRADE["Swap / Stake / Limit"]
+    API --> TRADE["Swap / Stake / Limit Order"]
     API --> PRIV["Privacy / Hide Mode"]
     API --> REWARD["Points / Rewards / NFT"]
     API --> BRIDGE["Bridge Routing"]
-    API --> AI["AI Intent + Command Parsing"]
+    API --> AI["AI Intent Parsing"]
 
     PRIV --> RELAYER["Relayer Signer"]
     TRADE --> RELAYER
     AI --> RELAYER
 
-    API --> PG[("PostgreSQL")]
-    API --> REDIS[("Redis")]
+    API --> PG[("PostgreSQL\n(source of truth off-chain)")]
+    API --> REDIS[("Redis\n(price cache)")]
 
     INDEXER["Indexer Worker"] --> PG
     PRICE["Price Worker"] --> REDIS
-    POINTS["Points Worker"] --> PG
+    POINTS["Point Calculator Worker"] --> PG
     LIMITEXEC["Limit Order Worker"] --> PG
 
-    RELAYER --> STARKNET["Starknet Sepolia"]
+    RELAYER --> STARKNET["Starknet\n(canonical state)"]
     BRIDGE --> ETH["Ethereum Sepolia"]
     BRIDGE --> BTC["Bitcoin testnet"]
+
+    PG -.->|sync| STARKNET
 ```
 
-## Privacy Model (Hide Mode)
-Problem:
-- In normal mode, the user wallet directly calls swap/limit/stake targets, so the wallet becomes linkable to trading behavior on-chain.
+**Data flow rule:** PostgreSQL is the mutable off-chain ledger. Smart contracts hold the immutable finalized state. The sync direction is always DB → chain, never chain → DB (except via the indexer, which is read-only from chain).
 
-What hide mode **does**:
-- Uses a note model (`deposit_fixed_v4` -> `execute_private_*_v4` / `private_exit_v3`) so later spends use a `nullifier` + ZK proof instead of revealing which `note_commitment` was deposited.
-- Shifts the on-chain `tx.from` for execution to the backend relayer account (the user wallet is not the sender that interacts with DEX/LOB/staking targets).
-- Enforces **proof-bound execution**: the verifier output includes an `action_hash`/`exit_hash` and a `recipient`, and `ShieldedPoolV4` recomputes the hash on-chain to prevent relayer parameter tampering.
+---
 
-What hide mode **does not** do (important):
-- Starknet calldata and ERC20 transfers are public. Explorers will still show token addresses, amounts, routes, and transfers for `execute_private_*_with_payout`.
-- Deposits (`deposit_fixed_v4`) and exits (`private_exit_v3`) are still user-signed on-chain calls; depositor/recipient addresses and denomination tiers remain observable.
-- Hide mode is therefore not “full anonymous trading”; it is primarily *note unlinkability* (commitment vs nullifier) plus *integrity* (proof-bound execution).
+## Service Layer — What Stays Off-Chain and Why
 
-Role of Garaga in this backend:
-- Garaga is used to generate/verify the ZK proof that proves membership/non-spend and binds the execution hash/recipient.
-- Garaga does **not** encrypt calldata or hide token transfers; it prevents invalid spends and relayer manipulation.
+```
+backend-rust/src/services/
+```
+
+| Service | Responsibility | Why off-chain |
+|---|---|---|
+| `point_calculator` | Calculate trading / staking / battle / bridge points per tx | Needs USD prices, AI level, NFT state, cross-tx wash trading detection |
+| `merkle_generator` | Build Poseidon Merkle tree of epoch rewards | Must read all users; tree construction is O(n) — not feasible on-chain |
+| `snapshot_manager` | Finalize epochs, submit root + total to chain | Orchestration between DB and multiple contracts |
+| `limit_order_executor` | Monitor active orders, trigger execution when price matches | Keeper pattern; price comparison needs off-chain price feed |
+| `social_verifier` | Verify Twitter/Telegram/Discord tasks, award points | External OAuth / API calls |
+| `nft_discount` | Read NFT discount rate on-chain, consume usage on-chain | On-chain reads + writes — backend acts as session coordinator |
+| `privacy_verifier` | Route ZK verifier selection, validate proof format | Verifier routing config + pre-validation before on-chain submission |
+| `gas_optimizer` | Estimate gas costs by tx type | Advisory — no consensus needed |
+| `price_guard` | Sanitize price inputs, fallback prices | Defense against oracle manipulation in off-chain computation |
+| `route_optimizer` | Select DEX route for swap / limit orders | Aggregation across Ekubo and other DEXes |
+
+---
+
+## On-Chain Sync Points
+
+The backend calls these contracts to commit off-chain computation results:
+
+| Trigger | Contract | Method | When |
+|---|---|---|---|
+| Points calculated | `PointStorage` | `submit_points(epoch, user, total)` | After each transaction is processed |
+| Social task completed | `PointStorage` | `submit_points(epoch, user, total)` | After DB upsert |
+| Epoch finalized | `PointStorage` | `finalize_epoch(epoch, total_points)` | End of epoch |
+| Epoch finalized | `SnapshotDistributor` | `submit_merkle_root(epoch, root)` | After Merkle tree generated |
+| Limit order expired | `LimitOrderBook` | `expire_limit_order(order_id)` | When keeper detects expiry |
+| Limit order filled | `LimitOrderBook` | `execute_limit_order(order_id, amount)` | When price condition met |
+| Privacy action | `PrivacyRouter` | `submit_action(...)` | For hide mode swaps/stakes |
+
+**Design invariant:** `submit_points` always writes the **absolute total** (not a delta). This ensures that even if the backend retries or runs concurrently, on-chain state converges to the DB's authoritative value without double-counting.
+
+---
 
 ## API Domains
-Main modules under `src/api/`:
-- `auth`, `wallet`, `profile`, `admin`
-- `swap`, `stake`, `limit_order`, `bridge`, `market`
-- `privacy`, `onchain_privacy`, `private_payments`, `anonymous_credentials`, `dark_pool`
-- `rewards`, `nft`, `leaderboard`, `referral`, `analytics`, `transactions`, `deposit`, `faucet`
-- `ai`, `battleship`, `social`, `notifications`, `charts`, `webhooks`, `health`
+
+All handlers live under `src/api/`:
+
+| Group | Endpoints |
+|---|---|
+| Identity | `auth`, `wallet`, `profile`, `admin` |
+| Trading | `swap`, `stake`, `limit_order`, `market` |
+| Bridge | `bridge`, `garden` (Garden Finance) |
+| Privacy | `privacy`, `onchain_privacy` |
+| Rewards | `rewards`, `leaderboard`, `referral`, `nft`, `analytics` |
+| Data | `transactions`, `charts`, `deposit`, `faucet` |
+| AI | `ai`, `ai_plan` |
+| Social / Game | `social`, `battleship`, `notifications` |
+| Infra | `webhooks`, `health` |
+
+---
 
 ## Background Workers
-Main background components:
-- Indexing: `src/services/event_indexer.rs`, `src/indexer/`
-- Route/price logic: `src/services/route_optimizer.rs`, `src/services/price_guard.rs`, `src/services/price_chart_service.rs`
-- Rewards/points: `src/services/point_calculator.rs`, `src/services/snapshot_manager.rs`, `src/services/nft_discount.rs`
-- Trading execution support: `src/services/limit_order_executor.rs`, `src/services/liquidity_aggregator.rs`
-- Privacy verification: `src/services/privacy_verifier.rs`
+
+Workers spawn as `tokio` tasks at startup:
+
+| Worker | File | Interval | Function |
+|---|---|---|---|
+| Block indexer | `services/event_indexer.rs` + `indexer/` | Continuous | Index Starknet events into DB |
+| Price updater | `services/price_chart_service.rs` | 30s | Cache latest prices in Redis |
+| Point calculator | `services/point_calculator.rs` | 10–60s | Process pending txs, sync points to chain |
+| Snapshot manager | `services/snapshot_manager.rs` | Epoch boundary | Finalize epoch, submit Merkle root |
+| Limit order executor | `services/limit_order_executor.rs` | 10s | Check prices, execute or expire orders |
+| Header pusher | `services/header_pusher.rs` | Continuous | WebSocket price/order push |
+
+---
 
 ## Build and Test
-Build:
+
 ```bash
 cd backend-rust
 cargo build
-```
-
-Run tests:
-```bash
-cd backend-rust
 cargo test
 ```
 
-Latest recorded local snapshot (2026-03-05):
-- `208 passed, 0 failed`
+Latest recorded test snapshot (2026-03-05): **208 passed, 0 failed**
 
-Detailed report: `../docs/test_reports.md`.
+Detailed report: `../docs/test_reports.md`
+
+---
 
 ## Run Local
+
 ```bash
 cd backend-rust
 cp .env.testnet.example .env
+# edit .env — fill in RPC URLs, contract addresses, keys
 cargo run
 ```
 
-If shell-exported vars override `.env`, use a clean env shell:
+If shell-exported vars override `.env`:
+
 ```bash
-cd backend-rust
 env -i HOME="$HOME" PATH="$PATH" TERM="$TERM" bash -lc 'set -a; source .env; set +a; cargo run'
 ```
 
-Binary notes:
-- Main API runtime binary: `carel-backend`
-- `src/bin/ai_e2e_tools.rs` is an internal CLI utility, not the API server.
-
-## Runtime Profile
-For active FE/BE execution flow:
-- Backend runtime profile: `backend-rust/.env`
-- Frontend runtime profile: `frontend/.env.local` (plus fallback to `frontend/.env`)
-
-Backend endpoint alignment:
-- Ensure `NEXT_PUBLIC_BACKEND_URL` and `NEXT_PUBLIC_BACKEND_WS_URL` point to this backend runtime.
-- Typical local values:
-  - `PORT=3000` or `PORT=8080` depending on profile.
+---
 
 ## Environment Variables
-Use `backend-rust/.env.testnet.example` as baseline.
 
-Minimum required groups:
+Reference file: `backend-rust/.env.testnet.example`
 
-- Boot/security:
-  - `DATABASE_URL`
-  - `STARKNET_RPC_URL`
-  - `ETHEREUM_RPC_URL`
-  - `BACKEND_PRIVATE_KEY`
-  - `BACKEND_PUBLIC_KEY`
-  - `BACKEND_ACCOUNT_ADDRESS`
-  - `JWT_SECRET`
+### Required at boot
 
-- Core on-chain bindings:
-  - `CAREL_TOKEN_ADDRESS`
-  - `POINT_STORAGE_ADDRESS`
-  - `SNAPSHOT_DISTRIBUTOR_ADDRESS`
-  - `PRICE_ORACLE_ADDRESS`
-  - `LIMIT_ORDER_BOOK_ADDRESS`
-  - `AI_EXECUTOR_ADDRESS`
-  - `AI_SIGNATURE_VERIFIER_ADDRESS`
-  - `BRIDGE_AGGREGATOR_ADDRESS`
+```
+DATABASE_URL
+STARKNET_RPC_URL
+ETHEREUM_RPC_URL
+BACKEND_PRIVATE_KEY
+BACKEND_PUBLIC_KEY
+BACKEND_ACCOUNT_ADDRESS
+JWT_SECRET
+```
 
-- Hide mode bindings:
-  - `PRIVATE_ACTION_EXECUTOR_ADDRESS`
-  - `PRIVACY_INTERMEDIARY_ADDRESS`
-  - `HIDE_BALANCE_RELAYER_POOL_ENABLED=true`
-  - `HIDE_BALANCE_RELAYER_POOL_LIMIT_ENABLED=true`
-  - `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4`
-  - `HIDE_BALANCE_POOL_VERSION_DEFAULT=v4`
-  - `HIDE_BALANCE_V2_REDEEM_ONLY=true`
-  - `HIDE_BALANCE_MIN_NOTE_AGE_SECS=3600`
-  - `HIDE_BALANCE_MAX_USES_PER_DAY=3`
-  - `ZK_PRIVACY_ROUTER_ADDRESS`
+### Core contract bindings
 
-Recommended optional keys:
-- `STARKNET_API_RPC_POOL`, `STARKNET_INDEXER_RPC_POOL`, `STARKNET_WALLET_RPC_POOL`
-- `PRIVACY_AUTO_GARAGA_PROVER_CMD`
-- `GARAGA_DYNAMIC_BINDING=true`
-- `GARDEN_APP_ID`
-- `AI_LEVEL3_BRIDGE_ENABLED=false` (default; keep bridge on AI Level 2 for current public provider flow)
+```
+CAREL_TOKEN_ADDRESS
+POINT_STORAGE_ADDRESS
+SNAPSHOT_DISTRIBUTOR_ADDRESS
+PRICE_ORACLE_ADDRESS
+LIMIT_ORDER_BOOK_ADDRESS
+AI_EXECUTOR_ADDRESS
+AI_SIGNATURE_VERIFIER_ADDRESS
+BRIDGE_AGGREGATOR_ADDRESS
+```
 
-## V4 Baseline Profile
-Active hide-mode baseline in backend runtime:
-- `HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4`
-- `HIDE_BALANCE_POOL_VERSION_DEFAULT=v4`
-- `HIDE_BALANCE_V2_REDEEM_ONLY=true`
+### Hide Mode bindings
 
-Operational notes:
-- New notes should be routed to V4.
-- V2 stays deployed for legacy note redemption during migration window.
-- FE payloads should include V4-compatible fields (`note_version=v4`, `root`, `nullifier`, `proof`, `public_inputs`).
+```
+ZK_PRIVACY_ROUTER_ADDRESS
+PRIVATE_ACTION_EXECUTOR_ADDRESS
+PRIVACY_INTERMEDIARY_ADDRESS
+HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4
+HIDE_BALANCE_POOL_VERSION_DEFAULT=v4
+HIDE_BALANCE_V2_REDEEM_ONLY=true
+HIDE_BALANCE_MIN_NOTE_AGE_SECS=3600
+HIDE_BALANCE_MAX_USES_PER_DAY=3
+```
 
-## Environment Audit Split
-Audit of `backend-rust/.env` (runtime usage):
+### Optional / prover
 
-### 1) Active MVP keys
-- `STARKNET_SWAP_CONTRACT_ADDRESS`
-- `BRIDGE_AGGREGATOR_ADDRESS`
-- `LIMIT_ORDER_BOOK_ADDRESS`
-- `STAKING_CAREL_ADDRESS`
-- `STAKING_STABLECOIN_ADDRESS`
-- `STAKING_WBTC_ADDRESS`
-- `DISCOUNT_SOULBOUND_ADDRESS`
-- `AI_EXECUTOR_ADDRESS`
-- `ZK_PRIVACY_ROUTER_ADDRESS`
-- `PRIVATE_ACTION_EXECUTOR_ADDRESS`
-- `CAREL_TOKEN_ADDRESS`
-- `POINT_STORAGE_ADDRESS`
-- `SNAPSHOT_DISTRIBUTOR_ADDRESS`
-- `PRICE_ORACLE_ADDRESS`
+```
+GARAGA_DYNAMIC_BINDING=true
+GARAGA_PROVE_CMD
+GARAGA_VK_PATH / GARAGA_PROOF_PATH / GARAGA_PUBLIC_INPUTS_PATH
+PRIVACY_AUTO_GARAGA_PROVER_CMD
+```
 
-### 2) Backend-only optional keys
-- `DARK_POOL_ADDRESS`
-- `PRIVATE_PAYMENTS_ADDRESS`
-- `ANONYMOUS_CREDENTIALS_ADDRESS`
-- `BATTLESHIP_GARAGA_ADDRESS`
+Full env audit: `docs/env_runtime_audit_mvp.md`
 
-### 3) Prover/tooling keys
-- `GARAGA_PRECOMPUTED_PAYLOAD_PATH`
-- `GARAGA_ALLOW_PRECOMPUTED_PAYLOAD`
-- `GARAGA_DYNAMIC_BINDING`
-- `GARAGA_PROVE_CMD`
-- `GARAGA_VK_PATH`
-- `GARAGA_PROOF_PATH`
-- `GARAGA_PUBLIC_INPUTS_PATH`
-- `GARAGA_TIMEOUT_SECS`
-- `GARAGA_UVX_CMD`
-- `GARAGA_REAL_PROVER_CMD`
-
-### 4) Currently unused keys in runtime logic
-- `FAUCET_WALLET_PRIVATE_KEY`
-- `INDEXER_DIAGNOSTICS`
-
-Cross-layer env audit reference: `docs/env_runtime_audit_mvp.md`.
+---
 
 ## Signer Semantics
-Signer keys:
-- `BACKEND_PRIVATE_KEY`: Starknet relayer private key.
-- `BACKEND_ACCOUNT_ADDRESS`: Starknet account contract for that signer.
-- `BACKEND_PUBLIC_KEY`: corresponding public key.
-- These are unrelated to LLM provider API keys.
+
+| Key | Purpose |
+|---|---|
+| `BACKEND_PRIVATE_KEY` | Starknet relayer — signs all on-chain txs submitted by the backend |
+| `BACKEND_ACCOUNT_ADDRESS` | The Starknet account contract for the relayer key |
+| `BACKEND_PUBLIC_KEY` | Corresponding public key for verification |
+
+These are Starknet keys, unrelated to LLM provider API keys.
+
+---
+
+## Hide Mode (V4)
+
+The V4 hide mode baseline:
+
+```
+HIDE_BALANCE_EXECUTOR_KIND=shielded_pool_v4
+HIDE_BALANCE_POOL_VERSION_DEFAULT=v4
+HIDE_BALANCE_V2_REDEEM_ONLY=true   # legacy notes still redeemable, no new V2 deposits
+```
+
+Hide mode reduces linkability between the user's wallet and the on-chain transaction by routing execution through a backend relayer with Garaga ZK proof binding. It does **not** hide transaction amounts, timing, or token addresses — these remain visible on Starknet explorers.
+
+See `docs-site/pages/hidemode.mdx` for the user-facing explanation.
+
+---
 
 ## AI Production Guardrails
-When `ENVIRONMENT=production|prod|mainnet`, backend enforces fail-fast checks:
-- Must be set and valid: `AI_EXECUTOR_ADDRESS`, `AI_SIGNATURE_VERIFIER_ADDRESS`, `BACKEND_ACCOUNT_ADDRESS`, `TREASURY_ADDRESS`.
-- At least one provider key required: `LLM_API_KEY` or `OPENAI_API_KEY` or `CAIRO_CODER_API_KEY` or `GEMINI_API_KEY`.
-- `AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION` must be `false`.
-- Default verifier mode is `account`.
-- If using legacy allowlist mode in production, explicit risk flags are required.
+
+When `ENVIRONMENT=production|prod|mainnet`, the backend enforces fail-fast checks at startup:
+
+- `AI_EXECUTOR_ADDRESS`, `AI_SIGNATURE_VERIFIER_ADDRESS`, `BACKEND_ACCOUNT_ADDRESS`, `TREASURY_ADDRESS` must be set and valid
+- At least one provider key required (`LLM_API_KEY` or `OPENAI_API_KEY` or `CAIRO_CODER_API_KEY` or `GEMINI_API_KEY`)
+- `AI_EXECUTOR_AUTO_DISABLE_SIGNATURE_VERIFICATION` must be `false`
+- Signature verification mode defaults to `account`
+
+---
 
 ## Deployment Notes
-Run migrations before deployment:
+
+Run DB migrations before starting:
+
 ```bash
 cd backend-rust
 sqlx migrate run
+cargo run
 ```
 
-Optional API smoke test:
+Optional smoke test:
+
 ```bash
-cd backend-rust
 bash scripts/smoke_test_api.sh
 ```
 
-## Current Constraints
-- Hide mode reduces linkability between deposit and execution, but does **not** hide calldata, token transfers, or trade amounts/pairs.
-- Bridge quality depends on external provider uptime, API limits, and liquidity.
-- RPC quota/availability can affect indexer and quote latency.
-- Advanced privacy flows remain sensitive to prover payload correctness.
+---
 
-## Development Plan
-- Short term:
-  - Improve RPC failover and backpressure handling.
-  - Tighten relayer-path validation and observability.
-  - Expand smoke tests for high-impact APIs.
-- Mid term:
-  - Strengthen worker isolation from API hot path.
-  - Add richer bridge-route telemetry and failure classification.
-  - Improve nullifier/replay analytics.
-- Long term:
-  - Multi-region runtime hardening.
-  - Queue-centric execution model for burst traffic.
-  - Incident runbook and recovery automation.
+## Current Constraints
+
+| Constraint | Notes |
+|---|---|
+| Hide mode metadata | Reduces wallet linkability; cannot hide amounts, timing, or token addresses |
+| Bridge dependency | Depends on LayerSwap / Garden Finance uptime, API limits, and liquidity |
+| RPC stability | Quote and indexer quality degrades under provider rate limits |
+| Prover latency | Garaga Honk proof generation adds 3–10s to hide mode execution |
+| Social verification | Twitter/Telegram/Discord integration is stub in testnet — requires real OAuth for mainnet |
+
+Backend infrastructure roadmap: [`docs-site/pages/roadmap.mdx`](../docs-site/pages/roadmap.mdx) — Backend Infrastructure Roadmap section.
+
+---
+
+## Open Items (Pre-Mainnet)
+
+From internal audit (`AUDIT_BACKEND_RUST.md`) — full file-by-file pass completed 2026-05-06:
+
+**Fixed in this commit:**
+
+| # | Item | Severity | Status |
+|---|---|---|---|
+| 1 | `expire_limit_order` on-chain + Rust fix | Critical | **Fixed** |
+| 2 | Referral double-counting via `sync_referral_onchain` | Critical | **Fixed** |
+| 3 | `add_points` vs `submit_points` race in social verifier | Medium | **Fixed** |
+
+**Bug candidates — require fix before mainnet:**
+
+| # | Item | Severity | File |
+|---|---|---|---|
+| 4 | `generate_proof` silently returns unverified proof — user cannot claim rewards | Medium | `services/merkle_generator.rs` |
+| 5 | Unknown BTC senders credited to `DEFAULT_STARKNET_RECIPIENT` | Medium | `bridge_worker.rs` |
+| 6 | Bridge worker uses `mint_points` on point token; conflicts with `PointStorage.submit_points` path | Medium | `bridge_worker.rs` |
+| 7 | `POINTS_PER_USD = 25.0` hardcoded in bridge worker | Low | `bridge_worker.rs` |
+
+**Technical debt — open:**
+
+| # | Item | Severity |
+|---|---|---|
+| 8 | Local Honk proof pre-validation in `privacy_verifier.rs` | High |
+| 9 | `GARAGA_ALLOW_STATEMENT_OVERRIDE` not blocked in production startup check | Medium |
+| 10 | Epoch can be finalized without a Merkle root (`snapshot_manager`) | Medium |
+| 11 | Chain-indexed transactions have no USD value → 0 points from calculator | Medium |
+| 12 | `LimitOrderFilled` events do not extract user address (`event_parser`) | Medium |
+| 13 | Gas price oracle in `gas_optimizer.rs` uses hardcoded values | Low |
+| 14 | DEX clients (Ekubo, Haiko, Avnu) are mock stubs | Low (gated by mainnet flag) |
+| 15 | Unify limit order status enum (DB uses 0/2/4; contract uses 1/2/3) | Low |

@@ -2,6 +2,7 @@ const meta = {
   index: 'Introduction',
   quickstart: 'Quick Start',
   architecture: 'Architecture',
+  backend: 'Backend',
   hidemode: 'Hide Mode',
   'ai-agent': 'AI Agent',
   staking: 'Staking',

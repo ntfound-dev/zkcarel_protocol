@@ -306,6 +306,30 @@ impl LimitOrderExecutor {
 
     // Internal helper that supports `expire_order` operations.
     async fn expire_order(&self, order_id: &str) -> Result<()> {
+        // Call on-chain first so locked tokens are returned to the owner.
+        let contract = self.config.limit_order_book_address.trim();
+        if !contract.is_empty() && !contract.starts_with("0x0000") {
+            if let Some(invoker) = OnchainInvoker::from_config(&self.config).ok().flatten() {
+                let to = parse_felt(contract)?;
+                let selector = get_selector_from_name("expire_limit_order").map_err(|e| {
+                    crate::error::AppError::Internal(format!("Selector error: {}", e))
+                })?;
+                let order_felt = parse_felt(order_id)?;
+                let call = Call {
+                    to,
+                    selector,
+                    calldata: vec![order_felt],
+                };
+                if let Err(err) = invoker.invoke(call).await {
+                    tracing::warn!(
+                        "expire_limit_order on-chain failed: order_id={}, err={}",
+                        order_id,
+                        err
+                    );
+                }
+            }
+        }
+
         sqlx::query(
             "UPDATE limit_orders
              SET status = 4

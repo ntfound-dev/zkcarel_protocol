@@ -1,6 +1,6 @@
 # Security
 
-This page documents the current security posture of CAREL Protocol based on the internal security review completed in March 2026. This is not a third-party audit report.
+This page documents the current security posture of CAREL Protocol based on the internal security review completed in March–May 2026. This is not a third-party audit report.
 
 ## Current Status
 
@@ -10,7 +10,7 @@ This page documents the current security posture of CAREL Protocol based on the 
 | Smart contract tests | 172/172 passing |
 | Private executor tests | 22/22 passing |
 | Backend tests | 208/208 passing |
-| Internal audit | **Completed** — 35 contracts, FE, and BE reviewed |
+| Internal audit | **Completed** — 35 contracts, FE reviewed; full BE audit (all ~55 files) completed May 2026 |
 | External audit | **Not completed** — planned for Growth phase |
 | Upgradeability | No proxy path — redeploy + migration model |
 
@@ -30,7 +30,7 @@ DiscountSoulbound, BattleshipGaraga, DCAOrders, PrivacyIntermediary, Staking (4 
 
 ### Backend — Rust/Axum
 
-Reviewed: relayer execution path, privacy API binding logic, Garaga auto-prover wiring, V4 hide mode payload handling, proof validation flow.
+Full file-by-file pass of all ~55 source files. Reviewed: auth flow (multi-wallet signature routing), on-chain privacy calldata verification, Garaga auto-prover orchestration (Groth16 + ZK-Honk), relayer and circuit breaker, Merkle tree generation, epoch snapshot finalization, bridge route optimization, DEX liquidity aggregation, NFT discount consumption, point calculator, social verifier, indexer (block processor + event parser), and bridge worker.
 
 ### Frontend — Next.js
 
@@ -48,6 +48,27 @@ Reviewed: wallet connection flow, trade execution path, hide mode payload signin
 | Low / Info | 4 |
 
 All Critical and High findings have been addressed in the current codebase. External audit is required before mainnet deployment.
+
+**Backend Full Audit (May 2026) — 3 confirmed bugs fixed, 4 bug candidates open, 15 technical-debt items:**
+
+Confirmed bugs (all fixed in this commit):
+
+| Severity | Finding | Status |
+|---|---|---|
+| Critical | `expire_limit_order`: expired orders permanently locked user `from_token` in contract — keeper never called on-chain refund | **Fixed** |
+| Critical | Referral double-counting: backend synced referral bonus via `submit_points` (absolute total) AND called `record_referee_points` on ReferralSystem, allowing a second claim via `claim_referral_bonus` | **Fixed** |
+| Medium | Race condition: `social_verifier` used `add_points` (delta) while `point_calculator` used `submit_points` (absolute overwrite) — running out of order caused stale or doubled on-chain point state | **Fixed** |
+
+Bug candidates requiring fix before mainnet:
+
+| Severity | Finding | File |
+|---|---|---|
+| Medium | `merkle_generator.generate_proof` silently returns unverified proof — user cannot claim rewards | `services/merkle_generator.rs` |
+| Medium | Unknown BTC senders credited to `DEFAULT_STARKNET_RECIPIENT` — unintended credit to wrong address | `bridge_worker.rs` |
+| Medium | Bridge worker calls `mint_points` on point token; other services use `PointStorage.submit_points` — bridge points may be overwritten to 0 | `bridge_worker.rs` |
+| Low | Hardcoded `POINTS_PER_USD = 25.0` in bridge worker diverges from protocol-wide rate | `bridge_worker.rs` |
+
+> See `backend-rust/AUDIT_BACKEND_RUST.md` for full root cause analysis, technical-debt index, and prioritized pre-mainnet checklist.
 
 **V4 Hide Mode Audit (March 2026) — additional findings:**
 
@@ -80,6 +101,12 @@ Earlier internal review of V3 found and remediated:
 | Admin key hardening | Current admin is single key — needs multisig before mainnet |
 | AI rate-limit gas | ~4.9–5.1M gas vs 1.5M target |
 | TWAP gas | ~3.4–3.7M gas vs 100–200K target |
+| Backend — local ZK proof pre-validation | `privacy_verifier.rs` policy gate only; Honk pre-validation needed before mainnet |
+| Backend — gas price oracle | `gas_optimizer.rs` uses hardcoded values; needs live oracle integration |
+| Backend — `GARAGA_ALLOW_STATEMENT_OVERRIDE` | Not blocked in production startup check; can override ZK public inputs in mainnet if misconfigured |
+| Backend — epoch finalization without Merkle root | `snapshot_manager` can call `finalize_epoch` on-chain even if no Merkle root exists — users cannot claim rewards |
+| Backend — chain-indexed transactions have no USD value | `block_processor` leaves `usd_value: None` → 0 points from calculator for all chain-indexed txs |
+| Backend — DEX integrations are mock stubs | Ekubo, Haiko, Avnu clients return simulated quotes; real API integrations needed before mainnet |
 | External audit | Required before mainnet — planned for Growth phase |
 
 ## Security Assumptions (Testnet)

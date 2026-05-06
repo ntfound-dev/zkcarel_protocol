@@ -1,0 +1,210 @@
+# Backend
+
+The CAREL backend is an off-chain execution layer built with Rust and Axum. It acts as a thin coordinator between user requests, external data sources, and on-chain contracts. Business-critical state lives on-chain; the backend computes, then writes canonical results to chain.
+
+## Why a Backend Exists
+
+Certain protocol operations cannot run on-chain:
+
+| Operation | Why off-chain |
+|---|---|
+| Point calculation | Requires USD prices, AI level, cross-epoch tx history from DB |
+| Wash trading detection | Time-window query across tx history — no on-chain equivalent |
+| Merkle tree generation | Must iterate all users; posted root to `SnapshotDistributor` |
+| Limit order monitoring | Keeper pattern — monitors price, triggers on-chain execution |
+| Social verification | Requires external API calls (Twitter, Telegram, Discord) |
+| ZK proof generation | Garaga Honk proof generation is a multi-second CPU job |
+| Bridge routing | Aggregates quotes from LayerSwap, Garden Finance, Atomiq |
+
+Everything with consensus requirements lives in Cairo smart contracts. The backend computes, then writes the canonical result on-chain.
+
+---
+
+## Architecture
+
+```
+Client / App
+    │
+    ▼
+Axum API Layer
+    ├── Auth + JWT
+    ├── Swap / Stake / Limit Order
+    ├── Privacy / Hide Mode
+    ├── Points / Rewards / NFT
+    ├── Bridge Routing
+    └── AI Intent Parsing
+         │
+         ├── PostgreSQL  (mutable off-chain ledger)
+         ├── Redis       (price cache)
+         └── Relayer Signer ──▶ Starknet (canonical state)
+
+Background Workers
+    ├── Block Indexer     — continuous
+    ├── Price Updater     — 30s
+    ├── Point Calculator  — 10–60s
+    ├── Snapshot Manager  — epoch boundary
+    ├── Limit Order Exec  — 10s
+    └── Header Pusher     — WebSocket, continuous
+```
+
+**Data flow rule:** PostgreSQL is the mutable off-chain ledger. Smart contracts hold the immutable finalized state. Sync direction is always DB → chain, never chain → DB (except via the read-only indexer).
+
+---
+
+## Service Layer
+
+| Service | Responsibility | Why off-chain |
+|---|---|---|
+| `point_calculator` | Calculate trading / staking / battle / bridge points per tx | Needs USD prices, AI level, NFT state, wash-trade detection |
+| `merkle_generator` | Build Poseidon Merkle tree of epoch rewards | Must read all users; O(n) construction not feasible on-chain |
+| `snapshot_manager` | Finalize epochs, submit root + total to chain | Orchestration between DB and multiple contracts |
+| `limit_order_executor` | Monitor active orders, trigger execution when price matches | Keeper pattern; price comparison needs off-chain price feed |
+| `social_verifier` | Verify Twitter/Telegram/Discord tasks, award points | External OAuth / API calls |
+| `nft_discount` | Read NFT discount rate on-chain, consume usage on-chain | On-chain reads + writes — backend acts as session coordinator |
+| `privacy_verifier` | Route ZK verifier selection, validate proof format | Verifier routing config + pre-validation before on-chain submission |
+| `gas_optimizer` | Estimate gas costs by tx type | Advisory — no consensus needed |
+| `price_guard` | Sanitize price inputs, fallback prices | Defense against oracle manipulation in off-chain computation |
+| `route_optimizer` | Select best bridge route across providers | Aggregation across external provider APIs |
+| `liquidity_aggregator` | Aggregate DEX swap quotes | Requires off-chain DEX API calls |
+
+---
+
+## On-Chain Sync Points
+
+The backend calls these contracts to commit off-chain computation results:
+
+| Trigger | Contract | Method | When |
+|---|---|---|---|
+| Points calculated | `PointStorage` | `submit_points(epoch, user, total)` | After each transaction is processed |
+| Social task completed | `PointStorage` | `submit_points(epoch, user, total)` | After DB upsert |
+| Epoch finalized | `PointStorage` | `finalize_epoch(epoch, total_points)` | End of epoch |
+| Epoch finalized | `SnapshotDistributor` | `submit_merkle_root(epoch, root)` | After Merkle tree generated |
+| Limit order expired | `LimitOrderBook` | `expire_limit_order(order_id)` | When keeper detects expiry |
+| Limit order filled | `LimitOrderBook` | `execute_limit_order(order_id, amount)` | When price condition met |
+| Privacy action | `ShieldedPool V4` | `submit_private_swap / stake / limit` | For hide mode flows |
+
+**Design invariant:** `submit_points` always writes the **absolute total** (not a delta). This ensures that even if the backend retries or runs concurrently, on-chain state converges to the DB's authoritative value without double-counting.
+
+---
+
+## API Domains
+
+| Group | Endpoints |
+|---|---|
+| Identity | `auth`, `wallet`, `profile`, `admin` |
+| Trading | `swap`, `stake`, `limit_order`, `market` |
+| Bridge | `bridge`, `garden` |
+| Privacy | `privacy`, `onchain_privacy` |
+| Rewards | `rewards`, `leaderboard`, `referral`, `nft`, `analytics` |
+| Data | `transactions`, `charts`, `deposit`, `faucet` |
+| AI | `ai`, `ai_plan` |
+| Social / Game | `social`, `battleship`, `notifications` |
+| Infra | `webhooks`, `health` |
+
+---
+
+## Background Workers
+
+| Worker | Interval | Function |
+|---|---|---|
+| Block indexer | Continuous | Index Starknet events into DB |
+| Price updater | 30s | Cache latest prices in Redis |
+| Point calculator | 10–60s | Process pending txs, sync points to chain |
+| Snapshot manager | Epoch boundary | Finalize epoch, submit Merkle root |
+| Limit order executor | 10s | Check prices, execute or expire orders |
+| Header pusher | Continuous | WebSocket price/order push |
+
+---
+
+## Garaga ZK Proof Pipeline
+
+For Hide Mode, the backend orchestrates the full ZK proof lifecycle:
+
+```
+User submits hide request
+        │
+        ▼
+auto_prover receives tx_context + user_address
+        │
+        ├── (testnet) load precomputed payload or static artifacts
+        └── (mainnet) invoke GARAGA_PROVE_CMD
+                │
+                ▼
+        Honk proof generated (Barretenberg / Noir circuit)
+                │
+                ▼
+        garaga-rs assembles calldata for Starknet verifier
+                │
+                ▼
+        nullifier / root / commitment bound to public inputs
+                │
+                ▼
+        Relayer submits tx → ShieldedPool V4 verifies on-chain
+```
+
+The Redis-based prover queue limits concurrent proving jobs (default: 2) to prevent resource exhaustion.
+
+---
+
+## Signer Semantics
+
+| Key | Purpose |
+|---|---|
+| `BACKEND_PRIVATE_KEY` | Starknet relayer — signs all on-chain txs submitted by backend |
+| `BACKEND_ACCOUNT_ADDRESS` | Starknet account contract for the relayer key |
+| `BACKEND_PUBLIC_KEY` | Corresponding public key for verification |
+
+These are Starknet keys, unrelated to LLM provider API keys.
+
+---
+
+## Internal Audit Status
+
+A full file-by-file internal audit of all `backend-rust/src/` files was completed on 2026-05-06.
+
+**Confirmed bugs — all fixed:**
+
+| Severity | Finding |
+|---|---|
+| Critical | Expired limit orders permanently locked user `from_token` — keeper never called on-chain refund |
+| Critical | Referral double-counting — bonus synced via `submit_points` AND separately claimable via `ReferralSystem` |
+| Medium | Race condition — `social_verifier` used `add_points` (delta) while `point_calculator` used `submit_points` (absolute overwrite) |
+
+**Open pre-mainnet items (selected high priority):**
+
+| Item | File |
+|---|---|
+| Local Honk proof pre-validation | `services/privacy_verifier.rs` |
+| `merkle_generator.generate_proof` returns unverified proof silently | `services/merkle_generator.rs` |
+| Epoch finalization possible without Merkle root | `services/snapshot_manager.rs` |
+| Chain-indexed transactions have no USD value → 0 points | `indexer/block_processor.rs` |
+| Bridge worker uses inconsistent points minting path | `bridge_worker.rs` |
+
+Full audit with root cause analysis, 15 technical-debt items, and prioritized checklist: [`backend-rust/AUDIT_BACKEND_RUST.md`](https://github.com/your-org/carel-protocol/blob/main/backend-rust/AUDIT_BACKEND_RUST.md)
+
+---
+
+## Running the Backend
+
+```bash
+cd backend-rust
+cp .env.testnet.example .env
+# fill in RPC URLs, contract addresses, keys
+sqlx migrate run
+cargo run
+```
+
+Tests:
+
+```bash
+cargo test
+# 208 passed, 0 failed (snapshot: 2026-03-05)
+```
+
+Smoke test:
+
+```bash
+bash scripts/smoke_test_api.sh
+```
+
+For environment variable reference: `backend-rust/.env.testnet.example`
