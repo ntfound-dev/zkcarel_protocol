@@ -1,5 +1,9 @@
 export PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(shell ls -d $(HOME)/.nvm/versions/node/*/bin 2>/dev/null | tail -1):$(PATH)
 
+# Build artifacts go to native Linux FS to avoid WSL2 /mnt/c cross-FS slowness
+export CARGO_TARGET_DIR   := $(HOME)/.cache/zkcare/cargo-target
+export SCARB_TARGET_DIR   := $(HOME)/.cache/zkcare/scarb-target
+
 .PHONY: help dev stop prove docker-up docker-down logs-be logs-fe test test-be test-sc docs build-sc deploy-sc deploy-be deploy-fe
 
 help:
