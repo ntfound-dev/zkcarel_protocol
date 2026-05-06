@@ -1,3 +1,5 @@
+export PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(shell ls -d $(HOME)/.nvm/versions/node/*/bin 2>/dev/null | tail -1):$(PATH)
+
 .PHONY: help dev stop prove docker-up docker-down logs-be logs-fe test test-be test-sc docs build-sc deploy-sc deploy-be deploy-fe
 
 help:
@@ -51,7 +53,7 @@ logs-fe:
 test: test-be test-sc
 
 test-be:
-	@cd backend-rust && CARGO_TARGET_DIR=/tmp/zkcare_target cargo test
+	@cd backend-rust && cargo test
 
 test-sc:
 	@cd smartcontract/starknet/cairo && snforge test
