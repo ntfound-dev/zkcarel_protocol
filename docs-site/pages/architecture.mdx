@@ -1,7 +1,5 @@
 # Architecture
 
-<img src="/carel-tokenomics-architecture.svg" alt="CAREL Architecture" style={{maxWidth:'100%', margin:'16px 0'}} />
-
 CAREL has three execution modes. Every user action goes through one of them.
 
 ## Execution Modes
@@ -221,21 +219,33 @@ Hide:
 ### AI Agent
 
 ```
-L1:
-  AI command → Backend response (no on-chain execution)
+L1 (advisory):
+  AI command → Backend AI response only (no on-chain execution)
 
-L2 (normal):
-  AI command → AIExecutor setup on-chain
+L2 (autonomous):
+  AI command → AI builds execution plan
                      ↓
-               Backend execute → Swap / Limit / Stake / Bridge
+               User signs once (authorize plan)
+                     ↓
+               AIExecutor executes autonomously — no per-step approval
+               → Swap / Limit / Stake / Bridge
+                     ↓
+               Execution report returned to user
 
-L3 (hide):
-  AI command → AIExecutor setup on-chain
+L3 (autonomous + private):
+  AI command → AI builds execution plan
                      ↓
-               User deposit note → Mixing window
+               User signs once (authorize plan)
                      ↓
-               Backend execute → Relayer submit → ShieldedPool V4 → Swap / Limit / Stake
+               AIExecutor → Garaga Honk proof generated (off-chain)
+                     ↓
+               Relayer submits proof → ShieldedPool V4 verifies on-chain
+               → Swap / Limit / Stake (private, wallet unlinkable)
+                     ↓
+               Execution report returned to user
 ```
+
+> No human approval at each step. The user authorizes the plan once — the agent handles all execution autonomously.
 
 ### Bridge
 
