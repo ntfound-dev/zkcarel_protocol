@@ -74,7 +74,7 @@ Latest snapshot (2026-05-07):
 
 ## Runtime Addresses (Starknet Sepolia)
 
-Snapshot updated **18 March 2026**. Full inventory: `docs/runtime_addresses_sepolia_2026-03-18.md`.
+Snapshot updated **18 March 2026** — current live addresses (v6 protocol redeploy pending). Full inventory: [docs-site/contracts](https://docs-site-two-teal.vercel.app/contracts).
 
 | Contract | Address |
 | --- | --- |
