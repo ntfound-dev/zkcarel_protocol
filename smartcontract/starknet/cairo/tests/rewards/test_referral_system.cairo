@@ -20,7 +20,8 @@ mod tests {
     fn deploy_point_storage(signer: ContractAddress) -> IPointStorageDispatcher {
         let contract = declare("PointStorage").unwrap().contract_class();
         let mut args = array![];
-        signer.serialize(ref args);
+        signer.serialize(ref args); // admin (use signer as admin for tests)
+        signer.serialize(ref args); // signer
         let (contract_address, _) = contract.deploy(@args).unwrap();
         IPointStorageDispatcher { contract_address }
     }

@@ -1,4 +1,4 @@
-export PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(shell ls -d $(HOME)/.nvm/versions/node/*/bin 2>/dev/null | tail -1):$(PATH)
+export PATH := $(HOME)/.asdf/shims:$(HOME)/.cargo/bin:$(HOME)/.local/bin:$(shell ls -d $(HOME)/.nvm/versions/node/*/bin 2>/dev/null | tail -1):$(PATH)
 
 # Build artifacts go to native Linux FS to avoid WSL2 /mnt/c cross-FS slowness
 export CARGO_TARGET_DIR   := $(HOME)/.cache/zkcare/cargo-target

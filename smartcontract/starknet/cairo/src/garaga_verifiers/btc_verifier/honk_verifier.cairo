@@ -335,9 +335,7 @@ mod UltraKeccakZKHonkVerifier {
             public_inputs: Span<felt252>,
         ) -> bool {
             match self.verify_ultra_keccak_zk_honk_proof(proof) {
-                Result::Ok(proof_public_inputs) => {
-                    proof_public_inputs_match(public_inputs, proof_public_inputs)
-                }
+                Result::Ok(proof_public_inputs) => proof_public_inputs_match(public_inputs, proof_public_inputs),
                 Result::Err(_) => false,
             }
         }

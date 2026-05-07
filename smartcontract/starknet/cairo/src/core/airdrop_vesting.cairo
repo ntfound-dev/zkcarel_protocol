@@ -145,6 +145,7 @@ pub mod AirdropVesting {
         pub funded_amount: u256,
         #[substorage(v0)]
         pub ownable: OwnableComponent::Storage,
+        #[substorage(v0)]
         pub reentrancy_guard: ReentrancyGuardComponent::Storage,
     }
 
@@ -420,7 +421,9 @@ pub mod AirdropVesting {
             loop {
                 if i >= len { break; }
                 let sibling = *proof.at(i);
-                leaf = if leaf < sibling {
+                let leaf_u256: u256 = leaf.into();
+                let sib_u256: u256 = sibling.into();
+                leaf = if leaf_u256 < sib_u256 {
                     core::pedersen::pedersen(leaf, sibling)
                 } else {
                     core::pedersen::pedersen(sibling, leaf)

@@ -10,7 +10,8 @@ use smartcontract::rewards::point_storage::PointStorage::{PointsUpdated, EpochFi
 fn deploy_point_storage(signer: ContractAddress) -> IPointStorageDispatcher {
     let contract = declare("PointStorage").unwrap().contract_class();
     let mut constructor_args = array![];
-    constructor_args.append(signer.into());
+    constructor_args.append(signer.into()); // admin (use signer as admin for tests)
+    constructor_args.append(signer.into()); // signer
     let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
     IPointStorageDispatcher { contract_address }
 }

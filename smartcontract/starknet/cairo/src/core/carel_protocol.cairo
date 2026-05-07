@@ -55,7 +55,6 @@ pub mod CarelProtocol {
     use starknet::get_caller_address;
     use starknet::get_block_timestamp;
     use core::num::traits::Zero;
-    use core::traits::TryInto;
     use crate::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use crate::privacy_action_types::ACTION_PROTOCOL;
     use openzeppelin::access::ownable::OwnableComponent;

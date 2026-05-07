@@ -218,6 +218,7 @@ pub mod Treasury {
         pub usd_oracle: ContractAddress,
         #[substorage(v0)]
         pub ownable: OwnableComponent::Storage,
+        #[substorage(v0)]
         pub reentrancy_guard: ReentrancyGuardComponent::Storage,
     }
 

@@ -1,5 +1,5 @@
 use starknet::ContractAddress;
-use starknet::syscalls::SyscallResultTrait;
+use starknet::SyscallResultTrait;
 use snforge_std::{declare, ContractClassTrait, DeclareResultTrait};
 use snforge_std::{start_cheat_caller_address, stop_cheat_caller_address, spy_events};
 

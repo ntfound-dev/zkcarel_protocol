@@ -100,13 +100,12 @@ pub mod LockupEscrow {
     use starknet::get_contract_address;
     use starknet::storage::*;
     use core::num::traits::Zero;
-    use core::traits::TryInto;
     use openzeppelin::access::ownable::OwnableComponent;
     use openzeppelin::security::reentrancyguard::ReentrancyGuardComponent;
     use super::{
         LockInfo, IERC20Dispatcher, IERC20DispatcherTrait,
         IDEXRouterDispatcher, IDEXRouterDispatcherTrait,
-        ITreasuryDispatcher, ITreasuryDispatcherTrait
+        ITreasuryDispatcher
     };
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
@@ -137,6 +136,7 @@ pub mod LockupEscrow {
         pub total_locked: u256,
         #[substorage(v0)]
         pub ownable: OwnableComponent::Storage,
+        #[substorage(v0)]
         pub reentrancy_guard: ReentrancyGuardComponent::Storage,
     }
 
@@ -268,7 +268,7 @@ pub mod LockupEscrow {
             let caller = get_caller_address();
             let mut info = self.locks.entry(caller).read();
             assert!(info.is_active, "No active lock");
-            assert!(get_block_timestamp() < info.end_time, "Use unlock() — lock expired");
+            assert!(get_block_timestamp() < info.end_time, "Use unlock() - lock expired");
 
             let penalty = (info.principal * EARLY_PENALTY_BPS) / BPS_DENOM;
             let returned = info.principal - penalty;
@@ -383,11 +383,11 @@ pub mod LockupEscrow {
 
             if !dex_router.is_zero() && !usdc_token.is_zero() {
                 // Production: pull USDC from treasury, buy CAREL, send to user
-                let treasury_disp = ITreasuryDispatcher { contract_address: self.treasury.read() };
+                let _treasury_disp = ITreasuryDispatcher { contract_address: self.treasury.read() };
                 // Conservative: request ~10% more USDC than needed to cover price movement
                 // Caller should ensure enough USDC is in treasury
                 let usdc_disp = IERC20Dispatcher { contract_address: usdc_token };
-                let usdc_before = usdc_disp.balance_of(get_contract_address());
+                let _usdc_before = usdc_disp.balance_of(get_contract_address());
 
                 // We buy exactly bonus_carel worth of CAREL — use 0 as min_out here,
                 // actual amount is guarded by what treasury releases

@@ -22,6 +22,7 @@ fn deploy_executor() -> (IAIExecutorDispatcher, ContractAddress, ContractAddress
     let mut constructor_args = array![];
     carel_token.serialize(ref constructor_args);
     admin.serialize(ref constructor_args);
+    constructor_args.append(1); // chain_id
     let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
 
     (IAIExecutorDispatcher { contract_address }, admin, user)
@@ -36,7 +37,7 @@ fn test_ai_executor_burst_load() {
     // Configure for load: disable fees/signature checks and raise rate limit.
     start_cheat_caller_address(dispatcher.contract_address, admin);
     let admin_dispatcher = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
-    admin_dispatcher.set_fee_config(1, 2, false);
+    admin_dispatcher.set_fee_config(2_000_000_000_000_000_000, 3_000_000_000_000_000_000, false);
     admin_dispatcher.set_signature_verification(0.try_into().unwrap(), false);
     admin_dispatcher.set_rate_limit(1000);
     admin_dispatcher.set_max_pending_scan(2000);
