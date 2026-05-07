@@ -28,6 +28,7 @@ fn setup_protocol() -> (IFeeCollectorDispatcher, ITreasuryDispatcher, ContractAd
 
     start_cheat_caller_address(treasury_addr, admin);
     treasury.add_fee_collector(collector_addr);
+    treasury.set_burn_config(0, false);
     stop_cheat_caller_address(treasury_addr);
 
     start_cheat_caller_address(collector_addr, admin);

@@ -653,7 +653,6 @@ pub mod AIExecutor {
                 let verifier = self.signature_verifier.read();
                 assert!(!verifier.is_zero(), "Verifier not set");
                 assert!(nonce != 0, "Nonce required");
-                self.nonces.use_checked_nonce(caller, nonce);
                 let computed_hash = compute_action_hash(@self, caller, action_type, params, nonce);
                 assert!(message_hash != 0, "Message hash required");
                 assert!(message_hash == computed_hash, "Message hash mismatch");

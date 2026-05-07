@@ -1,7 +1,8 @@
 use starknet::ContractAddress;
 use snforge_std::{
-    declare, ContractClassTrait, DeclareResultTrait, 
-    start_cheat_caller_address, stop_cheat_caller_address
+    declare, ContractClassTrait, DeclareResultTrait,
+    start_cheat_caller_address, stop_cheat_caller_address,
+    cheat_caller_address, CheatSpan
 };
 
 // Import dispatcher and types from the project namespace
@@ -126,12 +127,12 @@ fn test_governance_add_owner_via_multisig() {
     start_cheat_caller_address(dispatcher.contract_address, owner1);
     let tx_id = dispatcher.submit_transaction(target, selector, calldata.span());
     dispatcher.confirm_transaction(tx_id);
-    
-    // 2. Execute
-    // Note: If the unwrap_syscall still fails with 'Only contract can call this', 
-    // it confirms that snforge is applying the cheat to the internal syscall.
-    dispatcher.execute_transaction(tx_id, calldata.span());
     stop_cheat_caller_address(dispatcher.contract_address);
+
+    // 2. Execute — TargetCalls(1) limits the cheat to the direct call only,
+    // so internal self-calls from execute_transaction see the real caller (multisig itself).
+    cheat_caller_address(dispatcher.contract_address, owner1, CheatSpan::TargetCalls(1));
+    dispatcher.execute_transaction(tx_id, calldata.span());
 
     let owners = dispatcher.get_owners();
     assert_eq!(owners.len(), 2);

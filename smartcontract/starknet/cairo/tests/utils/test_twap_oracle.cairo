@@ -121,7 +121,7 @@ fn test_price_deviation_calculation() {
         if i >= 10 { break; }
         start_cheat_block_timestamp(dispatcher.contract_address, ts);
         dispatcher.update_observation(token, 100_u256);
-        ts += 100;
+        ts += 200;
         i += 1;
     };
 

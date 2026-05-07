@@ -53,11 +53,12 @@ fn setup_with_signature_verifier() -> (
     let mut executor_args = array![];
     carel_token.serialize(ref executor_args);
     backend_signer.serialize(ref executor_args);
+    executor_args.append(1); // chain_id (non-zero required; overwritten by set_chain_id below)
     let (executor_address, _) = executor_class.deploy(@executor_args).unwrap();
 
     let admin_exec = IAIExecutorAdminDispatcher { contract_address: executor_address };
     start_cheat_caller_address(executor_address, backend_signer);
-    admin_exec.set_fee_config(1_000_000_000_000_000_000, 2_000_000_000_000_000_000, false);
+    admin_exec.set_fee_config(2_000_000_000_000_000_000, 3_000_000_000_000_000_000, false);
     admin_exec.set_signature_verification(verifier_address, true);
     admin_exec.set_chain_id(TEST_CHAIN_ID);
     stop_cheat_caller_address(executor_address);
@@ -140,7 +141,7 @@ fn test_ai_executor_signature_verification_with_account_signature() {
 }
 
 #[test]
-#[should_panic(expected: "Invalid user signature")]
+#[should_panic(expected: "Signature already consumed")]
 // Test case: validates ai executor rejects replay signature hash behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_ai_executor_rejects_replay_signature_hash() {

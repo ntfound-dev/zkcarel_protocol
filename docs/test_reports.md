@@ -115,53 +115,34 @@ npm run build
 
 ## Smart Contracts
 **Project:** CAREL Protocol Smart Contracts
-**Date:** March 5, 2026
+**Date:** May 7, 2026
 **Prepared by:** Local test run summary
 
 ### Scope
-- `smartcontract/` (main package)
-- `smartcontract/private_executor_lite/` (hide mode package)
+- `smartcontract/starknet/cairo/` (consolidated package, run via `make test-sc`)
 
 ### Environment
 - Tooling: `scarb`, `snforge`
 - Network: local test execution (no deployment required)
 
 ### Executive Summary
-- Main package tests: **172/172 passed**
-- `private_executor_lite` tests: **22/22 passed**
+- Tests: **109/109 passed**
+- Warnings: **0**
 - No failing tests observed.
 
 ### Detailed Results
-#### Main Package
 Command:
 ```bash
-cd /mnt/c/Users/frend/zkcare_protocol/smartcontract
-scarb test
+make test-sc
 ```
 
 Result:
-- Collected: `172 test(s)`
-- Passed: `172`
+- Collected: `109 test(s)`
+- Passed: `109`
 - Failed: `0`
-
-#### `private_executor_lite`
-Command:
-```bash
-cd /mnt/c/Users/frend/zkcare_protocol/smartcontract
-bash scripts/test_private_executor_lite.sh
-```
-
-Result:
-- Collected: `22 test(s)`
-- Passed: `22`
-- Failed: `0`
+- Warnings: `0`
 
 ### Recommended Commands
 ```bash
-cd /mnt/c/Users/frend/zkcare_protocol/smartcontract
-scarb test
-
-bash scripts/test_private_executor_lite.sh
-
-bash scripts/test_garaga_fast.sh
-```
+make build-sc   # compile (0 warnings)
+make test-sc    # run full suite (109/109)

@@ -58,6 +58,7 @@ fn setup() -> (ISnapshotDistributorDispatcher, ContractAddress, ContractAddress)
 
     let dist_class = declare("SnapshotDistributor").unwrap().contract_class();
     let mut args = array![];
+    admin.serialize(ref args);
     token_addr.serialize(ref args);
     staking_addr.serialize(ref args);
     dev.serialize(ref args);
@@ -71,6 +72,7 @@ fn setup() -> (ISnapshotDistributorDispatcher, ContractAddress, ContractAddress)
     let token = ICarelTokenDispatcher { contract_address: token_addr };
     start_cheat_caller_address(token_addr, admin);
     token.set_minter(admin);
+    token.set_burner(dist_addr);
     token.mint(dist_addr, 1_000_000_u256);
     stop_cheat_caller_address(token_addr);
 

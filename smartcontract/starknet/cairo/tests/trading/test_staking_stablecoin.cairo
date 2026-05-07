@@ -115,7 +115,7 @@ fn test_unstake_anytime() {
 }
 
 #[test]
-#[should_panic(expected: "Token tidak didukung")]
+#[should_panic(expected: "Token not accepted")]
 // Test case: validates stake unaccepted token fails behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_stake_unaccepted_token_fails() {

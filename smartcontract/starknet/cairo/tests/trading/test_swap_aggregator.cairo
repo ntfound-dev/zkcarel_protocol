@@ -264,8 +264,7 @@ fn test_slippage_calculation() {
 }
 
 #[test]
-// Use double quotes because the contract panic payload is ByteArray.
-#[should_panic(expected: "Only owner")]
+#[should_panic(expected: 'Caller is not the owner')]
 // Test case: validates unauthorized registration fails behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unauthorized_registration_fails() {

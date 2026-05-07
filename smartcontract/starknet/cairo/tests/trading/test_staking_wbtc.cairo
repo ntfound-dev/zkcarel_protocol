@@ -1,7 +1,7 @@
 use core::array::ArrayTrait;
 use core::traits::TryInto;
 use starknet::ContractAddress;
-use starknet::syscalls::SyscallResultTrait;
+use starknet::SyscallResultTrait;
 
 // Use the correct package name 'smartcontract' instead of 'carel'
 // Ensure IWBTCStakingDispatcherTrait is imported to enable method calls
@@ -138,7 +138,7 @@ fn test_claim_rewards_fee_consume_does_not_revert() {
 }
 
 #[test]
-#[should_panic(expected: "Periode lock 14 hari belum selesai")]
+#[should_panic(expected: "Lock period not elapsed")]
 // Test case: validates unstake too early fails behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_unstake_too_early_fails() {

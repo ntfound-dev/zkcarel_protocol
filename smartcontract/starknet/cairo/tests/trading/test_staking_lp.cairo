@@ -116,7 +116,7 @@ fn test_unstake_reduces_balance() {
 }
 
 #[test]
-#[should_panic(expected: "Pool tidak aktif")]
+#[should_panic(expected: "Pool not active")]
 // Test case: validates stake inactive pool fails behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_stake_inactive_pool_fails() {
@@ -127,7 +127,7 @@ fn test_stake_inactive_pool_fails() {
 }
 
 #[test]
-#[should_panic(expected: "Unauthorized")]
+#[should_panic(expected: 'Caller is not the owner')]
 // Test case: validates only owner can add pool behavior with expected assertions and revert boundaries.
 // Used in isolated test context to validate invariants and avoid regressions in contract behavior.
 fn test_only_owner_can_add_pool() {

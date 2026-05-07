@@ -70,6 +70,7 @@ fn test_full_treasury_flow() {
     // --- 1. Authorized Collector Setup ---
     start_cheat_caller_address(treasury_addr, admin);
     treasury.add_fee_collector(collector);
+    treasury.set_burn_config(0, false);
     stop_cheat_caller_address(treasury_addr);
 
     // --- 2. Receive Fee and Event Verification ---

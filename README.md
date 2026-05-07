@@ -62,13 +62,12 @@ make deploy-fe  # deploy frontend to Vercel (vercel --prod)
 
 ## Test Status
 
-Latest snapshot (2026-03-05):
+Latest snapshot (2026-05-07):
 
 | Module | Result |
 | --- | --- |
 | Backend (`backend-rust`) | `208/208` pass |
-| Smartcontract core | `172/172` pass |
-| Private executor suite | `22/22` pass |
+| Smartcontract (`make test-sc`) | `109/109` pass, 0 warnings |
 | Frontend | lint pass, build pass |
 
 ---

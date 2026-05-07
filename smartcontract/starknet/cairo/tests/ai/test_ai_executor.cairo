@@ -4,10 +4,15 @@ use core::traits::TryInto;
 use core::serde::Serde;
 
 use snforge_std::{
-    declare, DeclareResultTrait, ContractClassTrait, 
+    declare, DeclareResultTrait, ContractClassTrait,
     start_cheat_caller_address, stop_cheat_caller_address,
     cheat_block_timestamp, CheatSpan
 };
+
+#[starknet::interface]
+trait IOwnableAccept<TContractState> {
+    fn accept_ownership(ref self: TContractState);
+}
 
 // Import from 'smartcontract' package and include the DispatcherTrait
 use smartcontract::ai::ai_executor::{
@@ -26,14 +31,15 @@ fn setup() -> (IAIExecutorDispatcher, ContractAddress, ContractAddress, Contract
     let mut constructor_args = array![];
     carel_token.serialize(ref constructor_args);
     backend_signer.serialize(ref constructor_args);
-    
+    constructor_args.append(1); // chain_id (non-zero required)
+
     let (contract_address, _) = contract.deploy(@constructor_args).unwrap();
 
     // Disable fees and signature verification for unit tests.
     let admin = backend_signer;
     start_cheat_caller_address(contract_address, admin);
     let admin_dispatcher = IAIExecutorAdminDispatcher { contract_address };
-    admin_dispatcher.set_fee_config(1_000_000_000_000_000_000, 2_000_000_000_000_000_000, false);
+    admin_dispatcher.set_fee_config(2_000_000_000_000_000_000, 3_000_000_000_000_000_000, false);
     admin_dispatcher.set_signature_verification(0.try_into().unwrap(), false);
     stop_cheat_caller_address(contract_address);
 
@@ -184,15 +190,19 @@ fn test_transfer_admin_allows_new_admin_config() {
     let (dispatcher, backend, _, _) = setup();
     let new_admin: ContractAddress = 0x555.try_into().unwrap();
     let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+    let ownable = IOwnableAcceptDispatcher { contract_address: dispatcher.contract_address };
 
     start_cheat_caller_address(dispatcher.contract_address, backend);
     admin.set_admin(new_admin);
     stop_cheat_caller_address(dispatcher.contract_address);
 
+    // Two-step: new_admin must accept ownership to become the actual owner.
     start_cheat_caller_address(dispatcher.contract_address, new_admin);
+    ownable.accept_ownership();
     admin.set_rate_limit(1234);
     let current = admin.rate_limit();
     assert!(current == 1234, "New admin should be able to set rate limit");
+    stop_cheat_caller_address(dispatcher.contract_address);
 }
 
 #[test]
@@ -203,9 +213,20 @@ fn test_transfer_admin_revokes_old_admin() {
     let (dispatcher, backend, _, _) = setup();
     let new_admin: ContractAddress = 0x555.try_into().unwrap();
     let admin = IAIExecutorAdminDispatcher { contract_address: dispatcher.contract_address };
+    let ownable = IOwnableAcceptDispatcher { contract_address: dispatcher.contract_address };
 
+    // Initiate two-step transfer from backend.
     start_cheat_caller_address(dispatcher.contract_address, backend);
     admin.set_admin(new_admin);
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    // new_admin accepts, completing the transfer. backend is no longer the owner.
+    start_cheat_caller_address(dispatcher.contract_address, new_admin);
+    ownable.accept_ownership();
+    stop_cheat_caller_address(dispatcher.contract_address);
+
+    // backend tries to act as admin — must panic (no longer the owner).
+    start_cheat_caller_address(dispatcher.contract_address, backend);
     admin.set_rate_limit(4321);
 }
 

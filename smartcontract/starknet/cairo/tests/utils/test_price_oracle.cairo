@@ -74,9 +74,9 @@ mod tests {
         let chainlink: ContractAddress = 0x0_felt252.try_into().unwrap();
         
         let mut constructor_args = array![];
+        constructor_args.append(owner.into());
         constructor_args.append(pragma.into());
         constructor_args.append(chainlink.into());
-        constructor_args.append(owner.into());
 
         let (address, _) = contract.contract_class().deploy(@constructor_args).expect('Oracle deploy failed');
         IPriceOracleDispatcher { contract_address: address }
